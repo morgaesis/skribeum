@@ -55,6 +55,12 @@ jobs:
 
       - uses: actions/checkout@v5
 
+      # The container user differs from the workspace owner, so git refuses
+      # to operate on the checkout until the directory is marked safe.
+      - name: Mark workspace safe for git (container)
+        if: runner.os == 'Linux'
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Install rustup (container)
         if: runner.os == 'Linux'
         run: |

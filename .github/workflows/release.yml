@@ -100,7 +100,7 @@ jobs:
       # output: that output also lists directories (macOS .app), which cannot
       # be attestation subjects.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             target/**/bundle/**/*.deb

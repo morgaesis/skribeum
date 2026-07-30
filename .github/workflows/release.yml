@@ -41,8 +41,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
     steps:
-      - uses: actions/checkout@v5
-
+      # Installed before checkout: without git in the container, checkout
+      # falls back to a tarball download with no .git directory, which breaks
+      # every subsequent git-aware step (including the package prepare hook).
       - name: Install build dependencies (container)
         if: runner.os == 'Linux'
         run: |
@@ -51,6 +52,8 @@ jobs:
             build-essential ca-certificates curl file git pkg-config unzip wget xz-utils \
             libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
             libayatana-appindicator3-dev libssl-dev patchelf
+
+      - uses: actions/checkout@v5
 
       - name: Install rustup (container)
         if: runner.os == 'Linux'

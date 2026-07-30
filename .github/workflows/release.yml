@@ -80,7 +80,7 @@ jobs:
 
       - name: Build and attach to draft release
         id: tauri
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # AppImage tooling cannot mount FUSE inside a container; run the

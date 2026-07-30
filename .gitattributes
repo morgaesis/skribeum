@@ -2,3 +2,4 @@
 *.png binary
 *.ico binary
 *.icns binary
+tests/corpus/** -text

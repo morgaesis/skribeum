@@ -2973,6 +2973,10 @@ dependencies = [
 [[package]]
 name = "skribeum-core"
 version = "0.0.0"
+dependencies = [
+ "serde",
+ "toml 1.1.4+spec-1.1.0",
+]
 
 [[package]]
 name = "skribeum-vault"

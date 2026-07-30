@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  LINUX_WEBKIT_PACKAGES: >-
+    libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+    libayatana-appindicator3-dev libssl-dev patchelf
+
+jobs:
+  rust:
+    name: rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install webkit dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ env.LINUX_WEBKIT_PACKAGES }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - run: bunx biome check .
+
+      - run: bun run check
+
+      # The frontend must be built before any cargo compilation:
+      # tauri::generate_context! embeds ../dist at compile time, so clippy and
+      # the test build fail without it.
+      - run: bun run build
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --all --check
+
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - run: cargo test --workspace --locked
+
+  msrv:
+    name: msrv (1.95)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install webkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ env.LINUX_WEBKIT_PACKAGES }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run build
+
+      - name: Install MSRV toolchain
+        run: rustup toolchain install 1.95 --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml so the build runs on
+      # the minimum supported version declared in Cargo.toml.
+      - run: cargo build --workspace --locked
+        env:
+          RUSTUP_TOOLCHAIN: "1.95"
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history so the whole commit range is scanned, not just HEAD.
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz | tar -xz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+
+      - run: gitleaks detect --redact --source .
+
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  e2e:
+    name: e2e (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install webkit dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ env.LINUX_WEBKIT_PACKAGES }} xvfb
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The webdriver feature compiles the embedded WebDriver server into the
+      # debug binary; the @wdio/tauri-service embedded provider connects to it
+      # directly, so no external tauri-driver is needed on any platform.
+      - name: Build debug app
+        run: bun tauri build --debug --no-bundle --features webdriver
+
+      - name: Run smoke test (headless)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a bun run e2e
+
+      - name: Run smoke test
+        if: runner.os != 'Linux'
+        run: bun run e2e
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshot-${{ runner.os }}
+          path: tests/e2e/screenshots/
+          if-no-files-found: ignore

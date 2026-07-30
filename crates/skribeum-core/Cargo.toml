@@ -1,0 +1,13 @@
+[package]
+name = "skribeum-core"
+description = "Pure parsing and text functions. No I/O, no Tauri dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

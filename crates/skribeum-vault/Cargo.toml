@@ -1,0 +1,13 @@
+[package]
+name = "skribeum-vault"
+description = "Vault filesystem access, watcher and index. Native only, no Tauri dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,41 @@
+# cargo-deny configuration. Checked in CI and locally via `cargo deny check`.
+
+[graph]
+# Include feature-gated dependencies (the webdriver test feature) in the checks.
+all-features = true
+
+[advisories]
+yanked = "deny"
+# The gtk3 and unic advisory groups flag transitive dependencies of the Tauri
+# ecosystem itself; only direct workspace dependencies are held to the
+# unmaintained standard.
+unmaintained = "workspace"
+
+[licenses]
+# MPL-2.0 is required by cssparser, dtoa-short, and option-ext, all transitive
+# dependencies of tauri-utils. MPL-2.0 is file-level copyleft and imposes no
+# obligations on this codebase.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+# Workspace path dependencies carry no version and are not wildcards in the
+# problematic sense.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

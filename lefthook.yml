@@ -1,0 +1,7 @@
+pre-commit:
+  jobs:
+    - name: gitleaks
+      run: gitleaks protect --staged --redact
+    - name: biome
+      glob: "*.{js,ts,svelte,json,jsonc,css}"
+      run: bunx biome check --no-errors-on-unmatched {staged_files}

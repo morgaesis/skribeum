@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - name: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - name: windows-x86_64
+            os: windows-latest
+            args: ""
+          - name: linux-x86_64
+            os: ubuntu-latest
+            # Pinned by digest so the Linux build environment (and therefore
+            # the glibc floor of the produced binaries) does not drift with
+            # runner image updates.
+            container: "debian:12@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc"
+            # tauri invokes "<runner> build ..."; cargo-auditable must be
+            # invoked as "cargo auditable", so the runner is a one-line shim
+            # created below. It embeds dependency data in the binary for
+            # auditing with cargo-audit.
+            args: --runner cargo-auditable-runner
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies (container)
+        if: runner.os == 'Linux'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl file git pkg-config unzip wget xz-utils \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev libssl-dev patchelf
+
+      - name: Install rustup (container)
+        if: runner.os == 'Linux'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - name: Add cross-compilation target
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-auditable
+        if: runner.os == 'Linux'
+        run: |
+          cargo install cargo-auditable --locked
+          printf '#!/bin/sh\nexec cargo auditable "$@"\n' > /usr/local/bin/cargo-auditable-runner
+          chmod +x /usr/local/bin/cargo-auditable-runner
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build and attach to draft release
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # AppImage tooling cannot mount FUSE inside a container; run the
+          # extracted tool instead.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Skribeum ${{ github.ref_name }}"
+          releaseBody: >-
+            Unsigned build artifacts. Binaries are not code-signed and not
+            notarized; verify the build provenance attestations instead.
+          releaseDraft: true
+          prerelease: true
+          args: ${{ matrix.args }}
+
+      # Attest the bundle files by glob rather than the action's artifactPaths
+      # output: that output also lists directories (macOS .app), which cannot
+      # be attestation subjects.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            target/**/bundle/**/*.deb
+            target/**/bundle/**/*.rpm
+            target/**/bundle/**/*.AppImage
+            target/**/bundle/**/*.dmg
+            target/**/bundle/**/*.app.tar.gz
+            target/**/bundle/**/*.msi
+            target/**/bundle/**/*.exe
+
+  sbom:
+    name: sbom
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Generates an SPDX SBOM from Cargo.lock and bun.lock and uploads it as
+      # a workflow artifact alongside the draft release.
+      - uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          artifact-name: skribeum-sbom.spdx.json

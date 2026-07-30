@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": [
+      "node",
+      "mocha",
+      "@wdio/globals/types",
+      "@wdio/tauri-service",
+      "expect-webdriverio"
+    ]
+  },
+  "include": ["./**/*.ts", "../../src/lib/fixture.ts"]
+}

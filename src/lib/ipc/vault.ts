@@ -81,6 +81,25 @@ export async function noteWrite(
   );
 }
 
+/**
+ * Reads a vault configuration file (`.obsidian/app.json` and friends)
+ * through the `note_read` command. Returns null when the command does not
+ * serve the path (absent, outside the indexed surface, not UTF-8);
+ * configuration is optional and its absence is never an error, so every
+ * consumer degrades to defaults.
+ */
+export async function readVaultConfigFile(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<string | null> {
+  try {
+    const loaded = await readNote(handle, relPath);
+    return loaded.readOnly ? null : loaded.text;
+  } catch {
+    return null;
+  }
+}
+
 export async function readNote(
   handle: VaultHandle,
   relPath: string,

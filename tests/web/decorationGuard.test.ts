@@ -1,14 +1,15 @@
-// Criterion 3 (M1b): decorations are inert. There is no decoration engine
-// until M2, but its enforcement mechanism exists now: every transaction the
-// engine dispatches carries the `decorationOrigin` annotation, and the
-// dispatch wrapper asserts `docChanged === false` for annotated
-// transactions. The corpus sweep below drives the guard at sampled cursor
-// positions on every corpus file; at M2 the same sweep runs the real
-// decoration engine at each position before asserting.
+// Criterion 2 (M2, carried from M1b): decorations are inert. Every
+// transaction the engine causes carries the `decorationOrigin` annotation,
+// and the dispatch wrapper asserts `docChanged === false` for annotated
+// transactions. The corpus sweep below mounts the real decoration engine
+// over every corpus file and drives cursor movement (which rebuilds the
+// decoration set through cursor reveal) and engine context updates at
+// sampled positions, asserting the document never changes.
 
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -16,6 +17,13 @@ import {
   assertDecorationsInert,
   decorationOrigin,
 } from "../../src/lib/editor/decorationGuard";
+import {
+  decorationEngine,
+  dispatchWikilinkContext,
+  engineDecorations,
+} from "../../src/lib/editor/decorations/engine";
+import { DEFAULT_OBSIDIAN_APP_CONFIG } from "../../src/lib/editor/decorations/wikilinks";
+import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
 
 const corpusDirectory = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -105,21 +113,51 @@ describe("decoration inertness guard", () => {
     }
   });
 
-  it("holds over every corpus file at sampled cursor positions", () => {
+  it("holds over every corpus file with the real engine at sampled cursor positions", {
+    timeout: 120000,
+  }, () => {
     const documents = corpusDocuments();
     expect(documents.length).toBeGreaterThan(0);
     for (const document of documents) {
-      const state = EditorState.create({ doc: document.text });
-      for (const position of samplePositions(state.doc.length)) {
-        // M2 replaces this selection-only transaction with the decoration
-        // engine's own output at the same sampled position; the assertion
-        // below is the criterion and stays unchanged.
-        const transaction = state.update({
-          selection: { anchor: position },
-          annotations: decorationOrigin.of(true),
+      const view = new EditorView({
+        state: EditorState.create({
+          doc: document.text,
+          extensions: [
+            markdown({
+              base: markdownLanguage,
+              extensions: obsidianMarkdownExtensions,
+            }),
+            decorationEngine(),
+          ],
+        }),
+        dispatchTransactions: (transactions, target) => {
+          assertDecorationsInert(transactions);
+          target.update(transactions);
+        },
+      });
+      try {
+        // The editor buffer normalizes terminators on load; the invariant
+        // is that no engine-caused transaction moves the document from
+        // its mounted state.
+        const mounted = view.state.doc.toString();
+        // The engine's own dispatch site: a wikilink context update, which
+        // must pass the guard and leave the document untouched.
+        dispatchWikilinkContext(view, {
+          paths: ["garden-journal.md"],
+          config: DEFAULT_OBSIDIAN_APP_CONFIG,
         });
-        expect(transaction.docChanged).toBe(false);
-        expect(() => assertDecorationsInert([transaction])).not.toThrow();
+        for (const position of samplePositions(view.state.doc.length)) {
+          // Cursor movement rebuilds the decoration set through cursor
+          // reveal; the annotated transaction must stay inert.
+          view.dispatch({
+            selection: { anchor: position },
+            annotations: decorationOrigin.of(true),
+          });
+        }
+        expect(view.state.doc.toString()).toBe(mounted);
+        expect(engineDecorations(view)).not.toBeNull();
+      } finally {
+        view.destroy();
       }
     }
   });

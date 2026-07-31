@@ -132,9 +132,11 @@ export function dominantTerminator(map: LineEndingMap): Terminator {
 /**
  * Converts a buffer-byte offset into an original-byte offset. Offsets on a
  * line map within that line's content; the offset just past a line's
- * content maps to the start of its terminator bytes.
+ * content maps to the start of its terminator bytes. Exported for the
+ * conformance emitter, which reports raw byte offsets over files whose
+ * terminators the buffer projection normalized away.
  */
-function bufferOffsetToByte(map: LineEndingMap, offset: number): number {
+export function bufferOffsetToByte(map: LineEndingMap, offset: number): number {
   let bufferPosition = 0;
   for (const line of map.lines) {
     const contentEnd = bufferPosition + line.contentLength;

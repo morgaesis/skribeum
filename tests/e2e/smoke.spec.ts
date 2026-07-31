@@ -3,10 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
-import { M0_FIXTURE } from "../../src/lib/fixture";
 import {
   CRLF_NOTE_NAME,
   LF_NOTE_NAME,
+  LIVE_PREVIEW_NOTE_NAME,
   SCRATCH_VAULT_PATH,
 } from "./scratchVault";
 
@@ -95,15 +95,21 @@ describe("skribeum shell", () => {
     const editorContent = $(".cm-content");
     await editorContent.waitForExist({ timeout: 15000 });
 
-    // CodeMirror renders one div per line; getText joins them with newlines.
-    // Compare against the fixture line by line so webview-specific whitespace
-    // handling of empty lines cannot cause false failures.
+    // The fixture renders decorated: emphasis asterisks are hidden and
+    // the task marker is a checkbox widget, so the assertions cover the
+    // rendered text, not the raw source. The heading marker is exempt
+    // here: the initial cursor sits at offset zero, on the heading line,
+    // where cursor-line reveal legitimately shows it; the dedicated
+    // live-preview spec covers marker hiding.
     const renderedText = await editorContent.getText();
-    for (const line of M0_FIXTURE.split("\n")) {
-      if (line.trim() !== "") {
-        expect(renderedText).toContain(line);
-      }
-    }
+    expect(renderedText).toContain("Skribeum");
+    expect(renderedText).toContain(
+      "Byte-faithful editing of plain Markdown, rendered by CodeMirror 6.",
+    );
+    expect(renderedText).toContain(
+      "scaffold fixture, replaced when vaults open",
+    );
+    expect(renderedText).not.toContain("*plain*");
 
     mkdirSync(screenshotDirectory, { recursive: true });
     await browser.saveScreenshot(path.join(screenshotDirectory, "smoke.png"));
@@ -303,6 +309,55 @@ describe("skribeum shell", () => {
       });
     });
     expect(tabUncanceled).toBe(true);
+  });
+
+  it("renders_live_preview_hiding_the_heading_marker_until_cursor_enters", async () => {
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Sunrise heading"),
+      {
+        timeout: 15000,
+      },
+    );
+
+    const headingLineText = () =>
+      browser.execute(
+        () => document.querySelector(".cm-line")?.textContent ?? "",
+      );
+
+    // A fresh note opens with the cursor at offset zero, on the heading
+    // line, where cursor-line reveal shows the marker; move the cursor to
+    // the body first (a synthesized click alone does not move CodeMirror's
+    // selection here, hence the helper), then assert the marker hides.
+    await placeCursorAtLineEnd("body text here");
+    await browser.waitUntil(
+      async () => (await headingLineText()) === "Sunrise heading",
+      {
+        timeout: 10000,
+        timeoutMsg: "heading marker did not hide with the cursor elsewhere",
+      },
+    );
+
+    // Entering the heading line with the cursor reveals the source
+    // marker (cursor-line reveal per docs/decoration-rules.md).
+    await placeCursorAtLineEnd("Sunrise heading");
+    await browser.waitUntil(
+      async () => (await headingLineText()) === "# Sunrise heading",
+      {
+        timeout: 10000,
+        timeoutMsg: "heading marker did not reveal on cursor entry",
+      },
+    );
+
+    // Leaving the line hides the marker again.
+    await placeCursorAtLineEnd("body text here");
+    await browser.waitUntil(
+      async () => (await headingLineText()) === "Sunrise heading",
+      {
+        timeout: 10000,
+        timeoutMsg: "heading marker did not hide after the cursor left",
+      },
+    );
   });
 
   it("surfaces_and_dismisses_the_note_removed_banner_by_keyboard", async () => {

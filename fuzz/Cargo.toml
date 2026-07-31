@@ -46,3 +46,10 @@ path = "fuzz_targets/change_set_apply.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "extract"
+path = "fuzz_targets/extract.rs"
+test = false
+doc = false
+bench = false

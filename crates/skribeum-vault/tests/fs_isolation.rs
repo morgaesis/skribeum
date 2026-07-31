@@ -15,6 +15,8 @@ const ALLOWED: &[&str] = &[
     // core crate has no dependency on this crate, so it cannot use RealFs.
     "crates/skribeum-core/tests/corpus_coverage.rs",
     "crates/skribeum-core/tests/line_ending_corpus.rs",
+    "crates/skribeum-core/tests/conformance.rs",
+    "crates/skribeum-core/tests/wikilink_properties.rs",
 ];
 
 /// Source roots scanned for Rust files.

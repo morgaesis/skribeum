@@ -32,4 +32,9 @@ export const STRINGS = {
   reconciliationBannerPrefix: "Needs review:",
   reviewAction: "Review",
   dismissAction: "Dismiss",
+  taskCheckboxCheckedLabel: "completed task",
+  taskCheckboxUncheckedLabel: "open task",
+  taskCheckboxOtherLabel: "task with a custom state",
+  propertiesPanelLabel: "Note properties",
+  propertiesListItemLabel: "list item",
 } as const;

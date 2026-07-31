@@ -1,6 +1,6 @@
 <script lang="ts">
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   Annotation,
   type ChangeSet,
@@ -12,15 +12,30 @@ import { EditorView, keymap } from "@codemirror/view";
 import { onMount } from "svelte";
 import type { ByteChange } from "./editor/byteChangeSet";
 import { assertDecorationsInert } from "./editor/decorationGuard";
+import {
+  decorationEngine,
+  dispatchWikilinkContext,
+} from "./editor/decorations/engine";
+import type { WikilinkResolutionContext } from "./editor/decorations/wikilinks";
+import {
+  applyTypeOverrides,
+  type Frontmatter,
+  type FrontmatterValueType,
+  parseFrontmatter,
+} from "./editor/frontmatter";
+import { obsidianMarkdownExtensions } from "./editor/markdown/obsidian";
 import { NoteSession } from "./editor/noteSession";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
+import PropertiesPanel from "./PropertiesPanel.svelte";
 
 let {
   doc = "",
   note = null,
   vault = null,
   path = null,
+  linkContext = null,
+  propertyTypes = null,
   onConflict,
   onWriteError,
 }: {
@@ -29,6 +44,10 @@ let {
   note?: LoadedNote | null;
   vault?: VaultHandle | null;
   path?: string | null;
+  /** Vault tree and `.obsidian/app.json` knobs for wikilink resolution. */
+  linkContext?: WikilinkResolutionContext | null;
+  /** Declared Obsidian property types for the properties panel. */
+  propertyTypes?: Readonly<Record<string, FrontmatterValueType>> | null;
   onConflict?: () => void;
   onWriteError?: (message: string) => void;
 } = $props();
@@ -46,6 +65,46 @@ let saveChain: Promise<void> = Promise.resolve();
 
 const historyCompartment = new Compartment();
 
+/**
+ * Frontmatter is panel-edited only within this many leading characters; a
+ * block whose closing fence sits beyond it stays plain buffer text.
+ */
+const FRONTMATTER_SCAN_LIMIT = 16384;
+let frontmatter = $state<Frontmatter | null>(null);
+
+function refreshFrontmatter() {
+  if (view === undefined || session === null) {
+    frontmatter = null;
+    return;
+  }
+  const head = view.state.doc.sliceString(
+    0,
+    Math.min(view.state.doc.length, FRONTMATTER_SCAN_LIMIT),
+  );
+  const parsed = parseFrontmatter(head);
+  frontmatter =
+    parsed === null
+      ? null
+      : propertyTypes === null
+        ? parsed
+        : applyTypeOverrides(parsed, propertyTypes);
+}
+
+/**
+ * Panel edits are app mutations declaring their exact range: the change
+ * replaces precisely the value's characters and flows through the normal
+ * local-edit save path.
+ */
+function editFrontmatterValue(from: number, to: number, insert: string) {
+  view?.dispatch({ changes: { from, to, insert } });
+}
+
+function applyLinkContext() {
+  if (view !== undefined && linkContext !== null) {
+    dispatchWikilinkContext(view, linkContext);
+  }
+}
+
 // Marks transactions whose changes the session has already accounted for
 // (external ingests, recoveries, reconciles), so the dispatcher does not
 // fold them into the pending set a second time.
@@ -55,7 +114,11 @@ function stateFor(content: string, locked: boolean): EditorState {
   return EditorState.create({
     doc: content,
     extensions: [
-      markdown(),
+      markdown({
+        base: markdownLanguage,
+        extensions: obsidianMarkdownExtensions,
+      }),
+      decorationEngine(),
       EditorView.lineWrapping,
       historyCompartment.of(history()),
       keymap.of([
@@ -103,6 +166,9 @@ function dispatchTransactions(
     }
     session?.recordLocalChanges(transaction.changes);
     scheduleIdleSave();
+  }
+  if (transactions.some((transaction) => transaction.docChanged)) {
+    refreshFrontmatter();
   }
 }
 
@@ -297,11 +363,15 @@ function initializeForNote(current: LoadedNote | null) {
   if (current === null) {
     session = null;
     view?.setState(stateFor(doc, false));
+    applyLinkContext();
+    refreshFrontmatter();
     return;
   }
   if (current.readOnly) {
     session = null;
     view?.setState(stateFor(current.text, true));
+    applyLinkContext();
+    refreshFrontmatter();
     return;
   }
   session = new NoteSession(current.bytes, current.meta.projection_hash);
@@ -323,6 +393,8 @@ function initializeForNote(current: LoadedNote | null) {
     }
   }
   view?.setState(stateFor(text, false));
+  applyLinkContext();
+  refreshFrontmatter();
 }
 
 onMount(() => {
@@ -348,9 +420,28 @@ $effect(() => {
     initializeForNote(note);
   }
 });
+
+// Push wikilink context updates (tree refreshes, config reads) into the
+// live editor state; the dispatch is decoration-annotated and inert.
+$effect(() => {
+  if (view !== undefined && linkContext !== null) {
+    dispatchWikilinkContext(view, linkContext);
+  }
+});
+
+// Declared property types can arrive after the note opened.
+$effect(() => {
+  void propertyTypes;
+  refreshFrontmatter();
+});
 </script>
 
-<div class="editor h-full" bind:this={host}></div>
+<div class="flex h-full min-h-0 flex-col">
+  {#if frontmatter !== null && frontmatter.entries.length > 0}
+    <PropertiesPanel {frontmatter} onEditValue={editFrontmatterValue} />
+  {/if}
+  <div class="editor min-h-0 flex-1" bind:this={host}></div>
+</div>
 
 <style>
   .editor :global(.cm-editor) {

@@ -1,0 +1,328 @@
+# Shared syntax specification for the two-parser conformance gate.
+#
+# This file is the normative contract between the Rust extraction layer
+# (skribeum-core, pulldown-cmark based) and the TypeScript decoration
+# engine (Lezer based). Both implementations must produce an identical
+# set of (kind, start_byte, end_byte) extractions over every file in
+# tests/corpus/. Divergence fails the build. Where the two upstream
+# parsers disagree, the ruling recorded here governs and each side ships
+# a normalization shim; a per-construct allowlist is the last resort and
+# every allowlist entry must link to an issue.
+#
+# Terms used throughout:
+# - "byte offset": an index into the file's raw bytes, before any
+#   decoding, BOM stripping, or line-ending normalization. start_byte is
+#   inclusive, end_byte exclusive, so end_byte - start_byte is the
+#   construct's length in bytes.
+# - "line terminator": LF, CRLF, or a lone CR. All three delimit lines
+#   for every rule in this file.
+# - "Unicode whitespace": any character with the Unicode White_Space
+#   property (Rust char::is_whitespace, JavaScript /\s/u).
+
+[grammar]
+# The base grammar both sides parse before extraction: CommonMark plus
+# the GFM tables, strikethrough, and task-list extensions, plus
+# footnotes, plus the Obsidian constructs specified below. Math ($ and
+# $$), GFM alerts, and GFM bare-URL autolinking are NOT part of the
+# extraction grammar: a dollar sign has no special meaning for
+# extraction, and bare URLs or www. forms are never extracted.
+#
+# A UTF-8 byte order mark (EF BB BF) at offset 0 is skipped before
+# parsing; all reported offsets remain offsets into the original bytes,
+# so the first extractable construct in a BOM-prefixed file starts at
+# byte 3 or later.
+#
+# Input that is not valid UTF-8 yields an empty extraction set. Such
+# files open read-only and are excluded from indexing, so extraction
+# over them is defined as empty rather than defined over a lossy
+# decode whose replacement characters would shift every offset.
+#
+# YAML frontmatter is invisible to extraction. A frontmatter block
+# opens with a line that is exactly "---" at offset 0 (after an
+# optional BOM) and closes at the next line that is exactly "---" or
+# "..."; an unterminated block is not frontmatter. No construct is ever
+# recognized inside the block, and the block itself is not an
+# extraction kind. Tags in frontmatter values are metadata, handled by
+# the frontmatter layer, never by text extraction.
+
+[emission]
+# Canonical emitter format for conformance artifacts. Both sides emit,
+# per corpus file, one UTF-8 text file:
+# - one line per extraction: "<kind> <start_byte>..<end_byte>"
+#   (kind, one space, start, two dots, end; decimal, no padding),
+# - sorted ascending by start_byte, then end_byte, then kind in byte
+#   lexicographic order,
+# - LF line endings, with a trailing LF after the last line,
+# - a zero-byte file when a corpus file yields no extractions.
+# The committed golden snapshots live in tests/conformance/rust/, one
+# "<corpus-file-name>.txt" per corpus markdown file (for example
+# wikilinks-forms.md.txt). The Rust harness regenerates and compares
+# them; the TypeScript harness emits the same format and diffs against
+# the same committed files. Any byte difference fails the build.
+line_format = "<kind> <start_byte>..<end_byte>"
+snapshot_directory = "tests/conformance/rust"
+
+# ---------------------------------------------------------------------
+# Construct kinds. The `kind` string below is the stable name used in
+# emitted lines and must never change once committed.
+# ---------------------------------------------------------------------
+
+[[construct]]
+kind = "heading"
+name = "Headings, ATX and setext"
+range = """
+ATX: from the first '#' of the marker run (leading indentation of up to
+three spaces excluded) to the end of the heading line, line terminator
+excluded. A closing hash sequence and any interior trailing whitespace
+before the terminator are inside the range. Setext: from the first byte
+of the first content line to the last byte of the underline, terminator
+excluded; a multi-line setext heading spans all its content lines.
+"""
+rulings = """
+An ATX marker must be followed by a space, a tab, or the end of line;
+'#word' is not a heading (it is a tag when the tag rules match). Four or
+more leading spaces make the line indented code, not a heading. Headings
+inside blockquotes are extracted; their range starts at the '#' marker,
+after the quote prefix. Heading levels are not distinguished by kind;
+all levels emit "heading".
+"""
+
+[[construct]]
+kind = "link"
+name = "CommonMark links: inline and reference"
+range = """
+From the opening '[' of the link text to the final byte of the
+construct: the closing ')' for inline links, the closing ']' of the
+label for full references, the closing ']' of '[]' for collapsed
+references, the closing ']' of the text for shortcut references.
+"""
+rulings = """
+Covers inline links, and full, collapsed, and shortcut reference links
+whose label has a matching reference definition. A bracketed token with
+no matching definition is plain text, not a link. Reference definitions
+themselves ([label]: destination) are not extracted. CommonMark images
+(![alt](url) and reference images) are not extracted under any kind.
+A link whose label begins with '^' is a footnote reference and is never
+extracted as a link; footnote references and definitions are not
+extraction kinds. Task-list markers ([ ], [x], [X]) and non-standard
+status markers ([-], [?]) are not links.
+"""
+
+[[construct]]
+kind = "autolink"
+name = "Angle-bracket autolinks"
+range = """
+From the opening '<' to the closing '>', both included.
+"""
+rulings = """
+Covers CommonMark URI autolinks (scheme required) and email autolinks.
+GFM extended autolinking is excluded: a bare https:// URL or a www.
+form in prose is never extracted. Angle-bracket text that is neither a
+valid autolink nor HTML stays plain text.
+"""
+
+[[construct]]
+kind = "wikilink"
+name = "Obsidian wikilinks, all four forms"
+range = """
+From the first '[' of the opening '[[' to the second ']' of the closing
+']]', both bracket pairs included, alias included when present.
+"""
+rulings = """
+The four forms all emit kind "wikilink" with identical range semantics:
+[[note]], [[note|alias]], [[note#heading]], [[note#^block-id]], plus
+their combinations ([[note#heading|alias]], [[note#^block-id|alias]]),
+path-like targets ([[folder/sub/note]]), targets containing spaces, and
+the self-referencing form [[#heading]] / [[#^block-id]] with an empty
+note part. '[[]]' with an empty target is not a wikilink. A wikilink
+wins over the reference-link reading in every conflict: [[Foo]] is a
+wikilink even when a reference definition '[Foo]:' exists in the file
+(the single-bracket [Foo] elsewhere in that file is then a shortcut
+reference link). A wikilink inside would-be CommonMark link text
+prevents the outer link: in "[text [[wl]] more](url)" only the wikilink
+is extracted. Escaping any bracket disarms the construct:
+'\\[\\[note\\]\\]' is plain text. Wikilinks are recognized inside
+headings, list items, task items, table cells, blockquotes, and
+emphasis, and never inside code spans, code blocks, autolinks, or
+frontmatter. Adjacent wikilinks with no separator are two extractions.
+"""
+
+[[construct]]
+kind = "embed"
+name = "Obsidian embeds"
+range = """
+From the '!' through the closing ']]', exclamation mark included.
+"""
+rulings = """
+An embed is '!' immediately followed by a wikilink: ![[note]],
+![[note#heading]], ![[note#^block-id]], ![[image.png]], and the
+size-parameter and alias-position forms ![[image.png|320]],
+![[image.png|320x200]], ![[note|display text]] all emit kind "embed".
+An escaped exclamation mark ('\\![[note]]') yields a wikilink covering
+'[[note]]', not an embed. A CommonMark image ![alt](url) is not an
+embed and is not extracted. Embeds follow the same recognition and
+exclusion contexts as wikilinks.
+"""
+
+[[construct]]
+kind = "tag"
+name = "Obsidian inline tags"
+range = """
+From the '#' through the last byte of the tag body. Trailing
+punctuation is outside the range; trailing '/' characters are trimmed
+from the body.
+"""
+rulings = """
+A tag is '#' followed by a body of one or more characters drawn from:
+Unicode alphanumerics (letters in any script, including combining
+sequences that form them, and digits), '-', '_', and '/'. The '#' must
+be at the start of the input or preceded by Unicode whitespace; a '#'
+preceded by any non-whitespace byte (including '\\', which also covers
+the escaped form '\\#tag', and the '#' in a URL fragment) never opens a
+tag. The body must contain at least one character that is not an ASCII
+digit: #2024 is not a tag, #y2024 and #1-2 are. The body ends at the
+first character outside the set; trailing '/' characters are then
+trimmed off the range (a tag never ends in '/'). '#' followed by
+whitespace is never a tag, so ATX heading markers are excluded by
+construction; '#word' at the start of a line IS a tag (Obsidian
+semantics; the heading reading requires a space). Tags are recognized
+in paragraphs, headings, list items, task items, blockquotes, and table
+cells, and never inside code spans, code blocks, autolinks, wikilinks,
+embeds, HTML blocks, inline HTML tags, or frontmatter.
+"""
+
+[[construct]]
+kind = "block-id"
+name = "Obsidian block identifiers"
+range = """
+From the '^' through the last byte of the identifier body.
+"""
+rulings = """
+A block identifier is '^' followed by one or more ASCII letters, ASCII
+digits, or '-', where: the '^' is at the start of a line or preceded by
+Unicode whitespace, and nothing but whitespace follows the body before
+the line terminator or end of input. A '^' preceded by a
+non-whitespace byte (2^10, mid-word carets, the '^' inside
+[[note#^id]], the inline-footnote marker text^[...]) is not a block
+identifier, and a candidate with trailing non-whitespace text on the
+line ("^id more words") is not one either. A line consisting only of
+the identifier (the standalone anchor form) qualifies; so does an
+identifier at the end of a paragraph, list item, blockquote line, or a
+line following a table. Block identifiers are never recognized inside
+code spans, code blocks, or frontmatter. The quote-prefix bytes of a
+blockquote line do not disqualify the end-of-line rule; the rule is
+evaluated on the raw source line.
+"""
+
+[[construct]]
+kind = "code-span"
+name = "Inline code spans"
+range = """
+From the first backtick of the opening run to the last backtick of the
+closing run, both delimiter runs included, over the raw source bytes
+(so a '\\|' written inside a code span in a table cell is two bytes of
+the range).
+"""
+rulings = """
+Standard CommonMark code-span semantics: the closing run must match the
+opening run's length, so a double-backtick span may contain single
+backticks. No construct is extracted from inside a code span, and a
+code span's range never overlaps another code span's.
+"""
+
+[[construct]]
+kind = "code-fence"
+name = "Fenced code blocks"
+range = """
+From the first fence character of the opening fence (leading
+indentation of up to three spaces excluded) to the last fence character
+of the closing fence. For a fence that is never closed, to the end of
+the last content line, final line terminator excluded. Info strings are
+inside the range. For a fence inside a blockquote the range runs from
+the opening fence character to the closing fence character and
+necessarily includes the interior quote-prefix bytes, byte ranges being
+contiguous.
+"""
+rulings = """
+Backtick and tilde fences of length three or more; a longer fence may
+contain shorter fence-character runs as content. No construct is
+extracted from inside a fenced block: not tags, not block identifiers,
+not wikilinks.
+"""
+
+[[construct]]
+kind = "code-indented"
+name = "Indented code blocks"
+range = """
+From the first byte of the first line of the block (the line's
+indentation whitespace included, i.e. the range starts at column zero
+of that line) to the end of the last content line, line terminator
+excluded. Interior blank lines are inside the range; trailing blank
+lines are outside the block per CommonMark.
+"""
+rulings = """
+Standard CommonMark indented code (four spaces or a tab), reachable
+only after a blank line following a paragraph. No construct is
+extracted from inside the block.
+"""
+
+# ---------------------------------------------------------------------
+# Cross-cutting rulings
+# ---------------------------------------------------------------------
+
+[exclusions]
+# Contexts in which the post-pass constructs (tag, block-id) are never
+# recognized. Byte ranges of these zones are derived from the parse:
+# code spans, fenced and indented code blocks, autolinks, wikilinks,
+# embeds, HTML blocks, inline HTML tags, and the frontmatter block.
+# CommonMark inline structure (emphasis, link text) is NOT an exclusion
+# zone: a whitespace-preceded tag inside emphasis or link text is
+# extracted.
+zones = [
+  "code-span",
+  "code-fence",
+  "code-indented",
+  "autolink",
+  "wikilink",
+  "embed",
+  "html-block",
+  "html-inline",
+  "frontmatter",
+]
+
+[overlap]
+# Extractions of the same kind never overlap; the fuzz harness asserts
+# this per kind. Extractions of different kinds may nest or overlap
+# freely (a wikilink inside a heading, a code span inside a heading, a
+# tag inside a heading line).
+per_kind_disjoint = true
+
+[wikilink-resolution]
+# Semantics of resolve_wikilink in skribeum-core, shared with the
+# TypeScript side for display-time resolution. Pure function over the
+# vault index's path list (vault-root-relative, '/'-separated paths).
+#
+# 1. The alias is split off at the first '|'; everything after it is
+#    display text and never affects resolution.
+# 2. The subpath is split off at the first '#'. A subpath beginning
+#    with '^' is a block reference (identifier after the caret);
+#    anything else is a heading reference, kept verbatim including any
+#    further '#' separators for nested heading chains.
+# 3. The remaining note part is trimmed of surrounding whitespace. An
+#    empty note part is a self-reference (resolves within the current
+#    file).
+# 4. A note part without a '.md'-style extension matches index paths
+#    both as written and with '.md' appended; a note part carrying an
+#    extension (embeds of attachments) matches as written only.
+# 5. Match order, first non-empty tier wins:
+#    a. exact: the note part equals a full index path,
+#    b. suffix: an index path ends with '/' + note part (Obsidian
+#       shortest-path linking),
+#    c. the same two tiers case-insensitively (Unicode simple case
+#       folding) when the case-sensitive tiers are empty.
+# 6. When one tier holds several candidates the resolution is
+#    deterministic: fewest path segments first, then byte-lexicographic
+#    order, and the result is flagged ambiguous.
+# Heading and block-id subpath existence is not checked here; the
+# resolver locates the file, and subpath verification belongs to the
+# consumer holding that file's extractions.

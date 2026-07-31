@@ -40,9 +40,18 @@ jobs:
 
       # Component-level editor tests: offset-conversion and line-ending
       # parity with skribeum-core, cursor mapping and undo discipline
-      # across external ingests, and the decoration-inertness guard over
-      # the corpus.
+      # across external ingests, the decoration engine (snapshot goldens,
+      # cursor-reveal rules, buffer inertness over the corpus, frontmatter
+      # round trips, UI-string externalization), and the TypeScript half of
+      # the two-parser conformance gate against tests/conformance/rust/.
       - run: bun run test:web
+
+      # Data-driven decoration proof: a pull request changing the
+      # decoration table may touch only the table file, tests, and
+      # docs/decoration-rules.md.
+      - run: bash scripts/check-table-only-diff.sh
+        shell: bash
+        if: runner.os == 'Linux'
 
       # The frontend must be built before any cargo compilation:
       # tauri::generate_context! embeds ../dist at compile time, so clippy and
@@ -59,6 +68,16 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - run: cargo test --workspace --locked
+
+      # Two-parser conformance gate (permanent): the Rust extractor and the
+      # TypeScript decoration engine must produce identical
+      # (kind, start_byte, end_byte) sets over tests/corpus/, per
+      # tests/syntax-spec.toml. This step verifies the Rust emission against
+      # the committed snapshots in tests/conformance/rust/; the TypeScript
+      # emitter's comparison against the same snapshots runs in the web
+      # test suite above.
+      - name: Two-parser conformance gate
+        run: cargo test -p skribeum-core --locked --test conformance
 
       # IPC contract gate: the tauri-specta generated bindings must expose
       # exactly the command set committed in ipc-allowlist.json, and the

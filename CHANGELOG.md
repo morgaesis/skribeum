@@ -8,6 +8,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Live preview: a data-driven decoration engine over the Lezer syntax
+  tree renders headings, emphasis, links, wikilinks, embeds, lists,
+  tasks, inline and fenced code, blockquotes, callouts, tags and block
+  identifiers as source-text decoration with per-construct cursor-reveal
+  (documented in `docs/decoration-rules.md`), windowed to the viewport,
+  disabled on over-long lines, and asserted inert against the buffer over
+  the whole corpus; decoration sets serialize to committed golden
+  snapshots so rendering changes are reviewed diffs.
+- Obsidian syntax extensions for the editor's markdown parser: wikilinks
+  with aliases, embeds, tags, block identifiers, callout marks and the
+  frontmatter block, shared by decoration and the conformance emitter.
+- Wikilink display resolution honoring `.obsidian/app.json`, resolving
+  targets against the vault tree with shortest-path semantics and styling
+  unresolved links distinctly.
+- Properties panel above the editor: frontmatter keys render in order
+  with typed inputs for dates, numbers, booleans and lists (honoring
+  `.obsidian/types.json`), and edits replace exactly the value's bytes
+  through the normal change-set save path.
+- TypeScript half of the two-parser conformance gate: the extended Lezer
+  parse emits `(kind, start_byte, end_byte)` lines per corpus file and
+  must match the committed Rust goldens byte for byte.
+- UI-string externalization check over the Svelte templates and a
+  keystroke-latency report harness for the two pathological corpus files.
 - Crash-safe write path: temp file, fsync, rename over the target, parent
   directory fsync, `F_FULLFSYNC` semantics on macOS, permission mode and
   obtainable ownership preserved, symlinks resolved and written through.

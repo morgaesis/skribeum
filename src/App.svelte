@@ -3,6 +3,16 @@ import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
 import { onMount } from "svelte";
 import Banners, { type BannerItem } from "./lib/Banners.svelte";
 import Editor from "./lib/Editor.svelte";
+import {
+  DEFAULT_OBSIDIAN_APP_CONFIG,
+  type ObsidianAppConfig,
+  parseObsidianAppConfig,
+  type WikilinkResolutionContext,
+} from "./lib/editor/decorations/wikilinks";
+import {
+  type FrontmatterValueType,
+  parseObsidianTypes,
+} from "./lib/editor/frontmatter";
 import FileTree from "./lib/FileTree.svelte";
 import { M0_FIXTURE } from "./lib/fixture";
 import {
@@ -17,6 +27,7 @@ import {
   type LoadedNote,
   openVault,
   readNote,
+  readVaultConfigFile,
   vaultTree,
   watchSubscribe,
 } from "./lib/ipc/vault";
@@ -30,6 +41,9 @@ let collisionGroups = $state<string[][]>([]);
 let errorText = $state<string | null>(null);
 let banners = $state<BannerItem[]>([]);
 let editor = $state<ReturnType<typeof Editor> | undefined>();
+let obsidianConfig = $state<ObsidianAppConfig>(DEFAULT_OBSIDIAN_APP_CONFIG);
+let linkContext = $state<WikilinkResolutionContext | null>(null);
+let propertyTypes = $state<Record<string, FrontmatterValueType> | null>(null);
 
 let nextBannerId = 0;
 // Journal-recovered deltas for notes that are not open yet, applied as
@@ -65,6 +79,32 @@ function bannerReasonText(reason: BannerReason): string {
   }
 }
 
+function refreshLinkContext() {
+  linkContext = {
+    paths: tree
+      .filter((entry) => entry.kind !== "directory")
+      .map((entry) => entry.path),
+    config: obsidianConfig,
+  };
+}
+
+/**
+ * Reads the optional `.obsidian` configuration (link knobs, declared
+ * property types) read-only through the existing `note_read` command.
+ * Absent files leave the defaults; nothing is ever written.
+ */
+async function readObsidianConfig(handle: VaultHandle) {
+  const [appJson, typesJson] = await Promise.all([
+    readVaultConfigFile(handle, ".obsidian/app.json"),
+    readVaultConfigFile(handle, ".obsidian/types.json"),
+  ]);
+  obsidianConfig =
+    appJson === null
+      ? DEFAULT_OBSIDIAN_APP_CONFIG
+      : parseObsidianAppConfig(appJson);
+  propertyTypes = typesJson === null ? null : parseObsidianTypes(typesJson);
+}
+
 async function openVaultAtPath(path: string) {
   errorText = null;
   try {
@@ -73,6 +113,8 @@ async function openVaultAtPath(path: string) {
     tree = await vaultTree(handle);
     selectedPath = null;
     note = null;
+    await readObsidianConfig(handle);
+    refreshLinkContext();
     await watchSubscribe(handle);
   } catch (error) {
     errorText = describeError(STRINGS.vaultOpenFailed, error);
@@ -93,6 +135,7 @@ async function refreshTree() {
   }
   try {
     tree = await vaultTree(vault);
+    refreshLinkContext();
   } catch (error) {
     errorText = describeError(STRINGS.vaultOpenFailed, error);
   }
@@ -341,6 +384,8 @@ onMount(() => {
           {note}
           {vault}
           path={selectedPath}
+          {linkContext}
+          {propertyTypes}
           {onConflict}
           {onWriteError}
         />

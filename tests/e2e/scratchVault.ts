@@ -17,6 +17,12 @@ export const LF_NOTE_CONTENT = "alpha\nbeta\ngamma\n";
 export const CRLF_NOTE_NAME = "crlf.md";
 export const CRLF_NOTE_CONTENT = "first\r\nsecond\r\nthird\r\n";
 
+// Named to sort after the other notes so the keyboard-traversal spec's
+// arrow-key expectations over the first two rows stay stable.
+export const LIVE_PREVIEW_NOTE_NAME = "z-live-preview.md";
+export const LIVE_PREVIEW_NOTE_CONTENT =
+  "# Sunrise heading\n\nbody text here\n";
+
 /**
  * Resets the scratch vault to its fixture files. The vault root itself is
  * never deleted: the WebdriverIO launcher starts the app before the worker
@@ -36,5 +42,9 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, CRLF_NOTE_NAME),
     CRLF_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, LIVE_PREVIEW_NOTE_NAME),
+    LIVE_PREVIEW_NOTE_CONTENT,
   );
 }

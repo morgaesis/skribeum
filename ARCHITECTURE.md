@@ -81,10 +81,65 @@ exactly at the ingest state. Journal-recovered deltas apply as pending
 Every transaction annotated as decoration-originated is asserted inert
 (`docChanged === false`) by the dispatch wrapper in dev and test builds.
 
+## Live preview
+
+The editor renders source-text decoration: the buffer holds the exact
+source and presentation is decoration only, never a text transform. The
+`@lezer/markdown` parse is extended in
+`src/lib/editor/markdown/obsidian.ts` with the Obsidian constructs the
+stock grammar lacks (wikilinks, embeds, tags, block identifiers, callout
+marks, the frontmatter block), and that module's node vocabulary is the
+only one decoration speaks. The decoration engine
+(`src/lib/editor/decorations/engine.ts`) is data-driven: one table
+(`src/lib/editor/decorations/table.ts`) maps node names to marks, hidden
+ranges, line classes or widgets, each row carrying a cursor-reveal policy
+(`docs/decoration-rules.md` mirrors the table row for row, test-enforced).
+The engine interprets rows synchronously inside the view plugin's update,
+windowed to the visible ranges, with decorations disabled on lines past a
+length threshold so pathological lines stay editable. Decoration sets
+serialize to stable text for golden-snapshot review, and the same
+serialized attributes carry the accessibility roles and names widgets
+render.
+
+Wikilink display resolution honors `.obsidian/app.json` read through the
+existing `note_read` command, resolves targets against the vault tree
+with shortest-path semantics, and styles unresolved links distinctly; the
+Rust index stays the authority for vault-wide link structure. Frontmatter
+renders as a properties panel above the editor: a positional parser
+records each value's exact character range, typed inputs (dates, numbers,
+booleans, lists, honoring `.obsidian/types.json`) replace precisely that
+range through a normal editor transaction, and untouched keys are
+byte-preserved through the ordinary change-set save path.
+
+The two-parser split (decision 11) is held together by a permanent
+conformance gate: `tests/syntax-spec.toml` is the shared syntax contract,
+and both the Rust extractor and the Lezer-based emitter
+(`tests/web/conformanceEmitter.ts`) must produce identical
+`(kind, start_byte, end_byte)` sets over `tests/corpus/`, compared
+against the committed goldens in `tests/conformance/rust/`.
+
 The `webdriver`-feature build (end-to-end tests only, never release
 artifacts) announces the vault named by `SKRIBEUM_E2E_VAULT` to the
 webview on page load, which opens it on startup; the directory-picker
 dialog cannot be driven headlessly.
+
+## Two parsers, one contract
+
+Two markdown parsers exist by design, with a hard split of authority. The
+Lezer tree in the webview is the sole authority for what an open buffer
+shows. The `skribeum-core` extraction layer (`extract.rs`, pulldown-cmark
+offset iteration plus post-passes for the Obsidian constructs CommonMark
+lacks) is the sole authority for vault-wide structure: links, wikilinks,
+embeds, tags, headings, block identifiers, and code regions, feeding the
+link graph, backlinks and search. Neither ever computes the other's
+output. Both implement the shared specification in `tests/syntax-spec.toml`
+and must emit an identical `(kind, start_byte, end_byte)` set over every
+file in `tests/corpus/`; the committed snapshots under
+`tests/conformance/rust/` are the comparison point, and any divergence
+fails CI. Wikilink resolution (`resolve_wikilink`) is a pure function over
+the vault index's path list implementing Obsidian shortest-path semantics:
+exact path, then unique suffix, then the same case-insensitively, with
+heading and block subpaths split off.
 
 ## Files are the source of truth
 

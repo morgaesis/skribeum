@@ -29,6 +29,7 @@ import {
   SettingsStore,
 } from "./lib/features/settingsStore";
 import {
+  VIEW_CANVAS,
   VIEW_COMMAND_PALETTE,
   VIEW_OUTLINE,
   VIEW_QUICK_SWITCHER,
@@ -54,14 +55,22 @@ import {
   openVault,
   readNote,
   readVaultConfigFile,
+  readVaultFile,
   vaultTree,
   watchSubscribe,
 } from "./lib/ipc/vault";
 import OutlinePanel from "./lib/OutlinePanel.svelte";
 import PaletteOverlay from "./lib/PaletteOverlay.svelte";
 import { type CommandContext, globalKeydownHandler } from "./lib/registry";
+import CanvasView from "./lib/rendering/CanvasView.svelte";
+import {
+  type CanvasDocument,
+  canvasFilePaths,
+  parseCanvas,
+} from "./lib/rendering/canvas";
 import SettingsView from "./lib/SettingsView.svelte";
 import { STRINGS } from "./lib/strings";
+import { applyTheme, isThemeName } from "./lib/themes/theme";
 
 let vault = $state<VaultHandle | null>(null);
 let tree = $state<TreeEntry[]>([]);
@@ -74,6 +83,11 @@ let editor = $state<ReturnType<typeof Editor> | undefined>();
 let obsidianConfig = $state<ObsidianAppConfig>(DEFAULT_OBSIDIAN_APP_CONFIG);
 let linkContext = $state<WikilinkResolutionContext | null>(null);
 let propertyTypes = $state<Record<string, FrontmatterValueType> | null>(null);
+let contentView = $state<string | null>(null);
+let canvas = $state<CanvasDocument | null>(null);
+let canvasPreviews = $state<Record<string, string>>({});
+let canvasError = $state<string | null>(null);
+let canvasViewer = $state<ReturnType<typeof CanvasView> | undefined>();
 
 let nextBannerId = 0;
 // Journal-recovered deltas for notes that are not open yet, applied as
@@ -97,6 +111,7 @@ let outlineEntries = $state<OutlineEntry[]>([]);
 let overlayQuery = $state("");
 let searchResults = $state<SearchResult[]>([]);
 let searchDebounce: ReturnType<typeof setTimeout> | undefined;
+let cancelOutlineRefresh: (() => void) | undefined;
 /** Recently opened note paths, most recent first. */
 let recents = $state<string[]>([]);
 let settingsState = $state<SettingsState>({
@@ -117,6 +132,9 @@ function applyEditorFontSize(pixels: number) {
 const settingsStore = new SettingsStore((state) => {
   settingsState = state;
   applyEditorFontSize(state.document.editor_font_size);
+  applyTheme(
+    isThemeName(state.document.theme) ? state.document.theme : "system",
+  );
 });
 
 function notePathsOf(entries: TreeEntry[]): string[] {
@@ -128,6 +146,26 @@ function notePathsOf(entries: TreeEntry[]): string[] {
 function refreshOutline() {
   const view = editor?.getView();
   outlineEntries = view === undefined ? [] : computeOutline(view.state);
+}
+
+function scheduleOutlineRefresh() {
+  cancelOutlineRefresh?.();
+  if (typeof requestIdleCallback === "function") {
+    const callback = requestIdleCallback(
+      () => {
+        cancelOutlineRefresh = undefined;
+        refreshOutline();
+      },
+      { timeout: 250 },
+    );
+    cancelOutlineRefresh = () => cancelIdleCallback(callback);
+    return;
+  }
+  const timer = setTimeout(() => {
+    cancelOutlineRefresh = undefined;
+    refreshOutline();
+  }, 0);
+  cancelOutlineRefresh = () => clearTimeout(timer);
 }
 
 function openOverlay(id: string) {
@@ -155,7 +193,11 @@ async function refreshTreeIndex() {
 
 function closeOverlay() {
   activeOverlay = null;
-  editor?.getView()?.focus();
+  if (contentView === VIEW_CANVAS) {
+    canvasViewer?.focus();
+  } else {
+    editor?.getView()?.focus();
+  }
 }
 
 function commandContext(): CommandContext {
@@ -280,7 +322,7 @@ function outlineNavigate(from: number) {
 
 function onEditorDocChanged() {
   if (outlineOpen) {
-    refreshOutline();
+    scheduleOutlineRefresh();
   }
 }
 
@@ -347,9 +389,17 @@ async function openVaultAtPath(path: string) {
     tree = await vaultTree(handle);
     selectedPath = null;
     note = null;
+    contentView = null;
+    canvas = null;
+    canvasError = null;
     await readObsidianConfig(handle);
     refreshLinkContext();
     await watchSubscribe(handle);
+    const harnessNote = (window as Window & { __SKRIBEUM_E2E_NOTE__?: string })
+      .__SKRIBEUM_E2E_NOTE__;
+    if (typeof harnessNote === "string") {
+      await openNote(harnessNote);
+    }
   } catch (error) {
     errorText = describeError(STRINGS.vaultOpenFailed, error);
   }
@@ -382,6 +432,14 @@ async function openNote(path: string) {
   errorText = null;
   // Persist pending edits of the current note before switching away.
   await editor?.flush();
+  const debugWindow = window as Window & {
+    __SKRIBEUM_DEBUG_NOTE_OPEN_MS__?: number;
+    __SKRIBEUM_DEBUG_PERF__?: boolean;
+  };
+  const debugStart = debugWindow.__SKRIBEUM_DEBUG_PERF__
+    ? performance.now()
+    : undefined;
+  delete debugWindow.__SKRIBEUM_DEBUG_NOTE_OPEN_MS__;
   try {
     const loaded = await readNote(vault, path);
     const recovered = pendingRecovered.get(path);
@@ -391,12 +449,82 @@ async function openNote(path: string) {
       pushBanner({ text: STRINGS.noteRecoveredNotice });
     }
     note = loaded;
+    contentView = null;
+    canvas = null;
+    canvasError = null;
     selectedPath = path;
     recents = [path, ...recents.filter((entry) => entry !== path)].slice(0, 50);
     await tick();
-    refreshOutline();
+    if (outlineOpen) {
+      refreshOutline();
+    }
+    if (debugStart !== undefined) {
+      debugWindow.__SKRIBEUM_DEBUG_NOTE_OPEN_MS__ =
+        performance.now() - debugStart;
+    }
   } catch (error) {
     errorText = describeError(STRINGS.noteReadFailed, error);
+  }
+}
+
+function decodeFile(bytes: Uint8Array): string {
+  const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  return decoded.length > 100_000
+    ? `${decoded.slice(0, 100_000)}\n${STRINGS.canvasPreviewTruncated}`
+    : decoded;
+}
+
+function decodeCanvas(bytes: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
+async function openCanvas(path: string) {
+  const currentVault = vault;
+  if (currentVault === null) {
+    return;
+  }
+  errorText = null;
+  await editor?.flush();
+  try {
+    const parsed = parseCanvas(
+      decodeCanvas(await readVaultFile(currentVault, path)),
+    );
+    const previews = await Promise.all(
+      canvasFilePaths(parsed).map(async (file) => {
+        try {
+          return [
+            file,
+            decodeFile(await readVaultFile(currentVault, file)),
+          ] as const;
+        } catch {
+          return [file, STRINGS.canvasFileUnavailable] as const;
+        }
+      }),
+    );
+    note = null;
+    canvas = parsed;
+    canvasPreviews = Object.fromEntries(previews);
+    canvasError = null;
+    contentView = VIEW_CANVAS;
+    selectedPath = path;
+    outlineOpen = false;
+    await tick();
+    canvasViewer?.focus();
+  } catch (error) {
+    note = null;
+    canvas = null;
+    canvasPreviews = {};
+    canvasError = `${STRINGS.canvasParseFailed}: ${String(error)}`;
+    contentView = VIEW_CANVAS;
+    selectedPath = path;
+  }
+}
+
+function openPath(path: string) {
+  if (path.toLowerCase().endsWith(".canvas")) {
+    void openCanvas(path);
+  } else {
+    void openNote(path);
   }
 }
 
@@ -456,6 +584,13 @@ function pollEndToEndVault() {
 }
 
 onMount(() => {
+  const debugWindow = window as Window & {
+    __SKRIBEUM_DEBUG_OPEN_NOTE__?: (path: string) => Promise<void>;
+    __SKRIBEUM_DEBUG_PERF__?: boolean;
+  };
+  if (debugWindow.__SKRIBEUM_DEBUG_PERF__ === true) {
+    debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__ = openNote;
+  }
   const unlisteners = [
     events.vaultCollisionsDetected.listen((event) => {
       collisionGroups = event.payload.groups;
@@ -568,7 +703,9 @@ onMount(() => {
   void settingsStore.load();
   const pollTimer = pollEndToEndVault();
   return () => {
+    delete debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__;
     clearInterval(pollTimer);
+    cancelOutlineRefresh?.();
     for (const unlisten of unlisteners) {
       void unlisten.then((dispose) => dispose());
     }
@@ -582,7 +719,7 @@ onMount(() => {
 <svelte:window onkeydown={onGlobalKeydown} />
 
 <div class="flex h-screen flex-col overflow-hidden">
-  <header class="flex items-center gap-3 border-b border-gray-200 px-3 py-1.5">
+  <header class="skr-app-header flex items-center gap-3 border-b px-3 py-1.5">
     <h1 class="m-0 text-sm font-semibold">{STRINGS.appTitle}</h1>
     <button
       type="button"
@@ -591,37 +728,43 @@ onMount(() => {
     >
       {STRINGS.openVault}
     </button>
-    {#if note?.readOnly}
-      <span class="rounded bg-amber-100 px-2 py-0.5 text-xs">{STRINGS.readOnlyBadge}</span>
+    {#if note?.readOnly || contentView === VIEW_CANVAS}
+      <span class="skr-warning rounded px-2 py-0.5 text-xs">{STRINGS.readOnlyBadge}</span>
     {/if}
   </header>
 
   {#if collisionGroups.length > 0}
-    <aside class="border-b border-amber-300 bg-amber-50 px-3 py-1 text-xs" role="alert">
+    <aside class="skr-warning border-b px-3 py-1 text-xs" role="alert">
       {STRINGS.collisionBanner}
       {collisionGroups.map((group) => group.join(" / ")).join("; ")}
     </aside>
   {/if}
   {#if note?.readOnly}
-    <aside class="border-b border-amber-300 bg-amber-50 px-3 py-1 text-xs" role="alert">
+    <aside class="skr-warning border-b px-3 py-1 text-xs" role="alert">
       {STRINGS.nonUtf8Banner}
     </aside>
   {/if}
   <Banners {banners} onDismiss={dismissBanner} />
   {#if errorText !== null}
-    <aside class="border-b border-red-300 bg-red-50 px-3 py-1 text-xs" role="alert">
+    <aside class="skr-error border-b px-3 py-1 text-xs" role="alert">
       {errorText}
     </aside>
   {/if}
 
   <main class="flex min-h-0 flex-1 overflow-hidden">
     {#if vault !== null}
-      <nav class="w-64 shrink-0 overflow-y-auto border-r border-gray-200">
-        <FileTree entries={tree} {selectedPath} onOpenNote={openNote} />
+      <nav class="skr-sidebar w-64 shrink-0 overflow-y-auto border-r">
+        <FileTree entries={tree} {selectedPath} onOpenPath={openPath} />
       </nav>
     {/if}
     <section class="min-w-0 flex-1">
-      {#if note !== null}
+      {#if contentView === VIEW_CANVAS && canvas !== null}
+        <CanvasView bind:this={canvasViewer} {canvas} previews={canvasPreviews} />
+      {:else if contentView === VIEW_CANVAS && canvasError !== null}
+        <div class="skr-error m-4 rounded border p-3 text-sm" role="alert" data-testid="canvas-error">
+          {canvasError}
+        </div>
+      {:else if note !== null}
         <Editor
           bind:this={editor}
           {note}
@@ -650,7 +793,7 @@ onMount(() => {
       {/if}
     </section>
     {#if outlineOpen}
-      <aside class="w-60 shrink-0 overflow-y-auto border-l border-gray-200">
+      <aside class="skr-panel w-60 shrink-0 overflow-y-auto border-l">
         <OutlinePanel entries={outlineEntries} onNavigate={outlineNavigate} />
       </aside>
     {/if}

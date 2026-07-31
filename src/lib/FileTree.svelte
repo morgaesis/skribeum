@@ -5,11 +5,11 @@ import { STRINGS } from "./strings";
 let {
   entries,
   selectedPath = null,
-  onOpenNote,
+  onOpenPath,
 }: {
   entries: TreeEntry[];
   selectedPath?: string | null;
-  onOpenNote: (path: string) => void;
+  onOpenPath: (path: string) => void;
 } = $props();
 
 let expanded = $state<Record<string, boolean>>({});
@@ -57,8 +57,11 @@ function focusRow(index: number) {
 function activate(row: Row) {
   if (row.kind === "directory") {
     expanded[row.path] = !expanded[row.path];
-  } else if (row.kind === "note") {
-    onOpenNote(row.path);
+  } else if (
+    row.kind === "note" ||
+    row.path.toLowerCase().endsWith(".canvas")
+  ) {
+    onOpenPath(row.path);
   }
 }
 
@@ -132,11 +135,11 @@ function onKeydown(event: KeyboardEvent) {
       role="treeitem"
       aria-level={row.depth + 1}
       aria-expanded={row.kind === "directory" ? Boolean(expanded[row.path]) : undefined}
-      aria-selected={row.kind === "note" ? row.path === selectedPath : undefined}
-      aria-disabled={row.kind === "file" ? true : undefined}
+      aria-selected={row.kind === "note" || row.path.toLowerCase().endsWith(".canvas") ? row.path === selectedPath : undefined}
+      aria-disabled={row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas") ? true : undefined}
       tabindex={index === focusIndex ? 0 : -1}
       class="cursor-pointer rounded px-2 py-0.5 outline-offset-1 focus-visible:outline-2 focus-visible:outline-blue-500"
-      class:opacity-60={row.hidden || row.kind === "file"}
+      class:opacity-60={row.hidden || (row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas"))}
       class:bg-blue-100={row.path === selectedPath}
       style={`padding-left: ${0.5 + row.depth}rem`}
       onclick={() => {

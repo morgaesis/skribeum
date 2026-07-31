@@ -21,7 +21,8 @@ Reveal policies:
 The Context column restricts a row: `parent=` requires one of the listed
 direct parents, `notParent=` excludes them, `ancestor=` requires an
 enclosing node, `withSibling=`/`withoutSibling=` condition on a sibling
-node under the same parent. `-` means the row applies to every node of
+node under the same parent, and `codeInfo=` matches the first fenced-code
+info token case-insensitively. `-` means the row applies to every node of
 that name.
 
 | Node | Context | Presentation | Reveal |
@@ -57,12 +58,15 @@ that name.
 | `EmbedMark` | `-` | `hide` | cursor-inside |
 | `ListMark` | `-` | `mark cm-skr-list-mark` | never |
 | `TaskMarker` | `-` | `widget task-checkbox` | cursor-inside |
+| `InlineMath` | `-` | `widget math-inline` | cursor-inside |
+| `BlockMath` | `-` | `widget math-block` | cursor-inside |
 | `InlineCode` | `-` | `mark cm-skr-inline-code` | never |
 | `CodeMark` | `parent=InlineCode` | `hide` | cursor-inside |
 | `CodeMark` | `parent=FencedCode` | `mark cm-skr-code-fence` | never |
 | `FencedCode` | `-` | `line cm-skr-code-block` | never |
 | `CodeBlock` | `-` | `line cm-skr-code-block` | never |
 | `CodeInfo` | `-` | `mark cm-skr-code-info` | never |
+| `FencedCode` | `codeInfo=mermaid` | `widget mermaid-diagram` | cursor-inside |
 | `Blockquote` | `-` | `line cm-skr-blockquote` | never |
 | `QuoteMark` | `-` | `mark cm-skr-quote-mark` | never |
 | `CalloutMark` | `ancestor=Blockquote` | `mark cm-skr-callout-mark` | never |
@@ -71,13 +75,20 @@ that name.
 | `BlockId` | `-` | `mark cm-skr-block-id` | never |
 | `Frontmatter` | `-` | `line cm-skr-frontmatter` | never |
 
-Context-dependent attributes come from three documented engine builtins a
+Context-dependent attributes come from four documented engine builtins a
 row opts into: `wikilink-resolution` stamps `data-resolved` from the vault
 tree (unresolved links style distinctly), `callout-type` stamps
 `data-callout` and the `cm-skr-callout` line class when a blockquote is
 headed by a callout mark, and `code-language` stamps `data-language` from
-the fence info string.
+the fence info string. `mermaid-block` restricts the diagram widget to a
+Mermaid fence and stamps its language attribute.
 
-Two engine-level safeguards apply to every row: no decoration is computed
-on a document line longer than 10,000 characters, and computation is
-windowed to the viewport's visible ranges.
+No decoration is computed on a document line longer than 10,000 characters.
+Marks and inline widgets are windowed to visible ranges. Math-block and
+Mermaid replacements are held in a full-document decoration field because
+CodeMirror requires vertical-layout decorations to come from editor state;
+their expensive rendering starts only when CodeMirror mounts the widget.
+
+KaTeX font files are emitted as local build assets. Mermaid is a dynamic
+chunk loaded by the first diagram, and neither renderer adds a remote CSP
+source.

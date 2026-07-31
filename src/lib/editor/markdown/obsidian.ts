@@ -15,6 +15,7 @@ import {
   Subscript,
   Superscript,
 } from "@lezer/markdown";
+import { mathMarkdownExtension } from "../../rendering/math";
 
 const CHAR_EXCLAMATION = 33;
 const CHAR_HASH = 35;
@@ -237,14 +238,34 @@ const callouts: MarkdownConfig = {
 };
 
 /**
+ * Lezer reuses Markdown trees at block boundaries. A paragraph without a
+ * blank line is one block, so editing any character in a multi-megabyte
+ * paragraph otherwise reparses the entire block synchronously. Bound the
+ * editor tree's paragraph blocks while leaving ordinary paragraphs intact.
+ */
+export const MAX_INCREMENTAL_PARAGRAPH_LENGTH = 4_096;
+/** Maximum leading source scanned for a closed frontmatter block. */
+export const FRONTMATTER_BLOCK_SCAN_LIMIT = 16_384;
+
+const boundedParagraphs: MarkdownConfig = {
+  parseBlock: [
+    {
+      name: "BoundedParagraph",
+      endLeaf(_cx, _line, leaf) {
+        return leaf.content.length >= MAX_INCREMENTAL_PARAGRAPH_LENGTH;
+      },
+    },
+  ],
+};
+
+/**
  * The leading YAML frontmatter block as one opaque node, so `title: x`
  * lines followed by the closing `---` never read as a setext heading and
  * no inline construct is recognized inside the block. The block opens
  * with a line that is exactly `---` at document start and closes at the
- * next `---` or `...` line. An unterminated opener consumes the rest of
- * the document as frontmatter; the conformance emitter applies the
- * specification's stricter unterminated-is-not-frontmatter rule by
- * choosing a parser without this extension for such documents.
+ * next `---` or `...` line. The editor scan is bounded; an opener without
+ * a nearby close becomes ordinary text instead of making every subsequent
+ * edit reparse to the document end.
  */
 const frontmatterBlock: MarkdownConfig = {
   defineNodes: [{ name: "Frontmatter", block: true }],
@@ -256,15 +277,28 @@ const frontmatterBlock: MarkdownConfig = {
         if (cx.lineStart !== 0 || line.text !== "---") {
           return false;
         }
-        while (cx.nextLine()) {
-          if (line.text === "---" || line.text === "...") {
-            const end = cx.lineStart + line.text.length;
+        const lines = [line.text];
+        let end = line.text.length;
+        while (end < FRONTMATTER_BLOCK_SCAN_LIMIT && cx.nextLine()) {
+          const currentLine = line.text as string;
+          if (currentLine === "---" || currentLine === "...") {
+            end = cx.lineStart + currentLine.length;
             cx.nextLine();
             cx.addElement(cx.elt("Frontmatter", 0, end));
             return true;
           }
+          lines.push(currentLine);
+          end = cx.lineStart + currentLine.length;
         }
-        cx.addElement(cx.elt("Frontmatter", 0, cx.prevLineEnd()));
+        cx.nextLine();
+        cx.addElement(
+          cx.elt(
+            "Paragraph",
+            0,
+            end,
+            cx.parser.parseInline(lines.join("\n"), 0),
+          ),
+        );
         return true;
       },
     },
@@ -277,11 +311,13 @@ const frontmatterBlock: MarkdownConfig = {
  * claimed as one embed rather than an image-plus-wikilink split.
  */
 export const obsidianMarkdownExtensions: MarkdownConfig[] = [
+  boundedParagraphs,
   frontmatterBlock,
   wikilinks,
   tags,
   blockIds,
   callouts,
+  mathMarkdownExtension,
 ];
 
 const baseExtensions = [GFM, Subscript, Superscript, Emoji];

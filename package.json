@@ -25,6 +25,8 @@
     "@lezer/markdown": "^1.7.2",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
+    "katex": "^0.18.1",
+    "mermaid": "^11.16.0",
     "svelte": "^5.56.8"
   },
   "devDependencies": {
@@ -36,6 +38,7 @@
     "@wdio/local-runner": "^9.30.0",
     "@wdio/mocha-framework": "^9.30.0",
     "@wdio/tauri-service": "^1.2.0",
+    "axe-core": "^4.12.1",
     "expect-webdriverio": "^5.7.0",
     "jsdom": "^30.0.1",
     "lefthook": "^2.1.10",

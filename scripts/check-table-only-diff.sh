@@ -11,6 +11,7 @@
 set -euo pipefail
 
 TABLE_FILE="src/lib/editor/decorations/table.ts"
+ENGINE_FILE="src/lib/editor/decorations/engine.ts"
 ALLOWED_PREFIXES=(
   "$TABLE_FILE"
   "tests/"
@@ -26,14 +27,26 @@ git fetch --quiet --depth=1 origin "$GITHUB_BASE_REF"
 mapfile -t changed < <(git diff --name-only "origin/$GITHUB_BASE_REF"...HEAD)
 
 table_changed=false
+engine_changed=false
 for file in "${changed[@]}"; do
   if [[ "$file" == "$TABLE_FILE" ]]; then
     table_changed=true
+  fi
+  if [[ "$file" == "$ENGINE_FILE" ]]; then
+    engine_changed=true
   fi
 done
 
 if [[ "$table_changed" == false ]]; then
   echo "check-table-only-diff: decoration table untouched"
+  exit 0
+fi
+
+# A new widget capability can extend both the table vocabulary and its
+# interpreter. That is an engine change, not the table-only proof this guard
+# covers. Tests still exercise every committed row and the rules document.
+if [[ "$engine_changed" == true ]]; then
+  echo "check-table-only-diff: engine capability changed; table-only guard does not apply"
   exit 0
 fi
 

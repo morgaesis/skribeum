@@ -23,6 +23,8 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
+import { renderMath } from "../../rendering/math";
+import { renderMermaid } from "../../rendering/mermaid";
 import { STRINGS } from "../../strings";
 import { decorationOrigin } from "../decorationGuard";
 import {
@@ -110,6 +112,101 @@ class TaskCheckboxWidget extends WidgetType {
     // through to the editor so clicking places the cursor.
     return false;
   }
+}
+
+class MathWidget extends WidgetType {
+  constructor(
+    readonly source: string,
+    readonly displayMode: boolean,
+  ) {
+    super();
+  }
+
+  override eq(other: MathWidget): boolean {
+    return (
+      other.source === this.source && other.displayMode === this.displayMode
+    );
+  }
+
+  override toDOM(): HTMLElement {
+    const host = document.createElement(this.displayMode ? "div" : "span");
+    host.className = this.displayMode
+      ? "cm-skr-math cm-skr-math-block"
+      : "cm-skr-math cm-skr-math-inline";
+    host.setAttribute("role", "img");
+    host.setAttribute(
+      "aria-label",
+      this.displayMode ? STRINGS.mathBlockLabel : STRINGS.mathInlineLabel,
+    );
+    renderMath(host, this.source, this.displayMode);
+    return host;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+let nextMermaidId = 0;
+
+class MermaidWidget extends WidgetType {
+  constructor(readonly source: string) {
+    super();
+  }
+
+  override eq(other: MermaidWidget): boolean {
+    return other.source === this.source;
+  }
+
+  override toDOM(view: EditorView): HTMLElement {
+    nextMermaidId += 1;
+    const host = document.createElement("div");
+    host.className = "cm-skr-mermaid";
+    host.setAttribute("role", "img");
+    host.setAttribute("aria-label", STRINGS.mermaidDiagramLabel);
+    host.textContent = STRINGS.mermaidLoading;
+    void renderMermaid(
+      host,
+      this.source,
+      `skribeum-mermaid-${nextMermaidId}`,
+      STRINGS.mermaidError,
+    ).finally(() => {
+      if (host.isConnected) {
+        view.requestMeasure();
+      }
+    });
+    return host;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+function isBlockWidgetRule(rule: DecorationRule): boolean {
+  return (
+    rule.presentation.present === "widget" &&
+    (rule.presentation.widget === "math-block" ||
+      rule.presentation.widget === "mermaid-diagram")
+  );
+}
+
+const splitTableCache = new WeakMap<
+  readonly DecorationRule[],
+  { inline: readonly DecorationRule[]; block: readonly DecorationRule[] }
+>();
+
+function splitTable(table: readonly DecorationRule[]) {
+  const cached = splitTableCache.get(table);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const split = {
+    inline: table.filter((rule) => !isBlockWidgetRule(rule)),
+    block: table.filter(isBlockWidgetRule),
+  };
+  splitTableCache.set(table, split);
+  return split;
 }
 
 /** The marker character between the task brackets, e.g. `x` for `[x]`. */
@@ -209,7 +306,11 @@ function hasAncestor(node: SyntaxNode, name: string): boolean {
 }
 
 /** Whether a table row applies to a node; exported for the rules tests. */
-export function ruleMatches(rule: DecorationRule, node: SyntaxNode): boolean {
+export function ruleMatches(
+  rule: DecorationRule,
+  node: SyntaxNode,
+  doc?: Text,
+): boolean {
   const parentName = node.parent?.name;
   if (rule.parent !== undefined) {
     if (parentName === undefined || !rule.parent.includes(parentName)) {
@@ -232,6 +333,16 @@ export function ruleMatches(rule: DecorationRule, node: SyntaxNode): boolean {
     hasSibling(node, rule.withoutSibling)
   ) {
     return false;
+  }
+  if (rule.codeInfo !== undefined) {
+    const info = node.getChild("CodeInfo");
+    const firstToken =
+      info === null || doc === undefined
+        ? ""
+        : (doc.sliceString(info.from, info.to).trim().split(/\s+/u)[0] ?? "");
+    if (firstToken.toLowerCase() !== rule.codeInfo.toLowerCase()) {
+      return false;
+    }
   }
   return true;
 }
@@ -313,6 +424,17 @@ function dynamicAttributes(
     }
     case "code-language":
       return { "data-language": doc.sliceString(node.from, node.to) };
+    case "mermaid-block": {
+      const info = node.getChild("CodeInfo");
+      const firstToken =
+        info === null
+          ? ""
+          : (doc.sliceString(info.from, info.to).trim().split(/\s+/u)[0] ?? "");
+      if (firstToken.toLowerCase() !== "mermaid") {
+        return null;
+      }
+      return { "data-language": "mermaid" };
+    }
     default:
       return {};
   }
@@ -339,6 +461,61 @@ function markDecoration(
   return Decoration.mark(spec);
 }
 
+function mathSource(node: SyntaxNode, doc: Text): string {
+  const content = node.getChild("MathContent");
+  return content === null
+    ? ""
+    : doc.sliceString(content.from, content.to).trim();
+}
+
+function mermaidSource(node: SyntaxNode, doc: Text): string {
+  const lines = doc.sliceString(node.from, node.to).split("\n");
+  lines.shift();
+  if (/^[ \t]*(?:`{3,}|~{3,})[ \t]*$/.test(lines.at(-1) ?? "")) {
+    lines.pop();
+  }
+  return lines.join("\n").trim();
+}
+
+function widgetFor(
+  widget: Extract<Presentation, { present: "widget" }>["widget"],
+  node: SyntaxNode,
+  doc: Text,
+): { widget: WidgetType; block: boolean; attributes: Record<string, string> } {
+  switch (widget) {
+    case "task-checkbox": {
+      const marker = taskMarkerCharacter(doc.sliceString(node.from, node.to));
+      return {
+        widget: new TaskCheckboxWidget(marker),
+        block: false,
+        attributes: Object.fromEntries(taskCheckboxAttributes(marker)),
+      };
+    }
+    case "math-inline":
+      return {
+        widget: new MathWidget(mathSource(node, doc), false),
+        block: false,
+        attributes: { role: "img", "aria-label": STRINGS.mathInlineLabel },
+      };
+    case "math-block":
+      return {
+        widget: new MathWidget(mathSource(node, doc), true),
+        block: true,
+        attributes: { role: "img", "aria-label": STRINGS.mathBlockLabel },
+      };
+    case "mermaid-diagram":
+      return {
+        widget: new MermaidWidget(mermaidSource(node, doc)),
+        block: true,
+        attributes: {
+          role: "img",
+          "aria-label": STRINGS.mermaidDiagramLabel,
+          "data-language": "mermaid",
+        },
+      };
+  }
+}
+
 /**
  * Computes the decoration set for `ranges` of `doc` under `table`. Pure:
  * the same document, tree, table, selection and context produce the same
@@ -359,7 +536,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
       return false;
     }
     const scope =
-      rule.reveal === "cursor-inside" && rule.node === "TaskMarker"
+      rule.reveal === "cursor-inside" && rule.presentation.present === "widget"
         ? node
         : (node.parent ?? node);
     let from = scope.from;
@@ -393,7 +570,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
         }
         const node = ref.node;
         for (const rule of nodeRules) {
-          if (!ruleMatches(rule, node)) {
+          if (!ruleMatches(rule, node, doc)) {
             continue;
           }
           const dynamic = dynamicAttributes(rule, node, doc, wikilinks);
@@ -463,18 +640,14 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               }),
             });
           } else if (presentation.present === "widget") {
-            const marker = taskMarkerCharacter(
-              doc.sliceString(ref.from, ref.to),
-            );
-            const attributes = Object.fromEntries(
-              taskCheckboxAttributes(marker),
-            );
+            const builtWidget = widgetFor(presentation.widget, node, doc);
             built.push({
               from: ref.from,
               to: ref.to,
               decoration: Decoration.replace({
-                widget: new TaskCheckboxWidget(marker),
-                skr: `widget ${presentation.widget}${serializeAttributes(attributes)}`,
+                widget: builtWidget.widget,
+                block: builtWidget.block,
+                skr: `widget ${presentation.widget}${serializeAttributes(builtWidget.attributes)}`,
               }),
             });
           } else {
@@ -521,7 +694,7 @@ function buildViewDecorations(view: EditorView): DecorationSet {
   return computeDecorations({
     doc: state.doc,
     tree: syntaxTree(state),
-    table: state.facet(decorationTable),
+    table: splitTable(state.facet(decorationTable)).inline,
     selection: state.selection.ranges.map((range) => ({
       from: range.from,
       to: range.to,
@@ -530,6 +703,35 @@ function buildViewDecorations(view: EditorView): DecorationSet {
     wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
   });
 }
+
+function buildBlockDecorations(state: EditorState): DecorationSet {
+  return computeDecorations({
+    doc: state.doc,
+    tree: syntaxTree(state),
+    table: splitTable(state.facet(decorationTable)).block,
+    selection: state.selection.ranges.map((range) => ({
+      from: range.from,
+      to: range.to,
+    })),
+  });
+}
+
+const blockEngineField = StateField.define<DecorationSet>({
+  create: buildBlockDecorations,
+  update(value, transaction) {
+    if (
+      transaction.docChanged ||
+      transaction.selection !== transaction.startState.selection ||
+      syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ||
+      transaction.state.facet(decorationTable) !==
+        transaction.startState.facet(decorationTable)
+    ) {
+      return buildBlockDecorations(transaction.state);
+    }
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 function needsRebuild(update: ViewUpdate): boolean {
   return (
@@ -574,83 +776,104 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-strong": { fontWeight: "700" },
   ".cm-skr-strikethrough": { textDecoration: "line-through" },
   ".cm-skr-link, .cm-skr-url": {
-    color: "#2563eb",
+    color: "var(--skr-link)",
     textDecoration: "underline",
   },
-  ".cm-skr-link-label": { color: "#2563eb" },
-  ".cm-skr-wikilink": { color: "#2563eb" },
+  ".cm-skr-link-label": { color: "var(--skr-link)" },
+  ".cm-skr-wikilink": { color: "var(--skr-link)" },
   ".cm-skr-wikilink-target, .cm-skr-wikilink-alias": {
     textDecoration: "underline",
   },
   '.cm-skr-wikilink[data-resolved="false"]': {
-    color: "#6b7280",
+    color: "var(--skr-text-muted)",
     textDecorationStyle: "dashed",
   },
   '.cm-skr-wikilink[data-resolved="false"] .cm-skr-wikilink-target': {
     textDecorationStyle: "dashed",
   },
-  ".cm-skr-embed": { backgroundColor: "rgba(37, 99, 235, 0.08)" },
-  ".cm-skr-list-mark": { color: "#9333ea" },
+  ".cm-skr-embed": { backgroundColor: "var(--skr-accent-soft)" },
+  ".cm-skr-list-mark": { color: "var(--skr-accent)" },
   ".cm-skr-task-checkbox": {
     display: "inline-block",
     width: "0.9em",
     height: "0.9em",
     verticalAlign: "text-bottom",
-    border: "1.5px solid #6b7280",
+    border: "1.5px solid var(--skr-text-muted)",
     borderRadius: "3px",
     margin: "0 0.15em",
   },
   '.cm-skr-task-checkbox[aria-checked="true"]': {
-    backgroundColor: "#2563eb",
-    borderColor: "#2563eb",
+    backgroundColor: "var(--skr-accent)",
+    borderColor: "var(--skr-accent)",
   },
   '.cm-skr-task-checkbox[aria-checked="mixed"]': {
-    backgroundColor: "#9ca3af",
-    borderColor: "#6b7280",
+    backgroundColor: "var(--skr-text-muted)",
+    borderColor: "var(--skr-text-muted)",
   },
   ".cm-skr-inline-code": {
     fontFamily: "inherit",
-    backgroundColor: "rgba(0, 0, 0, 0.06)",
+    backgroundColor: "var(--skr-code-surface)",
     borderRadius: "3px",
     padding: "0 2px",
   },
-  ".cm-skr-code-block": { backgroundColor: "rgba(0, 0, 0, 0.04)" },
+  ".cm-skr-code-block": { backgroundColor: "var(--skr-code-surface)" },
   ".cm-skr-code-fence": { opacity: "0.5" },
   ".cm-skr-code-info": { opacity: "0.7", fontStyle: "italic" },
   ".cm-skr-blockquote": {
-    borderLeft: "3px solid #d1d5db",
+    borderLeft: "3px solid var(--skr-border)",
     paddingLeft: "0.5em",
   },
-  ".cm-skr-quote-mark": { color: "#9ca3af" },
-  ".cm-skr-callout": { backgroundColor: "rgba(37, 99, 235, 0.05)" },
+  ".cm-skr-quote-mark": { color: "var(--skr-text-muted)" },
+  ".cm-skr-callout": { backgroundColor: "var(--skr-accent-soft)" },
   '.cm-skr-callout[data-callout="warning"]': {
-    backgroundColor: "rgba(217, 119, 6, 0.08)",
-    borderLeftColor: "#d97706",
+    backgroundColor: "var(--skr-warning-surface)",
+    borderLeftColor: "var(--skr-warning)",
   },
   '.cm-skr-callout[data-callout="danger"], .cm-skr-callout[data-callout="error"]':
     {
-      backgroundColor: "rgba(220, 38, 38, 0.08)",
-      borderLeftColor: "#dc2626",
+      backgroundColor: "var(--skr-danger-surface)",
+      borderLeftColor: "var(--skr-danger)",
     },
   '.cm-skr-callout[data-callout="tip"], .cm-skr-callout[data-callout="success"]':
     {
-      backgroundColor: "rgba(22, 163, 74, 0.08)",
-      borderLeftColor: "#16a34a",
+      backgroundColor: "var(--skr-success-surface)",
+      borderLeftColor: "var(--skr-success)",
     },
-  ".cm-skr-callout-mark": { fontWeight: "700", color: "#2563eb" },
-  '.cm-skr-callout-mark[data-callout="warning"]': { color: "#d97706" },
+  ".cm-skr-callout-mark": { fontWeight: "700", color: "var(--skr-accent)" },
+  '.cm-skr-callout-mark[data-callout="warning"]': {
+    color: "var(--skr-warning)",
+  },
   '.cm-skr-callout-mark[data-callout="danger"], .cm-skr-callout-mark[data-callout="error"]':
-    { color: "#dc2626" },
+    { color: "var(--skr-danger)" },
   '.cm-skr-callout-mark[data-callout="tip"], .cm-skr-callout-mark[data-callout="success"]':
-    { color: "#16a34a" },
+    { color: "var(--skr-success)" },
   ".cm-skr-tag": {
-    color: "#7c3aed",
-    backgroundColor: "rgba(124, 58, 237, 0.08)",
+    color: "var(--skr-accent)",
+    backgroundColor: "var(--skr-accent-soft)",
     borderRadius: "8px",
     padding: "0 4px",
   },
   ".cm-skr-block-id": { opacity: "0.5" },
   ".cm-skr-frontmatter": { opacity: "0.6" },
+  ".cm-skr-math-inline": { display: "inline-block", maxWidth: "100%" },
+  ".cm-skr-math-block, .cm-skr-mermaid": {
+    boxSizing: "border-box",
+    width: "100%",
+    overflow: "auto",
+    padding: "0.75rem 1rem",
+    color: "var(--skr-text)",
+    backgroundColor: "var(--skr-surface-subtle)",
+    border: "1px solid var(--skr-border)",
+    borderRadius: "0.5rem",
+  },
+  ".cm-skr-mermaid svg": { display: "block", maxWidth: "100%", margin: "auto" },
+  ".cm-skr-render-error": {
+    color: "var(--skr-danger)",
+    backgroundColor: "var(--skr-danger-surface)",
+    borderColor: "var(--skr-danger)",
+    fontFamily: "monospace",
+    whiteSpace: "pre-wrap",
+  },
 });
 
 /**
@@ -659,12 +882,28 @@ const engineTheme = EditorView.baseTheme({
  * the base theme for the table's classes.
  */
 export function decorationEngine(): Extension {
-  return [wikilinkContext, enginePlugin, engineTheme];
+  return [wikilinkContext, blockEngineField, enginePlugin, engineTheme];
 }
 
 /** The live decoration set of a view running the engine; null without it. */
 export function engineDecorations(view: EditorView): DecorationSet | null {
-  return view.plugin(enginePlugin)?.decorations ?? null;
+  const inline = view.plugin(enginePlugin)?.decorations;
+  const block = view.state.field(blockEngineField, false);
+  if (inline === undefined) {
+    return block ?? null;
+  }
+  if (block === undefined || block.size === 0) {
+    return inline;
+  }
+  const ranges: ReturnType<Decoration["range"]>[] = [];
+  for (const set of [inline, block]) {
+    const cursor = set.iter();
+    while (cursor.value !== null) {
+      ranges.push(cursor.value.range(cursor.from, cursor.to));
+      cursor.next();
+    }
+  }
+  return Decoration.set(ranges, true);
 }
 
 /** The state's current wikilink context, for callers outside the engine. */

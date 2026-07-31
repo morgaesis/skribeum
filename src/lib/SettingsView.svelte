@@ -2,6 +2,7 @@
 import type { SettingsState } from "./features/settingsStore";
 import type { SettingsDocument } from "./ipc/services";
 import { STRINGS } from "./strings";
+import { isThemeName, type ThemeName } from "./themes/theme";
 
 let {
   settings,
@@ -14,6 +15,13 @@ let {
 } = $props();
 
 let dialogElement = $state<HTMLElement | undefined>();
+let selectedTheme = $state<ThemeName>("system");
+
+$effect(() => {
+  if (isThemeName(settings.document.theme)) {
+    selectedTheme = settings.document.theme;
+  }
+});
 
 $effect(() => {
   dialogElement?.querySelector("select")?.focus();
@@ -33,6 +41,12 @@ function onKeydown(event: KeyboardEvent) {
     onClose();
   }
 }
+
+$effect(() => {
+  if (isThemeName(selectedTheme) && selectedTheme !== settings.document.theme) {
+    onUpdate({ theme: selectedTheme });
+  }
+});
 </script>
 
 <div
@@ -48,12 +62,13 @@ function onKeydown(event: KeyboardEvent) {
     bind:this={dialogElement}
     class="w-[28rem] max-w-[90vw] rounded-lg border border-gray-300 bg-white p-4 shadow-xl"
     role="dialog"
+    aria-modal="true"
     aria-label={STRINGS.settingsLabel}
     tabindex="-1"
     data-testid="settings-view"
     onkeydown={onKeydown}
   >
-    <header class="mb-3 flex items-center justify-between">
+    <div class="mb-3 flex items-center justify-between">
       <h2 class="m-0 text-sm font-semibold">{STRINGS.settingsLabel}</h2>
       <button
         type="button"
@@ -62,7 +77,7 @@ function onKeydown(event: KeyboardEvent) {
       >
         {STRINGS.closeAction}
       </button>
-    </header>
+    </div>
 
     {#if settings.error !== null}
       <p class="mb-3 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs" role="alert">
@@ -76,10 +91,8 @@ function onKeydown(event: KeyboardEvent) {
         <span>{STRINGS.settingsTheme}</span>
         <select
           class="rounded border border-gray-300 px-2 py-1"
-          value={settings.document.theme}
-          onchange={(event) => {
-            onUpdate({ theme: (event.currentTarget as HTMLSelectElement).value });
-          }}
+          bind:value={selectedTheme}
+          data-testid="settings-theme"
         >
           <option value="system">{STRINGS.settingsThemeSystem}</option>
           <option value="light">{STRINGS.settingsThemeLight}</option>

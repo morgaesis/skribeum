@@ -98,10 +98,11 @@ const toolbarTheme = View.baseTheme({
     display: "flex",
     gap: "2px",
     padding: "2px",
-    backgroundColor: "#ffffff",
-    border: "1px solid #d1d5db",
+    color: "var(--skr-text)",
+    backgroundColor: "var(--skr-surface-raised)",
+    border: "1px solid var(--skr-border)",
     borderRadius: "6px",
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.12)",
+    boxShadow: "var(--skr-shadow)",
   },
   ".cm-skr-toolbar-button": {
     border: "none",
@@ -112,7 +113,7 @@ const toolbarTheme = View.baseTheme({
     fontWeight: "600",
   },
   ".cm-skr-toolbar-button:hover": {
-    backgroundColor: "#e5e7eb",
+    backgroundColor: "var(--skr-surface-subtle)",
   },
 });
 

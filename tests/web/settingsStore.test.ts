@@ -86,7 +86,7 @@ describe("settings store", () => {
     expect(written).toEqual([{ ...PERSISTED, search_result_limit: 99 }]);
   });
 
-  it("stores the theme value without requiring a theming layer", async () => {
+  it("persists the theme value", async () => {
     const { store, written } = harness();
     await store.load();
     await store.update({ theme: "light" });

@@ -143,8 +143,17 @@ serialize to stable text for golden-snapshot review, and the same
 serialized attributes carry the accessibility roles and names widgets
 render.
 
+Render-only Markdown uses the same decoration table. A rendering parser
+extension recognizes inline and block math without changing the vault-wide
+extraction contract. KaTeX replaces each recognized expression with local
+HTML and MathML, while malformed expressions remain visible in an error
+widget. Mermaid fences use the stock fenced-code nodes and load Mermaid only
+when the first diagram widget mounts. Block replacements live in a decoration
+state field because they affect vertical layout; ordinary marks and inline
+widgets remain viewport-windowed.
+
 Wikilink display resolution honors `.obsidian/app.json` read through the
-existing `note_read` command, resolves targets against the vault tree
+`vault_config_read` command, resolves targets against the vault tree
 with shortest-path semantics, and styles unresolved links distinctly; the
 Rust index stays the authority for vault-wide link structure. Frontmatter
 renders as a properties panel above the editor: a positional parser
@@ -164,6 +173,24 @@ The `webdriver`-feature build (end-to-end tests only, never release
 artifacts) announces the vault named by `SKRIBEUM_E2E_VAULT` to the
 webview on page load, which opens it on startup; the directory-picker
 dialog cannot be driven headlessly.
+
+## Render-only vault files
+
+JSON Canvas files remain outside note editing and search state. The vault
+exposes one read-only file command for indexed regular files, and the
+registered canvas content view parses the JSON in the webview. Cards retain
+their stored coordinates and dimensions, SVG edges connect their stored
+endpoints, and file cards display read-only text previews. Pointer, wheel,
+button and keyboard camera controls alter only the view transform.
+
+## Themes and accessibility
+
+The persisted `system`, `light` or `dark` setting selects a CSS custom-property
+palette shared by shell chrome, CodeMirror and rendered decorations. System
+mode follows `prefers-color-scheme` through a reactive media query. Unit tests
+compute WCAG contrast ratios from the deployed variables. The Linux end-to-end
+suite runs axe against the vault, decorated editor, palette, settings and
+canvas surfaces, alongside keyboard-only traversal and camera controls.
 
 ## Two parsers, one contract
 

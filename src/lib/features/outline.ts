@@ -2,7 +2,7 @@
 // tree to a nested outline, consumed by the outline panel. Navigation is
 // selection movement only; the outline never mutates the document.
 
-import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
 export type OutlineEntry = {
@@ -27,13 +27,12 @@ const HEADING_LEVELS = new Map<string, number>([
 ]);
 
 /**
- * Extracts the nested heading outline. The whole document's tree is
- * ensured within a time budget; a partial parse yields a partial outline
- * that completes on the next refresh.
+ * Extracts the nested heading outline from the tree CodeMirror already has.
+ * A partial parse yields a partial outline; callers refresh during idle work
+ * as the background parser extends the tree.
  */
 export function computeOutline(state: EditorState): OutlineEntry[] {
-  const tree =
-    ensureSyntaxTree(state, state.doc.length, 50) ?? syntaxTree(state);
+  const tree = syntaxTree(state);
   const root: OutlineEntry = { title: "", level: 0, from: 0, children: [] };
   const stack: OutlineEntry[] = [root];
   tree.iterate({

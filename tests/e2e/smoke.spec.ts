@@ -2,11 +2,15 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
+import axe from "axe-core";
 import { Key } from "webdriverio";
 import {
+  CANVAS_FILE_CONTENT,
+  CANVAS_FILE_NAME,
   CRLF_NOTE_NAME,
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_NAME,
+  RENDERING_NOTE_NAME,
   SCRATCH_VAULT_PATH,
 } from "./scratchVault";
 
@@ -25,6 +29,12 @@ const specDirectory = path.dirname(fileURLToPath(import.meta.url));
 const screenshotDirectory = path.join(specDirectory, "screenshots");
 
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
+
+before(async () => {
+  // Pin the sole application window after the Tauri service initializes. The
+  // service then skips its automatic nested focus probe before DOM commands.
+  await browser.tauri.switchWindow("main");
+});
 
 function noteOnDisk(name: string): string {
   return readFileSync(path.join(SCRATCH_VAULT_PATH, name), "utf8");
@@ -77,6 +87,20 @@ async function placeCursorAtLineEnd(text: string) {
   await browser.pause(200);
 }
 
+/** Sets the theme select's value and fires the change event it binds on. */
+async function selectTheme(value: string) {
+  await browser.execute((themeValue: string) => {
+    const select = document.querySelector<HTMLSelectElement>(
+      '[data-testid="settings-theme"]',
+    );
+    if (select === null) {
+      throw new Error("settings theme select missing");
+    }
+    select.value = themeValue;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+}
+
 async function activeElementDescriptor(): Promise<string> {
   return browser.execute(() => {
     const active = document.activeElement;
@@ -86,6 +110,50 @@ async function activeElementDescriptor(): Promise<string> {
     const role = active.getAttribute("role");
     return `${active.tagName.toLowerCase()}:${role ?? ""}:${active.className}:${active.textContent?.slice(0, 40) ?? ""}`;
   });
+}
+
+async function expectNoAxeViolations(surface: string) {
+  await browser.execute(axe.source);
+  const violations = await browser.executeAsync<
+    Array<{ id: string; impact: string | null; targets: string[] }>,
+    []
+  >((done) => {
+    const runner = (
+      window as unknown as {
+        axe?: {
+          run: () => Promise<{
+            violations: Array<{
+              id: string;
+              impact: string | null;
+              nodes: Array<{ target: string[] }>;
+            }>;
+          }>;
+        };
+      }
+    ).axe;
+    if (runner === undefined) {
+      done([{ id: "axe-unavailable", impact: "critical", targets: [] }]);
+      return;
+    }
+    runner
+      .run()
+      .then((result) =>
+        done(
+          result.violations.map((violation) => ({
+            id: violation.id,
+            impact: violation.impact,
+            targets: violation.nodes.flatMap((node) => node.target),
+          })),
+        ),
+      )
+      .catch((error: unknown) =>
+        done([{ id: String(error), impact: "critical", targets: [] }]),
+      );
+  });
+  if (violations.length > 0) {
+    throw new Error(`${surface}: ${JSON.stringify(violations)}`);
+  }
+  expect(violations).toEqual([]);
 }
 
 describe("skribeum shell", () => {
@@ -673,5 +741,126 @@ describe("skribeum core editing surfaces", () => {
       ),
     );
     expect(positive).toBe(false);
+  });
+
+  it("switches_the_persisted_theme_live", async () => {
+    await browser.keys([modifierKey, ","]);
+    const dialog = $('[data-testid="settings-view"]');
+    await dialog.waitForExist({ timeout: 10000 });
+    const select = $('[data-testid="settings-theme"]');
+    const original = await select.getValue();
+
+    // The embedded provider cannot drive native select interaction; set the
+    // value and dispatch the change event, which still exercises the real
+    // binding, store, and theme application path.
+    await selectTheme("dark");
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () => document.documentElement.dataset.theme,
+        )) === "dark",
+      { timeout: 10000 },
+    );
+    const darkBackground = await browser.execute(
+      () => getComputedStyle(document.body).backgroundColor,
+    );
+
+    await selectTheme("light");
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () => document.documentElement.dataset.theme,
+        )) === "light",
+      { timeout: 10000 },
+    );
+    expect(
+      await browser.execute(
+        () => getComputedStyle(document.body).backgroundColor,
+      ),
+    ).not.toBe(darkBackground);
+
+    await select.selectByAttribute("value", original);
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(
+      async () => !(await $('[data-testid="settings-view"]').isExisting()),
+      { timeout: 5000 },
+    );
+  });
+
+  it("renders_math_and_lazy_mermaid_with_inline_errors", async () => {
+    await openNoteFromTree(RENDERING_NOTE_NAME);
+    await $(".cm-skr-math-inline .katex").waitForExist({ timeout: 15000 });
+    await $(".cm-skr-math-block math").waitForExist({ timeout: 15000 });
+    await $(".cm-skr-mermaid svg").waitForExist({ timeout: 30000 });
+    await $(".cm-skr-mermaid.cm-skr-render-error").waitForExist({
+      timeout: 30000,
+    });
+    expect(await $(".cm-skr-mermaid.cm-skr-render-error").getText()).toContain(
+      "Diagram error",
+    );
+  });
+
+  it("opens_and_operates_the_read_only_canvas_by_keyboard", async () => {
+    await openNoteFromTree(CANVAS_FILE_NAME);
+    const viewer = $('[data-testid="canvas-view"]');
+    await viewer.waitForExist({ timeout: 15000 });
+    expect(await viewer.getAttribute("role")).toBe("region");
+    expect(await $('[data-node-id="idea"]').getText()).toContain("Stored idea");
+    expect(await $('[data-node-id="note"]').getText()).toContain(
+      "Sunrise heading",
+    );
+
+    const geometry = await browser.execute(() => {
+      const node = document.querySelector<HTMLElement>('[data-node-id="note"]');
+      return node === null
+        ? null
+        : {
+            left: node.style.left,
+            top: node.style.top,
+            width: node.style.width,
+            height: node.style.height,
+          };
+    });
+    expect(geometry).toEqual({
+      left: "360px",
+      top: "180px",
+      width: "260px",
+      height: "160px",
+    });
+    expect(await $$('[data-edge-id="connection"]').length).toBe(1);
+
+    await browser.execute(() =>
+      document
+        .querySelector<HTMLElement>('[data-testid="canvas-view"]')
+        ?.focus(),
+    );
+    const before = await viewer.getAttribute("data-camera");
+    await browser.keys(Key.ArrowRight);
+    expect(await viewer.getAttribute("data-camera")).not.toBe(before);
+    await browser.keys("+");
+    expect(await viewer.getAttribute("data-camera")).not.toMatch(/,1$/);
+    await browser.keys("0");
+    expect(await viewer.getAttribute("data-camera")).toBe("24,24,1");
+    expect(noteOnDisk(CANVAS_FILE_NAME)).toBe(CANVAS_FILE_CONTENT);
+  });
+
+  it("has_zero_axe_violations_on_main_surfaces", async () => {
+    await openNoteFromTree(RENDERING_NOTE_NAME);
+    await $(".cm-skr-mermaid svg").waitForExist({ timeout: 30000 });
+    await expectNoAxeViolations("vault and decorated editor");
+
+    await browser.keys([modifierKey, "p"]);
+    await overlayInput();
+    await expectNoAxeViolations("command palette");
+    await browser.keys(Key.Escape);
+
+    await browser.keys([modifierKey, ","]);
+    await $('[data-testid="settings-view"]').waitForExist({ timeout: 10000 });
+    await expectNoAxeViolations("settings");
+    await browser.keys(Key.Escape);
+
+    await openNoteFromTree(CANVAS_FILE_NAME);
+    await $('[data-testid="canvas-view"]').waitForExist({ timeout: 15000 });
+    await expectNoAxeViolations("canvas viewer");
   });
 });

@@ -69,7 +69,7 @@ export type Command = {
 };
 
 /** The kinds of surface a view occupies. */
-export type ViewKind = "overlay" | "panel";
+export type ViewKind = "overlay" | "panel" | "content";
 
 /**
  * One registered view. The registry knows views only as ids with titles;

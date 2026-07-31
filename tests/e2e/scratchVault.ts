@@ -23,6 +23,44 @@ export const LIVE_PREVIEW_NOTE_NAME = "z-live-preview.md";
 export const LIVE_PREVIEW_NOTE_CONTENT =
   "# Sunrise heading\n\nbody text here\n";
 
+export const RENDERING_NOTE_NAME = "zz-rendering.md";
+export const RENDERING_NOTE_CONTENT =
+  "# Rendered content\n\nInline $a^2 + b^2 = c^2$.\n\n$$\nE = mc^2\n$$\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\nthis is not valid mermaid\n```\n";
+
+export const CANVAS_FILE_NAME = "zzz-board.canvas";
+export const CANVAS_REFERENCE_NAME = "z-live-preview.md";
+export const CANVAS_FILE_CONTENT = JSON.stringify({
+  nodes: [
+    {
+      id: "idea",
+      type: "text",
+      text: "Stored idea",
+      x: 40,
+      y: 50,
+      width: 180,
+      height: 100,
+    },
+    {
+      id: "note",
+      type: "file",
+      file: CANVAS_REFERENCE_NAME,
+      x: 360,
+      y: 180,
+      width: 260,
+      height: 160,
+    },
+  ],
+  edges: [
+    {
+      id: "connection",
+      fromNode: "idea",
+      fromSide: "right",
+      toNode: "note",
+      toSide: "left",
+    },
+  ],
+});
+
 /**
  * Resets the scratch vault to its fixture files. The vault root itself is
  * never deleted: the WebdriverIO launcher starts the app before the worker
@@ -46,5 +84,13 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, LIVE_PREVIEW_NOTE_NAME),
     LIVE_PREVIEW_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),
+    RENDERING_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, CANVAS_FILE_NAME),
+    CANVAS_FILE_CONTENT,
   );
 }

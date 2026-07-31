@@ -20,7 +20,7 @@
 
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 use sha2::{Digest, Sha256};
 use skribeum_core::{ExtractionKind, extract};
 
@@ -189,8 +189,20 @@ impl SearchIndex {
     ///
     /// Returns [`SearchError::Storage`] when the index cannot be updated.
     pub fn index_note(&self, path: &str, bytes: &[u8]) -> Result<(), SearchError> {
+        let tx = self.conn.unchecked_transaction()?;
+        Self::index_note_in_transaction(&tx, path, bytes)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn index_note_in_transaction(
+        tx: &Transaction<'_>,
+        path: &str,
+        bytes: &[u8],
+    ) -> Result<(), SearchError> {
+        tx.execute("DELETE FROM note_index WHERE path = ?1", [path])?;
         let Ok(text) = core::str::from_utf8(bytes) else {
-            return self.remove_note(path);
+            return Ok(());
         };
         let body = text.strip_prefix('\u{FEFF}').unwrap_or(text);
         let headings = extract(bytes)
@@ -201,13 +213,10 @@ impl SearchIndex {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM note_index WHERE path = ?1", [path])?;
         tx.execute(
             "INSERT INTO note_index(path, title, headings, body) VALUES(?1, ?2, ?3, ?4)",
             [path, &note_title(path), &headings, body],
         )?;
-        tx.commit()?;
         Ok(())
     }
 
@@ -235,7 +244,6 @@ impl SearchIndex {
     pub fn rebuild(&self, fs: &dyn FileSystem, vault: &Vault) -> Result<usize, SearchError> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM note_index", [])?;
-        tx.commit()?;
         let mut indexed = 0usize;
         for entry in vault.tree() {
             if entry.kind != EntryKind::Note {
@@ -245,9 +253,10 @@ impl SearchIndex {
             let Ok(bytes) = fs.read(&absolute) else {
                 continue;
             };
-            self.index_note(entry.path.as_str(), &bytes)?;
+            Self::index_note_in_transaction(&tx, entry.path.as_str(), &bytes)?;
             indexed += 1;
         }
+        tx.commit()?;
         Ok(indexed)
     }
 

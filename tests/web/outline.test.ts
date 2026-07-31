@@ -2,19 +2,25 @@
 // support, and collapse-aware flattening for the panel.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
 import { computeOutline, flattenOutline } from "../../src/lib/features/outline";
 
 function stateOf(doc: string): EditorState {
-  return EditorState.create({
+  const state = EditorState.create({
     doc,
     extensions: markdown({
       base: markdownLanguage,
       extensions: obsidianMarkdownExtensions,
     }),
   });
+  // Force the parse to completion: syntaxTree(state) alone returns only the
+  // creation-time work slice, which shrinks under load and would make these
+  // assertions timing-dependent.
+  ensureSyntaxTree(state, state.doc.length, 5000);
+  return state;
 }
 
 const DOCUMENT = [

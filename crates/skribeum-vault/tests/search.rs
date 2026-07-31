@@ -140,6 +140,117 @@ fn fts_finds_every_brute_force_hit_over_corpus() {
     );
 }
 
+/// Fixed inputs for the search-scale gate. The generated notes deliberately
+/// share common terms while retaining deterministic group and topic terms,
+/// so sampled multi-term queries exercise both broad and narrow result sets.
+const SEARCH_SCALE_NOTE_COUNT: usize = 5_000;
+const SEARCH_SCALE_SEED: u64 = 0x51ca_1e5e_d00d_f00d;
+
+fn search_scale_value(index: usize) -> u64 {
+    let mut value = SEARCH_SCALE_SEED ^ u64::try_from(index).expect("note index fits in u64");
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn search_scale_note(index: usize) -> (String, Vec<u8>) {
+    let value = search_scale_value(index);
+    let group = value % 29;
+    let topic = (value >> 16) % 37;
+    (
+        format!("scale-note-{index:04}.md"),
+        format!("# Search scale {index}\n\nscaleanchor group{group} topic{topic} unique{index}\n")
+            .into_bytes(),
+    )
+}
+
+fn search_scale_notes() -> Vec<(String, Vec<u8>)> {
+    (0..SEARCH_SCALE_NOTE_COUNT)
+        .map(search_scale_note)
+        .collect()
+}
+
+/// A synthetic 5,000-note vault remains searchable after a full rebuild.
+/// The sampled queries must match an independent brute-force token scan.
+/// This test intentionally has no timing
+/// assertion: `scripts/search-scale.ts` measures its rebuild with a real
+/// clock outside the deterministic Rust suite.
+#[test]
+fn fts_finds_every_brute_force_hit_over_synthetic_scale_vault() {
+    let fs = SimFs::new();
+    fs.seed(SEARCH_SCALE_SEED);
+    let root = PathBuf::from("search-scale-vault");
+    fs.external_create_dir(&root);
+
+    let notes = search_scale_notes();
+    for (path, bytes) in &notes {
+        fs.external_write(&root.join(path), bytes);
+    }
+    fs.deliver_all();
+
+    let vault = Vault::open(&fs, &root).expect("synthetic vault opens");
+    assert_eq!(
+        vault
+            .tree()
+            .iter()
+            .filter(|entry| entry.kind == skribeum_vault::EntryKind::Note)
+            .count(),
+        SEARCH_SCALE_NOTE_COUNT,
+        "the synthetic vault contains every generated note"
+    );
+    let index = SearchIndex::in_memory().expect("index opens");
+    assert_eq!(
+        index.rebuild(&fs, &vault).expect("rebuild runs"),
+        SEARCH_SCALE_NOTE_COUNT,
+        "the rebuild indexes every synthetic note"
+    );
+
+    let tokenized = tokenized_notes(&notes);
+    let mut queries = vec!["scaleanchor".to_owned()];
+    for index in [0, 317, 911, 1_729, 2_903, 4_999] {
+        let value = search_scale_value(index);
+        queries.push(format!(
+            "scaleanchor group{} topic{}",
+            value % 29,
+            (value >> 16) % 37
+        ));
+    }
+
+    let mut total_scan_hits = 0usize;
+    for query in &queries {
+        let expected = brute_force_hits(&tokenized, query);
+        assert!(
+            !expected.is_empty(),
+            "the deterministic query {query:?} exercises the synthetic vault"
+        );
+        total_scan_hits += expected.len();
+        let found: BTreeSet<String> = index
+            .query(
+                query,
+                u32::try_from(SEARCH_SCALE_NOTE_COUNT).expect("scale fits in u32"),
+            )
+            .expect("query runs")
+            .into_iter()
+            .map(|hit| hit.path)
+            .collect();
+        assert_eq!(
+            found, expected,
+            "FTS and the brute-force scan disagree for {query:?}"
+        );
+    }
+    assert!(
+        total_scan_hits > SEARCH_SCALE_NOTE_COUNT,
+        "the sample queries include broad and narrow result sets (got {total_scan_hits} hits)"
+    );
+    assert_eq!(
+        fs.app_write_count(),
+        0,
+        "search rebuild never writes to the vault"
+    );
+}
+
 /// A title match outranks a body match for the same term.
 #[test]
 fn title_match_outranks_body_match() {

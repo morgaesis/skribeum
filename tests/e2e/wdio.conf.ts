@@ -19,12 +19,16 @@ process.env.SKRIBEUM_E2E_VAULT = SCRATCH_VAULT_PATH;
 // off):
 //   bun tauri build --debug --no-bundle --features webdriver --config src-tauri/tauri.webdriver.conf.json
 const binaryExtension = process.platform === "win32" ? ".exe" : "";
-const appBinaryPath = path.join(
-  repositoryRoot,
-  "target",
-  "debug",
-  `skribeum-app${binaryExtension}`,
-);
+const configuredBinary = process.env.SKRIBEUM_E2E_BINARY;
+const appBinaryPath =
+  configuredBinary === undefined
+    ? path.join(
+        repositoryRoot,
+        "target",
+        "debug",
+        `skribeum-app${binaryExtension}`,
+      )
+    : path.resolve(configuredBinary);
 
 const capabilities: TauriCapabilities[] = [
   {
@@ -49,10 +53,6 @@ export const config: WebdriverIO.Config = {
   framework: "mocha",
   mochaOpts: {
     ui: "bdd",
-    // The embedded driver service probes window state before find and
-    // click commands and waits out a 5s timeout twice per probe until it
-    // gives up, so element-heavy tests accumulate real minutes; the
-    // budget accommodates that on the slowest CI runner.
     timeout: 300000,
   },
   reporters: ["spec"],

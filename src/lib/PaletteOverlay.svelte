@@ -91,6 +91,7 @@ function onKeydown(event: KeyboardEvent) {
   <div
     class="w-[36rem] max-w-[90vw] rounded-lg border border-gray-300 bg-white shadow-xl"
     role="dialog"
+    aria-modal="true"
     aria-label={label}
   >
     <input

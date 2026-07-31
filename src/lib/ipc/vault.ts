@@ -136,3 +136,30 @@ export async function readNote(
     readOnly: meta.encoding === "non-utf8",
   };
 }
+
+/** Reads an indexed regular file without opening an editable note session. */
+export async function readVaultFile(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<Uint8Array> {
+  const channel = new Channel<number[]>();
+  const firstMessage = new Promise<Uint8Array>((resolve) => {
+    channel.onmessage = (payload) => {
+      if (payload instanceof ArrayBuffer) {
+        resolve(new Uint8Array(payload));
+      } else if (ArrayBuffer.isView(payload)) {
+        resolve(
+          new Uint8Array(
+            payload.buffer,
+            payload.byteOffset,
+            payload.byteLength,
+          ),
+        );
+      } else {
+        resolve(Uint8Array.from(payload));
+      }
+    };
+  });
+  unwrap(await commands.vaultFileRead(handle, relPath, channel));
+  return firstMessage;
+}

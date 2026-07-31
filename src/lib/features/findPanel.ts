@@ -177,7 +177,9 @@ const findTheme = View.baseTheme({
     padding: "4px",
   },
   ".cm-skr-find-input": {
-    border: "1px solid #d1d5db",
+    border: "1px solid var(--skr-border)",
+    color: "var(--skr-text)",
+    backgroundColor: "var(--skr-surface-raised)",
     borderRadius: "4px",
     padding: "1px 6px",
     font: "inherit",
@@ -188,8 +190,9 @@ const findTheme = View.baseTheme({
     minWidth: "5em",
   },
   ".cm-skr-find-button": {
-    border: "1px solid #d1d5db",
-    background: "transparent",
+    border: "1px solid var(--skr-border)",
+    color: "var(--skr-text)",
+    backgroundColor: "var(--skr-surface)",
     borderRadius: "4px",
     padding: "1px 6px",
     cursor: "pointer",

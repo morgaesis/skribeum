@@ -11,6 +11,7 @@ export const VIEW_QUICK_SWITCHER = "view.quick-switcher";
 export const VIEW_VAULT_SEARCH = "view.vault-search";
 export const VIEW_SETTINGS = "view.settings";
 export const VIEW_OUTLINE = "view.outline";
+export const VIEW_CANVAS = "view.canvas";
 
 /** Registers the surface views and their commands. */
 export function registerSurfaces(registry: CommandRegistry): void {
@@ -38,6 +39,11 @@ export function registerSurfaces(registry: CommandRegistry): void {
     id: VIEW_OUTLINE,
     title: STRINGS.outlineLabel,
     kind: "panel",
+  });
+  registry.registerView({
+    id: VIEW_CANVAS,
+    title: STRINGS.canvasViewerLabel,
+    kind: "content",
   });
 
   registry.register({

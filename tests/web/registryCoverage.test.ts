@@ -104,7 +104,9 @@ function hasExemptionComment(file: string): boolean {
 describe("registration coverage (criterion 1)", () => {
   it("finds no key wiring outside the registry and the allowlist", () => {
     const offenders = keyWiringOccurrences().filter((occurrence) => {
-      if (occurrence.file.startsWith(path.join("lib", "registry"))) {
+      // Occurrence paths are normalized to forward slashes; a literal
+      // prefix keeps this exclusion correct on Windows.
+      if (occurrence.file.startsWith("lib/registry/")) {
         return false;
       }
       return !(

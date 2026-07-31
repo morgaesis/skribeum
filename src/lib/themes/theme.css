@@ -1,0 +1,72 @@
+:root,
+:root[data-theme="light"] {
+  --skr-canvas: #f8fafc;
+  --skr-surface: #ffffff;
+  --skr-surface-subtle: #eef2f7;
+  --skr-surface-raised: #ffffff;
+  --skr-text: #172033;
+  --skr-text-muted: #475569;
+  --skr-link: #1d4ed8;
+  --skr-accent: #2563eb;
+  --skr-accent-soft: #dbeafe;
+  --skr-border: #cbd5e1;
+  --skr-focus: #2563eb;
+  --skr-danger: #9f1c16;
+  --skr-danger-surface: #fff1f0;
+  --skr-warning: #7a4107;
+  --skr-warning-surface: #fff7e8;
+  --skr-success: #16713b;
+  --skr-success-surface: #edf9f0;
+  --skr-code-surface: #eef2f7;
+  --skr-overlay: rgb(15 23 42 / 35%);
+  --skr-shadow: 0 18px 48px rgb(15 23 42 / 18%);
+}
+
+:root[data-theme="dark"] {
+  --skr-canvas: #0b1120;
+  --skr-surface: #111827;
+  --skr-surface-subtle: #1e293b;
+  --skr-surface-raised: #172033;
+  --skr-text: #f8fafc;
+  --skr-text-muted: #cbd5e1;
+  --skr-link: #93c5fd;
+  --skr-accent: #60a5fa;
+  --skr-accent-soft: #1e3a5f;
+  --skr-border: #475569;
+  --skr-focus: #93c5fd;
+  --skr-danger: #fca5a5;
+  --skr-danger-surface: #3b171b;
+  --skr-warning: #fcd34d;
+  --skr-warning-surface: #38270f;
+  --skr-success: #86efac;
+  --skr-success-surface: #143322;
+  --skr-code-surface: #1e293b;
+  --skr-overlay: rgb(2 6 23 / 62%);
+  --skr-shadow: 0 18px 48px rgb(0 0 0 / 45%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]),
+  :root[data-theme="system"] {
+    --skr-canvas: #0b1120;
+    --skr-surface: #111827;
+    --skr-surface-subtle: #1e293b;
+    --skr-surface-raised: #172033;
+    --skr-text: #f8fafc;
+    --skr-text-muted: #cbd5e1;
+    --skr-link: #93c5fd;
+    --skr-accent: #60a5fa;
+    --skr-accent-soft: #1e3a5f;
+    --skr-border: #475569;
+    --skr-focus: #93c5fd;
+    --skr-danger: #fca5a5;
+    --skr-danger-surface: #3b171b;
+    --skr-warning: #fcd34d;
+    --skr-warning-surface: #38270f;
+    --skr-success: #86efac;
+    --skr-success-surface: #143322;
+    --skr-code-surface: #1e293b;
+    --skr-overlay: rgb(2 6 23 / 62%);
+    --skr-shadow: 0 18px 48px rgb(0 0 0 / 45%);
+  }
+}

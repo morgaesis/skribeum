@@ -25,11 +25,20 @@ import {
 import { DECORATION_TABLE } from "../../src/lib/editor/decorations/table";
 import { bufferFromBytes } from "../../src/lib/editor/lineEndingMap";
 import { skribeumMarkdownParser } from "../../src/lib/editor/markdown/obsidian";
+import { mathMarkdownExtension } from "../../src/lib/rendering/math";
+
+const renderingParser = skribeumMarkdownParser.configure(mathMarkdownExtension);
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const corpusDirectory = path.join(testDirectory, "..", "corpus");
 const snapshotDirectory = path.join(testDirectory, "decoration-snapshots");
 const update = process.env.UPDATE_DECORATION_SNAPSHOTS === "1";
+const renderingFixtures = [
+  {
+    name: "mermaid-rendering.md",
+    text: "```mermaid\ngraph TD\n  A --> B\n```\n",
+  },
+] as const;
 
 const decoder = new TextDecoder("utf-8", { fatal: false });
 
@@ -50,7 +59,7 @@ function projectedText(bytes: Uint8Array): string {
 }
 
 function serializedDecorations(text: string): string {
-  const tree = skribeumMarkdownParser.parse(text);
+  const tree = renderingParser.parse(text);
   const doc = Text.of(text.split("\n"));
   return serializeDecorationSet(
     computeDecorations({ doc, tree, table: DECORATION_TABLE }),
@@ -75,6 +84,27 @@ describe("decoration snapshots over the corpus", () => {
     ).toBe(true);
     expect(serialized).toBe(readFileSync(goldenPath, "utf8"));
   });
+
+  it.each(renderingFixtures)(
+    "$name matches its rendering golden",
+    ({ name, text }) => {
+      const serialized = serializedDecorations(text);
+      const goldenPath = path.join(
+        snapshotDirectory,
+        `${name}.decorations.txt`,
+      );
+      if (update) {
+        mkdirSync(snapshotDirectory, { recursive: true });
+        writeFileSync(goldenPath, serialized);
+        return;
+      }
+      expect(
+        existsSync(goldenPath),
+        `missing golden ${goldenPath}; run with UPDATE_DECORATION_SNAPSHOTS=1 and review the diff`,
+      ).toBe(true);
+      expect(serialized).toBe(readFileSync(goldenPath, "utf8"));
+    },
+  );
 
   it("serialization is deterministic across runs", () => {
     const text = projectedText(

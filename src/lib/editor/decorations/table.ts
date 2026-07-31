@@ -10,7 +10,11 @@
 export type RevealPolicy = "cursor-inside" | "cursor-line" | "never";
 
 /** Inline widgets the engine knows how to build. */
-export type WidgetName = "task-checkbox";
+export type WidgetName =
+  | "task-checkbox"
+  | "math-inline"
+  | "math-block"
+  | "mermaid-diagram";
 
 export type Presentation =
   /** A styled span over the node's text. */
@@ -36,7 +40,8 @@ export type Presentation =
 export type DynamicAttribute =
   | "wikilink-resolution"
   | "callout-type"
-  | "code-language";
+  | "code-language"
+  | "mermaid-block";
 
 export type DecorationRule = {
   /** Lezer markdown node name this row decorates. */
@@ -57,6 +62,8 @@ export type DecorationRule = {
   withSibling?: string;
   /** Only nodes without a sibling of this name under the same parent. */
   withoutSibling?: string;
+  /** Only fenced code whose first info-string token matches this value. */
+  codeInfo?: string;
   presentation: Presentation;
   reveal: RevealPolicy;
   dynamic?: DynamicAttribute;
@@ -227,6 +234,19 @@ const listRows: DecorationRule[] = [
   },
 ];
 
+const mathRows: DecorationRule[] = [
+  {
+    node: "InlineMath",
+    presentation: { present: "widget", widget: "math-inline" },
+    reveal: "cursor-inside",
+  },
+  {
+    node: "BlockMath",
+    presentation: { present: "widget", widget: "math-block" },
+    reveal: "cursor-inside",
+  },
+];
+
 const codeRows: DecorationRule[] = [
   {
     node: "InlineCode",
@@ -260,6 +280,13 @@ const codeRows: DecorationRule[] = [
     presentation: { present: "mark", class: "cm-skr-code-info" },
     reveal: "never",
     dynamic: "code-language",
+  },
+  {
+    node: "FencedCode",
+    codeInfo: "mermaid",
+    presentation: { present: "widget", widget: "mermaid-diagram" },
+    reveal: "cursor-inside",
+    dynamic: "mermaid-block",
   },
 ];
 
@@ -315,6 +342,7 @@ export const DECORATION_TABLE: readonly DecorationRule[] = [
   ...linkRows,
   ...wikilinkRows,
   ...listRows,
+  ...mathRows,
   ...codeRows,
   ...quoteRows,
   ...inlineRows,

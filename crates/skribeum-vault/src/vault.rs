@@ -285,6 +285,25 @@ impl Vault {
         Ok(note)
     }
 
+    /// Reads any indexed regular file without creating note editing state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VaultError::NoteNotFound`] when the path is not indexed,
+    /// [`VaultError::NotANote`] when it names a directory, and propagates
+    /// filesystem read failures.
+    pub fn read_file(&self, fs: &dyn FileSystem, path: &VaultPath) -> Result<Vec<u8>, VaultError> {
+        let entry = self
+            .tree
+            .iter()
+            .find(|entry| &entry.path == path)
+            .ok_or(VaultError::NoteNotFound)?;
+        if entry.kind == EntryKind::Directory {
+            return Err(VaultError::NotANote);
+        }
+        Ok(fs.read(&self.root.join(path.as_str()))?)
+    }
+
     /// Reads one of the recognized Obsidian configuration files, read-only
     /// and size-capped. The `.obsidian` directory is excluded from indexing
     /// and watching; this is the single sanctioned read path into it, and

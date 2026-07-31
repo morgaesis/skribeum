@@ -1,6 +1,8 @@
 <script lang="ts">
 import { history } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { syntaxTree } from "@codemirror/language";
+import { STRINGS } from "./strings";
 import {
   Annotation,
   type ChangeSet,
@@ -172,6 +174,7 @@ function stateFor(content: string, locked: boolean): EditorState {
       ...registryExtensions(),
       EditorState.readOnly.of(locked),
       EditorView.editable.of(!locked),
+      EditorView.contentAttributes.of({ "aria-label": STRINGS.editorLabel }),
       EditorView.domEventHandlers({
         blur: () => {
           requestSave();
@@ -208,7 +211,23 @@ function dispatchTransactions(
   if (transactions.some((transaction) => transaction.docChanged)) {
     refreshFrontmatter();
     onDocChanged?.();
+  } else if (treeGrewInBackground(target)) {
+    // Background parsing advanced without a document change. Consumers of
+    // the syntax tree (the outline) recompute, or a large note's outline
+    // stays truncated at the initial parse slice until the first edit.
+    onDocChanged?.();
   }
+}
+
+let lastSeenTreeLength = 0;
+
+function treeGrewInBackground(target: EditorView): boolean {
+  const length = syntaxTree(target.state).length;
+  if (length === lastSeenTreeLength) {
+    return false;
+  }
+  lastSeenTreeLength = length;
+  return true;
 }
 
 /**

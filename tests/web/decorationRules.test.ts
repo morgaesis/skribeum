@@ -22,6 +22,9 @@ import {
   type DecorationRule,
 } from "../../src/lib/editor/decorations/table";
 import { skribeumMarkdownParser } from "../../src/lib/editor/markdown/obsidian";
+import { mathMarkdownExtension } from "../../src/lib/rendering/math";
+
+const renderingParser = skribeumMarkdownParser.configure(mathMarkdownExtension);
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -40,7 +43,9 @@ const SAMPLE_DOCUMENTS = [
   "A [[plain-target]] and an aliased [[target|alias]] link.\n",
   "An embed ![[embedded-note]] inline.\n",
   "- plain item\n- [ ] open task\n- [x] done task\n",
+  "Inline math $a^2 + b^2 = c^2$ here.\n\n$$\nE = mc^2\n$$\n",
   "Inline `code span` here.\n\n```rust\nfn main() {}\n```\n",
+  "```mermaid\ngraph TD\n  A --> B\n```\n",
   "paragraph\n\n    indented code line\n",
   "> plain quoted line\n",
   "> [!warning] Callout title\n> callout body\n",
@@ -59,14 +64,14 @@ type Located = {
 /** Finds the first node in any sample document matching the rule. */
 function locate(rule: DecorationRule): Located | null {
   for (const text of SAMPLE_DOCUMENTS) {
-    const tree = skribeumMarkdownParser.parse(text);
+    const tree = renderingParser.parse(text);
     const doc = Text.of(text.split("\n"));
     let found: SyntaxNode | null = null;
     tree.iterate({
       enter(ref) {
         if (found === null && ref.name === rule.node) {
           const node = ref.node;
-          if (ruleMatches(rule, node)) {
+          if (ruleMatches(rule, node, doc)) {
             found = node;
           }
         }
@@ -85,7 +90,7 @@ function locate(rule: DecorationRule): Located | null {
 }
 
 function serializedAt(text: string, cursor: number | null): string {
-  const tree = skribeumMarkdownParser.parse(text);
+  const tree = renderingParser.parse(text);
   const doc = Text.of(text.split("\n"));
   return serializeDecorationSet(
     computeDecorations({
@@ -242,6 +247,9 @@ describe("docs/decoration-rules.md mirrors the table", () => {
     }
     if (rule.withoutSibling !== undefined) {
       parts.push(`withoutSibling=${rule.withoutSibling}`);
+    }
+    if (rule.codeInfo !== undefined) {
+      parts.push(`codeInfo=${rule.codeInfo}`);
     }
     return parts.length === 0 ? "-" : parts.join(" ");
   }

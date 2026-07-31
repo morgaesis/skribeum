@@ -27,6 +27,11 @@ export const commands = {
 	 */
 	noteRead: (handle: VaultHandle, relPath: string, content: Channel<number[]>) => typedError<NoteContent, AppError>(__TAURI_INVOKE("note_read", { handle, relPath, content })),
 	/**
+	 *  Reads any indexed regular file without creating editor, reconciliation,
+	 *  or search-index state. This is the read path for render-only vault files.
+	 */
+	vaultFileRead: (handle: VaultHandle, relPath: string, content: Channel<number[]>) => typedError<VaultFileContent, AppError>(__TAURI_INVOKE("vault_file_read", { handle, relPath, content })),
+	/**
 	 *  Writes a note through the crash-safe change-set path: `change_set` (a
 	 *  list of byte-range replacements against the last-read projection)
 	 *  applies only after `expected_projection_hash` is verified against the
@@ -314,6 +319,15 @@ export type VaultCollisionsDetected = {
 	 *  filesystem may treat as a single file.
 	 */
 	groups: string[][],
+};
+
+/**
+ *  Metadata for a read-only indexed-file read. Bytes travel over the raw
+ *  channel passed to `vault_file_read`.
+ */
+export type VaultFileContent = {
+	/**  Exact byte count delivered over the channel. */
+	byte_length: number,
 };
 
 /**  Opaque handle to a vault opened in this session. */

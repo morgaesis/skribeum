@@ -69,6 +69,18 @@ jobs:
 
       - run: cargo test --workspace --locked
 
+      - name: Run Rust benchmarks and compare baselines
+        if: runner.os == 'Linux'
+        run: |
+          cargo bench -p skribeum-core --bench parse_extract --locked -- --noplot
+          cargo bench -p skribeum-vault --bench vault_operations --locked -- --noplot
+          bun scripts/compare-benchmarks.ts \
+            --baseline crates/skribeum-core/benches/baselines/core.json \
+            --criterion-dir target/criterion
+          bun scripts/compare-benchmarks.ts \
+            --baseline crates/skribeum-vault/benches/baselines/vault.json \
+            --criterion-dir target/criterion
+
       # Two-parser conformance gate (permanent): the Rust extractor and the
       # TypeScript decoration engine must produce identical
       # (kind, start_byte, end_byte) sets over tests/corpus/, per

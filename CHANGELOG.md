@@ -8,6 +8,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Local KaTeX rendering for inline and block math with cursor-source reveal,
+  MathML output, and visible source-preserving errors for malformed formulas.
+- Lazy Mermaid rendering for `mermaid` fences with cursor-source reveal and
+  inline parse errors; Mermaid stays outside the initial application chunk.
+- Registered read-only JSON Canvas view with stored-position cards, file
+  previews, SVG edges, and pointer plus keyboard pan and zoom controls.
+- Persisted system, light and dark themes over shared CSS variables, reactive
+  system color-scheme tracking, and programmatic WCAG AA contrast checks.
+- Linux axe accessibility gates for the vault, decorated editor, command
+  palette, settings and canvas surfaces, with expanded keyboard traversal.
+
 - Standalone `skribeum-import` CLI converting Notion Markdown and CSV export
   archives into Obsidian-compatible vaults, with readable collision-safe
   names, wikilink and attachment rewriting, database row frontmatter,

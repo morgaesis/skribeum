@@ -5,6 +5,7 @@
 // rules document.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { forceParsing } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { Decoration, EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -28,7 +29,7 @@ const HORIZONTAL_RULE_ROW: DecorationRule = {
 };
 
 function mountedView(extra: Parameters<Compartment["of"]>[0]): EditorView {
-  return new EditorView({
+  const view = new EditorView({
     state: EditorState.create({
       doc: "before\n\n---\n\nafter with *emphasis*\n",
       extensions: [
@@ -41,6 +42,11 @@ function mountedView(extra: Parameters<Compartment["of"]>[0]): EditorView {
       ],
     }),
   });
+  if (!forceParsing(view, view.state.doc.length, 1_000)) {
+    view.destroy();
+    throw new Error("fixture syntax tree did not finish parsing");
+  }
+  return view;
 }
 
 describe("data-driven decoration table", () => {

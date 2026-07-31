@@ -1,5 +1,14 @@
 0..0 line class="cm-skr-heading cm-skr-heading-1"
 0..2 hide node=HeaderMark
+25..42 widget math-inline aria-label="Rendered formula" role="img"
+96..119 widget math-inline aria-label="Rendered formula" role="img"
+138..152 widget math-inline aria-label="Rendered formula" role="img"
+174..188 widget math-block aria-label="Rendered equation" role="img"
+226..262 widget math-block aria-label="Rendered equation" role="img"
+300..375 widget math-block aria-label="Rendered equation" role="img"
+533..540 widget math-inline aria-label="Rendered formula" role="img"
+633..638 widget math-inline aria-label="Rendered formula" role="img"
 698..699 hide node=EmphasisMark
 698..738 mark class="cm-skr-emphasis"
+712..730 widget math-inline aria-label="Rendered formula" role="img"
 737..738 hide node=EmphasisMark

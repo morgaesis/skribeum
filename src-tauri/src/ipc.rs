@@ -133,6 +133,14 @@ pub struct NoteContent {
     pub byte_length: u32,
 }
 
+/// Metadata for a read-only indexed-file read. Bytes travel over the raw
+/// channel passed to `vault_file_read`.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct VaultFileContent {
+    /// Exact byte count delivered over the channel.
+    pub byte_length: u32,
+}
+
 /// A filesystem change under an open vault, delivered as a Tauri event
 /// stream after `watch_subscribe`.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
@@ -354,7 +362,16 @@ fn spawn_index_rebuild(search: &Arc<Mutex<Option<SearchIndex>>>, vault: Vault) {
     std::thread::spawn(move || {
         let guard = search.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(index) = guard.as_ref() {
+            #[cfg(debug_assertions)]
+            let rebuilt = index.rebuild(&RealFs, &vault).is_ok();
+            #[cfg(not(debug_assertions))]
             let _ = index.rebuild(&RealFs, &vault);
+            #[cfg(debug_assertions)]
+            if rebuilt && let Some(process_ms) = crate::cold_start_elapsed_milliseconds() {
+                eprintln!(
+                    "SKRIBEUM_COLD_START {{\"event\":\"full-text-index-complete\",\"process_ms\":{process_ms}}}"
+                );
+            }
         }
     });
 }
@@ -502,16 +519,6 @@ fn note_read(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .record_read(&path, &note.bytes);
-    // Index on open: the freshly read bytes are the note's current text.
-    if let Some(index) = open
-        .search
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_ref()
-    {
-        let _ = index.index_note(path.as_str(), &note.bytes);
-    }
-
     let byte_length = u32::try_from(note.bytes.len()).map_err(|_| AppError {
         code: "note/too-large",
         message: "note exceeds the maximum readable size".to_owned(),
@@ -533,6 +540,39 @@ fn note_read(
         projection_hash,
         byte_length,
     })
+}
+
+/// Reads any indexed regular file without creating editor, reconciliation,
+/// or search-index state. This is the read path for render-only vault files.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn vault_file_read(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    rel_path: String,
+    content: RawChannel,
+) -> Result<VaultFileContent, AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let vaults = registry.lock();
+    let open = vaults
+        .get(&handle.id)
+        .ok_or_else(AppError::unknown_handle)?;
+    let bytes = open
+        .vault
+        .read_file(&RealFs, &path)
+        .map_err(|error| AppError::from(error).with_path(path.as_str()))?;
+    let byte_length = u32::try_from(bytes.len()).map_err(|_| AppError {
+        code: "file/too-large",
+        message: "file exceeds the maximum readable size".to_owned(),
+        path: Some(path.as_str().to_owned()),
+    })?;
+    content.send_raw(bytes).map_err(|error| AppError {
+        code: "ipc/channel",
+        message: format!("failed to deliver file bytes: {error}"),
+        path: Some(path.as_str().to_owned()),
+    })?;
+    Ok(VaultFileContent { byte_length })
 }
 
 /// Writes a note through the crash-safe change-set path: `change_set` (a
@@ -1000,6 +1040,7 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             vault_tree,
             vault_tree_refresh::<tauri::Wry>,
             note_read,
+            vault_file_read,
             note_write,
             watch_subscribe::<tauri::Wry>,
             search_query,

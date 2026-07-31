@@ -5,3 +5,16 @@ pre-commit:
     - name: biome
       glob: "*.{js,ts,svelte,json,jsonc,css}"
       run: bunx biome check --no-errors-on-unmatched {staged_files}
+
+# Hooks install into the shared .git/hooks, so every worktree of this
+# repository runs them; a new clone runs them after its first `bun install`
+# through the package prepare script.
+pre-push:
+  jobs:
+    - name: gitleaks
+      run: |
+        if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{push}' 2>/dev/null); then
+          gitleaks detect --redact --log-opts "${upstream}..HEAD"
+        else
+          gitleaks detect --redact
+        fi

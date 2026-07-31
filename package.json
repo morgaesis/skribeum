@@ -8,7 +8,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit",
     "e2e": "wdio run tests/e2e/wdio.conf.ts",
     "test:web": "vitest run",
-    "prepare": "lefthook install",
+    "prepare": "node scripts/install-hooks.mjs",
     "tauri": "tauri"
   },
   "overrides": {

@@ -27,6 +27,11 @@ jobs:
           - name: windows-x86_64
             os: windows-latest
             args: ""
+          - name: windows-aarch64
+            os: windows-11-arm
+            # NSIS only: the WiX toolchain for arm64 MSIs is not reliable on
+            # the hosted arm runners, and the NSIS installer covers arm64.
+            args: --bundles nsis
           - name: linux-x86_64
             os: ubuntu-latest
             # Pinned by digest so the Linux build environment (and therefore
@@ -37,6 +42,12 @@ jobs:
             # invoked as "cargo auditable", so the runner is a one-line shim
             # created below. It embeds dependency data in the binary for
             # auditing with cargo-audit.
+            args: --runner cargo-auditable-runner
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            # The digest is the multi-arch manifest list, so the same pin
+            # resolves to the arm64 image on this runner.
+            container: "debian:12@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc"
             args: --runner cargo-auditable-runner
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}

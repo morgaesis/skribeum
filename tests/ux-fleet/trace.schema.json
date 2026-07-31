@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skribeum.example/schemas/ux-fleet-trace-v1.json",
+  "title": "Skribeum UX fleet interaction trace",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "session",
+    "persona",
+    "seq",
+    "intent",
+    "action",
+    "status",
+    "signal",
+    "error"
+  ],
+  "properties": {
+    "v": { "const": 1 },
+    "session": { "type": "string" },
+    "persona": { "type": "string" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "intent": { "type": "string" },
+    "action": { "type": "string" },
+    "status": { "enum": ["ok", "error"] },
+    "error": { "type": ["string", "null"] },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "latency",
+        "focus",
+        "scroll",
+        "layoutShift",
+        "consoleErrors",
+        "custom"
+      ],
+      "properties": {
+        "latency": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "ms", "source"],
+              "properties": {
+                "kind": { "enum": ["glyph", "surface", "note"] },
+                "ms": { "type": "number", "minimum": 0 },
+                "source": { "enum": ["event-to-paint", "webdriver-fallback"] }
+              }
+            }
+          ]
+        },
+        "focus": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["before", "after", "sensible", "body"],
+          "properties": {
+            "before": { "type": "string" },
+            "after": { "type": "string" },
+            "sensible": { "type": "boolean" },
+            "body": { "type": "boolean" }
+          }
+        },
+        "scroll": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["unexpectedPx", "deltaByContainer"],
+          "properties": {
+            "unexpectedPx": { "type": "number", "minimum": 0 },
+            "deltaByContainer": {
+              "type": "object",
+              "additionalProperties": { "type": "number" }
+            }
+          }
+        },
+        "layoutShift": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["score", "method"],
+          "properties": {
+            "score": { "type": "number", "minimum": 0 },
+            "method": { "enum": ["performance-observer", "unsupported"] }
+          }
+        },
+        "consoleErrors": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "custom": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["boolean", "number", "string", "null"]
+          }
+        }
+      }
+    }
+  }
+}

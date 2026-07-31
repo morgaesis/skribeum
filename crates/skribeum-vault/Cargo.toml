@@ -8,6 +8,22 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+notify = "8.2.0"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.11.0"
+skribeum-core = { path = "../skribeum-core" }
+thiserror = "2.0.19"
+unicode-normalization = "0.1.25"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+criterion = "0.8.2"
+proptest = "1.11.0"
+
+[[bench]]
+name = "vault_operations"
+harness = false

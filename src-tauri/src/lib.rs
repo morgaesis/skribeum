@@ -1,6 +1,35 @@
-//! Tauri shell. This crate contains glue only: window setup and, once the
-//! IPC allowlist gains entries, command registration. Application logic
+//! Tauri shell. This crate contains glue only: window setup, IPC command
+//! registration and the error mapping at the boundary. Application logic
 //! lives in `skribeum-core` and `skribeum-vault`.
+
+#[cfg(debug_assertions)]
+use std::sync::OnceLock;
+#[cfg(debug_assertions)]
+use std::time::Instant;
+
+pub mod error;
+pub mod ipc;
+
+pub use ipc::ipc_builder;
+
+#[cfg(debug_assertions)]
+const COLD_START_FIRST_EDITOR_PAINT_EVENT: &str = "skribeum://debug/first-editor-paint";
+#[cfg(debug_assertions)]
+static COLD_START_MAIN_ENTRY: OnceLock<Instant> = OnceLock::new();
+
+/// Records the process timestamp used by debug cold-start measurement.
+#[cfg(debug_assertions)]
+pub fn mark_cold_start_main_entry() {
+    let _ = COLD_START_MAIN_ENTRY.set(Instant::now());
+}
+
+/// Returns elapsed process time for debug-only cold-start measurement.
+#[cfg(debug_assertions)]
+pub(crate) fn cold_start_elapsed_milliseconds() -> Option<u128> {
+    COLD_START_MAIN_ENTRY
+        .get()
+        .map(|start| start.elapsed().as_millis())
+}
 
 /// Starts the application window.
 ///
@@ -10,7 +39,24 @@
 /// recovery path before a window exists.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let specta_builder = ipc_builder();
+
+    // In development, keep the committed TypeScript bindings current on
+    // every launch. The path is anchored to this crate's manifest directory
+    // so the export works whatever the process working directory is; CI
+    // separately asserts the committed file matches what this generates.
+    #[cfg(debug_assertions)]
+    specta_builder
+        .export(
+            specta_typescript::Typescript::default(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../src/lib/ipc/bindings.ts"),
+        )
+        .expect("failed to export TypeScript bindings");
+
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(ipc::VaultRegistry::default())
+        .invoke_handler(specta_builder.invoke_handler());
 
     // The embedded WebDriver server used by the end-to-end suite. Compiled in
     // only when the `webdriver` feature is enabled, so release artifacts never
@@ -18,7 +64,81 @@ pub fn run() {
     #[cfg(feature = "webdriver")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
+    // The debug measurement flag and the end-to-end vault seam are injected
+    // only into debug or webdriver builds. Release artifacts receive neither
+    // hook. The directory-picker dialog cannot be driven headlessly, so the
+    // webdriver seam announces `SKRIBEUM_E2E_VAULT` to the webview.
+    #[cfg(any(debug_assertions, feature = "webdriver"))]
+    let builder = builder.on_page_load(|webview, _payload| {
+        #[cfg(debug_assertions)]
+        {
+            if let Some(process_ms) = cold_start_elapsed_milliseconds() {
+                let _ = webview.eval(format!(
+                    "window.__SKRIBEUM_DEBUG_COLD_START_CALIBRATION__ = {{ processMs: {process_ms}, webviewMs: performance.now() }}; window.__SKRIBEUM_DEBUG_COLD_START__ = true;"
+                ));
+            }
+        }
+
+        #[cfg(any(debug_assertions, feature = "webdriver"))]
+        if let Ok(vault_path) = std::env::var("SKRIBEUM_E2E_VAULT")
+            && let Ok(encoded) = serde_json::to_string(&vault_path)
+        {
+            let _ = webview.eval(format!("window.__SKRIBEUM_E2E_VAULT__ = {encoded};"));
+        }
+
+        #[cfg(feature = "webdriver")]
+        if let Ok(note_path) = std::env::var("SKRIBEUM_E2E_NOTE")
+            && let Ok(encoded) = serde_json::to_string(&note_path)
+        {
+            let _ = webview.eval(format!("window.__SKRIBEUM_E2E_NOTE__ = {encoded};"));
+        }
+
+        #[cfg(feature = "webdriver")]
+        if std::env::var("SKRIBEUM_PERF_HARNESS").as_deref() == Ok("1") {
+            let _ = webview.eval("window.__SKRIBEUM_DEBUG_PERF__ = true;");
+        }
+    });
+
     builder
+        .setup(move |app| {
+            use tauri::Manager;
+            #[cfg(debug_assertions)]
+            use tauri::Listener;
+
+            specta_builder.mount_events(app);
+            #[cfg(debug_assertions)]
+            app.listen(COLD_START_FIRST_EDITOR_PAINT_EVENT, |event| {
+                let Ok(report) = serde_json::from_str::<ColdStartFirstEditorPaint>(event.payload())
+                else {
+                    return;
+                };
+                let process_ms = report.process_ms;
+                eprintln!(
+                    "SKRIBEUM_COLD_START {{\"event\":\"first-editor-paint\",\"process_ms\":{process_ms},\"webview_ms\":{}}}",
+                    report.webview_ms
+                );
+            });
+            // The crash journal is enabled by default; it lives in the OS
+            // app-data directory, never inside any vault.
+            let journal = app.path().app_data_dir().ok().map(|dir| {
+                skribeum_vault::Journal::new(dir.join(skribeum_vault::JOURNAL_FILE_NAME))
+            });
+            app.manage(ipc::JournalState(journal));
+            // Settings live in the OS app-config directory, never in any
+            // vault, with unknown keys preserved on every write.
+            let settings = app.path().app_config_dir().ok().map(|dir| {
+                skribeum_vault::SettingsStore::new(dir.join(skribeum_vault::SETTINGS_FILE_NAME))
+            });
+            app.manage(ipc::SettingsState(settings));
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("failed to start the application window");
+}
+
+#[cfg(debug_assertions)]
+#[derive(serde::Deserialize)]
+struct ColdStartFirstEditorPaint {
+    process_ms: f64,
+    webview_ms: f64,
 }

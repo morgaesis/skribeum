@@ -1,0 +1,55 @@
+[package]
+name = "skribeum-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+skribeum-core = { path = "../crates/skribeum-core" }
+skribeum-vault = { path = "../crates/skribeum-vault" }
+
+[[bin]]
+name = "vault_path"
+path = "fuzz_targets/vault_path.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "offset_conversion"
+path = "fuzz_targets/offset_conversion.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "encoding_classify"
+path = "fuzz_targets/encoding_classify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "read_frontmatter"
+path = "fuzz_targets/read_frontmatter.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "change_set_apply"
+path = "fuzz_targets/change_set_apply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extract"
+path = "fuzz_targets/extract.rs"
+test = false
+doc = false
+bench = false

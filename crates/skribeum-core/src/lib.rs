@@ -1,6 +1,20 @@
 //! Pure functions over markdown source text. This crate performs no I/O and
 //! has no Tauri dependency; everything here is a function of its arguments.
 
+pub mod change_set;
+pub mod extract;
+pub mod frontmatter;
+pub mod line_endings;
+pub mod wikilink;
+
+pub use change_set::{
+    ByteRangeReplace, ChangeSetError, apply_change_set, changed_span, span_within_declared,
+};
+pub use extract::{Extraction, ExtractionKind, extract};
+pub use frontmatter::read_frontmatter;
+pub use line_endings::{BufferEdit, LineEndingError, LineEndingMap, Terminator, buffer_from_bytes};
+pub use wikilink::{WikilinkResolution, WikilinkSubpath, resolve_wikilink};
+
 /// Converts a UTF-16 code-unit offset (the `CodeMirror` index space) into a UTF-8
 /// byte offset into `text`. All positions crossing the IPC boundary are UTF-8
 /// byte offsets; this conversion happens at the boundary and nowhere else.

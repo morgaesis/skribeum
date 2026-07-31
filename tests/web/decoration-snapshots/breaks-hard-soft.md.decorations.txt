@@ -1,0 +1,5 @@
+0..0 line class="cm-skr-heading cm-skr-heading-1"
+0..2 hide node=HeaderMark
+510..511 hide node=EmphasisMark
+510..529 mark class="cm-skr-emphasis"
+528..529 hide node=EmphasisMark

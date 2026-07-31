@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 440ff630be0087acbb69c717f07a67de50bf025082feef74744db131c9da0b0e # shrinks to base = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], raw = [(11465682209976372456, 1, [])]
+cc 6c97c437991fb1c196a328c3993811f456ddc62ca4a4892e4f6a9a2754aaae6a # shrinks to base = [97, 97, 97, 97, 97, 97, 97, 97, 13, 10, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 13, 10, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 13, 10, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 13, 10, 97, 97, 97, 97, 97, 97, 13, 10, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 13, 10, 97, 97, 13, 10, 97, 13, 10, 97, 97, 97, 97], offset_draw = 8688558793507707030, len_draw = 0, insert = [10]

@@ -761,18 +761,14 @@ describe("skribeum core editing surfaces", () => {
         )) === "dark",
       { timeout: 10000 },
     );
-    const initialBackground = await browser.execute(
-      () => getComputedStyle(document.body).backgroundColor,
-    );
-    await browser.waitUntil(
-      async () =>
-        (await browser.execute(
-          () => getComputedStyle(document.body).backgroundColor,
-        )) !== initialBackground,
-      {
-        timeout: 10000,
-        timeoutMsg: "dark theme background never diverged from the initial",
-      },
+    // Two frames let the style pass apply the flipped dataset before the
+    // dark value is recorded; the initial theme may already look dark, so
+    // divergence is only asserted between the two forced states below.
+    await browser.execute(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
     );
     const darkBackground = await browser.execute(
       () => getComputedStyle(document.body).backgroundColor,

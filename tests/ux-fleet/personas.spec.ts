@@ -220,7 +220,7 @@ describe("persona-driven UX fleet", () => {
       "Command palette",
       "p",
     );
-    await flow.query("insert table", "Table");
+    await flow.query("insert table", "Insert table");
     await flow.pick("Press Enter to insert a table", "Column 1");
   });
 
@@ -350,11 +350,9 @@ describe("persona-driven UX fleet", () => {
       "Switch notes during edits and dismiss transient surfaces at unpredictable points",
       FLEET_SEED + 6,
     );
-    await flow.quickNote(
-      "Interrupted draft",
-      NOTES.interruption,
-      "Interrupted draft",
-    );
+    // The quick switcher matches paths, as Obsidian's does, so the persona
+    // types what appears in the switcher rather than the note's heading.
+    await flow.quickNote("Draft", NOTES.interruption, "Interrupted draft");
     await flow.type(
       "Type a short burst into the draft",
       " before an interruption",

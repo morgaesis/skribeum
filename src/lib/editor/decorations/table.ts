@@ -14,7 +14,12 @@ export type WidgetName =
   | "task-checkbox"
   | "math-inline"
   | "math-block"
-  | "mermaid-diagram";
+  | "mermaid-diagram"
+  | "table-row"
+  | "table-separator"
+  | "embed"
+  | "code-copy"
+  | "callout";
 
 export type Presentation =
   /** A styled span over the node's text. */
@@ -27,8 +32,13 @@ export type Presentation =
   | { present: "hide" }
   /** A class on every document line the node covers. */
   | { present: "line"; class: string }
-  /** The node's text is replaced by a rendered widget. */
-  | { present: "widget"; widget: WidgetName };
+  /** The node's text is replaced by, or receives, a rendered widget. */
+  | {
+      present: "widget";
+      widget: WidgetName;
+      /** `before` inserts without replacing source, for overlay controls. */
+      place?: "replace" | "before";
+    };
 
 /**
  * Named engine behaviors a row may reference for context-dependent
@@ -40,6 +50,7 @@ export type Presentation =
 export type DynamicAttribute =
   | "wikilink-resolution"
   | "callout-type"
+  | "rich-callout"
   | "code-language"
   | "mermaid-block";
 
@@ -211,12 +222,31 @@ const wikilinkRows: DecorationRule[] = [
   },
   {
     node: "Embed",
-    presentation: { present: "mark", class: "cm-skr-embed" },
-    reveal: "never",
+    presentation: { present: "widget", widget: "embed" },
+    reveal: "cursor-inside",
   },
   {
     node: "EmbedMark",
     presentation: { present: "hide" },
+    reveal: "cursor-inside",
+  },
+];
+
+const tableRows: DecorationRule[] = [
+  {
+    node: "TableHeader",
+    presentation: { present: "widget", widget: "table-row" },
+    reveal: "cursor-inside",
+  },
+  {
+    node: "TableDelimiter",
+    parent: ["Table"],
+    presentation: { present: "widget", widget: "table-separator" },
+    reveal: "cursor-inside",
+  },
+  {
+    node: "TableRow",
+    presentation: { present: "widget", widget: "table-row" },
     reveal: "cursor-inside",
   },
 ];
@@ -263,7 +293,7 @@ const codeRows: DecorationRule[] = [
     node: "CodeMark",
     parent: ["FencedCode"],
     presentation: { present: "mark", class: "cm-skr-code-fence" },
-    reveal: "never",
+    reveal: "cursor-inside",
   },
   {
     node: "FencedCode",
@@ -278,8 +308,17 @@ const codeRows: DecorationRule[] = [
   {
     node: "CodeInfo",
     presentation: { present: "mark", class: "cm-skr-code-info" },
-    reveal: "never",
+    reveal: "cursor-inside",
     dynamic: "code-language",
+  },
+  {
+    node: "FencedCode",
+    presentation: {
+      present: "widget",
+      widget: "code-copy",
+      place: "before",
+    },
+    reveal: "never",
   },
   {
     node: "FencedCode",
@@ -291,6 +330,12 @@ const codeRows: DecorationRule[] = [
 ];
 
 const quoteRows: DecorationRule[] = [
+  {
+    node: "Blockquote",
+    presentation: { present: "widget", widget: "callout" },
+    reveal: "cursor-inside",
+    dynamic: "rich-callout",
+  },
   {
     node: "Blockquote",
     presentation: { present: "line", class: "cm-skr-blockquote" },
@@ -341,6 +386,7 @@ export const DECORATION_TABLE: readonly DecorationRule[] = [
   ...emphasisRows,
   ...linkRows,
   ...wikilinkRows,
+  ...tableRows,
   ...listRows,
   ...mathRows,
   ...codeRows,

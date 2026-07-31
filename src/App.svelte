@@ -361,11 +361,35 @@ function bannerReasonText(reason: BannerReason): string {
 }
 
 function refreshLinkContext() {
+  const activeVault = vault;
+  const currentPath = selectedPath;
   linkContext = {
     paths: tree
       .filter((entry) => entry.kind !== "directory")
       .map((entry) => entry.path),
     config: obsidianConfig,
+    currentPath,
+    embedAncestry: currentPath === null ? [] : [currentPath],
+    embedDepth: 0,
+    ...(activeVault === null
+      ? {}
+      : {
+          loadNote: async (path: string) => {
+            try {
+              const bytes = await readVaultFile(activeVault, path);
+              const content =
+                bytes.length >= 3 &&
+                bytes[0] === 0xef &&
+                bytes[1] === 0xbb &&
+                bytes[2] === 0xbf
+                  ? bytes.subarray(3)
+                  : bytes;
+              return new TextDecoder("utf-8", { fatal: false }).decode(content);
+            } catch {
+              return null;
+            }
+          },
+        }),
   };
 }
 
@@ -458,6 +482,7 @@ async function openNote(path: string) {
     canvas = null;
     canvasError = null;
     selectedPath = path;
+    refreshLinkContext();
     recents = [path, ...recents.filter((entry) => entry !== path)].slice(0, 50);
     await tick();
     if (outlineOpen) {

@@ -52,6 +52,7 @@
 740..740 line class="cm-skr-blockquote"
 740..740 line class="cm-skr-code-block"
 740..741 mark class="cm-skr-quote-mark"
+742..742 widget code-copy aria-label="Copy code" role="button"
 742..745 mark class="cm-skr-code-fence"
 745..749 mark class="cm-skr-code-info" data-language="text"
 750..750 line class="cm-skr-blockquote"

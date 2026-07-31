@@ -26,6 +26,7 @@
 765..801 mark class="cm-skr-inline-code"
 800..801 hide node=CodeMark
 822..822 line class="cm-skr-code-block"
+822..822 widget code-copy aria-label="Copy code" role="button"
 822..825 mark class="cm-skr-code-fence"
 825..829 mark class="cm-skr-code-info" data-language="text"
 830..830 line class="cm-skr-code-block"

@@ -17,6 +17,11 @@
   --skr-warning-surface: #fff7e8;
   --skr-success: #16713b;
   --skr-success-surface: #edf9f0;
+  --skr-callout-blue: #2563eb;
+  --skr-callout-cyan: #0e7490;
+  --skr-callout-yellow: #a16207;
+  --skr-callout-orange: #b45309;
+  --skr-callout-purple: #7e22ce;
   --skr-code-surface: #eef2f7;
   --skr-overlay: rgb(15 23 42 / 35%);
   --skr-shadow: 0 18px 48px rgb(15 23 42 / 18%);
@@ -40,6 +45,11 @@
   --skr-warning-surface: #38270f;
   --skr-success: #86efac;
   --skr-success-surface: #143322;
+  --skr-callout-blue: #60a5fa;
+  --skr-callout-cyan: #67e8f9;
+  --skr-callout-yellow: #fde047;
+  --skr-callout-orange: #fdba74;
+  --skr-callout-purple: #d8b4fe;
   --skr-code-surface: #1e293b;
   --skr-overlay: rgb(2 6 23 / 62%);
   --skr-shadow: 0 18px 48px rgb(0 0 0 / 45%);
@@ -65,6 +75,11 @@
     --skr-warning-surface: #38270f;
     --skr-success: #86efac;
     --skr-success-surface: #143322;
+    --skr-callout-blue: #60a5fa;
+    --skr-callout-cyan: #67e8f9;
+    --skr-callout-yellow: #fde047;
+    --skr-callout-orange: #fdba74;
+    --skr-callout-purple: #d8b4fe;
     --skr-code-surface: #1e293b;
     --skr-overlay: rgb(2 6 23 / 62%);
     --skr-shadow: 0 18px 48px rgb(0 0 0 / 45%);

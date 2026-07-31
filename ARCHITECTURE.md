@@ -148,9 +148,15 @@ extension recognizes inline and block math without changing the vault-wide
 extraction contract. KaTeX replaces each recognized expression with local
 HTML and MathML, while malformed expressions remain visible in an error
 widget. Mermaid fences use the stock fenced-code nodes and load Mermaid only
-when the first diagram widget mounts. Block replacements live in a decoration
-state field because they affect vertical layout; ordinary marks and inline
-widgets remain viewport-windowed.
+when the first diagram widget mounts. Fenced-code language parsers also load
+on demand, while unknown info strings stay plain. GFM tables render as aligned
+row widgets so cursor entry reveals one source row. Note and section embeds
+mount nested read-only instances of the same decoration engine with a bounded
+ancestry context for depth and cycle notices. Callouts use the same nested
+renderer for their bodies, with typed icon and accent metadata and native fold
+controls. Block replacements live in a decoration state field because they
+affect vertical layout; ordinary marks and inline widgets remain
+viewport-windowed.
 
 Wikilink display resolution honors `.obsidian/app.json` read through the
 `vault_config_read` command, resolves targets against the vault tree

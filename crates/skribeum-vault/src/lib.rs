@@ -9,6 +9,8 @@ pub mod journal;
 pub mod path;
 pub mod real;
 pub mod recon;
+pub mod search;
+pub mod settings;
 pub mod sim;
 pub mod vault;
 pub mod write;
@@ -18,6 +20,10 @@ pub use journal::{JOURNAL_FILE_NAME, Journal, JournalError, ReplayOutcome};
 pub use path::{PathCollision, VaultPath, VaultPathError, detect_collisions};
 pub use real::{RealClock, RealFs};
 pub use recon::{BannerReason, ReconEvent, Reconciler, ReconcilerConfig};
+pub use search::{SEARCH_SCHEMA_VERSION, SearchError, SearchHit, SearchIndex, index_file_name};
+pub use settings::{
+    SETTINGS_FILE_NAME, SETTINGS_SCHEMA_VERSION, Settings, SettingsError, SettingsStore,
+};
 pub use sim::{
     NetworkProfile, Scheduler, SchedulerOp, SimClock, SimFs, SimKill, install_quiet_kill_hook,
 };

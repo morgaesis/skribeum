@@ -4,7 +4,7 @@
 //! content.
 
 use serde::Serialize;
-use skribeum_vault::{FsError, VaultError, VaultPathError};
+use skribeum_vault::{FsError, SearchError, SettingsError, VaultError, VaultPathError};
 
 /// The one error shape that crosses IPC.
 #[derive(Debug, Clone, Serialize, specta::Type)]
@@ -27,6 +27,27 @@ impl AppError {
         Self {
             code: "vault/unknown-handle",
             message: "no open vault has this handle".to_owned(),
+            path: None,
+        }
+    }
+
+    /// An error for a vault whose search index is not available (still
+    /// opening, or the app-data directory could not be resolved).
+    #[must_use]
+    pub fn search_unavailable() -> Self {
+        Self {
+            code: "search/unavailable",
+            message: "the search index for this vault is not available".to_owned(),
+            path: None,
+        }
+    }
+
+    /// An error for an unresolvable settings location.
+    #[must_use]
+    pub fn settings_unavailable() -> Self {
+        Self {
+            code: "settings/unavailable",
+            message: "the settings directory could not be resolved".to_owned(),
             path: None,
         }
     }
@@ -74,6 +95,34 @@ impl From<&VaultError> for AppError {
 impl From<VaultError> for AppError {
     fn from(error: VaultError) -> Self {
         Self::from(&error)
+    }
+}
+
+impl From<SearchError> for AppError {
+    fn from(error: SearchError) -> Self {
+        let code = match error {
+            SearchError::Storage(_) => "search/index",
+        };
+        Self {
+            code,
+            message: error.to_string(),
+            path: None,
+        }
+    }
+}
+
+impl From<SettingsError> for AppError {
+    fn from(error: SettingsError) -> Self {
+        let code = match &error {
+            SettingsError::Corrupt => "settings/corrupt",
+            SettingsError::InvalidValue(_) => "settings/invalid",
+            SettingsError::Fs(fs) => fs_code(fs),
+        };
+        Self {
+            code,
+            message: error.to_string(),
+            path: None,
+        }
     }
 }
 
@@ -132,6 +181,18 @@ mod tests {
                 "path/invalid",
             ),
             (AppError::unknown_handle(), "vault/unknown-handle"),
+            (
+                SearchError::Storage("disk".to_owned()).into(),
+                "search/index",
+            ),
+            (AppError::search_unavailable(), "search/unavailable"),
+            (SettingsError::Corrupt.into(), "settings/corrupt"),
+            (
+                SettingsError::InvalidValue("theme").into(),
+                "settings/invalid",
+            ),
+            (SettingsError::Fs(FsError::NoSpace).into(), "fs/no-space"),
+            (AppError::settings_unavailable(), "settings/unavailable"),
         ];
         for (error, expected) in cases {
             assert_eq!(error.code, expected);

@@ -36,8 +36,10 @@ crate contains glue only.
   CI against the `tauri-specta` generated bindings
   (`src/lib/ipc/bindings.ts`, also committed and regeneration-checked). It
   grows deliberately, never incidentally. Current commands: `vault_open`
-  (the only command accepting an absolute path), `vault_tree`, `note_read`,
-  `note_write`, `watch_subscribe`.
+  (the only command accepting an absolute path), `vault_tree`,
+  `vault_tree_refresh` (on-demand re-index of the tree from current
+  filesystem state), `note_read`, `note_write`, `watch_subscribe`,
+  `search_query`, `settings_read`, `settings_write`.
 - `note_write` is change-set based: a list of byte-range replacements
   against the last-read projection, plus the expected projection hash. The
   hash is verified against the current on-disk projection before anything
@@ -80,6 +82,46 @@ exactly at the ingest state. Journal-recovered deltas apply as pending
 (unsaved) edits over the on-disk base, so the next save persists them.
 Every transaction annotated as decoration-originated is asserted inert
 (`docChanged === false`) by the dispatch wrapper in dev and test builds.
+
+## Registration surface
+
+Every user-invocable feature registers through one typed API
+(`src/lib/registry/`): commands with stable dot-namespaced string ids,
+palette entries, views, keybindings and slash-menu items. The registry
+core imports no components and no IPC; commands receive their
+capabilities per invocation through a `CommandContext` interface the
+shell implements, and the shell maps registered view ids to concrete
+surfaces. This is the surface the extensibility principle later
+publishes as the plugin API, so ids are the compatibility contract:
+they never change meaning once shipped.
+
+Key events reach commands through exactly two interpreters, both inside
+the registry module: a window-level handler for global-scope bindings
+and the editor keymap builder for editor-scope bindings (which also
+carries CodeMirror's stock editing keymaps). Several commands may share
+a chord; they chain in registration order, each declining until one
+handles it, which is how conditional surfaces (the slash menu's
+navigation keys, the find panel's Escape) coexist on common keys. A CI
+check sweeps the source tree for key wiring outside the registry
+module: any occurrence must be a documented ARIA-pattern-internal
+widget key (a combobox's arrows, a tree's roving tabindex) held in a
+committed allowlist, and a runtime assertion pins the palette and slash
+listings to exactly the registry's contents.
+
+Registered on this surface: the command palette and quick switcher
+(fuzzy-filtered ARIA comboboxes), ranked vault search (debounced
+`search_query`, snippets highlighted by byte ranges rendered as text
+segments, never injected markup), in-note find and replace over
+`@codemirror/search` with a custom match-counting panel, the heading
+outline (an ARIA tree over the syntax tree, navigation only), the
+settings view (optimistic updates over `settings_read`/`settings_write`
+with revert on failure), inline formatting toggles behind the selection
+toolbar, content insertions behind the slash menu, and table editing.
+Table operations (row and column insertion, cell navigation growth) are
+pure functions over the table block that return declared spans, the
+structural change composed with the formatting pass that re-pads other
+cells, so the byte-containment property is asserted over exactly what
+each operation declares and GFM alignment survives every edit.
 
 ## Live preview
 
@@ -203,3 +245,32 @@ bulk review event carries the whole set. The editor layer consumes typed
 events: an external update with a byte change set for open notes, an
 external removal, a reconciliation banner with its reason, the bulk
 review, and journal recovery.
+
+## Full-text search
+
+Search is ranked and snippeted, served by a SQLite FTS5 index in
+`skribeum-vault` (`search.rs`). The index is device-local derived state:
+it lives under the OS app-data directory (one database per vault, named by
+a hash of the vault root), never inside the vault, and a full
+open-rebuild-query cycle provably writes nothing under the vault root.
+Each note indexes as three BM25-weighted fields, title above headings
+above body, with headings extracted through the `skribeum-core`
+extraction layer. Updates are incremental: a note indexes on read,
+re-indexes on save, follows external edits and removals through the
+reconciliation events, and a tree refresh or vault open rebuilds in the
+background. The index is rebuildable at any time; a corrupted or missing
+database file is discarded and recreated transparently on open. Snippets
+are assembled in Rust from the indexed note text, and match positions
+cross IPC as byte ranges into the snippet, so the UI highlights by
+slicing text, never by injecting HTML.
+
+## Settings
+
+`settings.json` lives in the OS app-config directory, never in a vault.
+The document carries a `schema_version` and typed known keys (theme,
+editor font size, search result limit); writes are whole-document,
+validated, durable through the crash-safe sequence, and preserve every
+unknown key already in the file, so settings written by a newer build
+survive a round trip through an older one. A missing file reads as the
+defaults; a file that does not parse as a JSON object fails loudly on
+read and write rather than being silently replaced.

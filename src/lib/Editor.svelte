@@ -1,14 +1,15 @@
 <script lang="ts">
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { history } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   Annotation,
   type ChangeSet,
   Compartment,
   EditorState,
+  type Extension,
   Transaction,
 } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { onMount } from "svelte";
 import type { ByteChange } from "./editor/byteChangeSet";
 import { assertDecorationsInert } from "./editor/decorationGuard";
@@ -25,9 +26,13 @@ import {
 } from "./editor/frontmatter";
 import { obsidianMarkdownExtensions } from "./editor/markdown/obsidian";
 import { NoteSession } from "./editor/noteSession";
+import { findExtension } from "./features/findPanel";
+import { selectionToolbar } from "./features/selectionToolbar";
+import { slashMenu } from "./features/slashMenu";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
 import PropertiesPanel from "./PropertiesPanel.svelte";
+import { type CommandContext, CommandRegistry, editorKeymap } from "./registry";
 
 let {
   doc = "",
@@ -36,8 +41,11 @@ let {
   path = null,
   linkContext = null,
   propertyTypes = null,
+  registry = null,
+  commandContext = null,
   onConflict,
   onWriteError,
+  onDocChanged,
 }: {
   /** Fallback document when no note is open (the scaffold fixture). */
   doc?: string;
@@ -48,8 +56,14 @@ let {
   linkContext?: WikilinkResolutionContext | null;
   /** Declared Obsidian property types for the properties panel. */
   propertyTypes?: Readonly<Record<string, FrontmatterValueType>> | null;
+  /** The registration API; keybindings, slash menu and toolbar read it. */
+  registry?: CommandRegistry | null;
+  /** Capability provider for commands fired inside the editor. */
+  commandContext?: (() => CommandContext) | null;
   onConflict?: () => void;
   onWriteError?: (message: string) => void;
+  /** Notified after any document-changing transaction (outline refresh). */
+  onDocChanged?: () => void;
 } = $props();
 
 const IDLE_SAVE_DELAY_MILLISECONDS = 400;
@@ -110,6 +124,40 @@ function applyLinkContext() {
 // fold them into the pending set a second time.
 const externalIngest = Annotation.define<boolean>();
 
+/**
+ * The registry-driven extensions: the editor keymap (every editor-scope
+ * keybinding, followed by CodeMirror's stock editing keymaps), the slash
+ * menu, the selection toolbar and the find panel. Without a registry
+ * (the bare fixture in tests) the editor still carries the stock keymap
+ * through `editorKeymap` on an empty registry.
+ */
+function registryExtensions(): Extension[] {
+  const activeRegistry = registry;
+  const provider =
+    commandContext ??
+    ((): CommandContext => ({
+      view: view ?? null,
+      openNote: () => Promise.resolve(),
+      openView: () => {},
+      toggleView: () => {},
+      closeSurfaces: () => {},
+      requestSave: () => {
+        requestSave();
+      },
+      notePaths: () => [],
+      recentNotePaths: () => [],
+    }));
+  if (activeRegistry === null) {
+    return [editorKeymap(new CommandRegistry(), provider)];
+  }
+  return [
+    editorKeymap(activeRegistry, provider),
+    slashMenu(activeRegistry, provider),
+    selectionToolbar(activeRegistry, provider),
+    findExtension(),
+  ];
+}
+
 function stateFor(content: string, locked: boolean): EditorState {
   return EditorState.create({
     doc: content,
@@ -121,17 +169,7 @@ function stateFor(content: string, locked: boolean): EditorState {
       decorationEngine(),
       EditorView.lineWrapping,
       historyCompartment.of(history()),
-      keymap.of([
-        {
-          key: "Mod-s",
-          run: () => {
-            requestSave();
-            return true;
-          },
-        },
-        ...defaultKeymap,
-        ...historyKeymap,
-      ]),
+      ...registryExtensions(),
       EditorState.readOnly.of(locked),
       EditorView.editable.of(!locked),
       EditorView.domEventHandlers({
@@ -169,6 +207,7 @@ function dispatchTransactions(
   }
   if (transactions.some((transaction) => transaction.docChanged)) {
     refreshFrontmatter();
+    onDocChanged?.();
   }
 }
 
@@ -344,6 +383,11 @@ export function markRemoved(): void {
   removed = true;
 }
 
+/** The live CodeMirror view, for command contexts and the outline. */
+export function getView(): EditorView | undefined {
+  return view;
+}
+
 async function rereadAndReconcile(): Promise<void> {
   if (vault === null || path === null) {
     return;
@@ -446,7 +490,8 @@ $effect(() => {
 <style>
   .editor :global(.cm-editor) {
     height: 100%;
-    font-size: 0.95rem;
+    /* The settings view drives the variable; the fallback is the default. */
+    font-size: var(--skr-editor-font-size, 0.95rem);
   }
   .editor :global(.cm-editor.cm-focused) {
     outline: 2px solid #3b82f6;

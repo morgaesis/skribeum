@@ -9,7 +9,9 @@ use skribeum_vault::{FileSystem, RealFs};
 
 /// Files allowed to touch the real filesystem directly.
 const ALLOWED: &[&str] = &[
-    // The single production call site; everything else goes through traits.
+    // Production filesystem boundaries; everything else goes through traits
+    // or pure import planning.
+    "crates/skribeum-import/src/io.rs",
     "crates/skribeum-vault/src/real.rs",
     // Fixture loading in the I/O-free core crate's test harnesses. The
     // core crate has no dependency on this crate, so it cannot use RealFs.

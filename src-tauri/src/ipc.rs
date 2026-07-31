@@ -12,10 +12,10 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use skribeum_vault::{
     Clock, Encoding, EntryKind, FileSystem, Journal, RealClock, RealFs, ReconEvent, Reconciler,
-    ReplayOutcome, Vault, VaultPath, is_indexed_path,
+    ReplayOutcome, SearchIndex, Settings, SettingsStore, Vault, VaultPath, is_indexed_path,
 };
 use tauri::ipc::InvokeResponseBody;
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_specta::Event;
 
 use crate::error::AppError;
@@ -281,10 +281,45 @@ impl specta::Type for RawChannel {
     }
 }
 
+/// One ranked full-text search result over IPC. `match_ranges` are byte
+/// offsets into `snippet` (`[start, end)`, character-boundary aligned), so
+/// the UI highlights by slicing, never by injecting markup.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct SearchHit {
+    /// Vault-relative path of the note.
+    pub path: String,
+    /// Note title (final path segment without its extension).
+    pub title: String,
+    /// Snippet of the note text around the first match.
+    pub snippet: String,
+    /// Byte ranges of query-term matches inside `snippet`.
+    pub match_ranges: Vec<[u32; 2]>,
+    /// Relevance score; higher ranks better.
+    pub score: f64,
+}
+
+/// The typed settings document over IPC. Unknown keys in the underlying
+/// `settings.json` never cross the boundary; they are preserved internally
+/// on every write.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct SettingsDoc {
+    /// Schema version of the document.
+    pub schema_version: u32,
+    /// Color theme: `system`, `light` or `dark`.
+    pub theme: String,
+    /// Editor font size in CSS pixels.
+    pub editor_font_size: u32,
+    /// Maximum number of results a search query returns.
+    pub search_result_limit: u32,
+}
+
 struct OpenVault {
     vault: Vault,
     watching: Arc<AtomicBool>,
     reconciler: Arc<Mutex<Reconciler>>,
+    /// The vault's full-text index. `None` when the OS app-data directory
+    /// could not be resolved; the index lives there, never in the vault.
+    search: Arc<Mutex<Option<SearchIndex>>>,
 }
 
 /// Session state: open vaults by handle, plus the session clock driving
@@ -308,6 +343,22 @@ impl VaultRegistry {
 /// journal protection.
 pub struct JournalState(pub Option<Journal>);
 
+/// The settings store, at `settings.json` in the OS app-config directory.
+/// Absent only when that directory could not be resolved.
+pub struct SettingsState(pub Option<SettingsStore>);
+
+/// Rebuilds a vault's search index on a background thread. The index reads
+/// notes only; a rebuild never writes inside the vault.
+fn spawn_index_rebuild(search: &Arc<Mutex<Option<SearchIndex>>>, vault: Vault) {
+    let search = Arc::clone(search);
+    std::thread::spawn(move || {
+        let guard = search.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(index) = guard.as_ref() {
+            let _ = index.rebuild(&RealFs, &vault);
+        }
+    });
+}
+
 /// Opens a vault at an absolute path, validates it and indexes its tree.
 /// This is the only command that accepts an absolute path.
 #[tauri::command]
@@ -325,18 +376,47 @@ fn vault_open<R: Runtime>(
         .iter()
         .map(|collision| collision.paths.clone())
         .collect();
+
+    // The full-text index lives in the OS app-data directory, keyed by a
+    // hash of the vault root; it is never created inside the vault. A
+    // corrupt or missing index file is recreated transparently, and the
+    // content rebuild runs off the command thread.
+    let search =
+        Arc::new(Mutex::new(app.path().app_data_dir().ok().and_then(|dir| {
+            SearchIndex::open_in_app_data(&dir, vault.root()).ok()
+        })));
+    spawn_index_rebuild(&search, vault.clone());
+
     registry.lock().insert(
         id,
         OpenVault {
             vault,
             watching: Arc::new(AtomicBool::new(false)),
             reconciler: Arc::new(Mutex::new(Reconciler::default())),
+            search,
         },
     );
     if !groups.is_empty() {
         let _ = VaultCollisionsDetected { vault: id, groups }.emit(&app);
     }
     Ok(VaultHandle { id })
+}
+
+/// Converts a vault's indexed tree into its IPC form.
+fn tree_entries(vault: &Vault) -> Vec<TreeEntry> {
+    vault
+        .tree()
+        .iter()
+        .map(|entry| TreeEntry {
+            path: entry.path.as_str().to_owned(),
+            kind: match entry.kind {
+                EntryKind::Directory => TreeEntryKind::Directory,
+                EntryKind::Note => TreeEntryKind::Note,
+                EntryKind::File => TreeEntryKind::File,
+            },
+            hidden: entry.hidden,
+        })
+        .collect()
 }
 
 /// Lists the indexed tree of an open vault, sorted by path.
@@ -351,20 +431,50 @@ fn vault_tree(
     let open = vaults
         .get(&handle.id)
         .ok_or_else(AppError::unknown_handle)?;
-    Ok(open
-        .vault
-        .tree()
-        .iter()
-        .map(|entry| TreeEntry {
-            path: entry.path.as_str().to_owned(),
-            kind: match entry.kind {
-                EntryKind::Directory => TreeEntryKind::Directory,
-                EntryKind::Note => TreeEntryKind::Note,
-                EntryKind::File => TreeEntryKind::File,
-            },
-            hidden: entry.hidden,
-        })
-        .collect())
+    Ok(tree_entries(&open.vault))
+}
+
+/// Re-indexes the tree of an open vault from the current filesystem state
+/// and returns it. This is the recovery path for tree staleness after
+/// external bulk changes or watcher overflow: the tree indexed at open
+/// never silently drifts, it is re-read here on demand. Newly discovered
+/// collisions re-emit, and the search index rebuilds in the background.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn vault_tree_refresh<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+) -> Result<Vec<TreeEntry>, AppError> {
+    let (entries, groups, search, vault) = {
+        let mut vaults = registry.lock();
+        let open = vaults
+            .get_mut(&handle.id)
+            .ok_or_else(AppError::unknown_handle)?;
+        open.vault.refresh(&RealFs)?;
+        let groups: Vec<Vec<String>> = open
+            .vault
+            .collisions()
+            .iter()
+            .map(|collision| collision.paths.clone())
+            .collect();
+        (
+            tree_entries(&open.vault),
+            groups,
+            Arc::clone(&open.search),
+            open.vault.clone(),
+        )
+    };
+    spawn_index_rebuild(&search, vault);
+    if !groups.is_empty() {
+        let _ = VaultCollisionsDetected {
+            vault: handle.id,
+            groups,
+        }
+        .emit(&app);
+    }
+    Ok(entries)
 }
 
 /// Reads a note. Metadata returns as JSON; the note bytes are sent over
@@ -392,6 +502,15 @@ fn note_read(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .record_read(&path, &note.bytes);
+    // Index on open: the freshly read bytes are the note's current text.
+    if let Some(index) = open
+        .search
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
+        let _ = index.index_note(path.as_str(), &note.bytes);
+    }
 
     let byte_length = u32::try_from(note.bytes.len()).map_err(|_| AppError {
         code: "note/too-large",
@@ -476,6 +595,15 @@ fn note_write(
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .record_write(&path, &base.bytes, registry.clock.now());
+                // Update the search index on save with the written bytes.
+                if let Some(index) = open
+                    .search
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                {
+                    let _ = index.index_note(path.as_str(), &base.bytes);
+                }
             }
             Ok(WriteResult::Written {
                 projection_hash: projection_hash.clone(),
@@ -503,7 +631,7 @@ fn watch_subscribe<R: Runtime>(
     journal: State<'_, JournalState>,
     handle: VaultHandle,
 ) -> Result<(), AppError> {
-    let (root, watching, reconciler) = {
+    let (root, watching, reconciler, search) = {
         let vaults = registry.lock();
         let open = vaults
             .get(&handle.id)
@@ -512,6 +640,7 @@ fn watch_subscribe<R: Runtime>(
             open.vault.root().to_owned(),
             Arc::clone(&open.watching),
             Arc::clone(&open.reconciler),
+            Arc::clone(&open.search),
         )
     };
     if watching.swap(true, Ordering::SeqCst) {
@@ -554,6 +683,21 @@ fn watch_subscribe<R: Runtime>(
                         }
                     }
                 }
+                // Disappearances drop out of the search index directly:
+                // the reconciler only tracks notes this session has read,
+                // so a delete or rename-away of an unopened note would
+                // otherwise leave a stale index row.
+                if matches!(
+                    change.change,
+                    VaultChangeKind::Removed | VaultChangeKind::Renamed
+                ) && let Some(path) = &change.path
+                    && let Some(index) = search
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .as_ref()
+                {
+                    let _ = index.remove_note(path);
+                }
                 if change.emit(&app).is_err() {
                     // The app is shutting down; end the watch thread.
                     return;
@@ -564,6 +708,15 @@ fn watch_subscribe<R: Runtime>(
                 recon.poll(&RealFs, &root, clock.now())
             };
             for event in events {
+                // External changes update the search index incrementally:
+                // updates re-read and re-index, removals drop the row.
+                if let Some(index) = search
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                {
+                    let _ = index.apply_recon_event(&RealFs, &root, &event);
+                }
                 if !emit_recon_event(&app, vault_id, event) {
                     return;
                 }
@@ -577,6 +730,102 @@ fn watch_subscribe<R: Runtime>(
         }
     });
     Ok(())
+}
+
+/// Runs a ranked full-text query over an open vault's notes. Results carry
+/// BM25 scores (title matches outrank heading matches outrank body
+/// matches), a Rust-assembled snippet and byte-offset match ranges into
+/// that snippet. At most `limit` hits return, best first.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn search_query(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    query: String,
+    limit: u32,
+) -> Result<Vec<SearchHit>, AppError> {
+    let vaults = registry.lock();
+    let open = vaults
+        .get(&handle.id)
+        .ok_or_else(AppError::unknown_handle)?;
+    let guard = open.search.lock().unwrap_or_else(PoisonError::into_inner);
+    let index = guard.as_ref().ok_or_else(AppError::search_unavailable)?;
+    let hits = index.query(&query, limit).map_err(AppError::from)?;
+    Ok(hits
+        .into_iter()
+        .map(|hit| SearchHit {
+            path: hit.path,
+            title: hit.title,
+            snippet: hit.snippet,
+            match_ranges: hit.match_ranges,
+            score: hit.score,
+        })
+        .collect())
+}
+
+/// Reads a recognized Obsidian configuration file from the vault's
+/// `.obsidian` directory, the single sanctioned read path into it. Returns
+/// null when the file is absent, oversized or not UTF-8: configuration
+/// degrades to defaults rather than erroring.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn vault_config_read(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    name: String,
+) -> Result<Option<String>, AppError> {
+    let vaults = registry.lock();
+    let open = vaults
+        .get(&handle.id)
+        .ok_or_else(AppError::unknown_handle)?;
+    open.vault
+        .read_obsidian_config(&RealFs, &name)
+        .map_err(AppError::from)
+}
+
+/// Reads the settings document from `settings.json` in the OS app-config
+/// directory. A missing file yields the defaults.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn settings_read(settings: State<'_, SettingsState>) -> Result<SettingsDoc, AppError> {
+    let store = settings
+        .0
+        .as_ref()
+        .ok_or_else(AppError::settings_unavailable)?;
+    let doc = store.read(&RealFs).map_err(AppError::from)?;
+    Ok(SettingsDoc {
+        schema_version: doc.schema_version,
+        theme: doc.theme,
+        editor_font_size: doc.editor_font_size,
+        search_result_limit: doc.search_result_limit,
+    })
+}
+
+/// Writes the settings document whole. Values are validated first, and
+/// unknown keys already present in the file are preserved, so settings
+/// written by a newer build survive a round trip through this one.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn settings_write(settings: State<'_, SettingsState>, doc: SettingsDoc) -> Result<(), AppError> {
+    let store = settings
+        .0
+        .as_ref()
+        .ok_or_else(AppError::settings_unavailable)?;
+    store
+        .write(
+            &RealFs,
+            &Settings {
+                schema_version: doc.schema_version,
+                theme: doc.theme,
+                editor_font_size: doc.editor_font_size,
+                search_result_limit: doc.search_result_limit,
+            },
+        )
+        .map_err(AppError::from)
 }
 
 /// Replays the crash journal for one vault, emitting recovery deltas and
@@ -749,9 +998,14 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
         .commands(tauri_specta::collect_commands![
             vault_open::<tauri::Wry>,
             vault_tree,
+            vault_tree_refresh::<tauri::Wry>,
             note_read,
             note_write,
             watch_subscribe::<tauri::Wry>,
+            search_query,
+            settings_read,
+            settings_write,
+            vault_config_read,
         ])
         .events(tauri_specta::collect_events![
             VaultChanged,

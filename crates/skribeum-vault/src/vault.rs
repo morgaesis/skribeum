@@ -225,6 +225,25 @@ impl Vault {
         &self.root
     }
 
+    /// Re-indexes the tree from the current filesystem state, replacing the
+    /// index taken at open. Read state (last-read note bases, registered
+    /// conflicts) is untouched, so open editing sessions survive a refresh.
+    /// Like open, a refresh performs zero writes.
+    ///
+    /// # Errors
+    ///
+    /// Propagates filesystem and path validation failures from indexing;
+    /// on failure the previous tree is kept.
+    pub fn refresh(&mut self, fs: &dyn FileSystem) -> Result<(), VaultError> {
+        let mut tree = Vec::new();
+        let mut seen: Vec<(VaultPath, usize)> = Vec::new();
+        index_directory(fs, &self.root, None, &mut tree, &mut seen)?;
+        tree.sort_by(|a, b| a.path.cmp(&b.path));
+        self.collisions = detect_collisions(&seen);
+        self.tree = tree;
+        Ok(())
+    }
+
     /// The indexed tree, sorted by path.
     #[must_use]
     pub fn tree(&self) -> &[TreeEntry] {
@@ -264,6 +283,42 @@ impl Vault {
         let note = classify(bytes);
         self.lock_notes().insert(path.clone(), note.clone());
         Ok(note)
+    }
+
+    /// Reads one of the recognized Obsidian configuration files, read-only
+    /// and size-capped. The `.obsidian` directory is excluded from indexing
+    /// and watching; this is the single sanctioned read path into it, and
+    /// only for the named configuration files the editor honors.
+    ///
+    /// Returns `Ok(None)` when the file does not exist, is not valid UTF-8,
+    /// or exceeds the size cap; configuration reads degrade to defaults
+    /// rather than erroring.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VaultError::NoteNotFound`] when `name` is not a recognized
+    /// configuration file name; filesystem failures other than absence
+    /// propagate.
+    pub fn read_obsidian_config(
+        &self,
+        fs: &dyn FileSystem,
+        name: &str,
+    ) -> Result<Option<String>, VaultError> {
+        const RECOGNIZED: &[&str] = &["app.json", "types.json"];
+        const SIZE_CAP: usize = 1 << 20;
+        if !RECOGNIZED.contains(&name) {
+            return Err(VaultError::NoteNotFound);
+        }
+        let absolute = self.root.join(".obsidian").join(name);
+        let bytes = match fs.read(&absolute) {
+            Ok(bytes) => bytes,
+            Err(FsError::NotFound) => return Ok(None),
+            Err(other) => return Err(VaultError::Fs(other)),
+        };
+        if bytes.len() > SIZE_CAP {
+            return Ok(None);
+        }
+        Ok(String::from_utf8(bytes).ok())
     }
 
     /// Writes a note through the crash-safe path: applies `change_set` (a

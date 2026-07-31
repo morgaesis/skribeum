@@ -258,3 +258,49 @@ fn real_write_goes_through_a_symlink() {
         "the link must still resolve to the target"
     );
 }
+
+#[test]
+fn real_watcher_survives_root_replacement() {
+    let root = scratch("watch-replace");
+    let mut watcher = RealFs.watch(&root).expect("watch subscribes");
+
+    // Replace the watched root wholesale: the OS subscription dies here.
+    // The empty root moves aside and a fresh directory takes its place,
+    // through the trait per the fs-isolation guard.
+    let moved_aside = scratch("watch-replace-aside").join("old-root");
+    RealFs.rename(&root, &moved_aside).expect("root moved away");
+    RealFs.create_dir_all(&root).expect("root recreated");
+
+    // Drain until the watcher reports unknown state; then it must recover
+    // and observe a write inside the recreated root.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut saw_overflow = false;
+    while std::time::Instant::now() < deadline && !saw_overflow {
+        while let Some(event) = watcher.try_next() {
+            if matches!(event, skribeum_vault::WatchEvent::Overflow) {
+                saw_overflow = true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        saw_overflow,
+        "replacing the root must surface unknown state, never silence"
+    );
+
+    write_durable(&RealFs, &root.join("after.md"), b"post-replacement").expect("write");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut observed_after = false;
+    while std::time::Instant::now() < deadline && !observed_after {
+        while let Some(event) = watcher.try_next() {
+            if !matches!(event, skribeum_vault::WatchEvent::Overflow) {
+                observed_after = true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        observed_after,
+        "the watcher must observe writes inside the recreated root"
+    );
+}

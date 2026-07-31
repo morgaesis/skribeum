@@ -193,8 +193,12 @@ impl FileSystem for RealFs {
 /// drained non-blockingly through [`Watcher::try_next`].
 struct RealWatcher {
     receiver: mpsc::Receiver<WatchEvent>,
-    // Held for its Drop: dropping the notify watcher ends the subscription.
-    _watcher: notify::RecommendedWatcher,
+    watcher: notify::RecommendedWatcher,
+    root: PathBuf,
+    // Deleting the watched root silently ends the OS subscription; a
+    // recreated root is unwatched until re-subscribed. Set when the root's
+    // own removal is observed, cleared when a rewatch succeeds.
+    needs_rewatch: bool,
 }
 
 impl RealWatcher {
@@ -212,8 +216,29 @@ impl RealWatcher {
             .map_err(|e| FsError::Io(e.to_string()))?;
         Ok(Self {
             receiver,
-            _watcher: watcher,
+            watcher,
+            root: root.to_owned(),
+            needs_rewatch: false,
         })
+    }
+
+    /// Attempts to re-establish the subscription after the root was
+    /// replaced. Returns true when a rewatch succeeded, which means events
+    /// were missed and the consumer must rescan.
+    fn try_rewatch(&mut self) -> bool {
+        if self.root.symlink_metadata().is_err() {
+            return false;
+        }
+        let _ = self.watcher.unwatch(&self.root);
+        if self
+            .watcher
+            .watch(&self.root, RecursiveMode::Recursive)
+            .is_ok()
+        {
+            self.needs_rewatch = false;
+            return true;
+        }
+        false
     }
 }
 
@@ -270,6 +295,22 @@ fn translate(result: notify::Result<notify::Event>) -> Vec<WatchEvent> {
 
 impl Watcher for RealWatcher {
     fn try_next(&mut self) -> Option<WatchEvent> {
-        self.receiver.try_recv().ok()
+        if self.needs_rewatch && self.try_rewatch() {
+            // Events were missed while unsubscribed; the consumer rescans.
+            return Some(WatchEvent::Overflow);
+        }
+        let event = self.receiver.try_recv().ok()?;
+        let root_gone = match &event {
+            WatchEvent::Removed(path) => *path == self.root,
+            WatchEvent::Renamed { from, .. } => *from == self.root,
+            _ => false,
+        };
+        if root_gone {
+            self.needs_rewatch = true;
+            // The subscription is dead; report unknown state rather than a
+            // removal of the vault the consumer still holds open.
+            return Some(WatchEvent::Overflow);
+        }
+        Some(event)
     }
 }

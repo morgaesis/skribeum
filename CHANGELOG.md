@@ -8,6 +8,44 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Standalone `skribeum-import` CLI converting Notion Markdown and CSV export
+  archives into Obsidian-compatible vaults, with readable collision-safe
+  names, wikilink and attachment rewriting, database row frontmatter,
+  dry-run planning, and corpus-gated golden fidelity tests.
+- Registration API: every command, palette entry, view, keybinding and
+  slash-menu item registers through one typed registry with stable
+  dot-namespaced ids, enforced by a CI sweep for key wiring outside the
+  registry plus runtime assertions that the palette and slash menu list
+  exactly the registry's contents.
+- Command palette (`mod+p`) and quick switcher (`mod+o`): fuzzy-filtered
+  ARIA comboboxes with full keyboard operation; the switcher ranks
+  recently opened notes first and opens on Enter.
+- Ranked vault search (`mod+shift+f`): debounced queries against the
+  search index, results with title and snippet, match ranges highlighted
+  as text segments, Enter opening the note with its first match
+  selected.
+- In-note find and replace (`mod+f`) over the editor buffer with a live
+  match count; replace-one and replace-all flow through the normal
+  change-set save path.
+- Heading outline panel: a collapsible ARIA tree computed from the
+  editor syntax tree; click or Enter navigates, the document is never
+  mutated.
+- Slash commands: `/` at a line start or after whitespace opens a
+  registry-driven insert menu (headings, task, code fence, callout,
+  table skeleton, wikilink); accepting removes the query as a declared
+  range and inserts through a normal transaction.
+- Select-to-style toolbar: a floating toolbar over non-empty selections
+  toggling bold, italic, code, strikethrough and wikilink markers as
+  declared-range insertions and deletions that round-trip exactly.
+- Table editing: Tab and Shift-Tab cell navigation (Tab past the last
+  cell grows the table), row and column insertion via palette and slash
+  commands, GFM alignment preserved; every operation declares its byte
+  ranges, including the formatting pass over re-padded cells, and the
+  containment property is asserted over generated tables.
+- Settings view (`mod+,`) over the persisted settings document: theme
+  (stored for the theming layer), editor font size (applied restart-free
+  through a CSS variable) and search result limit, with optimistic
+  updates reverted and surfaced on write failure.
 - Live preview: a data-driven decoration engine over the Lezer syntax
   tree renders headings, emphasis, links, wikilinks, embeds, lists,
   tasks, inline and fenced code, blockquotes, callouts, tags and block

@@ -393,3 +393,285 @@ describe("skribeum shell", () => {
     );
   });
 });
+
+// The M3a surfaces. These run after the shell suite, so the scratch
+// vault no longer contains the removed note; the specs below use the
+// CRLF and live-preview notes exclusively.
+describe("skribeum core editing surfaces", () => {
+  async function overlayInput() {
+    const input = $('[role="combobox"]');
+    await input.waitForExist({ timeout: 10000 });
+    return input;
+  }
+
+  async function closeAnyOverlay() {
+    if (await $('[role="combobox"]').isExisting()) {
+      await browser.keys(Key.Escape);
+      await browser.waitUntil(
+        async () => !(await $('[role="combobox"]').isExisting()),
+        { timeout: 5000 },
+      );
+    }
+  }
+
+  it("quick_switcher_opens_a_note_end_to_end", async () => {
+    await browser.keys([modifierKey, "o"]);
+    const input = await overlayInput();
+    await input.addValue("crlf");
+    await browser.waitUntil(
+      async () => (await $$('[role="option"]').length) === 1,
+      { timeout: 10000 },
+    );
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("second"),
+      { timeout: 15000 },
+    );
+    // The overlay closed and focus returned to the editor.
+    expect(await $('[role="combobox"]').isExisting()).toBe(false);
+  });
+
+  it("command_palette_filters_and_runs_the_outline_toggle", async () => {
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Sunrise heading"),
+      { timeout: 15000 },
+    );
+
+    await browser.keys([modifierKey, "p"]);
+    const input = await overlayInput();
+
+    // Full keyboard operation: arrows move the active descendant.
+    const before = await input.getAttribute("aria-activedescendant");
+    await browser.keys(Key.ArrowDown);
+    expect(await input.getAttribute("aria-activedescendant")).not.toBe(before);
+
+    await input.addValue("toggle outline");
+    await browser.waitUntil(
+      async () => {
+        const first = $('[role="option"]');
+        return (
+          (await first.isExisting()) &&
+          (await first.getText()).includes("outline")
+        );
+      },
+      { timeout: 10000 },
+    );
+    await browser.keys(Key.Enter);
+
+    // The outline panel opened as an ARIA tree over the note's headings.
+    const outlineItem = $(
+      '[role="tree"][aria-label="Outline"] [role="treeitem"]',
+    );
+    await outlineItem.waitForExist({ timeout: 10000 });
+    expect(await outlineItem.getText()).toContain("Sunrise heading");
+
+    // Enter on a focused outline row navigates without mutating the note.
+    const textBefore = await editorText();
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>(
+          '[role="tree"][aria-label="Outline"] [role="treeitem"]',
+        )
+        ?.focus();
+    });
+    await browser.keys(Key.Enter);
+    expect(await editorText()).toBe(textBefore);
+
+    // Toggle the panel back off through the same registered command.
+    await browser.keys([modifierKey, Key.Shift, "o"]);
+    await browser.waitUntil(
+      async () =>
+        !(await $('[role="tree"][aria-label="Outline"]').isExisting()),
+      { timeout: 10000 },
+    );
+  });
+
+  it("in_note_find_counts_matches_and_closes_by_keyboard", async () => {
+    await openNoteFromTree(CRLF_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("second"),
+      { timeout: 15000 },
+    );
+    await browser.execute(() => {
+      document.querySelector<HTMLElement>(".cm-content")?.focus();
+    });
+    await browser.keys([modifierKey, "f"]);
+    const findInput = $(".cm-skr-find-input");
+    await findInput.waitForExist({ timeout: 10000 });
+    await findInput.addValue("second");
+    await browser.waitUntil(
+      async () => {
+        const count = $(".cm-skr-find-count");
+        return (
+          (await count.isExisting()) &&
+          (await count.getText()).includes("1 match")
+        );
+      },
+      { timeout: 10000 },
+    );
+    // Escape inside the panel closes it and returns focus to the editor.
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(
+      async () => !(await $(".cm-skr-find-panel").isExisting()),
+      { timeout: 10000 },
+    );
+    expect(await activeElementDescriptor()).toContain("cm-content");
+  });
+
+  /** Reads the persisted font size through IPC (the global Tauri seam). */
+  async function persistedFontSize(): Promise<number | string> {
+    return browser.executeAsync<number | string, []>((done) => {
+      const tauri = (
+        window as unknown as {
+          __TAURI__?: {
+            core: {
+              invoke: (name: string) => Promise<{ editor_font_size: number }>;
+            };
+          };
+        }
+      ).__TAURI__;
+      if (tauri === undefined) {
+        done("no-global-tauri");
+        return;
+      }
+      tauri.core
+        .invoke("settings_read")
+        .then((doc) => done(doc.editor_font_size))
+        .catch((error: unknown) => done(String(error)));
+    });
+  }
+
+  /** Sets the settings font size through the open dialog's input. */
+  async function setFontSizeThroughDialog(value: number) {
+    const fontInput = $('[data-testid="settings-font-size"]');
+    await fontInput.setValue(String(value));
+    // Commit the change event explicitly: the synthesized driver does
+    // not move focus, which is what fires change on number inputs.
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLInputElement>('[data-testid="settings-font-size"]')
+        ?.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
+  it("settings_round_trip_applies_restart_free_and_persists", async () => {
+    // The settings file is the real per-user document; pick a target
+    // that differs from the current value and restore it afterwards.
+    const original = await persistedFontSize();
+    expect(typeof original).toBe("number");
+    const target = original === 21 ? 22 : 21;
+
+    await browser.keys([modifierKey, ","]);
+    const dialog = $('[data-testid="settings-view"]');
+    await dialog.waitForExist({ timeout: 10000 });
+    await setFontSizeThroughDialog(target);
+
+    // Restart-free apply: the editor font size follows immediately.
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => {
+          const editor = document.querySelector(".cm-editor");
+          return editor === null
+            ? ""
+            : window.getComputedStyle(editor).fontSize;
+        })) === `${target}px`,
+      { timeout: 10000 },
+    );
+
+    // Close, then confirm the persisted value by re-reading through IPC
+    // and by reopening the dialog.
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(
+      async () => !(await $('[data-testid="settings-view"]').isExisting()),
+      { timeout: 5000 },
+    );
+    await browser.waitUntil(
+      async () => (await persistedFontSize()) === target,
+      { timeout: 10000, timeoutMsg: "font size did not persist" },
+    );
+
+    await browser.keys([modifierKey, ","]);
+    await dialog.waitForExist({ timeout: 10000 });
+    expect(await $('[data-testid="settings-font-size"]').getValue()).toBe(
+      String(target),
+    );
+
+    // Restore the pre-test value through the same UI path.
+    await setFontSizeThroughDialog(original as number);
+    await browser.waitUntil(
+      async () => (await persistedFontSize()) === original,
+      { timeout: 10000 },
+    );
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(
+      async () => !(await $('[data-testid="settings-view"]').isExisting()),
+      { timeout: 5000 },
+    );
+  });
+
+  it("ranked_search_finds_notes_with_highlighted_snippets", async () => {
+    await browser.keys([modifierKey, Key.Shift, "f"]);
+    const input = await overlayInput();
+    await input.addValue("third");
+    await browser.waitUntil(
+      async () => (await $$('[role="option"]').length) > 0,
+      {
+        timeout: 20000,
+        timeoutMsg: "no ranked search results for a known body word",
+      },
+    );
+    const first = $('[role="option"]');
+    expect(await first.getText()).toContain("crlf");
+    // The snippet highlight renders as element-wrapped text, not markup.
+    const highlighted = $('[role="option"] mark');
+    await highlighted.waitForExist({ timeout: 5000 });
+    expect(await highlighted.getText()).toContain("third");
+
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("third"),
+      { timeout: 15000 },
+    );
+    expect(await $('[role="combobox"]').isExisting()).toBe(false);
+  });
+
+  it("keyboard_traversal_covers_the_new_surfaces_without_traps", async () => {
+    await closeAnyOverlay();
+
+    // The palette input leaves Tab uncanceled (no keyboard trap) and
+    // Escape returns focus to the editor.
+    await browser.keys([modifierKey, "p"]);
+    await overlayInput();
+    const tabUncanceled = await browser.execute(() => {
+      const input = document.querySelector('[role="combobox"]');
+      if (input === null) {
+        return false;
+      }
+      const event = new KeyboardEvent("keydown", {
+        key: "Tab",
+        code: "Tab",
+        keyCode: 9,
+        bubbles: true,
+        cancelable: true,
+      });
+      input.dispatchEvent(event);
+      return !event.defaultPrevented;
+    });
+    expect(tabUncanceled).toBe(true);
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(
+      async () => !(await $('[role="combobox"]').isExisting()),
+      { timeout: 5000 },
+    );
+    expect(await activeElementDescriptor()).toContain("cm-content");
+
+    // No element anywhere acquired a positive tabindex.
+    const positive = await browser.execute(() =>
+      [...document.querySelectorAll("[tabindex]")].some(
+        (element) => Number(element.getAttribute("tabindex")) > 0,
+      ),
+    );
+    expect(positive).toBe(false);
+  });
+});

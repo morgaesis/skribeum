@@ -13,6 +13,14 @@ export const commands = {
 	/**  Lists the indexed tree of an open vault, sorted by path. */
 	vaultTree: (handle: VaultHandle) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("vault_tree", { handle })),
 	/**
+	 *  Re-indexes the tree of an open vault from the current filesystem state
+	 *  and returns it. This is the recovery path for tree staleness after
+	 *  external bulk changes or watcher overflow: the tree indexed at open
+	 *  never silently drifts, it is re-read here on demand. Newly discovered
+	 *  collisions re-emit, and the search index rebuilds in the background.
+	 */
+	vaultTreeRefresh: (handle: VaultHandle) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("vault_tree_refresh", { handle })),
+	/**
 	 *  Reads a note. Metadata returns as JSON; the note bytes are sent over
 	 *  `content` as a single raw-payload message (an `ArrayBuffer` in the
 	 *  webview), so large files never cross the bridge as JSON.
@@ -34,6 +42,31 @@ export const commands = {
 	 *  a no-op.
 	 */
 	watchSubscribe: (handle: VaultHandle) => typedError<null, AppError>(__TAURI_INVOKE("watch_subscribe", { handle })),
+	/**
+	 *  Runs a ranked full-text query over an open vault's notes. Results carry
+	 *  BM25 scores (title matches outrank heading matches outrank body
+	 *  matches), a Rust-assembled snippet and byte-offset match ranges into
+	 *  that snippet. At most `limit` hits return, best first.
+	 */
+	searchQuery: (handle: VaultHandle, query: string, limit: number) => typedError<SearchHit[], AppError>(__TAURI_INVOKE("search_query", { handle, query, limit })),
+	/**
+	 *  Reads the settings document from `settings.json` in the OS app-config
+	 *  directory. A missing file yields the defaults.
+	 */
+	settingsRead: () => typedError<SettingsDoc, AppError>(__TAURI_INVOKE("settings_read")),
+	/**
+	 *  Writes the settings document whole. Values are validated first, and
+	 *  unknown keys already present in the file are preserved, so settings
+	 *  written by a newer build survive a round trip through this one.
+	 */
+	settingsWrite: (doc: SettingsDoc) => typedError<null, AppError>(__TAURI_INVOKE("settings_write", { doc })),
+	/**
+	 *  Reads a recognized Obsidian configuration file from the vault's
+	 *  `.obsidian` directory, the single sanctioned read path into it. Returns
+	 *  null when the file is absent, oversized or not UTF-8: configuration
+	 *  degrades to defaults rather than erroring.
+	 */
+	vaultConfigRead: (handle: VaultHandle, name: string) => typedError<string | null, AppError>(__TAURI_INVOKE("vault_config_read", { handle, name })),
 };
 
 /** Events */
@@ -182,6 +215,40 @@ export type ReconciliationBanner = {
 	reason: BannerReason,
 	/**  The observed on-disk projection hash, when one exists. */
 	disk_hash: string | null,
+};
+
+/**
+ *  One ranked full-text search result over IPC. `match_ranges` are byte
+ *  offsets into `snippet` (`[start, end)`, character-boundary aligned), so
+ *  the UI highlights by slicing, never by injecting markup.
+ */
+export type SearchHit = {
+	/**  Vault-relative path of the note. */
+	path: string,
+	/**  Note title (final path segment without its extension). */
+	title: string,
+	/**  Snippet of the note text around the first match. */
+	snippet: string,
+	/**  Byte ranges of query-term matches inside `snippet`. */
+	match_ranges: ([number, number])[],
+	/**  Relevance score; higher ranks better. */
+	score: number | null,
+};
+
+/**
+ *  The typed settings document over IPC. Unknown keys in the underlying
+ *  `settings.json` never cross the boundary; they are preserved internally
+ *  on every write.
+ */
+export type SettingsDoc = {
+	/**  Schema version of the document. */
+	schema_version: number,
+	/**  Color theme: `system`, `light` or `dark`. */
+	theme: string,
+	/**  Editor font size in CSS pixels. */
+	editor_font_size: number,
+	/**  Maximum number of results a search query returns. */
+	search_result_limit: number,
 };
 
 /**

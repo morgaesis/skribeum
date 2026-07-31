@@ -1,6 +1,6 @@
 <script lang="ts">
 import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
-import { onMount } from "svelte";
+import { onMount, tick } from "svelte";
 import Banners, { type BannerItem } from "./lib/Banners.svelte";
 import Editor from "./lib/Editor.svelte";
 import {
@@ -14,6 +14,27 @@ import {
   parseObsidianTypes,
 } from "./lib/editor/frontmatter";
 import FileTree from "./lib/FileTree.svelte";
+import { createAppRegistry } from "./lib/features";
+import { computeOutline, type OutlineEntry } from "./lib/features/outline";
+import {
+  firstMatchText,
+  type PickerItem,
+  paletteItems,
+  quickSwitcherItems,
+  searchResultItems,
+} from "./lib/features/pickers";
+import {
+  DEFAULT_SETTINGS,
+  type SettingsState,
+  SettingsStore,
+} from "./lib/features/settingsStore";
+import {
+  VIEW_COMMAND_PALETTE,
+  VIEW_OUTLINE,
+  VIEW_QUICK_SWITCHER,
+  VIEW_SETTINGS,
+  VIEW_VAULT_SEARCH,
+} from "./lib/features/surfaces";
 import { M0_FIXTURE } from "./lib/fixture";
 import {
   type BannerReason,
@@ -23,6 +44,11 @@ import {
   type VaultHandle,
 } from "./lib/ipc/bindings";
 import {
+  type SearchResult,
+  searchQuery,
+  vaultTreeRefresh,
+} from "./lib/ipc/services";
+import {
   IpcError,
   type LoadedNote,
   openVault,
@@ -31,6 +57,10 @@ import {
   vaultTree,
   watchSubscribe,
 } from "./lib/ipc/vault";
+import OutlinePanel from "./lib/OutlinePanel.svelte";
+import PaletteOverlay from "./lib/PaletteOverlay.svelte";
+import { type CommandContext, globalKeydownHandler } from "./lib/registry";
+import SettingsView from "./lib/SettingsView.svelte";
 import { STRINGS } from "./lib/strings";
 
 let vault = $state<VaultHandle | null>(null);
@@ -49,6 +79,210 @@ let nextBannerId = 0;
 // Journal-recovered deltas for notes that are not open yet, applied as
 // pending edits when the note opens.
 const pendingRecovered = new Map<string, ByteRangeReplace[]>();
+
+// The registration surface: every command, palette entry, view and
+// keybinding is registered here; this shell only maps view ids to
+// concrete components and provides command capabilities.
+const registry = createAppRegistry();
+
+const macPlatform =
+  typeof navigator !== "undefined" &&
+  /Mac|iP[ao]d|iPhone/.test(navigator.platform);
+
+/** The transient surface currently open (a registered overlay view id). */
+let activeOverlay = $state<string | null>(null);
+let outlineOpen = $state(false);
+let outlineEntries = $state<OutlineEntry[]>([]);
+/** The live query of the open picker overlay. */
+let overlayQuery = $state("");
+let searchResults = $state<SearchResult[]>([]);
+let searchDebounce: ReturnType<typeof setTimeout> | undefined;
+/** Recently opened note paths, most recent first. */
+let recents = $state<string[]>([]);
+let settingsState = $state<SettingsState>({
+  document: DEFAULT_SETTINGS,
+  error: null,
+  loaded: false,
+});
+
+function applyEditorFontSize(pixels: number) {
+  document.documentElement.style.setProperty(
+    "--skr-editor-font-size",
+    `${pixels}px`,
+  );
+}
+
+// Settings apply optimistically (the font size restart-free via the CSS
+// variable); a failed write reverts and the settings view surfaces it.
+const settingsStore = new SettingsStore((state) => {
+  settingsState = state;
+  applyEditorFontSize(state.document.editor_font_size);
+});
+
+function notePathsOf(entries: TreeEntry[]): string[] {
+  return entries
+    .filter((entry) => entry.kind === "note")
+    .map((entry) => entry.path);
+}
+
+function refreshOutline() {
+  const view = editor?.getView();
+  outlineEntries = view === undefined ? [] : computeOutline(view.state);
+}
+
+function openOverlay(id: string) {
+  activeOverlay = id;
+  overlayQuery = "";
+  searchResults = [];
+  if (id === VIEW_QUICK_SWITCHER) {
+    void refreshTreeIndex();
+  }
+}
+
+/** Re-indexes the tree so the switcher lists just-created notes. */
+async function refreshTreeIndex() {
+  if (vault === null) {
+    return;
+  }
+  try {
+    tree = await vaultTreeRefresh(vault);
+    refreshLinkContext();
+  } catch {
+    // The watcher-maintained tree remains authoritative when the
+    // refresh command is unavailable.
+  }
+}
+
+function closeOverlay() {
+  activeOverlay = null;
+  editor?.getView()?.focus();
+}
+
+function commandContext(): CommandContext {
+  return {
+    view: editor?.getView() ?? null,
+    openNote: (path) => openNote(path),
+    openView: (id) => {
+      if (id === VIEW_OUTLINE) {
+        outlineOpen = true;
+        refreshOutline();
+      } else {
+        openOverlay(id);
+      }
+    },
+    toggleView: (id) => {
+      if (id === VIEW_OUTLINE) {
+        outlineOpen = !outlineOpen;
+        if (outlineOpen) {
+          refreshOutline();
+        }
+      } else if (activeOverlay === id) {
+        closeOverlay();
+      } else {
+        openOverlay(id);
+      }
+    },
+    closeSurfaces: closeOverlay,
+    requestSave: () => {
+      void editor?.requestSave();
+    },
+    notePaths: () => notePathsOf(tree),
+    recentNotePaths: () => recents,
+  };
+}
+
+const onGlobalKeydown = globalKeydownHandler(registry, commandContext);
+
+const overlayItems = $derived.by((): PickerItem[] => {
+  switch (activeOverlay) {
+    case VIEW_COMMAND_PALETTE:
+      return paletteItems(registry, overlayQuery, macPlatform);
+    case VIEW_QUICK_SWITCHER:
+      return quickSwitcherItems(notePathsOf(tree), recents, overlayQuery);
+    case VIEW_VAULT_SEARCH:
+      return searchResultItems(searchResults);
+    default:
+      return [];
+  }
+});
+
+function onOverlayQuery(query: string) {
+  overlayQuery = query;
+  if (activeOverlay === VIEW_VAULT_SEARCH) {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      void runVaultSearch(query);
+    }, 200);
+  }
+}
+
+async function runVaultSearch(query: string) {
+  if (vault === null || query.length === 0) {
+    searchResults = [];
+    return;
+  }
+  try {
+    searchResults = await searchQuery(
+      vault,
+      query,
+      settingsState.document.search_result_limit,
+    );
+  } catch (error) {
+    searchResults = [];
+    errorText = describeError(STRINGS.vaultSearchFailed, error);
+  }
+}
+
+function onOverlayPick(id: string) {
+  const overlay = activeOverlay;
+  closeOverlay();
+  if (overlay === VIEW_COMMAND_PALETTE) {
+    registry.run(id, commandContext());
+  } else if (overlay === VIEW_QUICK_SWITCHER) {
+    void openNote(id);
+  } else if (overlay === VIEW_VAULT_SEARCH) {
+    void openSearchResult(id);
+  }
+}
+
+/** Opens a search hit and selects its first match in the note. */
+async function openSearchResult(path: string) {
+  const result = searchResults.find((entry) => entry.path === path);
+  await openNote(path);
+  const view = editor?.getView();
+  const match = result === undefined ? null : firstMatchText(result);
+  if (view === undefined || match === null || match.length === 0) {
+    return;
+  }
+  const index = view.state.doc.toString().indexOf(match);
+  if (index >= 0) {
+    view.dispatch({
+      selection: { anchor: index, head: index + match.length },
+      scrollIntoView: true,
+      userEvent: "select",
+    });
+  }
+  view.focus();
+}
+
+function outlineNavigate(from: number) {
+  const view = editor?.getView();
+  if (view === undefined) {
+    return;
+  }
+  view.dispatch({
+    selection: { anchor: from },
+    scrollIntoView: true,
+    userEvent: "select",
+  });
+  view.focus();
+}
+
+function onEditorDocChanged() {
+  if (outlineOpen) {
+    refreshOutline();
+  }
+}
 
 function pushBanner(banner: Omit<BannerItem, "id">) {
   nextBannerId += 1;
@@ -90,13 +324,13 @@ function refreshLinkContext() {
 
 /**
  * Reads the optional `.obsidian` configuration (link knobs, declared
- * property types) read-only through the existing `note_read` command.
+ * property types) read-only through the `vault_config_read` command.
  * Absent files leave the defaults; nothing is ever written.
  */
 async function readObsidianConfig(handle: VaultHandle) {
   const [appJson, typesJson] = await Promise.all([
-    readVaultConfigFile(handle, ".obsidian/app.json"),
-    readVaultConfigFile(handle, ".obsidian/types.json"),
+    readVaultConfigFile(handle, "app.json"),
+    readVaultConfigFile(handle, "types.json"),
   ]);
   obsidianConfig =
     appJson === null
@@ -158,6 +392,9 @@ async function openNote(path: string) {
     }
     note = loaded;
     selectedPath = path;
+    recents = [path, ...recents.filter((entry) => entry !== path)].slice(0, 50);
+    await tick();
+    refreshOutline();
   } catch (error) {
     errorText = describeError(STRINGS.noteReadFailed, error);
   }
@@ -328,6 +565,7 @@ onMount(() => {
       ];
     }),
   ];
+  void settingsStore.load();
   const pollTimer = pollEndToEndVault();
   return () => {
     clearInterval(pollTimer);
@@ -337,6 +575,11 @@ onMount(() => {
   };
 });
 </script>
+
+<!-- registry-exempt keydown: the window handler is the registry's own
+     global dispatcher; every chord it recognizes is a registered
+     keybinding. -->
+<svelte:window onkeydown={onGlobalKeydown} />
 
 <div class="flex h-screen flex-col overflow-hidden">
   <header class="flex items-center gap-3 border-b border-gray-200 px-3 py-1.5">
@@ -386,16 +629,65 @@ onMount(() => {
           path={selectedPath}
           {linkContext}
           {propertyTypes}
+          {registry}
+          {commandContext}
           {onConflict}
           {onWriteError}
+          onDocChanged={onEditorDocChanged}
         />
       {:else}
         <!-- The scaffold fixture stays as the empty-state view. -->
-        <Editor doc={M0_FIXTURE} />
+        <Editor
+          bind:this={editor}
+          doc={M0_FIXTURE}
+          {registry}
+          {commandContext}
+          onDocChanged={onEditorDocChanged}
+        />
         {#if vault === null}
           <p class="sr-only">{STRINGS.emptyStateHint}</p>
         {/if}
       {/if}
     </section>
+    {#if outlineOpen}
+      <aside class="w-60 shrink-0 overflow-y-auto border-l border-gray-200">
+        <OutlinePanel entries={outlineEntries} onNavigate={outlineNavigate} />
+      </aside>
+    {/if}
   </main>
 </div>
+
+{#if activeOverlay === VIEW_COMMAND_PALETTE}
+  <PaletteOverlay
+    label={STRINGS.commandPaletteLabel}
+    placeholder={STRINGS.commandPalettePlaceholder}
+    items={overlayItems}
+    onQueryChange={onOverlayQuery}
+    onPick={onOverlayPick}
+    onClose={closeOverlay}
+  />
+{:else if activeOverlay === VIEW_QUICK_SWITCHER}
+  <PaletteOverlay
+    label={STRINGS.quickSwitcherLabel}
+    placeholder={STRINGS.quickSwitcherPlaceholder}
+    items={overlayItems}
+    onQueryChange={onOverlayQuery}
+    onPick={onOverlayPick}
+    onClose={closeOverlay}
+  />
+{:else if activeOverlay === VIEW_VAULT_SEARCH}
+  <PaletteOverlay
+    label={STRINGS.vaultSearchLabel}
+    placeholder={STRINGS.vaultSearchPlaceholder}
+    items={overlayItems}
+    onQueryChange={onOverlayQuery}
+    onPick={onOverlayPick}
+    onClose={closeOverlay}
+  />
+{:else if activeOverlay === VIEW_SETTINGS}
+  <SettingsView
+    settings={settingsState}
+    onUpdate={(patch) => void settingsStore.update(patch)}
+    onClose={closeOverlay}
+  />
+{/if}

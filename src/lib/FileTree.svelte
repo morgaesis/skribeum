@@ -67,6 +67,10 @@ function parentIndex(row: Row): number {
   return rows.findIndex((candidate) => candidate.path === parent);
 }
 
+// registry-exempt keydown: ARIA tree pattern internal navigation (arrows
+// move and expand, Home/End jump, Enter and Space activate) with roving
+// tabindex, scoped to this widget; opening notes beyond the tree goes
+// through registry commands.
 function onKeydown(event: KeyboardEvent) {
   const row = rows[focusIndex];
   if (row === undefined) {

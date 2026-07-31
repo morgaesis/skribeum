@@ -38,7 +38,8 @@ export class IpcError extends Error {
   }
 }
 
-function unwrap<T>(
+/** Unwraps a generated-binding result, normalizing errors to `IpcError`. */
+export function unwrap<T>(
   result: { status: "ok"; data: T } | { status: "error"; error: AppError },
 ): T {
   if (result.status === "error") {
@@ -82,19 +83,18 @@ export async function noteWrite(
 }
 
 /**
- * Reads a vault configuration file (`.obsidian/app.json` and friends)
- * through the `note_read` command. Returns null when the command does not
- * serve the path (absent, outside the indexed surface, not UTF-8);
- * configuration is optional and its absence is never an error, so every
- * consumer degrades to defaults.
+ * Reads a recognized Obsidian configuration file (`app.json`,
+ * `types.json`) through `vault_config_read`, the one sanctioned read
+ * path into the otherwise excluded `.obsidian` directory. Returns null
+ * when the file is absent or unreadable; configuration is optional and
+ * its absence is never an error, so every consumer degrades to defaults.
  */
 export async function readVaultConfigFile(
   handle: VaultHandle,
-  relPath: string,
+  name: string,
 ): Promise<string | null> {
   try {
-    const loaded = await readNote(handle, relPath);
-    return loaded.readOnly ? null : loaded.text;
+    return unwrap(await commands.vaultConfigRead(handle, name));
   } catch {
     return null;
   }

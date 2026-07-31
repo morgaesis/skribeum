@@ -14,10 +14,18 @@ export default defineConfig({
   },
   envPrefix: ["VITE_", "TAURI_ENV_"],
   // The web test suite: component-level editor tests running under jsdom.
-  // End-to-end coverage lives in tests/e2e under WebdriverIO.
+  // End-to-end coverage lives in tests/e2e under WebdriverIO. The browser
+  // export condition makes component mounting resolve Svelte's client
+  // runtime instead of the server one under jsdom.
   test: {
     environment: "jsdom",
     include: ["tests/web/**/*.test.ts"],
     setupFiles: ["tests/web/setup.ts"],
+    server: {
+      deps: {
+        inline: ["svelte"],
+      },
+    },
   },
+  resolve: process.env.VITEST === "true" ? { conditions: ["browser"] } : {},
 });

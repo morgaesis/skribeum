@@ -65,6 +65,12 @@ pub fn run() {
                 skribeum_vault::Journal::new(dir.join(skribeum_vault::JOURNAL_FILE_NAME))
             });
             app.manage(ipc::JournalState(journal));
+            // Settings live in the OS app-config directory, never in any
+            // vault, with unknown keys preserved on every write.
+            let settings = app.path().app_config_dir().ok().map(|dir| {
+                skribeum_vault::SettingsStore::new(dir.join(skribeum_vault::SETTINGS_FILE_NAME))
+            });
+            app.manage(ipc::SettingsState(settings));
             Ok(())
         })
         .run(tauri::generate_context!())

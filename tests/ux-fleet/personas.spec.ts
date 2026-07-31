@@ -123,7 +123,11 @@ describe("persona-driven UX fleet", () => {
       FLEET_SEED + 1,
     );
     await flow.click("Start Here.md", "Start here");
-    await flow.quickNote("Deep Note 0199", NOTES.deep, "Deep migration note");
+    await flow.quickNote(
+      "Migration Deep Note 0199",
+      NOTES.deep,
+      "Deep migration note",
+    );
     await flow.surface(
       "Press Ctrl+Shift+F to search the imported vault",
       [modifier, Key.Shift, "f"],

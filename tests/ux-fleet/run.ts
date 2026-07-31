@@ -1,83 +1,73 @@
-import { execSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, rmSync, utimesSync } from "node:fs";
 import path from "node:path";
+import { createFleetVault, fleetVaultIsValid } from "./vault";
 
-async function analyzeTraces(): Promise<void> {
-  const tracesDir = path.join(import.meta.dirname, "traces");
-  if (!existsSync(tracesDir)) {
-    console.log("No traces directory found.");
-    return;
-  }
+const root = path.resolve(import.meta.dirname, "../..");
+const traces = path.join(import.meta.dirname, "traces");
 
-  const traceFiles = readdirSync(tracesDir).filter((f) => f.endsWith(".jsonl"));
-  if (traceFiles.length === 0) {
-    console.log("No trace files found.");
-    return;
-  }
-
-  const findings: Record<
-    string,
-    { persona: string; count: number; samples: string[] }
-  > = {};
-
-  for (const file of traceFiles) {
-    const filePath = path.join(tracesDir, file);
-    const content = readFileSync(filePath, "utf8");
-    const lines = content.trim().split("\n");
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const record = JSON.parse(line);
-      if (record.status === "error" || record.signal.consoleErrors.length > 0) {
-        const key = record.intent;
-        if (!findings[key]) {
-          findings[key] = { persona: record.persona, count: 0, samples: [] };
-        }
-        findings[key].count += 1;
-        if (findings[key].samples.length < 3) {
-          findings[key].samples.push(
-            `${record.action} (latency: ${record.signal.latency?.ms ?? 0}ms)`,
-          );
-        }
-      }
-    }
-  }
-
-  console.log(`\nUX Fleet Findings Summary\n${"=".repeat(50)}`);
-  const sorted = Object.entries(findings)
-    .sort(([, a], [, b]) => b.count - a.count)
-    .slice(0, 10);
-
-  if (sorted.length === 0) {
-    console.log("No UX defects detected in this run.");
-    return;
-  }
-
-  for (let i = 0; i < sorted.length; i++) {
-    const [intent, finding] = sorted[i];
-    console.log(
-      `\n${i + 1}. [${finding.persona}] ${intent} (${finding.count} occurrences)`,
-    );
-    for (const sample of finding.samples) {
-      console.log(`   - ${sample}`);
-    }
-  }
+function requireCommand(name: string): void {
+  if (spawnSync("which", [name], { stdio: "ignore" }).status !== 0)
+    throw new Error(`${name} is required to run the UX fleet`);
 }
 
-console.log("Running UX fleet under headless xvfb...");
-const cwd = path.resolve(import.meta.dirname, "../..");
-try {
-  execSync("xvfb-run -a npx wdio run tests/ux-fleet/wdio.conf.ts", {
-    stdio: "inherit",
-    cwd,
-    env: { ...process.env, PATH: process.env.PATH },
+function run(command: string[], environment = process.env): Promise<number> {
+  const executable = command[0];
+  if (executable === undefined) throw new Error("empty command");
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, command.slice(1), {
+      cwd: root,
+      env: environment,
+      stdio: "inherit",
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => resolve(code ?? 1));
   });
-} catch (error) {
-  console.error(
-    "Fleet execution failed:",
-    error instanceof Error ? error.message : error,
-  );
-  process.exit(1);
 }
 
-await analyzeTraces();
+requireCommand("xvfb-run");
+requireCommand("openbox");
+rmSync(traces, { recursive: true, force: true });
+mkdirSync(traces, { recursive: true });
+createFleetVault(true);
+if (!fleetVaultIsValid()) throw new Error("fleet vault generation failed");
+
+if (!process.argv.includes("--skip-build")) {
+  const now = new Date();
+  for (const file of ["src-tauri/build.rs", "src-tauri/src/lib.rs"])
+    utimesSync(path.join(root, file), now, now);
+  const build = await run([
+    "bun",
+    "tauri",
+    "build",
+    "--debug",
+    "--no-bundle",
+    "--features",
+    "webdriver",
+    "--config",
+    "src-tauri/tauri.webdriver.conf.json",
+  ]);
+  if (build !== 0) process.exit(build);
+}
+
+const data = path.join(traces, ".runtime");
+const fleet = await run(
+  [
+    "xvfb-run",
+    "-a",
+    "sh",
+    "-c",
+    "openbox >/dev/null 2>&1 & manager=$!; trap 'kill \"$manager\" 2>/dev/null || true' EXIT; bunx wdio run tests/ux-fleet/wdio.conf.ts",
+  ],
+  {
+    ...process.env,
+    XDG_CONFIG_HOME: path.join(data, "config"),
+    XDG_DATA_HOME: path.join(data, "data"),
+  },
+);
+const aggregate = await run([
+  "bun",
+  "tests/ux-fleet/aggregate.ts",
+  "--write-findings",
+]);
+process.exit(fleet === 0 ? aggregate : fleet);

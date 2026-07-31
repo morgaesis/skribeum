@@ -1,65 +1,95 @@
-# UX Fleet Test Run - Findings Report
+# UX fleet findings
 
-**Test Date:** 2026-07-31  
-**Fleet Version:** 1.0  
-**Personas Executed:** 6 (Obsidian migrant, Daily journaler, Researcher, Keyboard-only power user, Low-vision user, Interruption-prone user)  
-**Test Duration:** 8.4 seconds  
-**Result:** Harness defect prevented full fleet execution
+The deterministic fleet completed 2 persona sessions and recorded 12 intent-level interactions. The fleet found 9 distinct signal-backed defects, so this report contains fewer than ten findings. Ranking weights blocked work and lost focus above latency, scroll movement, and visual stability, independent of how often a signal occurred.
 
-## Summary
+The latency thresholds are exploratory triage thresholds, not release gates. Event-to-paint timing starts on the page event and ends at the next confirmed paint. The note threshold is deliberately above the 47 ms in-app p95 reference because this path includes UI dispatch and paint.
 
-The UX fleet successfully launched and initialized all six personas, but encountered a critical defect in the test harness itself that prevented measurement collection. This finding represents a harness-level issue, not a product-level defect.
+## 1. Critical: The UI session cannot complete: Press Enter to open Archive/Imported/Department-07/Area-04/Project-03/Topic-02/Deep Note 0199.md
 
-## Critical Harness Finding
+- Persona: Obsidian migrant
+- Session: `01-obsidian-migrant`, interaction 4
+- Measured signal: visibility failed for .cm-content
+- Reproduction:
+  1. Run `bun run ux:fleet` to open the deterministic generated vault.
+  2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
+  3. Press Enter to open Archive/Imported/Department-07/Area-04/Project-03/Topic-02/Deep Note 0199.md.
 
-### 1. WebDriver Code Execution Scope Error in Instrumentation
+## 2. High: Focus does not land on the expected control after users press ctrl+o to open the quick switcher
 
-**Category:** Test Infrastructure / Harness Bug  
-**Severity:** Critical (blocks fleet execution)  
-**Personas Affected:** All 6  
-**Reproduction:** Run any persona interaction with latency measurement  
-**Measured Signal:** Browser error on first interact call: `ReferenceError: Can't find variable: __name`
+- Persona: Daily journaler
+- Session: `02-daily-journaler`, interaction 1
+- Measured signal: Focus moved from div:textbox::Note editor:cm-content.cm-lineWrapping to input:combobox::Search vault:w-full.rounded-t-lg.border-b.
+- Reproduction:
+  1. Run `bun run ux:fleet` to open the deterministic generated vault.
+  2. Follow the Daily journaler session intent: Capture a daily entry, add links quickly, and move between linked notes.
+  3. Press Ctrl+O to open the quick switcher.
 
-**Root Cause:** The `armMeasurement` function in signals.ts passes a closure-based function to `browser.execute()`, which requires all variables to be explicitly passed as WebDriver execute parameters, not captured from outer scope. WebDriver's execute context does not have access to the enclosing function's lexical scope.
+## 3. High: Surface appearance is delayed while users press ctrl+o to open the quick switcher
 
-**Location:** tests/ux-fleet/signals.ts, lines 156-225 (armMeasurement function)
+- Persona: Obsidian migrant
+- Session: `01-obsidian-migrant`, interaction 2
+- Measured signal: Surface appearance: 865.00 ms (webdriver-fallback); exploratory threshold: 100 ms.
+- Reproduction:
+  1. Run `bun run ux:fleet` to open the deterministic generated vault.
+  2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
+  3. Press Ctrl+O to open the quick switcher.
 
-**Impact:** Latency measurements (glyph, surface, note timing) cannot be collected. All six personas failed immediately upon their first interaction, preventing any UX signal gathering.
+## 4. High: Surface appearance is delayed while users open the quick switcher to revisit recent notes
 
-**Fix Required:** Refactor armMeasurement to use WebDriver's parameter passing system: `browser.execute((triggerValue, visibility) => { ... }, trigger, visible)` pattern, ensuring the closure code doesn't reference outer variables except through explicit parameters.
+- Persona: Obsidian migrant
+- Session: `01-obsidian-migrant`, interaction 8
+- Measured signal: Surface appearance: 3660.00 ms (webdriver-fallback); exploratory threshold: 100 ms.
+- Reproduction:
+  1. Run `bun run ux:fleet` to open the deterministic generated vault.
+  2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
+  3. Open the quick switcher to revisit recent notes.
 
-## Measurement Limitations
+## 5. High: Surface appearance is delayed while users press ctrl+o to open the quick switcher
 
-The following signals could not be measured in this run due to the harness defect:
+- Persona: Daily journaler
+- Session: `02-daily-journaler`, interaction 1
+- Measured signal: Surface appearance: 3600.00 ms (webdriver-fallback); exploratory threshold: 100 ms.
+- Reproduction:
+  1. Run `bun run ux:fleet` to open the deterministic generated vault.
+  2. Follow the Daily journaler session intent: Capture a daily entry, add links quickly, and move between linked notes.
+  3. Press Ctrl+O to open the quick switcher.
 
-- **Latency measurements** (event-to-paint timing): Blocked by the WebDriver code execution error
-  - Glyph latency (keypress to visible character)
-  - Surface latency (command invocation to surface visibility)
-  - Note latency (note click to first painted content)
+## 6. Medium: First painted note content is delayed while users press enter to open archive/imported/department-07/area-04/project-03/topic-02/deep note 0199.md
 
-- **Custom interaction signals**: Blocked by the same error
+- Persona: Obsidian migrant
+- Session: `01-obsidian-migrant`, interaction 4
+- Measured signal: First painted note content: 109.00 ms (webdriver-fallback); exploratory threshold: 100 ms.
+- Reproduction:
+  1. Run `bun run ux:fleet` to open the deterministic generated vault.
+  2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
+  3. Press Enter to open Archive/Imported/Department-07/Area-04/Project-03/Topic-02/Deep Note 0199.md.
 
-## Successfully Measured Signals
+## 7. Medium: First painted note content is delayed while users press enter on the ranked deep-note result
 
-- **Focus tracking:** Pre/post-interaction focus detection was operational
-- **Scroll deltas:** Container scroll position capture was functional
-- **Layout shift detection:** Performance Observer integration initialized
-- **Console error logging:** Error capture instrumentation active
-- **Vault generation:** Deterministic 2000-note vault with special persona-specific notes created successfully
+- Persona: Obsidian migrant
+- Session: `01-obsidian-migrant`, interaction 7
+- Measured signal: First painted note content: 128.00 ms (webdriver-fallback); exploratory threshold: 100 ms.
+- Reproduction:
+  1. Run `bun run ux:fleet` to open the deterministic generated vault.
+  2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
+  3. Press Enter on the ranked deep-note result.
 
-## Test Infrastructure Observations
+## 8. Medium: Surface appearance is delayed while users press ctrl+shift+f to search the imported vault
 
-1. **Tauri driver dependencies** were missing but WebKitGTK fallback worked adequately for basic test startup
-2. **xvfb headless execution** was successful; display server initialization worked correctly
-3. **WebdriverIO configuration** loaded properly with correct Tauri service bindings
-4. **Test framework** (Mocha/WebdriverIO) executed all six persona test cases in proper order before encountering the harness defect
+- Persona: Obsidian migrant
+- Session: `01-obsidian-migrant`, interaction 5
+- Measured signal: Surface appearance: 307.00 ms (webdriver-fallback); exploratory threshold: 100 ms.
+- Reproduction:
+  1. Run `bun run ux:fleet` to open the deterministic generated vault.
+  2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
+  3. Press Ctrl+Shift+F to search the imported vault.
 
-## Recommendations
+## 9. Medium: Surface appearance is delayed while users press ctrl+shift+f to search the imported vault
 
-1. **Immediate:** Fix the WebDriver variable scoping issue in armMeasurement
-2. **Secondary:** Add a test harness validation step that runs a single "smoke" interaction before full fleet execution
-3. **Tertiary:** Implement browser console error capture earlier in the initialization sequence to catch harness bugs faster
-
-## Next Steps
-
-Once the WebDriver scoping issue is resolved, re-run the fleet to gather actual UX measurement data from all personas. The harness structure and persona scripts are sound; only the instrumentation wiring requires correction.
+- Persona: Obsidian migrant
+- Session: `01-obsidian-migrant`, interaction 5
+- Measured signal: Surface appearance: 105.00 ms (webdriver-fallback); exploratory threshold: 100 ms.
+- Reproduction:
+  1. Run `bun run ux:fleet` to open the deterministic generated vault.
+  2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
+  3. Press Ctrl+Shift+F to search the imported vault.

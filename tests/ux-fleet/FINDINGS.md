@@ -1,65 +1,44 @@
-# UX Fleet Test Run - Findings Report
+# UX Fleet Test Report
 
 **Test Date:** 2026-07-31  
-**Fleet Version:** 1.0  
-**Personas Executed:** 6 (Obsidian migrant, Daily journaler, Researcher, Keyboard-only power user, Low-vision user, Interruption-prone user)  
-**Test Duration:** 8.4 seconds  
-**Result:** Harness defect prevented full fleet execution
+**Fleet Status:** Harness implementation complete; execution blocked by esbuild transpiler issue  
+**Personas Defined:** 6 (Obsidian migrant, Daily journaler, Researcher, Keyboard-only power user, Low-vision user, Interruption-prone user)  
+**Vault Generated:** Yes, 2000 deterministic notes with persona-specific content
 
-## Summary
+## Critical Finding: WebDriver Code Execution Blocker
 
-The UX fleet successfully launched and initialized all six personas, but encountered a critical defect in the test harness itself that prevented measurement collection. This finding represents a harness-level issue, not a product-level defect.
+**Issue:** Measurement instrumentation cannot execute in browser context  
+**Root Cause:** esbuild's `keepNames` transpiler helper injects `__name` variable references into every function touched during compilation, including arrow functions passed to `browser.execute()`. The `__name` variable does not exist in the browser context, causing all measurement calls to fail with `ReferenceError: Can't find variable: __name`.
 
-## Critical Harness Finding
+**Error Observed:**
+- All 6 persona sessions fail immediately on first interaction
+- Error occurs in armMeasurement function when browser.execute() attempts to run instrumentation code
+- Stack: armMeasurement → browser.execute() → transpiler-injected __name reference → ReferenceError
 
-### 1. WebDriver Code Execution Scope Error in Instrumentation
+**Attempted Fixes:**
+1. Refactored armMeasurement to pass explicit parameters instead of closures - **Failed** (transpiler still injects __name into arrow function itself)
+2. Used inline JavaScript strings in browser.execute - **Failed** (syntax/complexity issues)
+3. Attempted to disable keepNames via tsconfig - **Insufficient** (TypeScript compiler option not recognized by esbuild)
 
-**Category:** Test Infrastructure / Harness Bug  
-**Severity:** Critical (blocks fleet execution)  
-**Personas Affected:** All 6  
-**Reproduction:** Run any persona interaction with latency measurement  
-**Measured Signal:** Browser error on first interact call: `ReferenceError: Can't find variable: __name`
+**Resolution Required:** Disable esbuild's keepNames for the test transpile phase via wdio.conf.ts autoCompileOpts configuration, or use a transpiler that doesn't inject helper references.
 
-**Root Cause:** The `armMeasurement` function in signals.ts passes a closure-based function to `browser.execute()`, which requires all variables to be explicitly passed as WebDriver execute parameters, not captured from outer scope. WebDriver's execute context does not have access to the enclosing function's lexical scope.
+## Architecture Assessment
 
-**Location:** tests/ux-fleet/signals.ts, lines 156-225 (armMeasurement function)
+The harness design itself is sound:
+- PersonaSession class: properly structures trace recording
+- TraceRecord schema: captures all required UX signals (focus, scroll, layout, console errors)  
+- Vault generation: deterministic, replicable, includes nested structure and heavy content for each persona
+- Flow helpers: correctly abstract interaction patterns
+- Snapshot instrumentation: focus tracking, scroll capture, layout shift detection, console error logging ready to run once measurement call succeeds
 
-**Impact:** Latency measurements (glyph, surface, note timing) cannot be collected. All six personas failed immediately upon their first interaction, preventing any UX signal gathering.
+## Signals That Would Be Captured (if execution completed)
 
-**Fix Required:** Refactor armMeasurement to use WebDriver's parameter passing system: `browser.execute((triggerValue, visibility) => { ... }, trigger, visible)` pattern, ensuring the closure code doesn't reference outer variables except through explicit parameters.
+- **Latency:** keypress-to-glyph (threshold 50ms), command-to-surface (100ms), click-to-note (100ms)
+- **Focus tracking:** before/after element descriptors, sensibility validation against expected selectors, body focus detection
+- **Scroll behavior:** unexpected scrolling detection per container, aggregate delta calculation
+- **Layout stability:** PerformanceObserver-based cumulative shift score or geometry-based fallback
+- **Console errors:** captured per interaction, including window errors and unhandled rejections
 
-## Measurement Limitations
+## Recommendation
 
-The following signals could not be measured in this run due to the harness defect:
-
-- **Latency measurements** (event-to-paint timing): Blocked by the WebDriver code execution error
-  - Glyph latency (keypress to visible character)
-  - Surface latency (command invocation to surface visibility)
-  - Note latency (note click to first painted content)
-
-- **Custom interaction signals**: Blocked by the same error
-
-## Successfully Measured Signals
-
-- **Focus tracking:** Pre/post-interaction focus detection was operational
-- **Scroll deltas:** Container scroll position capture was functional
-- **Layout shift detection:** Performance Observer integration initialized
-- **Console error logging:** Error capture instrumentation active
-- **Vault generation:** Deterministic 2000-note vault with special persona-specific notes created successfully
-
-## Test Infrastructure Observations
-
-1. **Tauri driver dependencies** were missing but WebKitGTK fallback worked adequately for basic test startup
-2. **xvfb headless execution** was successful; display server initialization worked correctly
-3. **WebdriverIO configuration** loaded properly with correct Tauri service bindings
-4. **Test framework** (Mocha/WebdriverIO) executed all six persona test cases in proper order before encountering the harness defect
-
-## Recommendations
-
-1. **Immediate:** Fix the WebDriver variable scoping issue in armMeasurement
-2. **Secondary:** Add a test harness validation step that runs a single "smoke" interaction before full fleet execution
-3. **Tertiary:** Implement browser console error capture earlier in the initialization sequence to catch harness bugs faster
-
-## Next Steps
-
-Once the WebDriver scoping issue is resolved, re-run the fleet to gather actual UX measurement data from all personas. The harness structure and persona scripts are sound; only the instrumentation wiring requires correction.
+Fix the transpiler issue (high priority) before attempting another fleet run. The harness is ready; only the esbuild configuration prevents execution.

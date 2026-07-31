@@ -12,4 +12,24 @@ export const STRINGS = {
     "Some file names in this vault collide by letter case or Unicode form and may be merged by other filesystems:",
   vaultOpenFailed: "Opening the vault failed",
   noteReadFailed: "Reading the note failed",
+  noteWriteFailed: "Saving the note failed",
+  conflictBanner:
+    "This note changed on disk while your edit was unsaved. The disk version was loaded and your edits were kept on top of it; review the result before saving.",
+  noteRemovedBanner:
+    "This note was removed from disk. Your buffer is kept as shown; saving is paused until the note reappears.",
+  noteRecoveredNotice:
+    "Unsaved changes from a previous session were recovered into this note. They are applied but not yet saved.",
+  noteRecoveredPendingBanner:
+    "Unsaved changes from a previous session were recovered. Open the note to apply them:",
+  bulkDivergenceBanner:
+    "More files changed at once than the review threshold. Nothing was applied automatically; review the affected files:",
+  bannerReasonSizeShrank: "shrank on disk past the safety threshold",
+  bannerReasonBecameEmpty: "became empty on disk",
+  bannerReasonEditWithinWriteSettle:
+    "changed on disk immediately after this device saved it",
+  bannerReasonJournalDiverged:
+    "changed on disk while the application was closed; recovered unsaved changes were not applied",
+  reconciliationBannerPrefix: "Needs review:",
+  reviewAction: "Review",
+  dismissAction: "Dismiss",
 } as const;

@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
@@ -12,4 +13,11 @@ export default defineConfig({
     strictPort: true,
   },
   envPrefix: ["VITE_", "TAURI_ENV_"],
+  // The web test suite: component-level editor tests running under jsdom.
+  // End-to-end coverage lives in tests/e2e under WebdriverIO.
+  test: {
+    environment: "jsdom",
+    include: ["tests/web/**/*.test.ts"],
+    setupFiles: ["tests/web/setup.ts"],
+  },
 });

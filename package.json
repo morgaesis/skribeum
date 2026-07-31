@@ -7,6 +7,7 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit",
     "e2e": "wdio run tests/e2e/wdio.conf.ts",
+    "test:web": "vitest run",
     "prepare": "lefthook install",
     "tauri": "tauri"
   },
@@ -14,6 +15,7 @@
     "@wdio/native-utils": "2.5.0"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.10.4",
     "@codemirror/lang-markdown": "^6.5.1",
     "@codemirror/language": "^6.12.4",
     "@codemirror/state": "^6.7.1",
@@ -34,10 +36,12 @@
     "@wdio/mocha-framework": "^9.30.0",
     "@wdio/tauri-service": "^1.2.0",
     "expect-webdriverio": "^5.7.0",
+    "jsdom": "^30.0.1",
     "lefthook": "^2.1.10",
     "svelte-check": "^4.7.4",
     "tailwindcss": "^4.3.3",
     "typescript": "~6",
-    "vite": "^8.2.0"
+    "vite": "^8.2.0",
+    "vitest": "^4.1.10"
   }
 }

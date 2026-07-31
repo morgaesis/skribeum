@@ -40,6 +40,21 @@ pub fn run() {
     #[cfg(feature = "webdriver")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
+    // End-to-end vault seam: the directory-picker dialog cannot be driven
+    // headlessly, so webdriver-feature builds announce the vault named by
+    // `SKRIBEUM_E2E_VAULT` to the webview, which opens it on startup. The
+    // hook compiles only into webdriver builds, so the seam does not exist
+    // in release artifacts; the corresponding webview poll is inert without
+    // this injection.
+    #[cfg(feature = "webdriver")]
+    let builder = builder.on_page_load(|webview, _payload| {
+        if let Ok(vault_path) = std::env::var("SKRIBEUM_E2E_VAULT")
+            && let Ok(encoded) = serde_json::to_string(&vault_path)
+        {
+            let _ = webview.eval(format!("window.__SKRIBEUM_E2E_VAULT__ = {encoded};"));
+        }
+    });
+
     builder
         .setup(move |app| {
             use tauri::Manager;

@@ -7,10 +7,12 @@
 import { Channel } from "@tauri-apps/api/core";
 import {
   type AppError,
+  type ByteRangeReplace,
   commands,
   type NoteContent,
   type TreeEntry,
   type VaultHandle,
+  type WriteResult,
 } from "./bindings";
 
 export type LoadedNote = {
@@ -20,6 +22,12 @@ export type LoadedNote = {
   text: string;
   /** True when the note must never be written (non-UTF-8). */
   readOnly: boolean;
+  /**
+   * A crash-journal delta recovered for this note before it was opened:
+   * applying it to `bytes` reproduces the pre-crash buffer. The editor
+   * applies it as pending (unsaved) edits when the note opens.
+   */
+  recoveredChangeSet?: ByteRangeReplace[];
 };
 
 export class IpcError extends Error {
@@ -49,6 +57,28 @@ export async function vaultTree(handle: VaultHandle): Promise<TreeEntry[]> {
 
 export async function watchSubscribe(handle: VaultHandle): Promise<void> {
   unwrap(await commands.watchSubscribe(handle));
+}
+
+/**
+ * Writes a note through the change-set path: byte-range replacements
+ * against the last-read projection, verified against the expected
+ * projection hash. The conflict variant returns as a value, never as an
+ * exception; the caller owns the reconciliation flow.
+ */
+export async function noteWrite(
+  handle: VaultHandle,
+  relPath: string,
+  changeSet: ByteRangeReplace[],
+  expectedProjectionHash: string,
+): Promise<WriteResult> {
+  return unwrap(
+    await commands.noteWrite(
+      handle,
+      relPath,
+      changeSet,
+      expectedProjectionHash,
+    ),
+  );
 }
 
 export async function readNote(

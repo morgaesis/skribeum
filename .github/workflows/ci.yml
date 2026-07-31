@@ -38,6 +38,12 @@ jobs:
 
       - run: bun run check
 
+      # Component-level editor tests: offset-conversion and line-ending
+      # parity with skribeum-core, cursor mapping and undo discipline
+      # across external ingests, and the decoration-inertness guard over
+      # the corpus.
+      - run: bun run test:web
+
       # The frontend must be built before any cargo compilation:
       # tauri::generate_context! embeds ../dist at compile time, so clippy and
       # the test build fail without it.
@@ -143,7 +149,7 @@ jobs:
       # debug binary; the @wdio/tauri-service embedded provider connects to it
       # directly, so no external tauri-driver is needed on any platform.
       - name: Build debug app
-        run: bun tauri build --debug --no-bundle --features webdriver
+        run: bun tauri build --debug --no-bundle --features webdriver --config src-tauri/tauri.webdriver.conf.json
 
       - name: Run smoke test (headless)
         if: runner.os == 'Linux'

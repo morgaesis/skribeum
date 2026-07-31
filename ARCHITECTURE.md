@@ -52,6 +52,40 @@ crate contains glue only.
   (an `ArrayBuffer` in the webview), never as JSON, so large files do not
   pay JSON bridge cost.
 
+## The editing surface
+
+The buffer lives in CodeMirror. Each open UTF-8 note has an editing
+session (`src/lib/editor/noteSession.ts`) holding the durable base (the
+exact on-disk projection last read or written) and the pending buffer
+edits since that base as a CodeMirror `ChangeSet`. Saves run on the
+explicit save chord, on a 400ms idle debounce and on editor blur: the
+pending set converts at the boundary from UTF-16 positions to UTF-8
+buffer-byte offsets, then through a TypeScript mirror of the
+`skribeum-core` line-ending map into the byte space of the base
+projection, and crosses IPC as a `note_write` change set with the
+expected projection hash. A conflict result never overwrites: the save
+rolls back, the note is re-read, and the local edits are rebased onto the
+disk content with the reconciliation state surfaced. The offset and
+line-ending mirrors are pinned to the Rust semantics by parity tests over
+the same cases. Non-UTF-8 notes stay read-only behind a banner and have
+no session.
+
+External changes to the open note arrive as byte change sets against the
+same base and dispatch with `addToHistory: false`, never undoable; cursor
+and selection map through the incoming changes, never reset, and pending
+local edits are rebased over the ingest rather than dropped. Undo never
+crosses an external ingest into a state that existed on no device: the
+undo history is emptied at every ingest point, so post-ingest undo stops
+exactly at the ingest state. Journal-recovered deltas apply as pending
+(unsaved) edits over the on-disk base, so the next save persists them.
+Every transaction annotated as decoration-originated is asserted inert
+(`docChanged === false`) by the dispatch wrapper in dev and test builds.
+
+The `webdriver`-feature build (end-to-end tests only, never release
+artifacts) announces the vault named by `SKRIBEUM_E2E_VAULT` to the
+webview on page load, which opens it on startup; the directory-picker
+dialog cannot be driven headlessly.
+
 ## Files are the source of truth
 
 Notes are plain `.md` files. Opening a vault performs no writes, asserted

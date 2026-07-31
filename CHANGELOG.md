@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Large multi-line editor input lands as one CodeMirror transaction instead
+  of triggering native contenteditable paragraph reconstruction.
+
 ### Added
 
 - Browser-only editor demo with a seeded sample vault, in-memory edits that

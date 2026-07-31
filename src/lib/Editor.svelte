@@ -12,6 +12,7 @@ import {
 } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { onMount } from "svelte";
+import { bulkTextInput } from "./editor/bulkInput";
 import type { ByteChange } from "./editor/byteChangeSet";
 import { assertDecorationsInert } from "./editor/decorationGuard";
 import {
@@ -170,6 +171,7 @@ function stateFor(content: string, locked: boolean): EditorState {
       }),
       decorationEngine(),
       EditorView.lineWrapping,
+      bulkTextInput(),
       historyCompartment.of(history()),
       ...registryExtensions(),
       EditorState.readOnly.of(locked),

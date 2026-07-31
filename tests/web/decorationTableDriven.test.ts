@@ -9,6 +9,10 @@ import { forceParsing } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { Decoration, EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import {
+  BULK_TEXT_INPUT_LENGTH,
+  bulkTextInput,
+} from "../../src/lib/editor/bulkInput";
 import { decorationOrigin } from "../../src/lib/editor/decorationGuard";
 import {
   decorationEngine,
@@ -92,6 +96,47 @@ describe("data-driven decoration table", () => {
       expect(
         view.contentDOM.querySelector(".cm-test-horizontal-rule"),
       ).not.toBeNull();
+    } finally {
+      view.destroy();
+      view.dom.remove();
+    }
+  });
+
+  it("restores complete decorations a few frames after bulk input", async () => {
+    const compartment = new Compartment();
+    const view = mountedView(compartment.of(bulkTextInput()));
+    document.body.append(view.dom);
+    try {
+      const text = `${"[[bulk target]]\n".repeat(BULK_TEXT_INPUT_LENGTH / 8)}`;
+      const event = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        data: text,
+        inputType: "insertText",
+      });
+
+      expect(view.contentDOM.dispatchEvent(event)).toBe(false);
+      expect(
+        serializeDecorationSet(engineDecorations(view) ?? Decoration.none),
+      ).not.toContain("cm-skr-wikilink");
+      expect(forceParsing(view, view.state.doc.length, 1_000)).toBe(true);
+
+      await new Promise<void>((resolve) => {
+        const waitForFrame = (remaining: number) => {
+          requestAnimationFrame(() => {
+            if (remaining === 1) {
+              resolve();
+            } else {
+              waitForFrame(remaining - 1);
+            }
+          });
+        };
+        waitForFrame(4);
+      });
+
+      expect(
+        serializeDecorationSet(engineDecorations(view) ?? Decoration.none),
+      ).toContain("cm-skr-wikilink");
     } finally {
       view.destroy();
       view.dom.remove();

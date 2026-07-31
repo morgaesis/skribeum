@@ -1,0 +1,84 @@
+0..0 line class="cm-skr-heading cm-skr-heading-1"
+0..2 hide node=HeaderMark
+10..10 line class="cm-skr-heading cm-skr-heading-2"
+10..13 hide node=HeaderMark
+25..26 hide node=EmbedMark
+25..44 mark class="cm-skr-embed"
+26..28 hide node=WikilinkMark
+26..44 mark class="cm-skr-wikilink" data-resolved="false"
+28..42 mark class="cm-skr-wikilink-target"
+42..44 hide node=WikilinkMark
+46..46 line class="cm-skr-heading cm-skr-heading-2"
+46..49 hide node=HeaderMark
+74..75 hide node=EmbedMark
+74..109 mark class="cm-skr-embed"
+75..77 hide node=WikilinkMark
+75..109 mark class="cm-skr-wikilink" data-resolved="false"
+77..107 mark class="cm-skr-wikilink-target"
+107..109 hide node=WikilinkMark
+111..111 line class="cm-skr-heading cm-skr-heading-2"
+111..114 hide node=HeaderMark
+147..148 hide node=EmbedMark
+147..177 mark class="cm-skr-embed"
+148..150 hide node=WikilinkMark
+148..177 mark class="cm-skr-wikilink" data-resolved="false"
+150..175 mark class="cm-skr-wikilink-target"
+175..177 hide node=WikilinkMark
+179..179 line class="cm-skr-heading cm-skr-heading-2"
+179..182 hide node=HeaderMark
+195..196 hide node=EmbedMark
+195..219 mark class="cm-skr-embed"
+196..198 hide node=WikilinkMark
+196..219 mark class="cm-skr-wikilink" data-resolved="false"
+198..217 mark class="cm-skr-wikilink-target"
+217..219 hide node=WikilinkMark
+221..221 line class="cm-skr-heading cm-skr-heading-2"
+221..224 hide node=HeaderMark
+258..259 hide node=EmbedMark
+258..286 mark class="cm-skr-embed"
+259..261 hide node=WikilinkMark
+259..286 mark class="cm-skr-wikilink" data-resolved="false"
+261..280 hide node=WikilinkTarget
+280..281 hide node=WikilinkMark
+281..284 mark class="cm-skr-wikilink-alias"
+284..286 hide node=WikilinkMark
+288..289 hide node=EmbedMark
+288..320 mark class="cm-skr-embed"
+289..291 hide node=WikilinkMark
+289..320 mark class="cm-skr-wikilink" data-resolved="false"
+291..310 hide node=WikilinkTarget
+310..311 hide node=WikilinkMark
+311..318 mark class="cm-skr-wikilink-alias"
+318..320 hide node=WikilinkMark
+322..322 line class="cm-skr-heading cm-skr-heading-2"
+322..325 hide node=HeaderMark
+357..358 hide node=EmbedMark
+357..403 mark class="cm-skr-embed"
+358..360 hide node=WikilinkMark
+358..403 mark class="cm-skr-wikilink" data-resolved="false"
+360..374 hide node=WikilinkTarget
+374..375 hide node=WikilinkMark
+375..401 mark class="cm-skr-wikilink-alias"
+401..403 hide node=WikilinkMark
+405..405 line class="cm-skr-heading cm-skr-heading-2"
+405..408 hide node=HeaderMark
+459..460 hide node=EmbedMark
+459..484 mark class="cm-skr-embed"
+460..462 hide node=WikilinkMark
+460..484 mark class="cm-skr-wikilink" data-resolved="false"
+462..482 mark class="cm-skr-wikilink-target"
+482..484 hide node=WikilinkMark
+558..558 line class="cm-skr-heading cm-skr-heading-2"
+558..561 hide node=HeaderMark
+610..612 hide node=LinkMark
+610..652 mark class="cm-skr-link"
+633..634 hide node=LinkMark
+634..635 hide node=LinkMark
+635..651 hide node=URL
+651..652 hide node=LinkMark
+654..654 line class="cm-skr-heading cm-skr-heading-2"
+654..657 hide node=HeaderMark
+688..690 hide node=WikilinkMark
+688..704 mark class="cm-skr-wikilink" data-resolved="false"
+690..702 mark class="cm-skr-wikilink-target"
+702..704 hide node=WikilinkMark

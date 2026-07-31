@@ -1,0 +1,252 @@
+# Corpus manifest. Every markdown construct and byte-level property the
+# round-trip harness must preserve is listed here with the files exercising
+# it. The coverage test in crates/skribeum-core/tests/corpus_coverage.rs
+# fails if a construct has no files, a listed file is missing, or a corpus
+# file is listed under no construct.
+#
+# All content in this directory is synthesized for testing and dedicated to
+# the public domain under CC0 1.0; see LICENSE in this directory.
+#
+# File names containing combining characters are written with TOML escape
+# sequences so no editor can silently normalize them: one name contains
+# NFC U+00E9, the other NFD U+0065 U+0301.
+
+[[construct]]
+key = "headings-atx"
+description = "ATX headings, levels one through six, open and closed forms"
+files = ["headings-atx-setext.md"]
+
+[[construct]]
+key = "headings-setext"
+description = "Setext headings with equals and hyphen underlines"
+files = ["headings-atx-setext.md"]
+
+[[construct]]
+key = "emphasis"
+description = "Italic, bold, bold-italic with asterisk and underscore delimiters, strikethrough, highlight, nesting, escapes"
+files = ["emphasis-forms.md"]
+
+[[construct]]
+key = "breaks-hard"
+description = "Hard breaks via two trailing spaces and via trailing backslash"
+files = ["breaks-hard-soft.md"]
+
+[[construct]]
+key = "breaks-soft"
+description = "Soft breaks joining source lines into one paragraph"
+files = ["breaks-hard-soft.md"]
+
+[[construct]]
+key = "lists-unordered"
+description = "Unordered lists with hyphen, star, and plus markers"
+files = ["lists-nested-loose-tight.md"]
+
+[[construct]]
+key = "lists-ordered"
+description = "Ordered lists with dot and parenthesis delimiters and offset starts"
+files = ["lists-nested-loose-tight.md"]
+
+[[construct]]
+key = "lists-nested"
+description = "Nested lists mixing ordered and unordered levels"
+files = ["lists-nested-loose-tight.md"]
+
+[[construct]]
+key = "lists-loose-tight"
+description = "Loose and tight list variants, including loose nesting with paragraphs"
+files = ["lists-nested-loose-tight.md"]
+
+[[construct]]
+key = "task-items"
+description = "Task list items: unchecked, checked, capital marker, custom status markers, nested and ordered"
+files = ["tasks-items.md"]
+
+[[construct]]
+key = "code-fenced"
+description = "Fenced code with and without info strings, backtick and tilde fences, longer fences containing shorter ones"
+files = ["code-fenced-indented.md"]
+
+[[construct]]
+key = "code-indented"
+description = "Indented code blocks, space and tab indented"
+files = ["code-fenced-indented.md", "bytes-tabs-indentation-tables.md"]
+
+[[construct]]
+key = "code-inline"
+description = "Inline code spans, including double-backtick spans containing backticks"
+files = ["code-fenced-indented.md"]
+
+[[construct]]
+key = "blockquotes"
+description = "Blockquotes: simple, multi-line, nested, containing other blocks"
+files = ["blockquotes-lazy.md"]
+
+[[construct]]
+key = "blockquotes-lazy-continuation"
+description = "Blockquote lazy continuation lines without markers, at outer and nested depth"
+files = ["blockquotes-lazy.md", "callouts.md"]
+
+[[construct]]
+key = "tables"
+description = "GFM tables: basic, without outer pipes, inline markup in cells, uneven rows"
+files = ["tables-alignment-escapes.md"]
+
+[[construct]]
+key = "tables-alignment"
+description = "Table column alignment markers: left, center, right, default"
+files = ["tables-alignment-escapes.md"]
+
+[[construct]]
+key = "tables-escaped-pipes"
+description = "Escaped pipes inside table cells, in plain text and inline code"
+files = ["tables-alignment-escapes.md"]
+
+[[construct]]
+key = "links-inline"
+description = "Inline links with URLs, titles, and relative paths"
+files = ["links-reference-definitions.md"]
+
+[[construct]]
+key = "links-reference"
+description = "Full, collapsed, and shortcut reference links"
+files = ["links-reference-definitions.md"]
+
+[[construct]]
+key = "reference-definitions"
+description = "Reference definitions, including an unused one and a [Foo]: definition coexisting with a [[Foo]] wikilink"
+files = ["links-reference-definitions.md"]
+
+[[construct]]
+key = "autolinks"
+description = "Angle-bracket autolinks, mail autolinks, bare URLs, and non-link angle text"
+files = ["autolinks.md"]
+
+[[construct]]
+key = "html-blocks"
+description = "Raw HTML blocks: elements, comments, void elements"
+files = ["html-blocks-inline.md"]
+
+[[construct]]
+key = "html-inline"
+description = "Inline HTML tags in prose, with markdown active inside spans"
+files = ["html-blocks-inline.md"]
+
+[[construct]]
+key = "frontmatter-yaml"
+description = "YAML frontmatter with duplicate adjacent keys and non-ASCII values, plus a later thematic break that is not frontmatter"
+files = ["frontmatter-duplicate-keys.md"]
+
+[[construct]]
+key = "wikilinks"
+description = "All four Obsidian wikilink forms: [[note]], [[note|alias]], [[note#heading]], [[note#^blockid]], plus combined and edge shapes"
+files = ["wikilinks-forms.md", "links-reference-definitions.md"]
+
+[[construct]]
+key = "embeds"
+description = "Embeds: note, heading, block, image with size parameters, alias-position text, escaped non-embed"
+files = ["embeds.md"]
+
+[[construct]]
+key = "callouts"
+description = "Obsidian callouts: typed, titled, folded open and closed, nested, custom types, lazy continuation"
+files = ["callouts.md"]
+
+[[construct]]
+key = "block-references"
+description = "Block identifiers on paragraphs, list items, quotes, tables, and standalone lines, plus references and non-anchors"
+files = ["block-references.md"]
+
+[[construct]]
+key = "tags"
+description = "Inline tags: simple, nested with slashes, punctuation, non-ASCII, and non-tag lookalikes"
+files = ["tags.md"]
+
+[[construct]]
+key = "footnotes"
+description = "Footnote references, named and numbered definitions, inline footnotes, orphans and missing definitions"
+files = ["footnotes.md"]
+
+[[construct]]
+key = "math-inline"
+description = "Inline math between single dollar signs, including non-math dollar amounts"
+files = ["math-inline-block.md"]
+
+[[construct]]
+key = "math-block"
+description = "Block math between double dollar signs, single-line and multi-line with environments"
+files = ["math-inline-block.md"]
+
+[[construct]]
+key = "bytes-crlf"
+description = "File whose every line ends with CRLF"
+files = ["bytes-crlf.md"]
+
+[[construct]]
+key = "bytes-lf"
+description = "File whose every line ends with LF only"
+files = ["bytes-lf.md"]
+
+[[construct]]
+key = "bytes-mixed-line-endings"
+description = "One file mixing LF, CRLF, and lone CR line endings"
+files = ["bytes-mixed-line-endings.md"]
+
+[[construct]]
+key = "bytes-trailing-whitespace"
+description = "Trailing spaces and tabs on lines, a whitespace-only line, and trailing spaces at EOF with no final newline"
+files = ["bytes-trailing-whitespace.md"]
+
+[[construct]]
+key = "bytes-no-trailing-newline"
+description = "File whose final byte is text, not a newline"
+files = ["bytes-no-trailing-newline.md"]
+
+[[construct]]
+key = "bytes-multiple-trailing-newlines"
+description = "File ending with four consecutive line feeds"
+files = ["bytes-multiple-trailing-newlines.md"]
+
+[[construct]]
+key = "bytes-tabs"
+description = "Tabs as indentation for code and nested lists, and tabs inside table cells"
+files = ["bytes-tabs-indentation-tables.md"]
+
+[[construct]]
+key = "bytes-utf8-bom"
+description = "File beginning with the UTF-8 byte order mark EF BB BF"
+files = ["bytes-utf8-bom.md"]
+
+[[construct]]
+key = "bytes-non-utf8"
+description = "Latin-1 encoded file that is not valid UTF-8"
+files = ["bytes-latin1.md"]
+
+[[construct]]
+key = "unicode-nfc-nfd-filenames"
+description = "Two files whose names look identical but differ in normalization: NFC U+00E9 versus NFD e plus U+0301"
+files = ["unicode-filename-caf\u00E9.md", "unicode-filename-cafe\u0301.md"]
+
+[[construct]]
+key = "unicode-zero-width-joiner"
+description = "Zero-width joiner sequences: multi-scalar emoji, ZWJ between letters, and a ZWNJ for contrast"
+files = ["unicode-zero-width-joiner.md"]
+
+[[construct]]
+key = "unicode-rtl"
+description = "Right-to-left Arabic and Hebrew text, bidi mixing, and explicit directional control characters"
+files = ["unicode-rtl.md"]
+
+[[construct]]
+key = "unicode-emoji-split-boundary"
+description = "A 4-byte emoji occupying bytes 62 through 65 so a scripted edit at byte offset 64 would split it"
+files = ["unicode-emoji-split-boundary.md"]
+
+[[construct]]
+key = "large-many-lines"
+description = "A 100000-line file stressing line-count handling"
+files = ["large-100k-lines.md"]
+
+[[construct]]
+key = "large-single-line"
+description = "A single line of 2 MiB stressing line-length handling"
+files = ["large-2mb-single-line.md"]

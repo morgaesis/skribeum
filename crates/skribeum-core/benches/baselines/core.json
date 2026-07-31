@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "runner_class": "linux-x64",
+  "window": 5,
+  "threshold_percent": 10,
+  "benchmarks": {
+    "parse_extract/parse": {
+      "samples_ns": [
+        7844,
+        7858,
+        7690.9601396376165,
+        7893.918345572243,
+        7774.097570663624
+      ]
+    },
+    "parse_extract/extract": {
+      "samples_ns": [
+        6839,
+        6743,
+        6873.900570693674,
+        7611.991853448276,
+        7655.157603686635
+      ]
+    }
+  }
+}

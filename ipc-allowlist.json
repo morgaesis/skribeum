@@ -1,0 +1,25 @@
+{
+  "description": "The committed IPC command allowlist. CI fails when the tauri-specta generated bindings expose a command set different from this list. Additions are deliberate contract changes, never side effects.",
+  "commands": [
+    "vault_open",
+    "vault_tree",
+    "vault_tree_refresh",
+    "note_read",
+    "vault_file_read",
+    "note_write",
+    "watch_subscribe",
+    "search_query",
+    "settings_read",
+    "settings_write",
+    "vault_config_read"
+  ],
+  "notes": {
+    "note_write": "Contract addition per design decision 100: change-set based writes verified against the expected projection hash, with a conflict variant carrying the current hash and a reconciliation handle, never a silent overwrite.",
+    "vault_tree_refresh": "Contract addition per design decision 100: on-demand re-index of the vault tree from current filesystem state, the recovery path for tree staleness after external bulk changes or watcher overflow.",
+    "search_query": "Contract addition per design decision 100: ranked snippeted full-text search (the decision 79 alpha floor). The index lives in the OS app-data directory, never in the vault; match positions are byte ranges into the snippet so highlighting needs no HTML injection.",
+    "settings_read": "Contract addition per design decision 100: reads settings.json from the OS app-config directory per the architecture contract (schema_version, typed known keys, defaults when absent).",
+    "settings_write": "Contract addition per design decision 100: whole-document settings write with validation; unknown keys already in the file are preserved internally.",
+    "vault_config_read": "Contract addition per design decision 100: read-only access to the recognized Obsidian configuration files (app.json, types.json) in the vault's .obsidian directory, the single sanctioned read path into an otherwise excluded directory; absent or malformed files degrade to defaults.",
+    "vault_file_read": "Read-only access to indexed regular files for registered render-only views. The command never creates note editing, reconciliation, or search-index state."
+  }
+}

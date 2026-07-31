@@ -22,7 +22,7 @@ export const NOTES = {
   zoom: "Accessibility/Zoom Review.md",
   interruption: "Interruptions/Draft.md",
   interruptionTarget: "Interruptions/Reference.md",
-  deep: "Archive/Imported/Department-07/Area-04/Project-03/Topic-02/Deep Note 0199.md",
+  deep: "Archive/Imported/Department-07/Area-04/Project-03/Topic-02/Migration Deep Note 0199.md",
 } as const;
 
 const STAMP = `.fleet-${FLEET_SEED.toString(16)}-${FLEET_NOTE_COUNT}`;

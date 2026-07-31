@@ -213,7 +213,7 @@ describe("cursor-reveal behavior per table row", () => {
   it("cursor on the heading line reveals the marker; the line above does not", () => {
     const text = "# Heading\n\nbody\n";
     const revealedOnLine = serializedAt(text, "# Heading".length);
-    expect(revealedOnLine).not.toContain("hide node=HeaderMark");
+    expect(revealedOnLine).toContain("reveal node=HeaderMark");
     const hiddenFromBody = serializedAt(text, text.indexOf("body"));
     expect(hiddenFromBody).toContain("hide node=HeaderMark");
   });

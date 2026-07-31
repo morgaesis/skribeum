@@ -29,6 +29,8 @@ fn missing_file_yields_defaults() {
     assert_eq!(settings, Settings::default());
     assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
     assert_eq!(settings.theme, "system");
+    assert_eq!(settings.editor_font_size, 17);
+    assert_eq!(settings.editor_reading_measure, 76);
 }
 
 /// A full round trip: unknown keys already in the file, including nested
@@ -42,6 +44,7 @@ fn write_preserves_unknown_keys() {
             "schema_version": 1,
             "theme": "dark",
             "editor_font_size": 18,
+            "editor_reading_measure": 72,
             "search_result_limit": 25,
             "future_feature": {"enabled": true, "levels": [1, 2, 3]},
             "another_unknown": "keep me"
@@ -51,10 +54,12 @@ fn write_preserves_unknown_keys() {
     let mut settings = store.read(&fs).expect("read succeeds");
     assert_eq!(settings.theme, "dark");
     assert_eq!(settings.editor_font_size, 18);
+    assert_eq!(settings.editor_reading_measure, 72);
     assert_eq!(settings.search_result_limit, 25);
 
     settings.theme = "light".to_owned();
     settings.editor_font_size = 16;
+    settings.editor_reading_measure = 76;
     store.write(&fs, &settings).expect("write succeeds");
 
     let bytes = fs
@@ -63,6 +68,7 @@ fn write_preserves_unknown_keys() {
     let object: Value = serde_json::from_slice(&bytes).expect("valid JSON");
     assert_eq!(object["theme"], "light");
     assert_eq!(object["editor_font_size"], 16);
+    assert_eq!(object["editor_reading_measure"], 76);
     assert_eq!(object["search_result_limit"], 25);
     assert_eq!(object["future_feature"]["enabled"], true);
     assert_eq!(
@@ -111,6 +117,7 @@ fn invalid_stored_values_read_as_defaults() {
             "schema_version": 1,
             "theme": "purple",
             "editor_font_size": "large",
+            "editor_reading_measure": 44,
             "search_result_limit": 0
         }"#,
     );
@@ -118,6 +125,10 @@ fn invalid_stored_values_read_as_defaults() {
     let defaults = Settings::default();
     assert_eq!(settings.theme, defaults.theme);
     assert_eq!(settings.editor_font_size, defaults.editor_font_size);
+    assert_eq!(
+        settings.editor_reading_measure,
+        defaults.editor_reading_measure
+    );
     assert_eq!(settings.search_result_limit, defaults.search_result_limit);
 }
 
@@ -137,6 +148,14 @@ fn invalid_values_are_rejected_on_write() {
         },
         Settings {
             editor_font_size: 4096,
+            ..Settings::default()
+        },
+        Settings {
+            editor_reading_measure: 44,
+            ..Settings::default()
+        },
+        Settings {
+            editor_reading_measure: 121,
             ..Settings::default()
         },
         Settings {

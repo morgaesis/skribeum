@@ -10,9 +10,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Large multi-line editor input lands as one CodeMirror transaction instead
   of triggering native contenteditable paragraph reconstruction.
+- The editor caret and selection formatting toolbar remain visible and
+  readable across light, dark, code and callout surfaces.
 
 ### Added
 
+- Persisted editor reading measure with a 76-character default and
+  restart-free application from the settings view.
 - Browser-only editor demo with a seeded sample vault, in-memory edits that
   reset on reload, and a static GitHub Pages build.
 - Local KaTeX rendering for inline and block math with cursor-source reveal,
@@ -147,6 +151,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The editor uses a system serif prose stack, monospace only for code,
+  centred reading measure, a six-level heading hierarchy and smoothly
+  revealed heading markers.
+- Frontmatter uses a collapsed properties panel as its primary presentation,
+  with the unchanged raw source available from an explicit panel control.
 - File tree rendering now uses windowing: only visible rows and a small
   overscan exist in the DOM, reducing layout and paint overhead for large
   vaults. Keyboard navigation (arrows, Home/End, focus management) and ARIA

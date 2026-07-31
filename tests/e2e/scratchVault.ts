@@ -5,11 +5,20 @@
 // dialog cannot be driven headlessly). Specs assert against the files on
 // disk directly.
 
+import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-export const SCRATCH_VAULT_PATH = path.join(os.tmpdir(), "skribeum-e2e-vault");
+const checkoutKey = createHash("sha256")
+  .update(fileURLToPath(import.meta.url))
+  .digest("hex")
+  .slice(0, 12);
+export const SCRATCH_VAULT_PATH = path.join(
+  os.tmpdir(),
+  `skribeum-e2e-vault-${checkoutKey}`,
+);
 
 export const LF_NOTE_NAME = "note.md";
 export const LF_NOTE_CONTENT = "alpha\nbeta\ngamma\n";
@@ -26,6 +35,39 @@ export const LIVE_PREVIEW_NOTE_CONTENT =
 export const RENDERING_NOTE_NAME = "zz-rendering.md";
 export const RENDERING_NOTE_CONTENT =
   "# Rendered content\n\nInline $a^2 + b^2 = c^2$.\n\n$$\nE = mc^2\n$$\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\nthis is not valid mermaid\n```\n";
+
+export const VISUAL_NOTE_NAME = "zzz-reading-room.md";
+export const VISUAL_NOTE_CONTENT = [
+  "---",
+  "title: A room for reading",
+  "status: draft",
+  "topics: [typography, editing, focus]",
+  "published: false",
+  "---",
+  "",
+  "# A room for reading",
+  "",
+  "Patient typography gives a long note room to breathe while keeping its structure easy to scan.",
+  "",
+  "## Deliberate hierarchy",
+  "",
+  "> [!tip] Reading note",
+  "> Keep the prose calm and reserve visual emphasis for meaning.",
+  "",
+  "### Practical details",
+  "",
+  "Use `inline code` for exact names and fenced blocks for examples:",
+  "",
+  "```ts",
+  'const measure = "comfortable";',
+  "```",
+  "",
+  "| Surface | Purpose |",
+  "| --- | --- |",
+  "| Prose | Sustained reading |",
+  "| Code | Exact notation |",
+  "",
+].join("\n");
 
 export const CANVAS_FILE_NAME = "zzz-board.canvas";
 export const CANVAS_REFERENCE_NAME = "z-live-preview.md";
@@ -88,6 +130,10 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),
     RENDERING_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, VISUAL_NOTE_NAME),
+    VISUAL_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, CANVAS_FILE_NAME),

@@ -53,6 +53,22 @@ describe("theme text contrast", () => {
     ["danger", "danger-surface"],
     ["warning", "warning-surface"],
     ["text", "accent-soft"],
+    ["heading-1", "surface"],
+    ["heading-2", "surface"],
+    ["heading-3", "surface"],
+    ["heading-4", "surface"],
+    ["heading-5", "surface"],
+    ["heading-6", "surface"],
+    ["selection-text", "selection-surface"],
+    ["toolbar-text", "toolbar-surface"],
+    ["toolbar-hover-text", "toolbar-hover-surface"],
+    ["toolbar-focus", "toolbar-surface"],
+    ["caret", "surface"],
+    ["caret", "code-surface"],
+    ["caret", "accent-soft"],
+    ["caret", "warning-surface"],
+    ["caret", "danger-surface"],
+    ["caret", "success-surface"],
   ] as const;
 
   it.each(["light", "dark"] as const)("%s variables meet WCAG AA", (theme) => {

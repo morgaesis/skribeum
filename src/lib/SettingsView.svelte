@@ -119,6 +119,29 @@ $effect(() => {
       </label>
 
       <label class="flex items-center justify-between gap-3">
+        <span>{STRINGS.settingsReadingMeasure}</span>
+        <span class="flex items-center gap-2">
+          <input
+            type="number"
+            min="45"
+            max="120"
+            class="w-24 rounded border border-gray-300 px-2 py-1"
+            value={settings.document.editor_reading_measure}
+            data-testid="settings-reading-measure"
+            onchange={(event) => {
+              const value = numberFrom(event);
+              if (value !== null && value >= 45 && value <= 120) {
+                onUpdate({ editor_reading_measure: value });
+              }
+            }}
+          />
+          <span class="text-xs text-gray-500">
+            {STRINGS.settingsReadingMeasureUnit}
+          </span>
+        </span>
+      </label>
+
+      <label class="flex items-center justify-between gap-3">
         <span>{STRINGS.settingsSearchLimit}</span>
         <input
           type="number"

@@ -317,6 +317,8 @@ pub struct SettingsDoc {
     pub theme: String,
     /// Editor font size in CSS pixels.
     pub editor_font_size: u32,
+    /// Editor reading measure in characters.
+    pub editor_reading_measure: u32,
     /// Maximum number of results a search query returns.
     pub search_result_limit: u32,
 }
@@ -840,6 +842,7 @@ fn settings_read(settings: State<'_, SettingsState>) -> Result<SettingsDoc, AppE
         schema_version: doc.schema_version,
         theme: doc.theme,
         editor_font_size: doc.editor_font_size,
+        editor_reading_measure: doc.editor_reading_measure,
         search_result_limit: doc.search_result_limit,
     })
 }
@@ -862,6 +865,7 @@ fn settings_write(settings: State<'_, SettingsState>, doc: SettingsDoc) -> Resul
                 schema_version: doc.schema_version,
                 theme: doc.theme,
                 editor_font_size: doc.editor_font_size,
+                editor_reading_measure: doc.editor_reading_measure,
                 search_result_limit: doc.search_result_limit,
             },
         )

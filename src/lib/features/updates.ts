@@ -34,7 +34,7 @@ type UpdateHandle = {
 function hasDesktopRuntime(): boolean {
   return (
     typeof window !== "undefined" &&
-    "__TAURI_INTERNALS__" in (window as Record<string, unknown>)
+    "__TAURI_INTERNALS__" in (window as unknown as Record<string, unknown>)
   );
 }
 

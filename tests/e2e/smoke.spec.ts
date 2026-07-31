@@ -12,6 +12,8 @@ import {
   LIVE_PREVIEW_NOTE_NAME,
   RENDERING_NOTE_NAME,
   SCRATCH_VAULT_PATH,
+  VISUAL_NOTE_CONTENT,
+  VISUAL_NOTE_NAME,
 } from "./scratchVault";
 
 // The embedded WebDriver provider synthesizes DOM events in the page
@@ -71,7 +73,15 @@ async function placeCursorAtLineEnd(text: string) {
   await $(`.cm-line=${text}`).click();
   await browser.execute((lineText: string) => {
     const line = [...document.querySelectorAll(".cm-line")].find(
-      (candidate) => candidate.textContent === lineText,
+      (candidate) => {
+        const visibleContent = candidate.cloneNode(true) as HTMLElement;
+        for (const marker of visibleContent.querySelectorAll(
+          ".cm-skr-reveal-marker",
+        )) {
+          marker.remove();
+        }
+        return visibleContent.textContent === lineText;
+      },
     );
     if (line === undefined) {
       throw new Error(`no editor line with text ${lineText}`);
@@ -99,6 +109,68 @@ async function selectTheme(value: string) {
     select.value = themeValue;
     select.dispatchEvent(new Event("change", { bubbles: true }));
   }, value);
+}
+
+async function applyVisualTheme(value: "light" | "dark") {
+  await browser.execute((theme: string) => {
+    document.documentElement.dataset.theme = theme;
+  }, value);
+  await browser.execute(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+}
+
+async function selectEditorText(text: string) {
+  await browser.execute((needle: string) => {
+    const root = document.querySelector(".cm-content");
+    if (root === null) {
+      throw new Error("editor content missing");
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (
+      let node = walker.nextNode();
+      node !== null;
+      node = walker.nextNode()
+    ) {
+      const start = node.textContent?.indexOf(needle) ?? -1;
+      if (start < 0) {
+        continue;
+      }
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, start + needle.length);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      root.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+      return;
+    }
+    throw new Error(`text not found: ${needle}`);
+  }, text);
+  await browser.pause(250);
+}
+
+async function clearEditorSelection() {
+  await browser.execute(() => {
+    const root = document.querySelector(".cm-content");
+    const line = root?.querySelector(".cm-line");
+    const selection = window.getSelection();
+    if (line !== null && line !== undefined && selection !== null) {
+      const range = document.createRange();
+      range.selectNodeContents(line);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    root?.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+  });
+  await browser.waitUntil(
+    async () => !(await $(".cm-skr-selection-toolbar").isExisting()),
+    { timeout: 5000 },
+  );
 }
 
 async function activeElementDescriptor(): Promise<string> {
@@ -191,6 +263,125 @@ describe("skribeum shell", () => {
     await tree.waitForExist({ timeout: 15000 });
     await $(`li=${LF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
     await $(`li=${CRLF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
+  });
+
+  it("presents_a_reading_surface_and_captures_both_themes", async () => {
+    const originalTheme = await browser.execute(
+      () => document.documentElement.dataset.theme ?? "system",
+    );
+    const originalBytes = noteOnDisk(VISUAL_NOTE_NAME);
+    expect(originalBytes).toBe(VISUAL_NOTE_CONTENT);
+
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await $(".cm-skr-heading-1").waitForExist({ timeout: 15000 });
+    const propertiesToggle = $(".skr-properties-toggle");
+    await propertiesToggle.waitForExist({ timeout: 10000 });
+    expect(await propertiesToggle.getAttribute("aria-expanded")).toBe("false");
+
+    const rawSourceHidden = await browser.execute(() => {
+      const lines = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".cm-line.cm-skr-frontmatter",
+        ),
+      ];
+      return (
+        lines.length > 0 &&
+        lines.every((line) => getComputedStyle(line).display === "none")
+      );
+    });
+    expect(rawSourceHidden).toBe(true);
+
+    const typography = await browser.execute(() => {
+      const prose = document.querySelector<HTMLElement>(".cm-content");
+      const code = document.querySelector<HTMLElement>(".cm-skr-inline-code");
+      const headings = [1, 2, 3].map((level) => {
+        const heading = document.querySelector<HTMLElement>(
+          `.cm-skr-heading-${level}`,
+        );
+        const style = heading === null ? null : getComputedStyle(heading);
+        return style === null
+          ? null
+          : [style.fontSize, style.fontWeight, style.color].join("/");
+      });
+      return {
+        proseFont: prose === null ? "" : getComputedStyle(prose).fontFamily,
+        codeFont: code === null ? "" : getComputedStyle(code).fontFamily,
+        headings,
+      };
+    });
+    expect(typography.proseFont).not.toBe(typography.codeFont);
+    expect(new Set(typography.headings).size).toBe(3);
+    expect(typography.headings).not.toContain(null);
+
+    mkdirSync(screenshotDirectory, { recursive: true });
+    for (const theme of ["light", "dark"] as const) {
+      await clearEditorSelection();
+      await applyVisualTheme(theme);
+      const caretColor = await browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(".cm-content");
+        return content === null ? "" : getComputedStyle(content).caretColor;
+      });
+      expect(caretColor).not.toBe("");
+      expect(caretColor).not.toBe("rgba(0, 0, 0, 0)");
+      await browser.saveScreenshot(
+        path.join(screenshotDirectory, `after-editor-${theme}.png`),
+      );
+
+      await propertiesToggle.click();
+      await browser.waitUntil(
+        async () =>
+          (await propertiesToggle.getAttribute("aria-expanded")) === "true",
+        { timeout: 5000 },
+      );
+      const revealDuration = await browser.execute(() => {
+        const reveal = document.querySelector<HTMLElement>(
+          ".skr-properties-reveal",
+        );
+        return reveal === null
+          ? Number.POSITIVE_INFINITY
+          : Number.parseFloat(getComputedStyle(reveal).transitionDuration) *
+              1000;
+      });
+      expect(revealDuration).toBeLessThan(200);
+      await browser.pause(180);
+      await browser.saveScreenshot(
+        path.join(screenshotDirectory, `after-frontmatter-${theme}.png`),
+      );
+
+      const rawToggle = $(".skr-raw-toggle");
+      await rawToggle.click();
+      await browser.waitUntil(
+        () =>
+          browser.execute(() =>
+            [
+              ...document.querySelectorAll<HTMLElement>(
+                ".cm-line.cm-skr-frontmatter",
+              ),
+            ].some((line) => getComputedStyle(line).display !== "none"),
+          ),
+        { timeout: 5000 },
+      );
+      expect(noteOnDisk(VISUAL_NOTE_NAME)).toBe(originalBytes);
+      await rawToggle.click();
+      await propertiesToggle.click();
+      await browser.waitUntil(
+        async () =>
+          (await propertiesToggle.getAttribute("aria-expanded")) === "false",
+        { timeout: 5000 },
+      );
+
+      await selectEditorText("Patient typography");
+      await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 5000 });
+      await browser.saveScreenshot(
+        path.join(screenshotDirectory, `after-toolbar-${theme}.png`),
+      );
+    }
+
+    expect(noteOnDisk(VISUAL_NOTE_NAME)).toBe(originalBytes);
+    await browser.execute((theme: string) => {
+      document.documentElement.dataset.theme = theme;
+    }, originalTheme);
+    await clearEditorSelection();
   });
 
   it("edits_saves_and_reopens_a_note", async () => {
@@ -379,7 +570,7 @@ describe("skribeum shell", () => {
     expect(tabUncanceled).toBe(true);
   });
 
-  it("renders_live_preview_hiding_the_heading_marker_until_cursor_enters", async () => {
+  it("transitions_the_heading_marker_when_the_cursor_enters", async () => {
     await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
     await browser.waitUntil(
       async () => (await editorText()).includes("Sunrise heading"),
@@ -388,10 +579,24 @@ describe("skribeum shell", () => {
       },
     );
 
-    const headingLineText = () =>
-      browser.execute(
-        () => document.querySelector(".cm-line")?.textContent ?? "",
-      );
+    const headingMarkerState = () =>
+      browser.execute(() => {
+        const marker = document.querySelector<HTMLElement>(
+          ".cm-skr-heading .cm-skr-reveal-marker",
+        );
+        if (marker === null) {
+          return null;
+        }
+        const style = getComputedStyle(marker);
+        return {
+          active: marker.classList.contains("cm-skr-reveal-marker-active"),
+          maxWidth: Number.parseFloat(style.maxWidth),
+          opacity: style.opacity,
+          transitionDurations: style.transitionDuration
+            .split(",")
+            .map((duration) => Number.parseFloat(duration) * 1000),
+        };
+      });
 
     // A fresh note opens with the cursor at offset zero, on the heading
     // line, where cursor-line reveal shows the marker; move the cursor to
@@ -399,28 +604,37 @@ describe("skribeum shell", () => {
     // selection here, hence the helper), then assert the marker hides.
     await placeCursorAtLineEnd("body text here");
     await browser.waitUntil(
-      async () => (await headingLineText()) === "Sunrise heading",
+      async () => (await headingMarkerState())?.active === false,
       {
         timeout: 10000,
         timeoutMsg: "heading marker did not hide with the cursor elsewhere",
       },
     );
+    const hidden = await headingMarkerState();
+    expect(hidden?.maxWidth).toBe(0);
+    expect(hidden?.opacity).toBe("0");
+    expect(
+      hidden?.transitionDurations.every((duration) => duration < 200),
+    ).toBe(true);
 
     // Entering the heading line with the cursor reveals the source
     // marker (cursor-line reveal per docs/decoration-rules.md).
     await placeCursorAtLineEnd("Sunrise heading");
     await browser.waitUntil(
-      async () => (await headingLineText()) === "# Sunrise heading",
+      async () => (await headingMarkerState())?.active === true,
       {
         timeout: 10000,
         timeoutMsg: "heading marker did not reveal on cursor entry",
       },
     );
+    const revealed = await headingMarkerState();
+    expect(revealed?.maxWidth ?? 0).toBeGreaterThan(0);
+    expect(revealed?.opacity).toBe("1");
 
     // Leaving the line hides the marker again.
     await placeCursorAtLineEnd("body text here");
     await browser.waitUntil(
-      async () => (await headingLineText()) === "Sunrise heading",
+      async () => (await headingMarkerState())?.active === false,
       {
         timeout: 10000,
         timeoutMsg: "heading marker did not hide after the cursor left",
@@ -610,6 +824,31 @@ describe("skribeum core editing surfaces", () => {
     });
   }
 
+  /** Reads the persisted reading measure through IPC. */
+  async function persistedReadingMeasure(): Promise<number | string> {
+    return browser.executeAsync<number | string, []>((done) => {
+      const tauri = (
+        window as unknown as {
+          __TAURI__?: {
+            core: {
+              invoke: (
+                name: string,
+              ) => Promise<{ editor_reading_measure: number }>;
+            };
+          };
+        }
+      ).__TAURI__;
+      if (tauri === undefined) {
+        done("no-global-tauri");
+        return;
+      }
+      tauri.core
+        .invoke("settings_read")
+        .then((doc) => done(doc.editor_reading_measure))
+        .catch((error: unknown) => done(String(error)));
+    });
+  }
+
   /** Sets the settings font size through the open dialog's input. */
   async function setFontSizeThroughDialog(value: number) {
     const fontInput = $('[data-testid="settings-font-size"]');
@@ -623,17 +862,34 @@ describe("skribeum core editing surfaces", () => {
     });
   }
 
+  /** Sets the reading measure through the open dialog's input. */
+  async function setReadingMeasureThroughDialog(value: number) {
+    const input = $('[data-testid="settings-reading-measure"]');
+    await input.setValue(String(value));
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLInputElement>(
+          '[data-testid="settings-reading-measure"]',
+        )
+        ?.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
   it("settings_round_trip_applies_restart_free_and_persists", async () => {
     // The settings file is the real per-user document; pick a target
     // that differs from the current value and restore it afterwards.
     const original = await persistedFontSize();
+    const originalMeasure = await persistedReadingMeasure();
     expect(typeof original).toBe("number");
+    expect(typeof originalMeasure).toBe("number");
     const target = original === 21 ? 22 : 21;
+    const targetMeasure = originalMeasure === 72 ? 78 : 72;
 
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
     await setFontSizeThroughDialog(target);
+    await setReadingMeasureThroughDialog(targetMeasure);
 
     // Restart-free apply: the editor font size follows immediately.
     await browser.waitUntil(
@@ -646,6 +902,11 @@ describe("skribeum core editing surfaces", () => {
         })) === `${target}px`,
       { timeout: 10000 },
     );
+    expect(
+      await browser.execute(() =>
+        document.documentElement.style.getPropertyValue("--skr-editor-measure"),
+      ),
+    ).toBe(`${targetMeasure}ch`);
 
     // Close, then confirm the persisted value by re-reading through IPC
     // and by reopening the dialog.
@@ -658,17 +919,29 @@ describe("skribeum core editing surfaces", () => {
       async () => (await persistedFontSize()) === target,
       { timeout: 10000, timeoutMsg: "font size did not persist" },
     );
+    await browser.waitUntil(
+      async () => (await persistedReadingMeasure()) === targetMeasure,
+      { timeout: 10000, timeoutMsg: "reading measure did not persist" },
+    );
 
     await browser.keys([modifierKey, ","]);
     await dialog.waitForExist({ timeout: 10000 });
     expect(await $('[data-testid="settings-font-size"]').getValue()).toBe(
       String(target),
     );
+    expect(await $('[data-testid="settings-reading-measure"]').getValue()).toBe(
+      String(targetMeasure),
+    );
 
     // Restore the pre-test value through the same UI path.
     await setFontSizeThroughDialog(original as number);
+    await setReadingMeasureThroughDialog(originalMeasure as number);
     await browser.waitUntil(
       async () => (await persistedFontSize()) === original,
+      { timeout: 10000 },
+    );
+    await browser.waitUntil(
+      async () => (await persistedReadingMeasure()) === originalMeasure,
       { timeout: 10000 },
     );
     await browser.keys(Key.Escape);

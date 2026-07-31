@@ -4,7 +4,9 @@ target/
 node_modules/
 dist/
 src-tauri/gen/schemas/
-tests/e2e/screenshots/
+tests/e2e/screenshots/*
+!tests/e2e/screenshots/before-*.png
+!tests/e2e/screenshots/after-*.png
 tests/ux-fleet/traces/
 fuzz/target/
 fuzz/corpus/

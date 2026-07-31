@@ -1,9 +1,10 @@
-// The decoration engine: interprets the mapping table in `table.ts` over
-// the Lezer syntax tree, synchronously inside the view plugin's update
-// (decision 11), windowed to the visible ranges. It never touches the
-// document; its one dispatch site (wikilink context updates) is annotated
-// with `decorationOrigin` so the inertness guard in `decorationGuard.ts`
-// asserts `docChanged === false` over everything the engine causes.
+// The decoration engine interprets the mapping table in `table.ts` over
+// the Lezer syntax tree, windowed to the visible ranges. Bulk input remaps
+// existing decorations for the initial paint and rebuilds them after three
+// animation frames. The engine never touches the document; its dispatches
+// are annotated with `decorationOrigin` so the inertness guard in
+// `decorationGuard.ts` asserts `docChanged === false` over everything the
+// engine causes.
 
 import { syntaxTree } from "@codemirror/language";
 import {

@@ -134,6 +134,12 @@ pub trait FileSystem: Send + Sync {
     /// a regular file. A missing final target resolves to itself.
     fn resolve_write_target(&self, path: &Path) -> Result<PathBuf, FsError>;
 
+    /// Returns the canonical absolute form of an existing path. Watcher
+    /// backends report canonical paths (macOS resolves the symlinked temp
+    /// directories), so the vault root must be canonical for event paths to
+    /// map back into the vault.
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FsError>;
+
     /// Renames `from` to `to`, replacing any existing `to`.
     fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError>;
 

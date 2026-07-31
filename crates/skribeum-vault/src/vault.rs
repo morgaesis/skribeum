@@ -189,6 +189,12 @@ impl Vault {
     /// [`VaultError::RootNotADirectory`] for an invalid root, and propagates
     /// filesystem and path validation failures from indexing.
     pub fn open(fs: &dyn FileSystem, root: &Path) -> Result<Self, VaultError> {
+        // Canonical root, so watcher event paths (reported canonical by the
+        // platform backends) map back into the vault.
+        let root = &fs.canonicalize(root).map_err(|e| match e {
+            FsError::NotFound => VaultError::RootNotFound,
+            other => VaultError::Fs(other),
+        })?;
         let meta = fs.metadata(root).map_err(|e| match e {
             FsError::NotFound => VaultError::RootNotFound,
             other => VaultError::Fs(other),

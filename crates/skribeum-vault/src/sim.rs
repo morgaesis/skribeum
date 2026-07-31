@@ -736,6 +736,12 @@ impl FileSystem for SimFs {
         Ok(self.lock().resolve(path))
     }
 
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FsError> {
+        // The simulator's namespace has no symlinked ancestors; an existing
+        // path is already canonical.
+        self.metadata(path).map(|_| path.to_owned())
+    }
+
     fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError> {
         let mut state = self.lock();
         if state.read_only {

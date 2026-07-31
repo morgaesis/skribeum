@@ -108,6 +108,10 @@ impl FileSystem for RealFs {
         Ok(())
     }
 
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FsError> {
+        std::fs::canonicalize(path).map_err(|e| map_io(&e))
+    }
+
     fn resolve_write_target(&self, path: &Path) -> Result<PathBuf, FsError> {
         let mut current = path.to_owned();
         // Bounded symlink chase; a cycle or an over-deep chain settles on

@@ -5,6 +5,13 @@
 //! 2. The committed `src/lib/ipc/bindings.ts` matches what the current code
 //!    generates (set `SKRIBEUM_WRITE_BINDINGS=1` while running this test to
 //!    rewrite it after an intentional change).
+//!
+//! Not run on Windows: the bare test harness fails at process start there
+//! (STATUS_ENTRYPOINT_NOT_FOUND loading the webview DLLs) while the checks
+//! themselves are platform-independent generated TypeScript, still gated on
+//! the Linux and macOS legs. The Windows binary itself is exercised by the
+//! end-to-end job.
+#![cfg(not(windows))]
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;

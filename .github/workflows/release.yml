@@ -112,7 +112,7 @@ jobs:
           releaseBody: >-
             Unsigned build artifacts. Binaries are not code-signed and not
             notarized; verify the build provenance attestations instead.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: true
           args: ${{ matrix.args }}
 

@@ -100,12 +100,16 @@ jobs:
 
       - name: Build and attach to draft release
         id: tauri
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # AppImage tooling cannot mount FUSE inside a container; run the
           # extracted tool instead.
           APPIMAGE_EXTRACT_AND_RUN: "1"
+          # Updater signing: artifacts gain detached signatures the promote
+          # workflow assembles into the manifest the application polls.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Skribeum ${{ github.ref_name }}"
@@ -120,7 +124,7 @@ jobs:
       # output: that output also lists directories (macOS .app), which cannot
       # be attestation subjects.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             target/**/bundle/**/*.deb

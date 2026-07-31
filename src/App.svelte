@@ -758,7 +758,7 @@ onMount(() => {
 
   <main class="flex min-h-0 flex-1 overflow-hidden">
     {#if vault !== null}
-      <nav class="skr-sidebar w-64 shrink-0 overflow-y-auto border-r">
+      <nav class="skr-sidebar w-64 shrink-0 overflow-hidden border-r">
         <FileTree entries={tree} {selectedPath} onOpenPath={openPath} />
       </nav>
     {/if}

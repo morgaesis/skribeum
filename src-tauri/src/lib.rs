@@ -58,6 +58,11 @@ pub fn run() {
         .manage(ipc::VaultRegistry::default())
         .invoke_handler(specta_builder.invoke_handler());
 
+    // The updater is compiled out of the end-to-end build so tests never
+    // reach the network; release builds carry it.
+    #[cfg(not(feature = "webdriver"))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
     // The embedded WebDriver server used by the end-to-end suite. Compiled in
     // only when the `webdriver` feature is enabled, so release artifacts never
     // contain it.

@@ -64,7 +64,12 @@ export type Command = {
    * Listed in the slash menu when present; `keywords` extend fuzzy
    * matching beyond the title.
    */
-  slash?: { keywords?: readonly string[] };
+  /**
+   * Slash-menu registration. `label` overrides the command title inside the
+   * menu, which already sits under an insert heading: the palette needs the
+   * verb ("Insert table") to be findable, the menu does not repeat it.
+   */
+  slash?: { keywords?: readonly string[]; label?: string };
   run(context: CommandContext): boolean | void | Promise<void>;
 };
 

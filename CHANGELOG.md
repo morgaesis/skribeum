@@ -140,3 +140,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Read-only vault browsing in the shell: a directory picker, a
   keyboard-navigable file tree, and read-only note rendering in CodeMirror,
   with user-facing strings centralized in one module.
+
+### Changed
+
+- File tree rendering now uses windowing: only visible rows and a small
+  overscan exist in the DOM, reducing layout and paint overhead for large
+  vaults. Keyboard navigation (arrows, Home/End, focus management) and ARIA
+  semantics remain identical; focused rows outside the window scroll into
+  view automatically.

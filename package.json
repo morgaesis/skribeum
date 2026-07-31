@@ -28,6 +28,7 @@
     "@lezer/markdown": "^1.7.2",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "katex": "^0.18.1",
     "mermaid": "^11.16.0",
     "svelte": "^5.56.8"

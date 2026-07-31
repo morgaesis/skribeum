@@ -38,36 +38,42 @@ export function registerInsertions(registry: CommandRegistry): void {
   const linePrefixed: readonly {
     id: string;
     title: string;
+    shortLabel: string;
     prefix: string;
     keywords: readonly string[];
   }[] = [
     {
       id: "insert.heading-1",
       title: STRINGS.insertHeading1,
+      shortLabel: STRINGS.slashHeading1,
       prefix: "# ",
       keywords: ["h1", "title"],
     },
     {
       id: "insert.heading-2",
       title: STRINGS.insertHeading2,
+      shortLabel: STRINGS.slashHeading2,
       prefix: "## ",
       keywords: ["h2"],
     },
     {
       id: "insert.heading-3",
       title: STRINGS.insertHeading3,
+      shortLabel: STRINGS.slashHeading3,
       prefix: "### ",
       keywords: ["h3"],
     },
     {
       id: "insert.task",
       title: STRINGS.insertTask,
+      shortLabel: STRINGS.slashTask,
       prefix: "- [ ] ",
       keywords: ["todo", "checkbox"],
     },
     {
       id: "insert.callout",
       title: STRINGS.insertCallout,
+      shortLabel: STRINGS.slashCallout,
       prefix: "> [!note] ",
       keywords: ["note", "admonition"],
     },
@@ -77,7 +83,7 @@ export function registerInsertions(registry: CommandRegistry): void {
       id: entry.id,
       title: entry.title,
       scope: "editor",
-      slash: { keywords: entry.keywords },
+      slash: { keywords: entry.keywords, label: entry.shortLabel },
       run: (context) =>
         context.view === null
           ? false
@@ -88,7 +94,10 @@ export function registerInsertions(registry: CommandRegistry): void {
     id: "insert.code-fence",
     title: STRINGS.insertCodeFence,
     scope: "editor",
-    slash: { keywords: ["code", "fence", "block"] },
+    slash: {
+      keywords: ["code", "fence", "block"],
+      label: STRINGS.slashCodeFence,
+    },
     run: (context) =>
       context.view === null
         ? false
@@ -98,7 +107,7 @@ export function registerInsertions(registry: CommandRegistry): void {
     id: "insert.table",
     title: STRINGS.insertTable,
     scope: "editor",
-    slash: { keywords: ["table", "grid"] },
+    slash: { keywords: ["table", "grid"], label: STRINGS.slashTable },
     run: (context) =>
       context.view === null
         ? false
@@ -108,7 +117,7 @@ export function registerInsertions(registry: CommandRegistry): void {
     id: "insert.wikilink",
     title: STRINGS.insertWikilink,
     scope: "editor",
-    slash: { keywords: ["link", "note"] },
+    slash: { keywords: ["link", "note"], label: STRINGS.slashWikilink },
     run: (context) =>
       context.view === null ? false : insertSnippet(context.view, "[[]]", 2),
   });

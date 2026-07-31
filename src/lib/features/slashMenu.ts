@@ -118,9 +118,10 @@ export function filteredSlashCommands(
   return registry
     .slashCommands()
     .map((command) => {
-      const haystack = [command.title, ...(command.slash?.keywords ?? [])].join(
-        " ",
-      );
+      const haystack = [
+        command.slash?.label ?? command.title,
+        ...(command.slash?.keywords ?? []),
+      ].join(" ");
       return { command, match: fuzzyMatch(query, haystack) };
     })
     .filter((entry) => entry.match !== null)
@@ -260,7 +261,7 @@ function slashTooltip(open: SlashState): Tooltip {
             index === selected
               ? "cm-skr-slash-option cm-skr-slash-option-active"
               : "cm-skr-slash-option";
-          option.textContent = item.title;
+          option.textContent = item.slash?.label ?? item.title;
           option.addEventListener("mousedown", (event) => {
             event.preventDefault();
             view.dispatch({ effects: setSelected.of(index) });

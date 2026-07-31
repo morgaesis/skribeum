@@ -1,6 +1,6 @@
 # UX fleet findings
 
-The deterministic fleet completed 6 persona sessions and recorded 56 intent-level interactions. The report ranks the ten highest-impact defects from 19 distinct signal breaches. Ranking weights blocked work and lost focus above latency, scroll movement, and visual stability, independent of how often a signal occurred.
+The deterministic fleet completed 6 persona sessions and recorded 56 intent-level interactions. The report ranks the ten highest-impact defects from 22 distinct signal breaches. Ranking weights blocked work and lost focus above latency, scroll movement, and visual stability, independent of how often a signal occurred.
 
 The latency thresholds are exploratory triage thresholds, not release gates. Event-to-paint timing starts on the page event and ends at the next confirmed paint. The note threshold is deliberately above the 47 ms in-app p95 reference because this path includes UI dispatch and paint.
 
@@ -48,7 +48,7 @@ The latency thresholds are exploratory triage thresholds, not release gates. Eve
 
 - Persona: Researcher with long documents
 - Session: `03-researcher`, interaction 4
-- Measured signal: Visible typing response: 756.00 ms (event-to-paint); exploratory threshold: 50 ms.
+- Measured signal: Visible typing response: 873.00 ms (event-to-paint); exploratory threshold: 50 ms.
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
   2. Follow the Researcher with long documents session intent: Review a long document, paste evidence, search within it, and edit tables.
@@ -78,28 +78,28 @@ The latency thresholds are exploratory triage thresholds, not release gates. Eve
 
 - Persona: Obsidian migrant
 - Session: `01-obsidian-migrant`, interaction 2
-- Measured signal: Surface appearance: 857.00 ms (event-to-paint); exploratory threshold: 100 ms.
+- Measured signal: Surface appearance: 804.00 ms (event-to-paint); exploratory threshold: 100 ms.
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
   2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
   3. Press Ctrl+O to open the quick switcher.
 
-## 9. Medium: First painted note content is delayed while users click start here.md in the vault tree
+## 9. High: Surface appearance is delayed while users press ctrl+o to open the quick switcher
 
-- Persona: Obsidian migrant
-- Session: `01-obsidian-migrant`, interaction 1
-- Measured signal: First painted note content: 107.00 ms (event-to-paint); exploratory threshold: 100 ms.
+- Persona: Keyboard-only power user
+- Session: `04-keyboard-power-user`, interaction 1
+- Measured signal: Surface appearance: 923.00 ms (event-to-paint); exploratory threshold: 100 ms.
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
-  3. Click Start Here.md in the vault tree.
+  2. Follow the Keyboard-only power user session intent: Navigate core command surfaces without pointer input and preserve useful focus.
+  3. Press Ctrl+O to open the quick switcher.
 
-## 10. Medium: First painted note content is delayed while users press enter to open research/long paper.md
+## 10. High: Surface appearance is delayed while users press ctrl+o to open the quick switcher
 
-- Persona: Researcher with long documents
-- Session: `03-researcher`, interaction 3
-- Measured signal: First painted note content: 159.00 ms (event-to-paint); exploratory threshold: 100 ms.
+- Persona: Interruption-prone user
+- Session: `06-interruption-prone`, interaction 1
+- Measured signal: Surface appearance: 3523.00 ms (event-to-paint); exploratory threshold: 100 ms.
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Researcher with long documents session intent: Review a long document, paste evidence, search within it, and edit tables.
-  3. Press Enter to open Research/Long Paper.md.
+  2. Follow the Interruption-prone user session intent: Switch notes during edits and dismiss transient surfaces at unpredictable points.
+  3. Press Ctrl+O to open the quick switcher.

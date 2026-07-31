@@ -96,7 +96,22 @@ function round(value: number, precision = 2): number {
   return Math.round(value * scale) / scale;
 }
 
+/**
+ * The bundler wraps nested functions in its keep-names helper, `__name`,
+ * which does not exist in the page: any transpiled function serialized into
+ * `browser.execute` throws on its first nested declaration. This shim is
+ * itself a string, so it reaches the page untranspiled, and every later
+ * measurement runs unchanged. It must run before any other injected code
+ * and again after each navigation.
+ */
+async function installKeepNamesShim(): Promise<void> {
+  await browser.execute(
+    "window.__name = window.__name || function (target) { return target; };",
+  );
+}
+
 export async function installUxInstrumentation(): Promise<void> {
+  await installKeepNamesShim();
   await browser.execute(() => {
     const uxWindow = window as UxWindow;
     if (uxWindow.__SKRIBEUM_UX__ !== undefined) {

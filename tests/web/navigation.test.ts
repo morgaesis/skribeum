@@ -100,22 +100,28 @@ describe("wikilink pointer navigation", () => {
     expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
   });
 
-  it("follows a note embed through the same click path", () => {
-    const navigate = vi.fn();
-    const options = navigationOptions({ navigate });
-    const view = makePointerView("![[Target note]]", 0, options);
-
-    pressLink(view);
-
-    expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
-  });
-
   it("follows an embedded note reference", () => {
     const navigate = vi.fn();
     const options = navigationOptions({ navigate });
     const view = makePointerView("Preview ![[Target note]] here", 0, options);
 
     const event = pressLink(view);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
+  });
+
+  it("follows a click event when no pointer-down event precedes it", () => {
+    const navigate = vi.fn();
+    const options = navigationOptions({ navigate });
+    const view = makePointerView("Before [[Target note]] after", 0, options);
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+
+    wikilinkTarget(view).dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });

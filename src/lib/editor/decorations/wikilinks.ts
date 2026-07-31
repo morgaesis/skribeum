@@ -85,9 +85,11 @@ export function resolveMarkdownLinkTarget(
 export function wikilinkPointerNavigation(
   options: () => FollowWikilinkOptions,
 ): Extension {
+  let pendingClick: { position: number; handled: boolean } | null = null;
   return Prec.high(
     EditorView.domEventHandlers({
       mousedown(event, view) {
+        pendingClick = null;
         if (event.button !== 0 || event.altKey || event.shiftKey) {
           return false;
         }
@@ -105,6 +107,43 @@ export function wikilinkPointerNavigation(
         }
         const position = wikilinkPositionFromElement(view, element);
         if (position === null) {
+          return false;
+        }
+        event.preventDefault();
+        const handled = followWikilinkAt(view, position, options());
+        pendingClick = { position, handled };
+        return handled;
+      },
+      click(event, view) {
+        if (event.button !== 0 || event.altKey || event.shiftKey) {
+          pendingClick = null;
+          return false;
+        }
+        const element =
+          event.target instanceof Element
+            ? event.target.closest<HTMLElement>(".cm-skr-wikilink")
+            : null;
+        if (element === null || !view.dom.contains(element)) {
+          pendingClick = null;
+          return false;
+        }
+        const position = wikilinkPositionFromElement(view, element);
+        if (position === null) {
+          pendingClick = null;
+          return false;
+        }
+        const preceding = pendingClick;
+        pendingClick = null;
+        if (preceding?.position === position) {
+          if (preceding.handled) {
+            event.preventDefault();
+          }
+          return preceding.handled;
+        }
+        if (
+          !(event.ctrlKey || event.metaKey) &&
+          element.classList.contains("cm-skr-reveal-source")
+        ) {
           return false;
         }
         event.preventDefault();

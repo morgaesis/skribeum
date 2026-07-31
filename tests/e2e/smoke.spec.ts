@@ -712,7 +712,9 @@ describe("skribeum shell", () => {
       { timeout: 15000 },
     );
 
-    await browser.keys([Key.Alt, Key.ArrowLeft]);
+    const back = $("button=Back");
+    await back.waitForEnabled({ timeout: 15000 });
+    await back.click();
     await browser.waitUntil(
       async () => (await editorText()).includes("Navigation source"),
       { timeout: 15000 },
@@ -760,11 +762,8 @@ describe("skribeum shell", () => {
 
     // The tree exposes exactly one roving tabindex stop and arrow keys
     // move it; Enter opens the focused note.
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]')
-        ?.focus();
-    });
+    const firstTreeItem = $('[role="treeitem"]');
+    await firstTreeItem.click();
     expect(await activeElementDescriptor()).toContain("treeitem");
     const beforeArrow = await activeElementDescriptor();
     await browser.keys(Key.ArrowDown);

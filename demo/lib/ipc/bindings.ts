@@ -1,0 +1,49 @@
+import type {
+  BulkDivergenceReview,
+  ExternalNoteRemove,
+  ExternalNoteUpdate,
+  NoteRecovered,
+  ReconciliationBanner,
+  VaultChanged,
+  VaultCollisionsDetected,
+} from "../../../src/lib/ipc/bindings";
+
+export type {
+  AppError,
+  BannerReason,
+  ByteRangeReplace,
+  NoteContent,
+  SearchHit,
+  SettingsDoc,
+  TreeEntry,
+  TreeEntryKind,
+  VaultHandle,
+  WriteResult,
+} from "../../../src/lib/ipc/bindings";
+
+type EventCallback<T> = (event: { payload: T }) => void;
+type Unlisten = () => void;
+
+function inertEvent<T>() {
+  return {
+    listen(_callback: EventCallback<T>): Promise<Unlisten> {
+      return Promise.resolve(() => {});
+    },
+    once(_callback: EventCallback<T>): Promise<Unlisten> {
+      return Promise.resolve(() => {});
+    },
+    emit(_payload: T): Promise<void> {
+      return Promise.resolve();
+    },
+  };
+}
+
+export const events = {
+  bulkDivergenceReview: inertEvent<BulkDivergenceReview>(),
+  externalNoteRemove: inertEvent<ExternalNoteRemove>(),
+  externalNoteUpdate: inertEvent<ExternalNoteUpdate>(),
+  noteRecovered: inertEvent<NoteRecovered>(),
+  reconciliationBanner: inertEvent<ReconciliationBanner>(),
+  vaultChanged: inertEvent<VaultChanged>(),
+  vaultCollisionsDetected: inertEvent<VaultCollisionsDetected>(),
+};

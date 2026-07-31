@@ -230,7 +230,6 @@ fn translate(result: notify::Result<notify::Event>) -> Vec<WatchEvent> {
     }
     let mut paths = event.paths;
     match event.kind {
-        EventKind::Create(_) => paths.into_iter().map(WatchEvent::Created).collect(),
         EventKind::Remove(_) => paths.into_iter().map(WatchEvent::Removed).collect(),
         EventKind::Modify(ModifyKind::Name(RenameMode::Both)) if paths.len() == 2 => {
             let to = paths.pop().unwrap_or_default();
@@ -244,8 +243,23 @@ fn translate(result: notify::Result<notify::Event>) -> Vec<WatchEvent> {
             paths.into_iter().map(WatchEvent::Created).collect()
         }
         EventKind::Access(_) => Vec::new(),
-        EventKind::Modify(_) | EventKind::Any | EventKind::Other => {
-            paths.into_iter().map(WatchEvent::Modified).collect()
+        // Event kinds are not portable: FSEvents on macOS reports deletions
+        // as generic name modifications, so ambiguous kinds classify by
+        // current presence on disk, the only signal every backend agrees on.
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Any | EventKind::Other => {
+            let created = matches!(event.kind, EventKind::Create(_));
+            paths
+                .into_iter()
+                .map(|path| {
+                    if path.symlink_metadata().is_err() {
+                        WatchEvent::Removed(path)
+                    } else if created {
+                        WatchEvent::Created(path)
+                    } else {
+                        WatchEvent::Modified(path)
+                    }
+                })
+                .collect()
         }
     }
 }

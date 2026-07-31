@@ -7,6 +7,7 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit",
     "e2e": "wdio run tests/e2e/wdio.conf.ts",
+    "ux:fleet": "bun tests/ux-fleet/run.ts",
     "test:web": "vitest run",
     "prepare": "node scripts/install-hooks.mjs",
     "tauri": "tauri"

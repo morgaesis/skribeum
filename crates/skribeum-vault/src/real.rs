@@ -67,7 +67,12 @@ impl FileSystem for RealFs {
     }
 
     fn fsync_file(&self, path: &Path) -> Result<(), FsError> {
-        let file = std::fs::File::open(path).map_err(|e| map_io(&e))?;
+        // Opened with write access: FlushFileBuffers on Windows requires it,
+        // and a read-only handle fails with permission denied there.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .map_err(|e| map_io(&e))?;
         // `sync_all` maps to fsync(2); on macOS the standard library issues
         // the stronger fcntl F_FULLFSYNC barrier, which is the behavior the
         // write path requires there.

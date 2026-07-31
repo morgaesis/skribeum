@@ -2,7 +2,6 @@
 import { history } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
-import { STRINGS } from "./strings";
 import {
   Annotation,
   type ChangeSet,
@@ -35,6 +34,7 @@ import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
 import PropertiesPanel from "./PropertiesPanel.svelte";
 import { type CommandContext, CommandRegistry, editorKeymap } from "./registry";
+import { STRINGS } from "./strings";
 
 let {
   doc = "",

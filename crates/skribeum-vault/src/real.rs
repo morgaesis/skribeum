@@ -1,0 +1,182 @@
+//! The real filesystem and clock. This module is the single place in the
+//! workspace allowed to call `std::fs` (and, when async I/O arrives,
+//! `tokio::fs`); a committed guard test enforces that mechanically. Every
+//! other module and crate reaches the operating system through the traits in
+//! [`crate::fs`].
+
+use std::path::Path;
+use std::sync::mpsc;
+use std::time::{Duration, Instant, UNIX_EPOCH};
+
+use notify::{RecursiveMode, Watcher as NotifyWatcherTrait};
+
+use crate::fs::{Clock, DirEntry, FileMetadata, FileSystem, FsError, WatchEvent, Watcher};
+
+/// The production [`FileSystem`] implementation.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RealFs;
+
+/// The production [`Clock`]: monotonic time from [`Instant`].
+#[derive(Debug)]
+pub struct RealClock {
+    origin: Instant,
+}
+
+impl Default for RealClock {
+    fn default() -> Self {
+        Self {
+            origin: Instant::now(),
+        }
+    }
+}
+
+impl Clock for RealClock {
+    fn now(&self) -> Duration {
+        self.origin.elapsed()
+    }
+}
+
+fn map_io(error: &std::io::Error) -> FsError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => FsError::NotFound,
+        std::io::ErrorKind::NotADirectory | std::io::ErrorKind::IsADirectory => {
+            FsError::NotADirectory
+        }
+        kind => FsError::Io(kind.to_string()),
+    }
+}
+
+impl FileSystem for RealFs {
+    fn read(&self, path: &Path) -> Result<Vec<u8>, FsError> {
+        std::fs::read(path).map_err(|e| map_io(&e))
+    }
+
+    fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
+        // Write to a sibling temporary file and rename over the target so a
+        // crash mid-write never leaves a truncated file. The M1b write path
+        // extends this with fsync of the file and its parent directory.
+        let parent = path.parent().ok_or(FsError::NotADirectory)?;
+        let file_name = path.file_name().ok_or(FsError::NotADirectory)?;
+        let temp = parent.join(format!(".skribeum-write-{}", file_name.to_string_lossy()));
+        std::fs::write(&temp, bytes).map_err(|e| map_io(&e))?;
+        std::fs::rename(&temp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&temp);
+            map_io(&e)
+        })
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError> {
+        std::fs::rename(from, to).map_err(|e| map_io(&e))
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<(), FsError> {
+        std::fs::remove_file(path).map_err(|e| map_io(&e))
+    }
+
+    fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
+        std::fs::create_dir_all(path).map_err(|e| map_io(&e))
+    }
+
+    fn metadata(&self, path: &Path) -> Result<FileMetadata, FsError> {
+        let meta = std::fs::metadata(path).map_err(|e| map_io(&e))?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .unwrap_or(Duration::ZERO);
+        Ok(FileMetadata {
+            size: meta.len(),
+            mtime,
+            is_dir: meta.is_dir(),
+        })
+    }
+
+    fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(path).map_err(|e| map_io(&e))? {
+            let entry = entry.map_err(|e| map_io(&e))?;
+            let file_type = entry.file_type().map_err(|e| map_io(&e))?;
+            entries.push(DirEntry {
+                path: entry.path(),
+                file_name: entry.file_name().to_string_lossy().into_owned(),
+                is_dir: file_type.is_dir(),
+            });
+        }
+        Ok(entries)
+    }
+
+    fn watch(&self, root: &Path) -> Result<Box<dyn Watcher>, FsError> {
+        RealWatcher::subscribe(root).map(|w| Box::new(w) as Box<dyn Watcher>)
+    }
+}
+
+/// A watcher backed by the `notify` crate. Events queue on a channel and are
+/// drained non-blockingly through [`Watcher::try_next`].
+struct RealWatcher {
+    receiver: mpsc::Receiver<WatchEvent>,
+    // Held for its Drop: dropping the notify watcher ends the subscription.
+    _watcher: notify::RecommendedWatcher,
+}
+
+impl RealWatcher {
+    fn subscribe(root: &Path) -> Result<Self, FsError> {
+        let (sender, receiver) = mpsc::channel();
+        let mut watcher =
+            notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                for event in translate(result) {
+                    let _ = sender.send(event);
+                }
+            })
+            .map_err(|e| FsError::Io(e.to_string()))?;
+        watcher
+            .watch(root, RecursiveMode::Recursive)
+            .map_err(|e| FsError::Io(e.to_string()))?;
+        Ok(Self {
+            receiver,
+            _watcher: watcher,
+        })
+    }
+}
+
+/// Maps a notify event onto the model's event vocabulary. Unknown or rescan
+/// events become [`WatchEvent::Overflow`], the "state unknown, rescan"
+/// signal; platform differences in rename reporting collapse into the pair
+/// or single-event forms the model already covers.
+fn translate(result: notify::Result<notify::Event>) -> Vec<WatchEvent> {
+    use notify::EventKind;
+    use notify::event::{ModifyKind, RenameMode};
+
+    // Watch errors (including overflow) mean events were lost.
+    let Ok(event) = result else {
+        return vec![WatchEvent::Overflow];
+    };
+    if event.need_rescan() {
+        return vec![WatchEvent::Overflow];
+    }
+    let mut paths = event.paths;
+    match event.kind {
+        EventKind::Create(_) => paths.into_iter().map(WatchEvent::Created).collect(),
+        EventKind::Remove(_) => paths.into_iter().map(WatchEvent::Removed).collect(),
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) if paths.len() == 2 => {
+            let to = paths.pop().unwrap_or_default();
+            let from = paths.pop().unwrap_or_default();
+            vec![WatchEvent::Renamed { from, to }]
+        }
+        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+            paths.into_iter().map(WatchEvent::Removed).collect()
+        }
+        EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
+            paths.into_iter().map(WatchEvent::Created).collect()
+        }
+        EventKind::Access(_) => Vec::new(),
+        EventKind::Modify(_) | EventKind::Any | EventKind::Other => {
+            paths.into_iter().map(WatchEvent::Modified).collect()
+        }
+    }
+}
+
+impl Watcher for RealWatcher {
+    fn try_next(&mut self) -> Option<WatchEvent> {
+        self.receiver.try_recv().ok()
+    }
+}

@@ -54,6 +54,12 @@ jobs:
 
       - run: cargo test --workspace --locked
 
+      # IPC contract gate: the tauri-specta generated bindings must expose
+      # exactly the command set committed in ipc-allowlist.json, and the
+      # committed src/lib/ipc/bindings.ts must match what the code generates.
+      - name: IPC allowlist and bindings check
+        run: cargo test -p skribeum-app --locked --test ipc_contract
+
   msrv:
     name: msrv (1.95)
     runs-on: ubuntu-latest

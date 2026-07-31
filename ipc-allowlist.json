@@ -1,0 +1,4 @@
+{
+  "description": "The committed IPC command allowlist. CI fails when the tauri-specta generated bindings expose a command set different from this list. Additions are deliberate contract changes, never side effects.",
+  "commands": ["vault_open", "vault_tree", "note_read", "watch_subscribe"]
+}

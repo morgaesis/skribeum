@@ -259,6 +259,12 @@ fn real_write_goes_through_a_symlink() {
     );
 }
 
+// Not run on Windows: delete-pending semantics keep the watched root's
+// name alive while the subscription dies without any event, so no portable
+// in-watcher death signal exists there. Windows recovery flows through the
+// application-level rescan paths (tree refresh, projection-hash
+// verification on read and save), stated in ARCHITECTURE.md.
+#[cfg(not(windows))]
 #[test]
 fn real_watcher_survives_root_replacement() {
     let root = scratch("watch-replace");

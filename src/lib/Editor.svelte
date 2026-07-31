@@ -174,13 +174,15 @@ function stateFor(content: string, locked: boolean): EditorState {
       ...registryExtensions(),
       EditorState.readOnly.of(locked),
       EditorView.editable.of(!locked),
-      EditorView.contentAttributes.of(
-        // Read-only content is not contenteditable, so without an explicit
-        // tabindex the scrollable region loses keyboard reachability.
-        locked
-          ? { "aria-label": STRINGS.editorLabel, tabindex: "0" }
-          : { "aria-label": STRINGS.editorLabel },
-      ),
+      // The explicit tabindex changes nothing for editable content (already
+      // in the tab order) and keeps read-only content keyboard-reachable;
+      // it also makes the scrollable region's focusability visible to
+      // accessibility checkers whose focusable-descendant selectors do not
+      // recognize contenteditable.
+      EditorView.contentAttributes.of({
+        "aria-label": STRINGS.editorLabel,
+        tabindex: "0",
+      }),
       EditorView.domEventHandlers({
         blur: () => {
           requestSave();

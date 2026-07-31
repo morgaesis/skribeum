@@ -761,6 +761,19 @@ describe("skribeum core editing surfaces", () => {
         )) === "dark",
       { timeout: 10000 },
     );
+    const initialBackground = await browser.execute(
+      () => getComputedStyle(document.body).backgroundColor,
+    );
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () => getComputedStyle(document.body).backgroundColor,
+        )) !== initialBackground,
+      {
+        timeout: 10000,
+        timeoutMsg: "dark theme background never diverged from the initial",
+      },
+    );
     const darkBackground = await browser.execute(
       () => getComputedStyle(document.body).backgroundColor,
     );
@@ -773,13 +786,20 @@ describe("skribeum core editing surfaces", () => {
         )) === "light",
       { timeout: 10000 },
     );
-    expect(
-      await browser.execute(
-        () => getComputedStyle(document.body).backgroundColor,
-      ),
-    ).not.toBe(darkBackground);
+    // The dataset flips synchronously; the computed background follows on
+    // the next style pass, so the change is awaited, not read immediately.
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () => getComputedStyle(document.body).backgroundColor,
+        )) !== darkBackground,
+      {
+        timeout: 10000,
+        timeoutMsg: "light theme background never diverged from dark",
+      },
+    );
 
-    await select.selectByAttribute("value", original);
+    await selectTheme(original);
     await browser.keys(Key.Escape);
     await browser.waitUntil(
       async () => !(await $('[data-testid="settings-view"]').isExisting()),

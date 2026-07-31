@@ -258,6 +258,14 @@ file that changed while the app was dead is an external edit.
 
 ## Reconciliation
 
+Watchers are treated as lossy: overflow means rescan, and a watcher whose
+root was deleted heals by re-subscribing once the root reappears, reporting
+unknown state in between. Windows cannot signal that death in-process
+(delete-pending semantics keep the name alive while the subscription dies
+silently), so recovery there flows through the application-level rescan
+paths: the on-demand tree refresh and projection-hash verification on every
+read and save.
+
 The watcher feeds a reconciliation state machine written entirely against
 the `FileSystem` and `Clock` traits. External changes are detected by
 content hash against the last projection and are never reverted. No read

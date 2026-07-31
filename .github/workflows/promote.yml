@@ -1,0 +1,52 @@
+name: Promote
+
+# Publishing an update is a deliberate act, never a build side effect: this
+# workflow assembles the updater manifest from an existing release and
+# publishes it to the fixed `updater` tag the application polls.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Released version to promote, for example 0.0.4
+        required: true
+      channel:
+        description: Manifest to write
+        required: true
+        default: stable
+        type: choice
+        options: [stable, beta]
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Assemble the manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          work="$(mktemp -d)"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$work" --pattern '*'
+          # Each platform key maps to the artifact the updater installs and
+          # its detached signature, which tauri-action writes beside it.
+          python3 .github/scripts/build-manifest.py \
+            --version "$VERSION" \
+            --directory "$work" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$tag" \
+            --output "$work/manifest.json"
+          name="latest.json"
+          if [ "$CHANNEL" = "beta" ]; then name="beta.json"; fi
+          cp "$work/manifest.json" "$name"
+          gh release view updater --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create updater --repo "$GITHUB_REPOSITORY" \
+                 --title "Update manifests" --notes "Manifests the application polls. Assembled by the promote workflow." --latest=false
+          gh release upload updater "$name" --repo "$GITHUB_REPOSITORY" --clobber

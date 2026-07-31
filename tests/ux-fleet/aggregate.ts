@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { TraceRecord } from "./signals";
+import type { TraceRecord, VisualCheck } from "./signals";
 
 type Impact = "Critical" | "High" | "Medium";
 
@@ -47,9 +47,10 @@ function addFinding(
   score: number,
   title: string,
   measured: string,
+  unique = false,
 ): void {
   findings.push({
-    key: `${key}:${record.session}:${record.seq}`,
+    key: unique ? key : `${key}:${record.session}:${record.seq}`,
     score,
     impact: impactFor(score),
     title,
@@ -58,10 +59,75 @@ function addFinding(
   });
 }
 
+const knownVisual = [
+  {
+    key: "tables",
+    match: (id: string) => id.startsWith("tables-"),
+    title: "GFM tables show raw pipe syntax instead of a rendered table",
+  },
+  {
+    key: "embeds",
+    match: (id: string) => id.startsWith("embeds-"),
+    title: "Embeds show source references instead of embedded content",
+  },
+  {
+    key: "code-highlighting",
+    match: (id: string) => id === "fenced-code-code",
+    title: "Fenced code has no syntax highlighting",
+  },
+  {
+    key: "toolbar-contrast",
+    match: (id: string) => id === "toolbar-contrast",
+    title: "Selection toolbar text does not contrast with its background",
+  },
+  {
+    key: "caret-visibility",
+    match: (id: string) => id === "caret-contrast",
+    title: "The editor caret is not visible against its background",
+  },
+  {
+    key: "frontmatter-duplication",
+    match: (id: string) => id === "frontmatter-frontmatter",
+    title:
+      "Frontmatter appears in both the properties panel and the editor source",
+  },
+] as const;
+
+function visualDetails(check: VisualCheck): {
+  key: string;
+  score: number;
+  title: string;
+} {
+  const known = knownVisual.find((item) => item.match(check.id));
+  return known === undefined
+    ? {
+        key: `visual-${check.id}`,
+        score: 105,
+        title: `${check.construct} does not render as readable output`,
+      }
+    : {
+        key: `visual-${known.key}`,
+        score: 120 - knownVisual.indexOf(known),
+        title: known.title,
+      };
+}
+
 function findingsFrom(records: TraceRecord[]): Finding[] {
   const findings: Finding[] = [];
   for (const record of records) {
     const { signal } = record;
+    for (const check of signal.visual.filter((item) => !item.pass)) {
+      const details = visualDetails(check);
+      addFinding(
+        findings,
+        record,
+        details.key,
+        details.score,
+        details.title,
+        `Expected ${check.expected}; observed ${check.actual}.`,
+        true,
+      );
+    }
     if (record.status === "error") {
       addFinding(
         findings,
@@ -162,13 +228,14 @@ function findingsFrom(records: TraceRecord[]): Finding[] {
       `${labels[latency.kind]}: ${latency.ms.toFixed(2)} ms (${latency.source}); exploratory threshold: ${threshold} ms.`,
     );
   }
-  return findings.sort(
+  const sorted = findings.sort(
     (left, right) =>
       right.score - left.score ||
       right.record.signal.layoutShift.score -
         left.record.signal.layoutShift.score ||
       left.key.localeCompare(right.key),
   );
+  return [...new Map(sorted.map((finding) => [finding.key, finding])).values()];
 }
 
 function renderFindings(records: TraceRecord[], findings: Finding[]): string {
@@ -182,7 +249,20 @@ function renderFindings(records: TraceRecord[], findings: Finding[]): string {
     const record = finding.record;
     return `## ${index + 1}. ${finding.impact}: ${finding.title}\n\n- Persona: ${record.persona}\n- Session: \`${record.session}\`, interaction ${record.seq}\n- Measured signal: ${finding.measured}\n- Reproduction:\n  1. Run \`bun run ux:fleet\` to open the deterministic generated vault.\n  2. Follow the ${record.persona} session intent: ${record.intent}.\n  3. ${record.action}.`;
   });
-  return `# UX fleet findings\n\nThe deterministic fleet completed ${sessions} persona sessions and recorded ${records.length} intent-level interactions. ${countStatement} Ranking weights blocked work and lost focus above latency, scroll movement, and visual stability, independent of how often a signal occurred.\n\nThe latency thresholds are exploratory triage thresholds, not release gates. Event-to-paint timing starts on the page event and ends at the next confirmed paint. The note threshold is deliberately above the 47 ms in-app p95 reference because this path includes UI dispatch and paint.\n\n${sections.join("\n\n")}\n`;
+  const checks = records.flatMap((record) => record.signal.visual);
+  const coverage = knownVisual
+    .map((known) => {
+      const matching = checks.filter((check) => known.match(check.id));
+      const status =
+        matching.length === 0
+          ? "Not exercised"
+          : matching.some((check) => !check.pass)
+            ? "Detected"
+            : "Passes";
+      return `| ${known.title} | ${status} |`;
+    })
+    .join("\n");
+  return `# UX fleet findings\n\nThe deterministic fleet completed ${sessions} persona sessions and recorded ${records.length} intent-level interactions. ${countStatement} A wrong screen ranks above a slow screen, so rendering failures precede latency, focus, scroll, and layout signals.\n\n## Rendering defect coverage\n\n| Check | Result |\n| --- | --- |\n${coverage}\n\nThe latency thresholds are exploratory triage thresholds, not release gates. Event-to-paint timing starts on the page event and ends at the next confirmed paint. The note threshold is above the 47 ms in-app p95 reference because this path includes UI dispatch and paint.\n\n${sections.join("\n\n")}\n`;
 }
 
 const records = loadTraces();

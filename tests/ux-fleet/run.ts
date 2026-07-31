@@ -51,6 +51,12 @@ if (!process.argv.includes("--skip-build")) {
 }
 
 const data = path.join(traces, ".runtime");
+const environment = {
+  ...process.env,
+  XDG_CONFIG_HOME: path.join(data, "config"),
+  XDG_DATA_HOME: path.join(data, "data"),
+  ...(process.argv.includes("--bless") ? { UX_FLEET_BLESS: "1" } : {}),
+};
 const fleet = await run(
   [
     "xvfb-run",
@@ -59,11 +65,7 @@ const fleet = await run(
     "-c",
     "openbox >/dev/null 2>&1 & manager=$!; trap 'kill \"$manager\" 2>/dev/null || true' EXIT; bunx wdio run tests/ux-fleet/wdio.conf.ts",
   ],
-  {
-    ...process.env,
-    XDG_CONFIG_HOME: path.join(data, "config"),
-    XDG_DATA_HOME: path.join(data, "data"),
-  },
+  environment,
 );
 const aggregate = await run([
   "bun",

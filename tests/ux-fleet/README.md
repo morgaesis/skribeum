@@ -1,141 +1,62 @@
-# Skribeum UX Fleet
+# Skribeum UX fleet
 
-A persona-driven testing harness that exercises the Skribeum UI through realistic user workflows to detect touch-and-feel defects.
+The UX fleet is an exploratory, headless WebDriver harness over a deterministic 2,000-note copy of the demo vault. It records realistic persona sessions and checks whether Markdown is visibly rendered, not merely present in the editor document.
 
-## Overview
+The fleet stays outside the CI gate. Its screenshots and timing signals depend on the local WebView and display stack, while its findings are intended for human triage.
 
-The UX fleet simulates six distinct user personas interacting with Skribeum against a deterministic 2000-note vault. Each persona follows a realistic workflow with measured latency, focus transitions, scroll behavior, and console error capture.
+## Run
+
+```bash
+bun run ux:fleet
+```
+
+The runner builds the WebDriver application, starts it under `xvfb` with an isolated runtime profile, runs all persona sessions, writes JSONL traces, generates `FINDINGS.md`, and creates the screenshot gallery at `screenshots/index.md`.
+
+Use an existing compatible debug build while iterating on the harness:
+
+```bash
+bun tests/ux-fleet/run.ts --skip-build
+```
 
 ## Personas
 
-1. **Obsidian Migrant** - Audits a large imported vault and navigates deeply nested material via the quick switcher and search
-2. **Daily Journaler** - Captures daily entries, creates rapid wikilinks, and follows linked references
-3. **Researcher** - Reviews long documents, pastes evidence extracts, searches within notes, and inserts tables
-4. **Keyboard-Only Power User** - Navigates all core surfaces without mouse input, using Tab, Enter, and command palette
-5. **Low-Vision User** - Operates with 200% page zoom and dark theme, checking for clipping and focus visibility
-6. **Interruption-Prone User** - Switches notes mid-edit, dismisses transient surfaces, and tests unsaved state handling
+The fleet retains the Obsidian migrant, daily journaler, researcher, keyboard-only power user, low-vision user, and interruption-prone user. It also includes:
 
-## Running the Fleet
+- Skimmer: reads and navigates without typing or editing.
+- Checker: compares every visible construct with deterministic source content.
 
-### Prerequisites
+Every persona opens the demo vault, follows a rendered link, hovers a code block for its copy affordance, attempts to collapse and expand frontmatter, scrolls a long note, changes theme, and uses wide and narrow windows.
 
-- Node.js / Bun
-- WebdriverIO with Tauri service
-- xvfb (for headless execution)
-- WebKitGTK driver or equivalent
+## Rendering assertions
 
-### Quick Start
+The checker covers six heading levels, emphasis, wikilinks, embeds, tags, every primary callout type, tasks, GFM tables, inline and fenced code, inline and block math, frontmatter properties, and canvas files. Each construct check records three independent conditions:
+
+1. The semantic rendered element exists.
+2. Source markers are absent while the cursor is elsewhere.
+3. Visible text matches rendered content rather than source syntax.
+
+Construct-specific checks verify table semantics, embedded content, syntax token colors, frontmatter source suppression, canvas cards, and the code-copy affordance. Failed visual checks are findings and do not abort the exploratory session.
+
+Computed-style checks measure caret contrast, selection-toolbar text contrast, and visible interactive chrome. These checks do not rely on axe because semantic accessibility rules can pass when inherited colors make a control unreadable.
+
+## Screenshot evidence
+
+`screenshots/index.md` links every persona and construct screenshot in light and dark themes at wide and narrow viewports. The directory is gitignored because each fleet run regenerates the evidence.
+
+The `references/` directory contains a small committed pixel baseline for headings, inline math, and canvas. Comparison permits up to 3 percent of pixels to differ by more than 32 RGB levels, which tolerates modest font rasterization differences while catching structural changes.
+
+Update references deliberately after reviewing the generated screenshots:
 
 ```bash
-bun tests/ux-fleet/run.ts
+bun tests/ux-fleet/run.ts --bless
 ```
 
-This runs the full fleet under headless xvfb and prints a summary of findings.
+## Trace format
 
-### Direct WebdriverIO Execution
+Each interaction appends one version 2 record under `traces/`. Records contain latency, focus, scroll, layout shift, console errors, visual checks, and persona-specific scalar signals. `trace.schema.json` defines the format.
 
-```bash
-npx wdio run tests/ux-fleet/wdio.conf.ts
-```
+Rendering failures rank above latency failures in `FINDINGS.md`. A wrong screen is more severe than a slow screen.
 
-## Signals Measured
+## Limits
 
-Each interaction records:
-
-- **Latency** - Time from event trigger to visible result (glyph, surface, or note opening)
-  - Source: event-to-paint measurement or WebDriver fallback timing
-  - Kinds: `glyph` (keypress to character), `surface` (command to UI), `note` (click to content)
-
-- **Focus** - Element with keyboard focus before/after interaction
-  - Tracks whether focus landed on expected element
-  - Flags focus landing on document.body (usually a defect)
-
-- **Scroll** - Unexpected scrolling caused by interactions
-  - Captures scroll deltas per container (editor, sidebar, listbox, outline)
-  - Flags unintended scroll jumps
-
-- **Layout Shift** - Cumulative layout instability score
-  - Measured via PerformanceObserver if available
-  - Falls back to bounding box geometry comparison
-
-- **Console Errors** - JavaScript errors, unhandled rejections, and console.error calls
-  - Captured per interaction
-  - Truncated to 500 chars
-
-- **Custom Signals** - Persona-specific measurements (zoom overflow, tab traversal results, etc.)
-
-## Trace Format
-
-Traces are stored in `tests/ux-fleet/traces/` as JSONL files (one JSON record per line):
-
-```typescript
-type TraceRecord = {
-  v: 1;
-  session: string;              // e.g., "01-obsidian-migrant"
-  persona: string;              // e.g., "Obsidian migrant"
-  seq: number;                  // interaction sequence number
-  intent: string;               // high-level user goal
-  action: string;               // specific action taken
-  status: "ok" | "error";       // whether the action succeeded
-  signal: {
-    latency: {
-      kind: "glyph" | "surface" | "note";
-      ms: number;               // milliseconds
-      source: "event-to-paint" | "webdriver-fallback";
-    } | null;
-    focus: {
-      before: string;           // descriptor before action
-      after: string;            // descriptor after action
-      sensible: boolean;        // matches expectedFocus selectors
-      body: boolean;           // focus on document.body
-    };
-    scroll: {
-      unexpectedPx: number;    // sum of absolute scroll deltas
-      deltaByContainer: Record<string, number>;
-    };
-    layoutShift: {
-      score: number;           // cumulative shift score
-      method: "performance-observer" | "geometry";
-    };
-    consoleErrors: string[];   // errors captured during interaction
-    custom: Record<string, boolean | number | string | null>;
-  };
-  error: string | null;        // exception message if status is "error"
-};
-```
-
-## Findings Report
-
-After running the fleet, see `FINDINGS.md` for the ranked report of discovered UX defects.
-
-## Architecture
-
-- **vault.ts** - Deterministic vault generator (seeded, 2000 notes, special persona-specific notes)
-- **signals.ts** - UX instrumentation and trace recording (PersonaSession, measurement timing, snapshot collection)
-- **personas.spec.ts** - Six persona test cases using WebdriverIO's BDD interface
-- **wdio.conf.ts** - WebdriverIO config that extends the existing e2e setup and overrides specs/timeouts
-- **run.ts** - Runner script that executes the fleet headlessly and prints findings summary
-
-## Design Rationale
-
-- **Persona-driven intent** - Each session models realistic user goals, not low-level UI assertions
-- **Deterministic vault** - Seeded generation ensures reproducible large-vault behavior
-- **No wall-clock sleeps** - Realistic pacing via a PRNG; no hardcoded waits that mask real timing issues
-- **Headless under xvfb** - Runs in CI without display server, avoiding brittle screenshot comparisons
-- **JSONL trace format** - Line-delimited JSON for streaming, easy aggregation, and grep-friendly inspection
-- **Signal ranking** - Findings ranked by user impact, not frequency; a single layout shift in a common workflow matters more than repeated scroll errors in edge cases
-
-## Constraints and Known Limits
-
-- Cannot measure platform-specific OS-level latency (copy/paste system clipboard, IME composition)
-- Performance metrics depend on system load during test run; xvfb helps but isn't perfectly isolated
-- Focus testing relies on DOM-level focus; native title bar or OS-level focus changes not captured
-- Layout shift measurement requires PerformanceObserver support in the WebView runtime
-- Large vault (2000 notes) may expose scalability issues not seen in smaller test vaults
-
-## Future Improvements
-
-- Add trace filtering/grouping by latency bucket (< 50ms, 50-200ms, > 200ms)
-- Implement differential analysis (compare runs to detect regressions)
-- Extend personas with accessibility tools (screen reader emulation, high-contrast mode verification)
-- Add visual regression detection via screenshot diffing
+The fleet cannot measure operating-system caret compositing, native clipboard completion, IME composition, assistive-technology speech output, or physical input feel. Computed caret contrast is the closest stable WebView-level signal. Pixel references cover only low-motion surfaces with deterministic content; the rest of the rendering surface remains screenshot-backed to avoid brittle regressions.

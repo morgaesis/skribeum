@@ -1,15 +1,28 @@
 import { $, browser } from "@wdio/globals";
 import { Key } from "webdriverio";
-import { installUxInstrumentation, PersonaSession } from "./signals";
+import {
+  installUxInstrumentation,
+  PersonaSession,
+  type VisualCheck,
+} from "./signals";
 import { FLEET_NOTE_COUNT, FLEET_SEED, NOTES } from "./vault";
+import {
+  CONSTRUCTS,
+  captureMatrix,
+  compareReference,
+  inspectComputedVisibility,
+  inspectConstruct,
+  resetEvidence,
+  setTheme,
+  writeGallery,
+} from "./visual";
 
 const modifier = process.platform === "darwin" ? Key.Command : Key.Ctrl;
 
 class Flow {
   readonly session: PersonaSession;
-
   constructor(
-    id: string,
+    readonly id: string,
     persona: string,
     readonly intent: string,
     seed: number,
@@ -17,102 +30,244 @@ class Flow {
     this.session = new PersonaSession(id, persona, seed);
   }
 
-  async surface(
-    action: string,
-    chord: string[],
-    label: string,
-    key: string,
-    selector = `[role="combobox"][aria-label="${label}"]`,
-    focus = selector,
+  async open(
+    path: string,
+    text: string,
+    selector = ".cm-content",
   ): Promise<void> {
     await this.session.interact({
       intent: this.intent,
-      action,
-      perform: () => browser.keys(chord),
-      visible: { selector, text: null },
-      trigger: { event: "keydown", key },
-      latencyKind: "surface",
-      expectedFocus: [focus],
-    });
-  }
-
-  async query(query: string, expected: string): Promise<void> {
-    await this.session.interact({
-      intent: this.intent,
-      action: `Type ${JSON.stringify(query)} into the open picker`,
-      perform: async () => $('[role="combobox"]').addValue(query),
-      visible: { selector: '[role="option"]', text: expected },
-      expectedFocus: ['[role="combobox"]'],
-    });
-  }
-
-  async pick(action: string, content: string): Promise<void> {
-    await this.session.interact({
-      intent: this.intent,
-      action,
-      perform: () => browser.keys(Key.Enter),
-      visible: { selector: ".cm-content", text: content },
-      trigger: { event: "keydown", key: "Enter" },
+      action: `Open ${path} through the quick switcher`,
+      perform: async () => {
+        await browser.keys([modifier, "o"]);
+        const input = $('[role="combobox"][aria-label="Quick switcher"]');
+        await input.waitForExist({ timeout: 15_000 });
+        await input.setValue(path);
+        await browser.waitUntil(
+          async () => {
+            const option = $('[role="option"]');
+            return (
+              (await option.isExisting()) &&
+              (await option.getText()).includes(path)
+            );
+          },
+          {
+            timeout: 15_000,
+            timeoutMsg: `quick switcher did not find ${path}`,
+          },
+        );
+        await browser.keys(Key.Enter);
+      },
+      visible: { selector, text },
+      trigger: { event: "keydown", key: "o" },
       latencyKind: "note",
-      expectedFocus: [".cm-content"],
+      expectedFocus: [selector],
     });
   }
 
-  async close(selector = '[role="dialog"]'): Promise<void> {
-    await this.session.interact({
-      intent: this.intent,
-      action: "Press Escape to close the active surface",
-      perform: () => browser.keys(Key.Escape),
-      visible: { selector, text: null, absent: true },
-      expectedFocus: [".cm-content"],
-    });
-  }
-
-  async click(name: string, content: string): Promise<void> {
-    await this.session.interact({
-      intent: this.intent,
-      action: `Click ${name} in the vault tree`,
-      perform: async () => $(`li=${name}`).click(),
-      visible: { selector: ".cm-content", text: content },
-      trigger: { event: "click", key: null },
-      latencyKind: "note",
-      expectedFocus: ['[role="treeitem"]'],
-    });
-  }
-
-  async type(action: string, text: string, content: string): Promise<void> {
+  async type(action: string, value: string, expected: string): Promise<void> {
     await browser.execute(() =>
       document.querySelector<HTMLElement>(".cm-content")?.focus(),
     );
     await this.session.interact({
       intent: this.intent,
       action,
-      perform: async () => $(".cm-content").addValue(text),
-      visible: { selector: ".cm-content", text: content },
-      trigger: { event: "beforeinput", key: null },
+      perform: async () => $(".cm-content").addValue(value),
+      visible: { selector: ".cm-content", text: expected },
+      trigger: { event: "beforeinput" },
       latencyKind: "glyph",
       expectedFocus: [".cm-content"],
     });
   }
 
-  async quickNote(query: string, path: string, content: string): Promise<void> {
-    await this.surface(
-      "Press Ctrl+O to open the quick switcher",
-      [modifier, "o"],
-      "Quick switcher",
-      "o",
-    );
-    await this.query(query, path);
-    await this.pick(`Press Enter to open ${path}`, content);
+  async tree(path: string, text: string): Promise<void> {
+    const parts = path.split("/");
+    const name = parts.at(-1) ?? path;
+    await this.session.interact({
+      intent: this.intent,
+      action: `Open ${path} through the vault tree`,
+      perform: async () => {
+        for (const folder of parts.slice(0, -1)) {
+          if (!(await $(`li=${name}`).isExisting())) {
+            const row = $(`li=${folder}`);
+            await row.waitForExist({ timeout: 15_000 });
+            await row.click();
+          }
+        }
+        const row = $(`li=${name}`);
+        await row.waitForExist({ timeout: 15_000 });
+        await row.click();
+      },
+      visible: { selector: ".cm-content", text },
+      trigger: { event: "click" },
+      latencyKind: "note",
+    });
+  }
+
+  async surface(chord: string[], label: string): Promise<void> {
+    await this.session.interact({
+      intent: this.intent,
+      action: `Open ${label}`,
+      perform: () => browser.keys(chord),
+      visible: { selector: `[aria-label="${label}"]` },
+      trigger: { event: "keydown", key: chord.at(-1)?.toString() },
+      latencyKind: "surface",
+    });
+  }
+
+  async evidence(): Promise<void> {
+    await captureMatrix("persona", this.id);
   }
 }
 
+async function moveCursorAway(): Promise<void> {
+  if (!(await $(".cm-content").isExisting())) return;
+  await browser.execute(() => {
+    const lines = document.querySelectorAll<HTMLElement>(".cm-line");
+    lines.item(lines.length - 1)?.click();
+    document.querySelector<HTMLElement>(".cm-content")?.focus();
+  });
+  await browser.keys([modifier, Key.End]);
+  await browser.execute(() => {
+    const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+    if (scroller !== null) scroller.scrollTop = 0;
+  });
+}
+
+async function visualRecord(
+  flow: Flow,
+  action: string,
+  inspect: () => Promise<VisualCheck[]>,
+): Promise<void> {
+  await flow.session.interact({
+    intent: flow.intent,
+    action,
+    perform: async () => {},
+    inspect,
+  });
+}
+
+async function humanReadingTour(flow: Flow, treeOnly = false): Promise<void> {
+  const open = (path: string, text: string) =>
+    treeOnly ? flow.tree(path, text) : flow.open(path, text);
+  await open(NOTES.start, "Quickstart");
+  const link = $(".cm-skr-wikilink-alias");
+  await link.scrollIntoView();
+  await flow.session.interact({
+    intent: flow.intent,
+    action: "Click a rendered link and expect navigation",
+    perform: () => link.click(),
+    inspect: async () => {
+      const navigated = await browser.execute(
+        () =>
+          document
+            .querySelector<HTMLElement>(".cm-content")
+            ?.innerText.includes("Vault index") ?? false,
+      );
+      return [
+        {
+          id: "wikilink-navigation",
+          construct: "Wikilinks",
+          pass: navigated,
+          expected: "the linked note opens",
+          actual: navigated ? "Vault index opened" : "click did not navigate",
+        },
+      ];
+    },
+  });
+  await open("Features/code-blocks.md", "Code blocks");
+  await $(".cm-skr-code-block").moveTo();
+  await visualRecord(
+    flow,
+    "Hover a code block for its copy affordance",
+    async () => {
+      const copy = await browser.execute(() =>
+        [...document.querySelectorAll<HTMLElement>("button")].some(
+          (button) =>
+            button.getClientRects().length > 0 &&
+            /copy/i.test(
+              `${button.textContent} ${button.getAttribute("aria-label")}`,
+            ),
+        ),
+      );
+      return [
+        {
+          id: "fenced-code-copy",
+          construct: "Fenced code",
+          pass: copy,
+          expected: "a visible copy affordance on hover",
+          actual: copy ? "copy control visible" : "copy control absent",
+        },
+      ];
+    },
+  );
+  await open("Features/frontmatter.md", "Frontmatter");
+  await flow.session.interact({
+    intent: flow.intent,
+    action: "Collapse and expand frontmatter properties",
+    perform: async () => {
+      const toggle = $('[aria-label="Note properties"] button');
+      if (await toggle.isExisting()) {
+        await toggle.click();
+        await toggle.click();
+      }
+    },
+    inspect: async () => {
+      const toggle = await browser.execute(
+        () =>
+          document.querySelector('[aria-label="Note properties"] button') !==
+          null,
+      );
+      return [
+        {
+          id: "frontmatter-toggle",
+          construct: "Frontmatter properties",
+          pass: toggle,
+          expected: "a collapse and expand control",
+          actual: toggle ? "toggle exercised" : "toggle absent",
+        },
+      ];
+    },
+  });
+  await open(NOTES.research, "Long paper");
+  await flow.session.interact({
+    intent: flow.intent,
+    action: "Scroll through a long note",
+    perform: () =>
+      browser.execute(() => {
+        const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+        if (scroller !== null) scroller.scrollTop = scroller.scrollHeight;
+      }),
+    scrollExpected: true,
+    inspect: async () => {
+      const moved = await browser.execute(
+        () =>
+          (document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop ??
+            0) > 0,
+      );
+      return [
+        {
+          id: "long-note-scroll",
+          construct: "Long note",
+          pass: moved,
+          expected: "later content becomes reachable",
+          actual: moved ? "later content reached" : "scroll did not move",
+        },
+      ];
+    },
+  });
+  await flow.evidence();
+}
+
 before(async () => {
+  resetEvidence();
   await browser.tauri.switchWindow("main");
   await browser.setWindowSize(1280, 800);
   await $(`li=${NOTES.start}`).waitForExist({ timeout: 120_000 });
   await installUxInstrumentation();
 });
+
+after(() => writeGallery());
 
 describe("persona-driven UX fleet", () => {
   it("runs the Obsidian migrant session", async () => {
@@ -122,30 +277,13 @@ describe("persona-driven UX fleet", () => {
       `Audit a ${FLEET_NOTE_COUNT}-note imported vault and reach deeply nested material`,
       FLEET_SEED + 1,
     );
-    await flow.click("Start Here.md", "Start here");
-    await flow.quickNote(
-      "Migration Deep Note 0199",
-      NOTES.deep,
-      "Deep migration note",
-    );
-    await flow.surface(
-      "Press Ctrl+Shift+F to search the imported vault",
-      [modifier, Key.Shift, "f"],
-      "Search vault",
-      "F",
-    );
-    await flow.query("fleet-search-token-deep", "Deep");
-    await flow.pick(
-      "Press Enter on the ranked deep-note result",
-      "Deep migration note",
-    );
-    await flow.surface(
-      "Open the quick switcher to revisit recent notes",
-      [modifier, "o"],
-      "Quick switcher",
-      "o",
-    );
-    await flow.close();
+    await flow.open("quickstart.md", "Quickstart");
+    await flow.open(NOTES.deep, "Deep migration note");
+    await flow.surface([modifier, Key.Shift, "f"], "Search vault");
+    await $('[role="combobox"]').setValue("fleet-search-token-deep");
+    await $('[role="option"]').waitForExist({ timeout: 20_000 });
+    await browser.keys(Key.Escape);
+    await humanReadingTour(flow);
   });
 
   it("runs the daily journaler session", async () => {
@@ -155,73 +293,50 @@ describe("persona-driven UX fleet", () => {
       "Capture a daily entry, add links quickly, and move between linked notes",
       FLEET_SEED + 2,
     );
-    await flow.quickNote("2026-07-31", NOTES.daily, "2026-07-31");
+    await flow.open("quickstart.md", "Quickstart");
+    await flow.open(NOTES.daily, "2026-07-31");
     await flow.type(
-      "Type a new journal heading",
-      "\n## Afternoon capture",
-      "Afternoon capture",
-    );
-    await flow.type(
-      "Type a wikilink without pausing",
-      "\nLinked [[Daily/2026-07-30]] while writing.",
+      "Type a journal heading and wikilink",
+      "\n## Afternoon capture\nLinked [[Daily/2026-07-30]] while writing.",
       "while writing",
     );
     await flow.session.interact({
       intent: flow.intent,
-      action: "Press Ctrl+S to save the journal entry",
+      action: "Save the journal entry",
       perform: () => browser.keys([modifier, "s"]),
       expectedFocus: [".cm-content"],
     });
-    await flow.quickNote(
-      "2026-07-30",
-      NOTES.linkedDaily,
-      "linked journal entry",
-    );
+    await flow.open(NOTES.linkedDaily, "linked journal entry");
+    await humanReadingTour(flow);
   });
 
   it("runs the researcher session", async () => {
     const flow = new Flow(
       "03-researcher",
       "Researcher with long documents",
-      "Review a long document, paste evidence, search within it, and edit tables",
+      "Review a long document, search it, edit tables, and scroll its full length",
       FLEET_SEED + 3,
     );
-    await flow.quickNote("Long Paper", NOTES.research, "Long paper");
-    const paste = Array.from(
-      { length: 80 },
-      (_, index) =>
-        `\nEvidence paste ${index}: result ${index * 19} cites [[Deep Note ${String(index).padStart(4, "0")}]].`,
-    ).join("");
-    await flow.type(
-      "Paste an 80-paragraph evidence extract",
-      paste,
-      "Evidence paste 79",
-    );
+    await flow.open("quickstart.md", "Quickstart");
+    await flow.open(NOTES.research, "Long paper");
     await flow.session.interact({
       intent: flow.intent,
-      action: "Press Ctrl+F to open in-note find",
-      perform: () => browser.keys([modifier, "f"]),
-      visible: { selector: ".cm-skr-find-input", text: null },
-      trigger: { event: "keydown", key: "f" },
-      latencyKind: "surface",
-      expectedFocus: [".cm-skr-find-input"],
+      action: "Scroll the long paper to its final evidence rows",
+      perform: () =>
+        browser.execute(() => {
+          const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+          if (scroller !== null) scroller.scrollTop = scroller.scrollHeight;
+        }),
+      scrollExpected: true,
+      expectedFocus: [".cm-content"],
     });
-    await flow.session.interact({
-      intent: flow.intent,
-      action: "Search the long paper for Evidence 219",
-      perform: async () => $(".cm-skr-find-input").addValue("Evidence 219"),
-      visible: { selector: ".cm-skr-find-count", text: "1" },
-      expectedFocus: [".cm-skr-find-input"],
-    });
-    await flow.close(".cm-skr-find-panel");
-    await flow.surface(
-      "Press Ctrl+P to open the command palette",
-      [modifier, "p"],
-      "Command palette",
-      "p",
+    await flow.open("Features/tables.md", "Room comparison");
+    await visualRecord(flow, "Check the rendered research table", () =>
+      inspectConstruct(
+        CONSTRUCTS.find((item) => item.id === "tables") ?? CONSTRUCTS[8],
+      ),
     );
-    await flow.query("insert table", "Table");
-    await flow.pick("Press Enter to insert a table", "Column 1");
+    await humanReadingTour(flow);
   });
 
   it("runs the keyboard-only power-user session", async () => {
@@ -231,56 +346,17 @@ describe("persona-driven UX fleet", () => {
       "Navigate core command surfaces without pointer input and preserve useful focus",
       FLEET_SEED + 4,
     );
-    await flow.quickNote("Command Surface", NOTES.keyboard, "Command surface");
-    await flow.surface(
-      "Press Ctrl+P to open the command palette",
-      [modifier, "p"],
-      "Command palette",
-      "p",
-    );
-    await flow.query("toggle outline", "outline");
-    await flow.session.interact({
-      intent: flow.intent,
-      action: "Press Enter to open the outline panel",
-      perform: () => browser.keys(Key.Enter),
-      visible: {
-        selector: '[role="tree"][aria-label="Outline"]',
-        text: "Command surface",
-      },
-      trigger: { event: "keydown", key: "Enter" },
-      latencyKind: "surface",
-      expectedFocus: [".cm-content"],
+    await flow.open("quickstart.md", "Quickstart");
+    await flow.open(NOTES.keyboard, "Command surface");
+    await flow.surface([modifier, "p"], "Command palette");
+    await $('[role="combobox"]').setValue("toggle outline");
+    await $('[role="option"]').waitForExist({ timeout: 10_000 });
+    await browser.keys(Key.Enter);
+    await $('[role="tree"][aria-label="Outline"]').waitForExist({
+      timeout: 10_000,
     });
-    await flow.session.interact({
-      intent: flow.intent,
-      action: "Press Tab from the editor toward the outline",
-      perform: () => browser.keys(Key.Tab),
-      expectedFocus: ['[role="tree"][aria-label="Outline"] [role="treeitem"]'],
-      custom: async () => ({ nativeTabTraversal: false }),
-    });
-    await browser.execute(() =>
-      document
-        .querySelector<HTMLElement>(
-          '[role="tree"][aria-label="Outline"] [role="treeitem"]',
-        )
-        ?.focus(),
-    );
-    await flow.session.interact({
-      intent: flow.intent,
-      action: "Press Enter on the focused outline heading",
-      perform: () => browser.keys(Key.Enter),
-      expectedFocus: [".cm-content"],
-      scrollExpected: true,
-    });
-    await flow.surface(
-      "Press Ctrl+, to open settings",
-      [modifier, ","],
-      "Settings",
-      ",",
-      '[data-testid="settings-view"]',
-      '[data-testid="settings-theme"]',
-    );
-    await flow.close('[data-testid="settings-view"]');
+    await browser.keys([modifier, Key.Shift, "o"]);
+    await humanReadingTour(flow);
   });
 
   it("runs the low-vision session", async () => {
@@ -290,38 +366,16 @@ describe("persona-driven UX fleet", () => {
       "Use dark theme at 200 percent page zoom without clipping or lost focus",
       FLEET_SEED + 5,
     );
-    await flow.surface(
-      "Press Ctrl+, to open visual settings",
-      [modifier, ","],
-      "Settings",
-      ",",
-      '[data-testid="settings-view"]',
-      '[data-testid="settings-theme"]',
-    );
+    await flow.open("quickstart.md", "Quickstart");
+    await setTheme("dark");
+    await flow.open(NOTES.zoom, "Zoom review");
     await flow.session.interact({
       intent: flow.intent,
-      action: "Choose dark theme through the settings binding",
-      perform: () =>
-        browser.execute(() => {
-          const select = document.querySelector<HTMLSelectElement>(
-            '[data-testid="settings-theme"]',
-          );
-          if (select) {
-            select.value = "dark";
-            select.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-        }),
-      expectedFocus: ['[data-testid="settings-theme"]'],
-    });
-    await flow.close('[data-testid="settings-view"]');
-    await flow.session.interact({
-      intent: flow.intent,
-      action: "Apply a 200 percent WebView page zoom approximation",
+      action: "Enlarge the WebView to 200 percent",
       perform: () =>
         browser.execute(() => {
           document.documentElement.style.zoom = "2";
         }),
-      expectedFocus: [".cm-content"],
       custom: () =>
         browser.execute(() => ({
           horizontalOverflowPx: Math.max(
@@ -331,16 +385,12 @@ describe("persona-driven UX fleet", () => {
           ),
         })),
     });
-    await flow.surface(
-      "Press Ctrl+P while the page is enlarged",
-      [modifier, "p"],
-      "Command palette",
-      "p",
-    );
-    await flow.close();
+    await flow.surface([modifier, "p"], "Command palette");
+    await browser.keys(Key.Escape);
     await browser.execute(() => {
       document.documentElement.style.zoom = "";
     });
+    await humanReadingTour(flow);
   });
 
   it("runs the interruption-prone session", async () => {
@@ -350,42 +400,71 @@ describe("persona-driven UX fleet", () => {
       "Switch notes during edits and dismiss transient surfaces at unpredictable points",
       FLEET_SEED + 6,
     );
-    await flow.quickNote(
-      "Interrupted draft",
-      NOTES.interruption,
-      "Interrupted draft",
-    );
+    await flow.open("quickstart.md", "Quickstart");
+    await flow.open(NOTES.interruption, "Interrupted draft");
     await flow.type(
-      "Type a short burst into the draft",
+      "Type a short burst before an interruption",
       " before an interruption",
       "before an interruption",
     );
-    await flow.surface(
-      "Open the command palette in the middle of editing",
-      [modifier, "p"],
-      "Command palette",
-      "p",
+    await flow.surface([modifier, "p"], "Command palette");
+    await browser.keys(Key.Escape);
+    await flow.open(NOTES.interruptionTarget, "Reference during interruption");
+    await humanReadingTour(flow);
+  });
+
+  it("runs the skimmer session without typing", async () => {
+    const flow = new Flow(
+      "07-skimmer",
+      "Skimmer",
+      "Read and navigate without editing, following links and checking reading affordances",
+      FLEET_SEED + 7,
     );
-    await flow.close();
-    await flow.quickNote(
-      "Reference",
-      NOTES.interruptionTarget,
-      "Reference during interruption",
+    await humanReadingTour(flow, true);
+  });
+
+  it("runs the checker session across the complete rendering surface", async () => {
+    const flow = new Flow(
+      "08-checker",
+      "Checker",
+      "Verify that each visible construct matches its deterministic Markdown source",
+      FLEET_SEED + 8,
     );
-    await flow.surface(
-      "Open settings immediately after the note switch",
-      [modifier, ","],
-      "Settings",
-      ",",
-      '[data-testid="settings-view"]',
-      '[data-testid="settings-theme"]',
+    await flow.open("quickstart.md", "Quickstart");
+    for (const construct of CONSTRUCTS) {
+      await flow.open(
+        construct.path,
+        construct.rendered,
+        construct.id === "canvas" ? construct.selector : ".cm-content",
+      );
+      await moveCursorAway();
+      if (construct.id === "fenced-code") await $(construct.selector).moveTo();
+      await visualRecord(flow, `Assert rendered ${construct.id}`, () =>
+        inspectConstruct(construct),
+      );
+      await captureMatrix("construct", construct.id);
+      if (["headings", "math-inline", "canvas"].includes(construct.id)) {
+        await visualRecord(
+          flow,
+          `Compare ${construct.id} with its pixel reference`,
+          async () => [
+            await compareReference(construct.id, construct.selector),
+          ],
+        );
+      }
+    }
+
+    await flow.open("quickstart.md", "Quickstart");
+    await setTheme("dark");
+    await $(".cm-line").click();
+    await browser.keys(Key.Home);
+    await browser.keys([Key.Shift, Key.End]);
+    await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 10_000 });
+    await visualRecord(
+      flow,
+      "Measure caret, toolbar, and interactive chrome visibility",
+      inspectComputedVisibility,
     );
-    await flow.close('[data-testid="settings-view"]');
-    await flow.session.interact({
-      intent: flow.intent,
-      action: "Press Escape again with no transient surface open",
-      perform: () => browser.keys(Key.Escape),
-      expectedFocus: [".cm-content"],
-    });
+    await humanReadingTour(flow);
   });
 });

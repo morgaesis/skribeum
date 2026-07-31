@@ -11,10 +11,10 @@ import path from "node:path";
 
 export const FLEET_SEED = 0x51ca_1e5e;
 export const FLEET_NOTE_COUNT = 2_000;
-export const FLEET_VAULT_PATH = path.join(os.tmpdir(), "skribeum-ux-fleet-v1");
+export const FLEET_VAULT_PATH = path.join(os.tmpdir(), "skribeum-ux-fleet-v2");
 
 export const NOTES = {
-  start: "Start Here.md",
+  start: "quickstart.md",
   daily: "Daily/2026-07-31.md",
   linkedDaily: "Daily/2026-07-30.md",
   research: "Research/Long Paper.md",
@@ -23,14 +23,29 @@ export const NOTES = {
   interruption: "Interruptions/Draft.md",
   interruptionTarget: "Interruptions/Reference.md",
   deep: "Archive/Imported/Department-07/Area-04/Project-03/Topic-02/Migration Deep Note 0199.md",
+  callouts: "Features/all-callout-types.md",
+  rendering: "Features/rendering-surface.md",
+  canvas: "demo.canvas",
 } as const;
 
 const STAMP = `.fleet-${FLEET_SEED.toString(16)}-${FLEET_NOTE_COUNT}`;
+const demoVault = path.resolve(import.meta.dirname, "../../demo/lib/vault");
 
 function writeNote(relativePath: string, content: string): void {
   const destination = path.join(FLEET_VAULT_PATH, relativePath);
   mkdirSync(path.dirname(destination), { recursive: true });
   writeFileSync(destination, content);
+}
+
+function demoFiles(directory = demoVault): Array<[string, string]> {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) return demoFiles(absolute);
+    if (entry.name.endsWith(".ts")) return [];
+    return [
+      [path.relative(demoVault, absolute), readFileSync(absolute, "utf8")],
+    ];
+  });
 }
 
 function generatedPath(index: number): string {
@@ -57,10 +72,45 @@ function specialNotes(): Array<[string, string]> {
     (_, index) =>
       `## Section ${index}\n\nResearch paragraph ${index} discusses deterministic evidence, citations, and longitudinal observations.`,
   ).join("\n\n");
+  const calloutTypes = [
+    "note",
+    "abstract",
+    "info",
+    "todo",
+    "tip",
+    "success",
+    "question",
+    "warning",
+    "failure",
+    "danger",
+    "bug",
+    "example",
+    "quote",
+  ];
   return [
+    ...demoFiles(),
     [
-      NOTES.start,
-      "# Start here\n\nA compact landing note for migration review.\n\n[[Daily/2026-07-31]]\n",
+      NOTES.rendering,
+      `# Rendered heading one
+## Rendered heading two
+### Rendered heading three
+#### Rendered heading four
+##### Rendered heading five
+###### Rendered heading six
+
+Cursor parking area.
+
+*Italic phrase*, **strong phrase**, and ~~struck phrase~~.
+`,
+    ],
+    [
+      NOTES.callouts,
+      `# All callout types\n\n${calloutTypes
+        .map(
+          (type) =>
+            `> [!${type}] ${type[0]?.toUpperCase()}${type.slice(1)} title\n> Rendered ${type} body.`,
+        )
+        .join("\n\n")}\n`,
     ],
     [
       NOTES.daily,
@@ -96,9 +146,7 @@ function specialNotes(): Array<[string, string]> {
 
 export function createFleetVault(force = false): void {
   const stampPath = path.join(FLEET_VAULT_PATH, STAMP);
-  if (!force && existsSync(stampPath)) {
-    return;
-  }
+  if (!force && existsSync(stampPath)) return;
   mkdirSync(FLEET_VAULT_PATH, { recursive: true });
   for (const entry of readdirSync(FLEET_VAULT_PATH)) {
     rmSync(path.join(FLEET_VAULT_PATH, entry), {
@@ -107,9 +155,8 @@ export function createFleetVault(force = false): void {
     });
   }
   const special = specialNotes();
-  for (const [relativePath, content] of special) {
+  for (const [relativePath, content] of special)
     writeNote(relativePath, content);
-  }
   const reserved = new Set(special.map(([relativePath]) => relativePath));
   let generated = 0;
   for (
@@ -118,9 +165,7 @@ export function createFleetVault(force = false): void {
     index += 1
   ) {
     const relativePath = generatedPath(index);
-    if (reserved.has(relativePath)) {
-      continue;
-    }
+    if (reserved.has(relativePath)) continue;
     writeNote(relativePath, generatedContent(index));
     generated += 1;
   }

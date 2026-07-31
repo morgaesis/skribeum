@@ -299,7 +299,16 @@ impl Watcher for RealWatcher {
             // Events were missed while unsubscribed; the consumer rescans.
             return Some(WatchEvent::Overflow);
         }
-        let event = self.receiver.try_recv().ok()?;
+        let Ok(event) = self.receiver.try_recv() else {
+            // Some backends stop silently when the watched root is deleted,
+            // delivering no event at all; an empty queue with a missing root
+            // is the only portable death signal.
+            if !self.needs_rewatch && self.root.symlink_metadata().is_err() {
+                self.needs_rewatch = true;
+                return Some(WatchEvent::Overflow);
+            }
+            return None;
+        };
         let root_gone = match &event {
             WatchEvent::Removed(path) => *path == self.root,
             WatchEvent::Renamed { from, .. } => *from == self.root,

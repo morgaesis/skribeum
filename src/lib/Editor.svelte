@@ -174,7 +174,13 @@ function stateFor(content: string, locked: boolean): EditorState {
       ...registryExtensions(),
       EditorState.readOnly.of(locked),
       EditorView.editable.of(!locked),
-      EditorView.contentAttributes.of({ "aria-label": STRINGS.editorLabel }),
+      EditorView.contentAttributes.of(
+        // Read-only content is not contenteditable, so without an explicit
+        // tabindex the scrollable region loses keyboard reachability.
+        locked
+          ? { "aria-label": STRINGS.editorLabel, tabindex: "0" }
+          : { "aria-label": STRINGS.editorLabel },
+      ),
       EditorView.domEventHandlers({
         blur: () => {
           requestSave();

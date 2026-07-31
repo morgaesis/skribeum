@@ -19,6 +19,10 @@ const ALLOWED: &[&str] = &[
     "crates/skribeum-core/tests/line_ending_corpus.rs",
     "crates/skribeum-core/tests/conformance.rs",
     "crates/skribeum-core/tests/wikilink_properties.rs",
+    // The real-filesystem smoke layer simulates EXTERNAL actors (another
+    // program deleting the watched root); routing those through RealFs
+    // would test the app against itself instead of against the outside.
+    "crates/skribeum-vault/tests/real_smoke.rs",
 ];
 
 /// Source roots scanned for Rust files.

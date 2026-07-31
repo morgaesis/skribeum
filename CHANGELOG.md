@@ -25,6 +25,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   system color-scheme tracking, and programmatic WCAG AA contrast checks.
 - Linux axe accessibility gates for the vault, decorated editor, command
   palette, settings and canvas surfaces, with expanded keyboard traversal.
+- Rendered GFM table rows, recursive whole-note and section embeds, lazy
+  fenced-code syntax highlighting, exact-source copy controls, cursor-aware
+  fence receding, and the full Obsidian callout taxonomy with icons, themed
+  accents and collapsible rich bodies.
 
 - Standalone `skribeum-import` CLI converting Notion Markdown and CSV export
   archives into Obsidian-compatible vaults, with readable collision-safe

@@ -1,5 +1,6 @@
 0..33 widget mermaid-diagram aria-label="Rendered diagram" data-language="mermaid" role="img"
 0..0 line class="cm-skr-code-block"
+0..0 widget code-copy aria-label="Copy code" role="button"
 0..3 mark class="cm-skr-code-fence"
 3..10 mark class="cm-skr-code-info" data-language="mermaid"
 11..11 line class="cm-skr-code-block"

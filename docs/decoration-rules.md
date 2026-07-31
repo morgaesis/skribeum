@@ -10,8 +10,9 @@ carries a behavioral reveal test for every row.
 
 Reveal policies:
 
-- **cursor-inside**: the hidden or replaced text returns as plain source
-  while any selection endpoint touches the enclosing construct.
+- **cursor-inside**: hidden or replaced text returns as plain source, and
+  receded source styling clears, while any selection endpoint touches the
+  enclosing construct.
 - **cursor-line**: the hidden text returns while any selection endpoint
   touches a document line the enclosing construct covers.
 - **never**: the decoration applies regardless of the cursor. Rows that
@@ -54,19 +55,24 @@ that name.
 | `WikilinkTarget` | `withSibling=WikilinkAlias` | `hide` | cursor-inside |
 | `WikilinkTarget` | `withoutSibling=WikilinkAlias` | `mark cm-skr-wikilink-target` | never |
 | `WikilinkAlias` | `-` | `mark cm-skr-wikilink-alias` | never |
-| `Embed` | `-` | `mark cm-skr-embed` | never |
+| `Embed` | `-` | `widget embed` | cursor-inside |
 | `EmbedMark` | `-` | `hide` | cursor-inside |
+| `TableHeader` | `-` | `widget table-row` | cursor-inside |
+| `TableDelimiter` | `parent=Table` | `widget table-separator` | cursor-inside |
+| `TableRow` | `-` | `widget table-row` | cursor-inside |
 | `ListMark` | `-` | `mark cm-skr-list-mark` | never |
 | `TaskMarker` | `-` | `widget task-checkbox` | cursor-inside |
 | `InlineMath` | `-` | `widget math-inline` | cursor-inside |
 | `BlockMath` | `-` | `widget math-block` | cursor-inside |
 | `InlineCode` | `-` | `mark cm-skr-inline-code` | never |
 | `CodeMark` | `parent=InlineCode` | `hide` | cursor-inside |
-| `CodeMark` | `parent=FencedCode` | `mark cm-skr-code-fence` | never |
+| `CodeMark` | `parent=FencedCode` | `mark cm-skr-code-fence` | cursor-inside |
 | `FencedCode` | `-` | `line cm-skr-code-block` | never |
 | `CodeBlock` | `-` | `line cm-skr-code-block` | never |
-| `CodeInfo` | `-` | `mark cm-skr-code-info` | never |
+| `CodeInfo` | `-` | `mark cm-skr-code-info` | cursor-inside |
+| `FencedCode` | `-` | `widget code-copy` | never |
 | `FencedCode` | `codeInfo=mermaid` | `widget mermaid-diagram` | cursor-inside |
+| `Blockquote` | `-` | `widget callout` | cursor-inside |
 | `Blockquote` | `-` | `line cm-skr-blockquote` | never |
 | `QuoteMark` | `-` | `mark cm-skr-quote-mark` | never |
 | `CalloutMark` | `ancestor=Blockquote` | `mark cm-skr-callout-mark` | never |
@@ -75,19 +81,21 @@ that name.
 | `BlockId` | `-` | `mark cm-skr-block-id` | never |
 | `Frontmatter` | `-` | `line cm-skr-frontmatter` | never |
 
-Context-dependent attributes come from four documented engine builtins a
+Context-dependent attributes come from five documented engine builtins a
 row opts into: `wikilink-resolution` stamps `data-resolved` from the vault
 tree (unresolved links style distinctly), `callout-type` stamps
 `data-callout` and the `cm-skr-callout` line class when a blockquote is
-headed by a callout mark, and `code-language` stamps `data-language` from
-the fence info string. `mermaid-block` restricts the diagram widget to a
-Mermaid fence and stamps its language attribute.
+headed by a callout mark, while `rich-callout` limits the replacement widget
+to those blockquotes. `code-language` stamps `data-language` from the fence
+info string. `mermaid-block` restricts the diagram widget to a Mermaid fence
+and stamps its language attribute.
 
 No decoration is computed on a document line longer than 10,000 characters.
-Marks and inline widgets are windowed to visible ranges. Math-block and
-Mermaid replacements are held in a full-document decoration field because
-CodeMirror requires vertical-layout decorations to come from editor state;
-their expensive rendering starts only when CodeMirror mounts the widget.
+Marks and inline widgets are windowed to visible ranges. Table rows, rich
+callouts, math blocks and Mermaid replacements are held in a full-document
+decoration field because CodeMirror requires vertical-layout decorations to
+come from editor state. Expensive rendering starts only when CodeMirror mounts
+the widget.
 
 KaTeX font files are emitted as local build assets. Mermaid is a dynamic
 chunk loaded by the first diagram, and neither renderer adds a remote CSP

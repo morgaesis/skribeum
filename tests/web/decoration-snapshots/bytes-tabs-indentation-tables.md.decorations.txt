@@ -5,3 +5,7 @@
 140..141 mark class="cm-skr-list-mark"
 155..156 mark class="cm-skr-list-mark"
 192..193 mark class="cm-skr-list-mark"
+231..254 widget table-row data-header="true" role="row"
+255..278 widget table-separator aria-hidden="true"
+279..316 widget table-row data-header="false" role="row"
+317..359 widget table-row data-header="false" role="row"

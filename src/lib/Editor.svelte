@@ -1,7 +1,11 @@
 <script lang="ts">
 import { history } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxTree } from "@codemirror/language";
+import {
+  defaultHighlightStyle,
+  syntaxHighlighting,
+  syntaxTree,
+} from "@codemirror/language";
 import {
   Annotation,
   type ChangeSet,
@@ -26,6 +30,7 @@ import {
   type FrontmatterValueType,
   parseFrontmatter,
 } from "./editor/frontmatter";
+import { codeLanguage } from "./editor/markdown/codeLanguages";
 import { obsidianMarkdownExtensions } from "./editor/markdown/obsidian";
 import { NoteSession } from "./editor/noteSession";
 import { findExtension } from "./features/findPanel";
@@ -167,8 +172,10 @@ function stateFor(content: string, locked: boolean): EditorState {
     extensions: [
       markdown({
         base: markdownLanguage,
+        codeLanguages: codeLanguage,
         extensions: obsidianMarkdownExtensions,
       }),
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       decorationEngine(),
       EditorView.lineWrapping,
       bulkTextInput(),

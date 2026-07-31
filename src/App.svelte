@@ -235,12 +235,17 @@ function commandContext(): CommandContext {
 
 const onGlobalKeydown = globalKeydownHandler(registry, commandContext);
 
+// Derived from the tree alone: the switcher's candidate list must not be
+// rebuilt from every tree entry on each keystroke, which is what made the
+// surface take most of a second to appear over a large vault.
+const notePaths = $derived(notePathsOf(tree));
+
 const overlayItems = $derived.by((): PickerItem[] => {
   switch (activeOverlay) {
     case VIEW_COMMAND_PALETTE:
       return paletteItems(registry, overlayQuery, macPlatform);
     case VIEW_QUICK_SWITCHER:
-      return quickSwitcherItems(notePathsOf(tree), recents, overlayQuery);
+      return quickSwitcherItems(notePaths, recents, overlayQuery);
     case VIEW_VAULT_SEARCH:
       return searchResultItems(searchResults);
     default:

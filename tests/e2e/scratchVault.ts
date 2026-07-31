@@ -79,6 +79,13 @@ export const REVEAL_NOTE_NAME = "zzzz-reveal.md";
 export const REVEAL_NOTE_CONTENT =
   "# Reveal interactions\n\n> [!tip] Linked callout\n> First body line.\n> Read [inside link](inside-target).\n\n[Outside link](outside-target)\n\ncursor parking\n";
 
+export const NAVIGATION_SOURCE_NOTE_NAME = "zzz-navigation-source.md";
+export const NAVIGATION_SOURCE_NOTE_CONTENT =
+  "# Navigation source\n\nFollow [[zzz-navigation-target]].\n";
+export const NAVIGATION_TARGET_NOTE_NAME = "zzz-navigation-target.md";
+export const NAVIGATION_TARGET_NOTE_CONTENT =
+  "# Navigation target\n\nWikilink destination content.\n";
+
 export const CANVAS_FILE_NAME = "zzz-board.canvas";
 export const CANVAS_REFERENCE_NAME = "z-live-preview.md";
 export const CANVAS_FILE_CONTENT = JSON.stringify({
@@ -148,6 +155,14 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, VISUAL_NOTE_NAME),
     VISUAL_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, NAVIGATION_SOURCE_NOTE_NAME),
+    NAVIGATION_SOURCE_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, NAVIGATION_TARGET_NOTE_NAME),
+    NAVIGATION_TARGET_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, CANVAS_FILE_NAME),

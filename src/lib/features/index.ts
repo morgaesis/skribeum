@@ -7,6 +7,7 @@ import { DEFAULT_TASK_STATUSES, type TaskStatus } from "../taskStatuses";
 import { registerFind } from "./findPanel";
 import { registerFormatting } from "./formattingCommands";
 import { registerInsertions } from "./insertions";
+import { registerNavigation } from "./navigation";
 import { registerSlashMenu } from "./slashMenu";
 import { registerSurfaces } from "./surfaces";
 import { registerTableEditing } from "./tableEditing";
@@ -22,6 +23,7 @@ export function createAppRegistry(
   registerFormatting(registry);
   registerInsertions(registry);
   registerSlashMenu(registry);
+  registerNavigation(registry);
   registerTableEditing(registry);
   registerTaskStatusCommands(registry, taskStatuses);
   return registry;

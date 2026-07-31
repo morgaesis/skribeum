@@ -2445,7 +2445,10 @@ const engineTheme = EditorView.baseTheme({
     textUnderlineOffset: "0.15em",
   },
   ".cm-skr-link-label": { color: "var(--skr-link)" },
-  ".cm-skr-wikilink": { color: "var(--skr-link)" },
+  ".cm-skr-wikilink": {
+    color: "var(--skr-link)",
+    cursor: "pointer",
+  },
   ".cm-skr-wikilink-target, .cm-skr-wikilink-alias": {
     textDecoration: "underline",
   },

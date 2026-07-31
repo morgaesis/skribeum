@@ -34,6 +34,12 @@ export type CommandContext = {
   notePaths(): readonly string[];
   /** Recently opened note paths, most recent first. */
   recentNotePaths(): readonly string[];
+  /** Moves to the previous note address, declining when none exists. */
+  navigateBack(): boolean;
+  /** Moves to the next note address, declining when none exists. */
+  navigateForward(): boolean;
+  /** Follows the wikilink under the editor cursor, declining outside one. */
+  followLink(view?: EditorView | null): boolean;
 };
 
 /**

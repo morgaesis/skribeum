@@ -12,6 +12,13 @@ export const STRINGS = {
     "Some file names in this vault collide by letter case or Unicode form and may be merged by other filesystems:",
   vaultOpenFailed: "Opening the vault failed",
   noteReadFailed: "Reading the note failed",
+  noteNotFoundTitle: "Note not found",
+  noteNotFoundPrefix: "No note exists at this vault-relative path:",
+  noteNotFoundBrowser:
+    "The browser demo uses a fixed sample vault and cannot create missing notes.",
+  noteNotFoundDesktop:
+    "Create the Markdown file at this path in the vault, then refresh the vault index.",
+  noteNotFoundRefresh: "Refresh and open",
   noteWriteFailed: "Saving the note failed",
   contentSwitchUnsaved:
     "The current note could not be saved. Its edits remain open in memory.",
@@ -312,6 +319,14 @@ export const STRINGS = {
   demoNoteNotMarkdown: "The requested demo file is not a note.",
   demoNoteAlreadyExists: "The requested demo note already exists.",
   commandSaveNote: "Save note",
+  navigationHistoryLabel: "Note history",
+  navigationBack: "Back",
+  navigationForward: "Forward",
+  commandNavigateBack: "Navigate back",
+  commandNavigateForward: "Navigate forward",
+  commandFollowLink: "Follow link under cursor",
+  wikilinkUnresolvedReason: "No note in this vault matches this link.",
+  wikilinkTargetNotNote: "This link resolves to a file that is not a note.",
   commandFindInNote: "Find in note",
   commandFindNext: "Find next match",
   commandFindPrevious: "Find previous match",

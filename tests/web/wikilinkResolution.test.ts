@@ -83,21 +83,53 @@ describe("wikilink target resolution", () => {
     });
   });
 
-  it("strips heading and block suffixes before resolving", () => {
+  it("retains heading and block suffixes after resolving", () => {
     expect(
       resolveWikilinkTarget("garden-journal#Spring planting", context),
-    ).toEqual({ kind: "note", path: "garden-journal.md" });
+    ).toEqual({
+      kind: "note",
+      path: "garden-journal.md",
+      fragment: "Spring planting",
+    });
     expect(resolveWikilinkTarget("garden-journal#^row-seven", context)).toEqual(
-      { kind: "note", path: "garden-journal.md" },
+      {
+        kind: "note",
+        path: "garden-journal.md",
+        fragment: "^row-seven",
+      },
     );
+  });
+
+  it("resolves multi-segment suffixes and prefers case-sensitive tiers", () => {
+    expect(resolveWikilinkTarget("greenhouse/frame", context)).toEqual({
+      kind: "note",
+      path: "projects/greenhouse/frame.md",
+    });
+    expect(
+      resolveWikilinkTarget("notes", {
+        ...context,
+        paths: ["Notes.md", "notes.md"],
+      }),
+    ).toEqual({ kind: "note", path: "notes.md" });
+  });
+
+  it("resolves explicitly relative targets from the current note", () => {
+    expect(
+      resolveWikilinkTarget("../garden-journal", {
+        ...context,
+        currentPath: "projects/greenhouse/current.md",
+      }),
+    ).toEqual({ kind: "note", path: "projects/garden-journal.md" });
   });
 
   it("treats an empty note part as a self reference", () => {
     expect(resolveWikilinkTarget("#Bare note link", context)).toEqual({
       kind: "self",
+      fragment: "Bare note link",
     });
     expect(resolveWikilinkTarget("#^para-anchor", context)).toEqual({
       kind: "self",
+      fragment: "^para-anchor",
     });
   });
 
@@ -153,6 +185,7 @@ describe("wikilink target resolution", () => {
   it("reports unknown targets unresolved", () => {
     expect(resolveWikilinkTarget("no-such-note", context)).toEqual({
       kind: "unresolved",
+      candidate: { path: "no-such-note.md" },
     });
   });
 });

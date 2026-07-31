@@ -1,8 +1,156 @@
 @import "tailwindcss";
+@import "./lib/themes/theme.css";
 
 html,
 body,
 #app {
   height: 100%;
   margin: 0;
+}
+
+body {
+  background: var(--skr-canvas);
+  color: var(--skr-text);
+}
+
+button,
+input,
+select {
+  color: inherit;
+}
+
+button,
+input,
+select,
+[role="dialog"] {
+  border-color: var(--skr-border);
+}
+
+button:hover {
+  background: var(--skr-surface-subtle);
+}
+
+input,
+select {
+  background: var(--skr-surface);
+}
+
+:focus-visible {
+  outline-color: var(--skr-focus);
+}
+
+.skr-app-header,
+.skr-sidebar,
+.skr-panel {
+  border-color: var(--skr-border);
+  background: var(--skr-surface);
+}
+
+[role="dialog"] {
+  background: var(--skr-surface-raised);
+  color: var(--skr-text);
+  box-shadow: var(--skr-shadow);
+}
+
+[role="treeitem"][aria-selected="true"] {
+  background: var(--skr-accent-soft);
+}
+
+[role="option"][aria-selected="true"] {
+  background: var(--skr-accent-soft);
+}
+
+.bg-white {
+  background-color: var(--skr-surface);
+}
+
+.bg-gray-50,
+.bg-gray-100 {
+  background-color: var(--skr-surface-subtle);
+}
+
+.bg-blue-100 {
+  background-color: var(--skr-accent-soft);
+}
+
+.bg-black\/20 {
+  background-color: var(--skr-overlay);
+}
+
+.bg-amber-50,
+.bg-amber-100,
+.bg-amber-200 {
+  background-color: var(--skr-warning-surface);
+  color: var(--skr-warning);
+}
+
+.bg-red-50 {
+  background-color: var(--skr-danger-surface);
+  color: var(--skr-danger);
+}
+
+.text-gray-500,
+.text-gray-600,
+.opacity-60 {
+  color: var(--skr-text-muted);
+  opacity: 1;
+}
+
+.border-gray-200,
+.border-gray-300 {
+  border-color: var(--skr-border);
+}
+
+.border-amber-300,
+.border-amber-400 {
+  border-color: var(--skr-warning);
+}
+
+.border-red-300 {
+  border-color: var(--skr-danger);
+}
+
+mark {
+  color: var(--skr-text);
+  background: var(--skr-warning-surface);
+}
+
+.skr-warning {
+  border-color: var(--skr-warning);
+  background: var(--skr-warning-surface);
+  color: var(--skr-warning);
+}
+
+.skr-error {
+  border-color: var(--skr-danger);
+  background: var(--skr-danger-surface);
+  color: var(--skr-danger);
+}
+
+.cm-editor,
+.cm-scroller,
+.cm-gutters {
+  background: var(--skr-surface);
+  color: var(--skr-text);
+}
+
+.cm-gutters {
+  border-color: var(--skr-border);
+  color: var(--skr-text-muted);
+}
+
+.cm-activeLine,
+.cm-activeLineGutter {
+  background: var(--skr-surface-subtle);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto;
+    transition-duration: 0.01ms;
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+  }
 }

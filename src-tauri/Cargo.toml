@@ -17,10 +17,14 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 skribeum-core = { path = "../crates/skribeum-core" }
 skribeum-vault = { path = "../crates/skribeum-vault" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["specta"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-wdio-webdriver = { version = "1.2.0", optional = true }
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+specta = "=2.0.0-rc.25"
+specta-typescript = "0.0.12"
+tauri-plugin-dialog = "2"
 
 [lints]
 workspace = true

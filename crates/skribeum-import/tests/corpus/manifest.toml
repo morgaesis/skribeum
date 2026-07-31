@@ -1,0 +1,74 @@
+# Import corpus manifest. Every source construct lists the synthesized archive
+# trees and files that exercise it. The coverage gate rejects empty constructs,
+# missing files, unlisted source files, duplicate keys, and archives without a
+# committed golden output tree.
+
+[[construct]]
+key = "page"
+description = "A regular Notion page exported as Markdown"
+archives = ["pages"]
+files = ["archives/pages/Workspace 11111111111111111111111111111111.md"]
+
+[[construct]]
+key = "nested-page"
+description = "A child page stored in the parent page export folder"
+archives = ["pages"]
+files = ["archives/pages/Workspace 11111111111111111111111111111111/Child 22222222222222222222222222222222.md"]
+
+[[construct]]
+key = "database-csv-typed-columns"
+description = "A CSV database with text, number, boolean, date, timestamp, and multi-value text columns plus an exported row body"
+archives = ["database"]
+files = [
+  "archives/database/Tasks ffffffffffffffffffffffffffffffff.csv",
+  "archives/database/Tasks ffffffffffffffffffffffffffffffff/Write docs cccccccccccccccccccccccccccccccc.md",
+]
+
+[[construct]]
+key = "internal-link"
+description = "Relative page links rewritten after source names and directories lose Notion IDs"
+archives = ["pages"]
+files = [
+  "archives/pages/Workspace 11111111111111111111111111111111.md",
+  "archives/pages/Workspace 11111111111111111111111111111111/Child 22222222222222222222222222222222.md",
+]
+
+[[construct]]
+key = "attachment-image"
+description = "Image attachments copied beside page content with relative Markdown links preserved or rewritten"
+archives = ["pages", "database"]
+files = [
+  "archives/pages/Workspace 11111111111111111111111111111111/diagram.svg",
+  "archives/pages/Workspace 11111111111111111111111111111111/sketch.svg",
+  "archives/database/Tasks ffffffffffffffffffffffffffffffff/draft.svg",
+]
+
+[[construct]]
+key = "name-collision-pair"
+description = "Two page exports with the same readable title and different Notion IDs"
+archives = ["pages"]
+files = [
+  "archives/pages/Twin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md",
+  "archives/pages/Twin bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.md",
+]
+
+[[construct]]
+key = "unicode-filename"
+description = "A readable NFC Unicode page name after the Notion ID is removed"
+archives = ["pages"]
+files = ["archives/pages/Café 六 66666666666666666666666666666666.md"]
+
+[[construct]]
+key = "deep-nesting"
+description = "A note nested through three de-suffixed export folders"
+archives = ["pages"]
+files = ["archives/pages/Workspace 11111111111111111111111111111111/Deep 33333333333333333333333333333333/Level 44444444444444444444444444444444/Leaf 55555555555555555555555555555555.md"]
+
+[[construct]]
+key = "created-edited-frontmatter"
+description = "Created and edited timestamps promoted from page properties and CSV columns into frontmatter"
+archives = ["pages", "database"]
+files = [
+  "archives/pages/Workspace 11111111111111111111111111111111.md",
+  "archives/database/Tasks ffffffffffffffffffffffffffffffff.csv",
+]

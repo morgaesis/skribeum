@@ -1,9 +1,17 @@
 [workspace]
 resolver = "2"
-members = ["crates/skribeum-core", "crates/skribeum-vault", "src-tauri"]
+members = [
+  "crates/skribeum-core",
+  "crates/skribeum-import",
+  "crates/skribeum-vault",
+  "src-tauri",
+]
+# The fuzz crate builds on its own pinned nightly (cargo-fuzz requires it);
+# keeping it outside the workspace keeps every other build on exact stable.
+exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.0.3"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"

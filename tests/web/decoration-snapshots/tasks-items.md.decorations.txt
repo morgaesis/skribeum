@@ -1,0 +1,38 @@
+0..0 line class="cm-skr-heading cm-skr-heading-1"
+0..2 hide node=HeaderMark
+14..15 mark class="cm-skr-list-mark"
+16..19 widget task-checkbox aria-checked="false" aria-disabled="true" aria-label="open task" role="checkbox"
+63..64 mark class="cm-skr-list-mark"
+65..68 widget task-checkbox aria-checked="true" aria-disabled="true" aria-label="completed task" role="checkbox"
+113..114 mark class="cm-skr-list-mark"
+115..118 widget task-checkbox aria-checked="true" aria-disabled="true" aria-label="completed task" role="checkbox"
+154..155 mark class="cm-skr-list-mark"
+156..159 widget task-checkbox aria-checked="false" aria-disabled="true" aria-label="open task" role="checkbox"
+170..172 hide node=EmphasisMark
+170..183 mark class="cm-skr-strong"
+181..183 hide node=EmphasisMark
+190..192 hide node=WikilinkMark
+190..209 mark class="cm-skr-wikilink" data-resolved="false"
+192..207 mark class="cm-skr-wikilink-target"
+207..209 hide node=WikilinkMark
+217..218 mark class="cm-skr-list-mark"
+219..220 hide node=LinkMark
+219..222 mark class="cm-skr-link"
+221..222 hide node=LinkMark
+274..275 mark class="cm-skr-list-mark"
+276..277 hide node=LinkMark
+276..279 mark class="cm-skr-link"
+278..279 hide node=LinkMark
+326..328 mark class="cm-skr-list-mark"
+329..332 widget task-checkbox aria-checked="false" aria-disabled="true" aria-label="open task" role="checkbox"
+356..358 mark class="cm-skr-list-mark"
+359..362 widget task-checkbox aria-checked="true" aria-disabled="true" aria-label="completed task" role="checkbox"
+385..386 mark class="cm-skr-list-mark"
+387..390 widget task-checkbox aria-checked="false" aria-disabled="true" aria-label="open task" role="checkbox"
+419..420 mark class="cm-skr-list-mark"
+421..424 widget task-checkbox aria-checked="false" aria-disabled="true" aria-label="open task" role="checkbox"
+455..456 mark class="cm-skr-list-mark"
+457..460 widget task-checkbox aria-checked="true" aria-disabled="true" aria-label="completed task" role="checkbox"
+488..489 mark class="cm-skr-list-mark"
+541..542 mark class="cm-skr-list-mark"
+543..546 widget task-checkbox aria-checked="false" aria-disabled="true" aria-label="open task" role="checkbox"

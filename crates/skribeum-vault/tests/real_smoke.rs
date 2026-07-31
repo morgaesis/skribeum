@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use skribeum_vault::{EntryKind, FileSystem, FsError, RealFs, SimFs, Vault};
+use skribeum_vault::{EntryKind, FileSystem, FsError, RealFs, SimFs, Vault, write_durable};
 
 /// A unique scratch directory for one test, created through the trait.
 fn scratch(name: &str) -> PathBuf {
@@ -30,8 +30,7 @@ fn write_read_metadata_remove_round_trip() {
     ] {
         let (fs, root) = fs_and_root;
         let file = root.join("note.md");
-        fs.write_atomic(&file, b"content\n")
-            .expect("write succeeds");
+        write_durable(fs, &file, b"content\n").expect("write succeeds");
         assert_eq!(fs.read(&file).expect("read succeeds"), b"content\n");
         let meta = fs.metadata(&file).expect("metadata succeeds");
         assert_eq!(meta.size, 8);
@@ -76,8 +75,8 @@ fn read_dir_lists_names_and_kinds() {
         let (fs, root) = fs_and_root;
         fs.create_dir_all(&root.join("sub"))
             .expect("mkdir succeeds");
-        fs.write_atomic(&root.join("a.md"), b"a").expect("write a");
-        fs.write_atomic(&root.join("b.txt"), b"b").expect("write b");
+        write_durable(fs, &root.join("a.md"), b"a").expect("write a");
+        write_durable(fs, &root.join("b.txt"), b"b").expect("write b");
         let mut names: Vec<(String, bool)> = fs
             .read_dir(&root)
             .expect("read_dir succeeds")
@@ -110,8 +109,7 @@ fn rename_moves_content() {
         (&sim as &dyn FileSystem, sim_root.clone()),
     ] {
         let (fs, root) = fs_and_root;
-        fs.write_atomic(&root.join("old.md"), b"payload")
-            .expect("write");
+        write_durable(fs, &root.join("old.md"), b"payload").expect("write");
         fs.rename(&root.join("old.md"), &root.join("new.md"))
             .expect("rename");
         assert_eq!(fs.read(&root.join("old.md")), Err(FsError::NotFound));
@@ -141,9 +139,7 @@ fn vault_opens_committed_corpus_on_real_fs() {
 #[test]
 fn opening_a_file_as_vault_fails() {
     let real_root = scratch("notdir");
-    RealFs
-        .write_atomic(&real_root.join("file.md"), b"x")
-        .expect("write");
+    write_durable(&RealFs, &real_root.join("file.md"), b"x").expect("write");
     let real_err = Vault::open(&RealFs, &real_root.join("file.md"));
     assert!(real_err.is_err());
 
@@ -166,9 +162,7 @@ fn opening_a_file_as_vault_fails() {
 fn real_watcher_observes_a_write() {
     let root = scratch("watch");
     let mut watcher = RealFs.watch(&root).expect("watch subscribes");
-    RealFs
-        .write_atomic(&root.join("seen.md"), b"event")
-        .expect("write");
+    write_durable(&RealFs, &root.join("seen.md"), b"event").expect("write");
 
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut observed = Vec::new();
@@ -184,5 +178,83 @@ fn real_watcher_observes_a_write() {
     assert!(
         !observed.is_empty(),
         "the real watcher must deliver at least one event for a write under its root"
+    );
+}
+
+/// The durable write preserves the target's permission mode across the
+/// temp-and-rename replace, matching the simulator's model.
+#[cfg(unix)]
+#[test]
+fn real_write_preserves_the_target_mode() {
+    let root = scratch("mode");
+    let note = root.join("note.md");
+    write_durable(&RealFs, &note, b"original").expect("write");
+
+    // Tighten the mode through the trait-visible metadata, then replace.
+    let sim = SimFs::new();
+    sim.external_create_dir(&PathBuf::from("vault"));
+    sim.external_write(&PathBuf::from("vault/note.md"), b"original");
+    sim.external_set_mode(&PathBuf::from("vault/note.md"), 0o600);
+    set_unix_mode(&note, 0o600);
+
+    for (fs, path) in [
+        (&RealFs as &dyn FileSystem, note.clone()),
+        (&sim as &dyn FileSystem, PathBuf::from("vault/note.md")),
+    ] {
+        write_durable(fs, &path, b"replaced").expect("replace");
+        let mode = fs
+            .metadata(&path)
+            .expect("metadata")
+            .mode
+            .expect("unix mode");
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the replace must preserve the target's permission mode"
+        );
+    }
+}
+
+/// Sets a Unix permission mode through the one crate-external escape hatch
+/// this smoke layer allows itself: a `chmod` child process, keeping the
+/// direct-filesystem guard intact.
+#[cfg(unix)]
+fn set_unix_mode(path: &std::path::Path, mode: u32) {
+    let status = std::process::Command::new("chmod")
+        .arg(format!("{mode:o}"))
+        .arg(path)
+        .status()
+        .expect("chmod runs");
+    assert!(status.success(), "chmod succeeds");
+}
+
+/// The durable write resolves a symlink and writes through it: the target
+/// receives the bytes and the link remains a link, on the real filesystem
+/// exactly as in the simulator.
+#[cfg(unix)]
+#[test]
+fn real_write_goes_through_a_symlink() {
+    let root = scratch("symlink");
+    let target = root.join("real.md");
+    let link = root.join("link.md");
+    write_durable(&RealFs, &target, b"target content").expect("write");
+    let status = std::process::Command::new("ln")
+        .arg("-s")
+        .arg(&target)
+        .arg(&link)
+        .status()
+        .expect("ln runs");
+    assert!(status.success(), "symlink created");
+
+    write_durable(&RealFs, &link, b"through the link").expect("write through link");
+    assert_eq!(
+        RealFs.read(&target).expect("target reads"),
+        b"through the link",
+        "the symlink target must receive the write"
+    );
+    let resolved = RealFs.resolve_write_target(&link).expect("resolves");
+    assert_eq!(
+        resolved, target,
+        "the link must still resolve to the target"
     );
 }

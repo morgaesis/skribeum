@@ -73,7 +73,7 @@ fn read_only_vault_opens_and_rejects_writes() {
     assert_eq!(fs.app_write_count(), 0);
 
     assert_eq!(
-        fs.write_atomic(&root.join("welcome.md"), b"changed"),
+        fs.write_file(&root.join("welcome.md"), b"changed"),
         Err(FsError::ReadOnly)
     );
     assert_eq!(

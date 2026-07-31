@@ -42,7 +42,14 @@ pub fn run() {
 
     builder
         .setup(move |app| {
+            use tauri::Manager;
             specta_builder.mount_events(app);
+            // The crash journal is enabled by default; it lives in the OS
+            // app-data directory, never inside any vault.
+            let journal = app.path().app_data_dir().ok().map(|dir| {
+                skribeum_vault::Journal::new(dir.join(skribeum_vault::JOURNAL_FILE_NAME))
+            });
+            app.manage(ipc::JournalState(journal));
             Ok(())
         })
         .run(tauri::generate_context!())

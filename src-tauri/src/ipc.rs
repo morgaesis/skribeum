@@ -10,7 +10,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use skribeum_vault::{Encoding, EntryKind, FileSystem, RealFs, Vault, VaultPath, is_indexed_path};
+use skribeum_vault::{
+    Clock, Encoding, EntryKind, FileSystem, Journal, RealClock, RealFs, ReconEvent, Reconciler,
+    ReplayOutcome, Vault, VaultPath, is_indexed_path,
+};
 use tauri::ipc::InvokeResponseBody;
 use tauri::{AppHandle, Runtime, State};
 use tauri_specta::Event;
@@ -47,6 +50,62 @@ pub struct TreeEntry {
     pub kind: TreeEntryKind,
     /// Whether the final segment is dot-prefixed.
     pub hidden: bool,
+}
+
+/// One byte-range replacement over IPC: bytes `start..end` of the base
+/// (the last-read projection) are replaced by `bytes`. Offsets are UTF-8
+/// byte offsets, per the boundary invariant.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct ByteRangeReplace {
+    /// Inclusive start byte offset into the base.
+    pub start: u32,
+    /// Exclusive end byte offset into the base.
+    pub end: u32,
+    /// Replacement bytes.
+    pub bytes: Vec<u8>,
+}
+
+impl From<&ByteRangeReplace> for skribeum_core::ByteRangeReplace {
+    fn from(change: &ByteRangeReplace) -> Self {
+        Self {
+            start: change.start as usize,
+            end: change.end as usize,
+            bytes: change.bytes.clone(),
+        }
+    }
+}
+
+/// Converts a core change set into its IPC form. Offsets past `u32::MAX`
+/// cannot occur: note reads are capped below that size.
+fn to_ipc_changes(changes: &[skribeum_core::ByteRangeReplace]) -> Vec<ByteRangeReplace> {
+    changes
+        .iter()
+        .map(|change| ByteRangeReplace {
+            start: u32::try_from(change.start).unwrap_or(u32::MAX),
+            end: u32::try_from(change.end).unwrap_or(u32::MAX),
+            bytes: change.bytes.clone(),
+        })
+        .collect()
+}
+
+/// The result of `note_write`. The conflict variant is the entry point of
+/// the reconciliation UX: it carries the current on-disk projection hash
+/// plus a reconciliation handle, and nothing was overwritten.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "result", rename_all = "lowercase")]
+pub enum WriteResult {
+    /// The change set was applied and durably written.
+    Written {
+        /// Projection hash of the new on-disk bytes.
+        projection_hash: String,
+    },
+    /// The on-disk projection no longer matches the expected hash.
+    Conflict {
+        /// Current on-disk projection hash; absent when the file is gone.
+        current_projection_hash: Option<String>,
+        /// Reconciliation handle for the conflict flow.
+        reconciliation: u32,
+    },
 }
 
 /// Encoding classification over IPC.
@@ -115,6 +174,84 @@ pub struct VaultCollisionsDetected {
     pub groups: Vec<Vec<String>>,
 }
 
+/// A reconciliation banner: ambiguity the editor must surface; nothing was
+/// applied automatically.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct ReconciliationBanner {
+    /// Handle of the vault concerned.
+    pub vault: u32,
+    /// Vault-relative path.
+    pub path: String,
+    /// Why the banner is shown.
+    pub reason: BannerReason,
+    /// The observed on-disk projection hash, when one exists.
+    pub disk_hash: Option<String>,
+}
+
+/// Banner reasons over IPC.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum BannerReason {
+    /// A stable read shrank past the guard fraction.
+    SizeShrank,
+    /// A previously non-empty note read back empty.
+    BecameEmpty,
+    /// An external edit landed within the settle window of this device's
+    /// own last write.
+    EditWithinWriteSettle,
+    /// The on-disk file changed between a crash and this start; the crash
+    /// journal was not replayed.
+    JournalDiverged,
+}
+
+/// A stable external change to an indexed note, delivered with a change set
+/// against this device's last-read projection so an open note ingests it as
+/// a delta. External changes are never reverted.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct ExternalNoteUpdate {
+    /// Handle of the vault concerned.
+    pub vault: u32,
+    /// Vault-relative path.
+    pub path: String,
+    /// Projection hash of the new on-disk content.
+    pub projection_hash: String,
+    /// Delta from the last projection to the new content.
+    pub change_set: Vec<ByteRangeReplace>,
+}
+
+/// An indexed note disappeared from disk.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct ExternalNoteRemove {
+    /// Handle of the vault concerned.
+    pub vault: u32,
+    /// Vault-relative path.
+    pub path: String,
+}
+
+/// More files diverged in one reconciliation pass than the review
+/// threshold; nothing was applied and the whole set needs review.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct BulkDivergenceReview {
+    /// Handle of the vault concerned.
+    pub vault: u32,
+    /// Every divergent vault-relative path.
+    pub paths: Vec<String>,
+}
+
+/// A crash-journal chain replayed on start: applying `change_set` to the
+/// current on-disk bytes reproduces the buffer as it was before the crash.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct NoteRecovered {
+    /// Handle of the vault concerned.
+    pub vault: u32,
+    /// Vault-relative path.
+    pub path: String,
+    /// Delta from the on-disk bytes to the recovered buffer.
+    pub change_set: Vec<ByteRangeReplace>,
+    /// Projection hash of the recovered buffer.
+    pub projection_hash: String,
+}
+
 /// A channel whose messages are raw byte payloads. The specta signature
 /// borrows `Channel<Vec<u8>>` so bindings type it as a Tauri channel, while
 /// sends use `InvokeResponseBody::Raw`, which the webview receives as an
@@ -147,13 +284,16 @@ impl specta::Type for RawChannel {
 struct OpenVault {
     vault: Vault,
     watching: Arc<AtomicBool>,
+    reconciler: Arc<Mutex<Reconciler>>,
 }
 
-/// Session state: open vaults by handle.
+/// Session state: open vaults by handle, plus the session clock driving
+/// reconciliation settle windows.
 #[derive(Default)]
 pub struct VaultRegistry {
     next_id: AtomicU32,
     vaults: Mutex<HashMap<u32, OpenVault>>,
+    clock: RealClock,
 }
 
 impl VaultRegistry {
@@ -161,6 +301,12 @@ impl VaultRegistry {
         self.vaults.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
+
+/// The crash journal, enabled by default and living in the OS app-data
+/// directory (see `skribeum_vault::journal`). Absent only when the app-data
+/// directory could not be resolved, in which case saves proceed without
+/// journal protection.
+pub struct JournalState(pub Option<Journal>);
 
 /// Opens a vault at an absolute path, validates it and indexes its tree.
 /// This is the only command that accepts an absolute path.
@@ -184,6 +330,7 @@ fn vault_open<R: Runtime>(
         OpenVault {
             vault,
             watching: Arc::new(AtomicBool::new(false)),
+            reconciler: Arc::new(Mutex::new(Reconciler::default())),
         },
     );
     if !groups.is_empty() {
@@ -241,6 +388,10 @@ fn note_read(
         .vault
         .read_note(&RealFs, &path)
         .map_err(|e| AppError::from(e).with_path(path.as_str()))?;
+    open.reconciler
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .record_read(&path, &note.bytes);
 
     let byte_length = u32::try_from(note.bytes.len()).map_err(|_| AppError {
         code: "note/too-large",
@@ -265,6 +416,81 @@ fn note_read(
     })
 }
 
+/// Writes a note through the crash-safe change-set path: `change_set` (a
+/// list of byte-range replacements against the last-read projection)
+/// applies only after `expected_projection_hash` is verified against the
+/// current on-disk projection. On mismatch nothing is written and the
+/// conflict variant returns with the current hash and a reconciliation
+/// handle. The delta is journaled durably before the write and committed
+/// after it.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn note_write(
+    registry: State<'_, VaultRegistry>,
+    journal: State<'_, JournalState>,
+    handle: VaultHandle,
+    rel_path: String,
+    change_set: Vec<ByteRangeReplace>,
+    expected_projection_hash: String,
+) -> Result<WriteResult, AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let changes: Vec<skribeum_core::ByteRangeReplace> = change_set.iter().map(Into::into).collect();
+    let vaults = registry.lock();
+    let open = vaults
+        .get(&handle.id)
+        .ok_or_else(AppError::unknown_handle)?;
+    let root = open.vault.root().to_owned();
+
+    // Journal the delta durably before touching the file: with no CRDT the
+    // journal is the only recovery path for a kill mid-write. A journal
+    // failure never blocks the save itself.
+    if let Some(journal) = &journal.0
+        && let Some(base) = open.vault.note_base(&path)
+        && base.projection_hash == expected_projection_hash
+        && let Ok(result_bytes) = skribeum_core::apply_change_set(&base.bytes, &changes)
+    {
+        let result_hash = skribeum_vault::classify(result_bytes).projection_hash;
+        let _ = journal.append_delta(
+            &RealFs,
+            &root,
+            path.as_str(),
+            &expected_projection_hash,
+            &result_hash,
+            &changes,
+        );
+    }
+
+    let result = open
+        .vault
+        .write_note(&RealFs, &path, &changes, &expected_projection_hash)
+        .map_err(|e| AppError::from(e).with_path(path.as_str()))?;
+
+    match &result {
+        skribeum_vault::WriteResult::Written { projection_hash } => {
+            if let Some(journal) = &journal.0 {
+                let _ = journal.append_commit(&RealFs, &root, path.as_str(), projection_hash);
+            }
+            if let Some(base) = open.vault.note_base(&path) {
+                open.reconciler
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .record_write(&path, &base.bytes, registry.clock.now());
+            }
+            Ok(WriteResult::Written {
+                projection_hash: projection_hash.clone(),
+            })
+        }
+        skribeum_vault::WriteResult::Conflict {
+            current_projection_hash,
+            reconciliation,
+        } => Ok(WriteResult::Conflict {
+            current_projection_hash: current_projection_hash.clone(),
+            reconciliation: *reconciliation,
+        }),
+    }
+}
+
 /// Subscribes to change events under an open vault. Events arrive as the
 /// `VaultChanged` event stream; a second subscription for the same handle is
 /// a no-op.
@@ -274,18 +500,32 @@ fn note_read(
 fn watch_subscribe<R: Runtime>(
     app: AppHandle<R>,
     registry: State<'_, VaultRegistry>,
+    journal: State<'_, JournalState>,
     handle: VaultHandle,
 ) -> Result<(), AppError> {
-    let (root, watching) = {
+    let (root, watching, reconciler) = {
         let vaults = registry.lock();
         let open = vaults
             .get(&handle.id)
             .ok_or_else(AppError::unknown_handle)?;
-        (open.vault.root().to_owned(), Arc::clone(&open.watching))
+        (
+            open.vault.root().to_owned(),
+            Arc::clone(&open.watching),
+            Arc::clone(&open.reconciler),
+        )
     };
     if watching.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
+
+    // Replay the crash journal for this vault now that the editor side is
+    // listening: recovered chains arrive as deltas against the on-disk
+    // bytes, a changed-on-disk chain surfaces the reconciliation banner and
+    // is never applied silently.
+    if let Some(journal) = &journal.0 {
+        replay_journal(&app, journal, handle.id, &root);
+    }
+
     let watcher = RealFs.watch(&root).map_err(|error| AppError {
         code: "fs/io",
         message: format!("failed to start the vault watcher: {error}"),
@@ -295,26 +535,141 @@ fn watch_subscribe<R: Runtime>(
     let vault_id = handle.id;
     std::thread::spawn(move || {
         let mut watcher = watcher;
+        let clock = RealClock::default();
         loop {
             let mut delivered_any = false;
             while let Some(event) = watcher.try_next() {
                 delivered_any = true;
-                if let Some(change) = translate_event(vault_id, &root, event)
-                    && change.emit(&app).is_err()
+                let now = clock.now();
+                let Some(change) = translate_event(vault_id, &root, event) else {
+                    continue;
+                };
                 {
+                    let mut recon = reconciler.lock().unwrap_or_else(PoisonError::into_inner);
+                    for observed in [&change.path, &change.renamed_to] {
+                        if let Some(observed) = observed
+                            && let Ok(path) = VaultPath::new(observed)
+                        {
+                            recon.observe_event(&path, now);
+                        }
+                    }
+                }
+                if change.emit(&app).is_err() {
                     // The app is shutting down; end the watch thread.
+                    return;
+                }
+            }
+            let events = {
+                let mut recon = reconciler.lock().unwrap_or_else(PoisonError::into_inner);
+                recon.poll(&RealFs, &root, clock.now())
+            };
+            for event in events {
+                if !emit_recon_event(&app, vault_id, event) {
                     return;
                 }
             }
             if !delivered_any {
                 // Polling cadence for the OS watcher queue. Reconciliation
-                // debounce logic (M1b) runs on the Clock trait, not on this
+                // debounce logic runs on the Clock trait, not on this
                 // interval.
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
     });
     Ok(())
+}
+
+/// Replays the crash journal for one vault, emitting recovery deltas and
+/// divergence banners.
+fn replay_journal<R: Runtime>(app: &AppHandle<R>, journal: &Journal, vault: u32, root: &Path) {
+    for outcome in journal.replay(&RealFs, root) {
+        match outcome {
+            ReplayOutcome::Recovered {
+                rel_path,
+                bytes,
+                projection_hash,
+            } => {
+                let disk = RealFs.read(&root.join(&rel_path)).unwrap_or_default();
+                let change_set = match skribeum_core::changed_span(&disk, &bytes) {
+                    None => Vec::new(),
+                    Some((start, end)) => {
+                        let replaced = bytes.len() - (disk.len() - (end - start));
+                        vec![skribeum_core::ByteRangeReplace {
+                            start,
+                            end,
+                            bytes: bytes[start..start + replaced].to_vec(),
+                        }]
+                    }
+                };
+                let _ = NoteRecovered {
+                    vault,
+                    path: rel_path,
+                    change_set: to_ipc_changes(&change_set),
+                    projection_hash,
+                }
+                .emit(app);
+            }
+            ReplayOutcome::Diverged {
+                rel_path,
+                disk_hash,
+            } => {
+                let _ = ReconciliationBanner {
+                    vault,
+                    path: rel_path,
+                    reason: BannerReason::JournalDiverged,
+                    disk_hash,
+                }
+                .emit(app);
+            }
+            ReplayOutcome::Clean { .. } => {}
+        }
+    }
+}
+
+/// Emits one typed reconciliation event; false when the app is shutting
+/// down.
+fn emit_recon_event<R: Runtime>(app: &AppHandle<R>, vault: u32, event: ReconEvent) -> bool {
+    let result = match event {
+        ReconEvent::ExternalUpdate {
+            path,
+            projection_hash,
+            change_set,
+        } => ExternalNoteUpdate {
+            vault,
+            path: path.as_str().to_owned(),
+            projection_hash,
+            change_set: to_ipc_changes(&change_set),
+        }
+        .emit(app),
+        ReconEvent::ExternalRemove { path } => ExternalNoteRemove {
+            vault,
+            path: path.as_str().to_owned(),
+        }
+        .emit(app),
+        ReconEvent::Banner {
+            path,
+            reason,
+            disk_hash,
+        } => ReconciliationBanner {
+            vault,
+            path: path.as_str().to_owned(),
+            reason: match reason {
+                skribeum_vault::BannerReason::SizeShrank => BannerReason::SizeShrank,
+                skribeum_vault::BannerReason::BecameEmpty => BannerReason::BecameEmpty,
+                skribeum_vault::BannerReason::EditWithinWriteSettle => {
+                    BannerReason::EditWithinWriteSettle
+                }
+            },
+            disk_hash,
+        }
+        .emit(app),
+        ReconEvent::BulkDivergence { paths } => BulkDivergenceReview {
+            vault,
+            paths: paths.iter().map(|p| p.as_str().to_owned()).collect(),
+        }
+        .emit(app),
+    };
+    result.is_ok()
 }
 
 /// Converts an absolute watcher path into a vault-relative string, dropping
@@ -355,12 +710,26 @@ fn translate_event(
             path: Some(vault_relative(root, &path)?),
             renamed_to: None,
         },
-        WatchEvent::Renamed { from, to } => VaultChanged {
-            vault,
-            change: VaultChangeKind::Renamed,
-            path: Some(vault_relative(root, &from)?),
-            renamed_to: vault_relative(root, &to),
-        },
+        // A rename from an excluded name into an indexed one (the shape of
+        // every temp-then-rename writer, this application included) is a
+        // modification of the target; the mirror is a removal.
+        WatchEvent::Renamed { from, to } => {
+            match (vault_relative(root, &from), vault_relative(root, &to)) {
+                (Some(from), to) => VaultChanged {
+                    vault,
+                    change: VaultChangeKind::Renamed,
+                    path: Some(from),
+                    renamed_to: to,
+                },
+                (None, Some(to)) => VaultChanged {
+                    vault,
+                    change: VaultChangeKind::Modified,
+                    path: Some(to),
+                    renamed_to: None,
+                },
+                (None, None) => return None,
+            }
+        }
         WatchEvent::Overflow => VaultChanged {
             vault,
             change: VaultChangeKind::Overflow,
@@ -381,10 +750,16 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             vault_open::<tauri::Wry>,
             vault_tree,
             note_read,
+            note_write,
             watch_subscribe::<tauri::Wry>,
         ])
         .events(tauri_specta::collect_events![
             VaultChanged,
             VaultCollisionsDetected,
+            ReconciliationBanner,
+            ExternalNoteUpdate,
+            ExternalNoteRemove,
+            BulkDivergenceReview,
+            NoteRecovered,
         ])
 }

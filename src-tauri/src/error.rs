@@ -44,6 +44,7 @@ fn fs_code(error: &FsError) -> &'static str {
         FsError::NotFound => "fs/not-found",
         FsError::NotADirectory => "fs/not-a-directory",
         FsError::ReadOnly => "fs/read-only",
+        FsError::NoSpace => "fs/no-space",
         FsError::Io(_) => "fs/io",
     }
 }
@@ -56,6 +57,10 @@ impl From<&VaultError> for AppError {
             VaultError::Path(_) => "path/invalid",
             VaultError::NoteNotFound => "note/not-found",
             VaultError::NotANote => "note/not-a-note",
+            VaultError::NoteNotRead => "note/not-read",
+            VaultError::NoteReadOnly => "note/read-only",
+            VaultError::BaseMismatch => "note/base-mismatch",
+            VaultError::ChangeSet(_) => "note/change-set",
             VaultError::Fs(fs) => fs_code(fs),
         };
         Self {
@@ -100,12 +105,20 @@ mod tests {
             ),
             (VaultError::NoteNotFound.into(), "note/not-found"),
             (VaultError::NotANote.into(), "note/not-a-note"),
+            (VaultError::NoteNotRead.into(), "note/not-read"),
+            (VaultError::NoteReadOnly.into(), "note/read-only"),
+            (VaultError::BaseMismatch.into(), "note/base-mismatch"),
+            (
+                VaultError::ChangeSet(skribeum_core::ChangeSetError::Overlap).into(),
+                "note/change-set",
+            ),
             (VaultError::Fs(FsError::NotFound).into(), "fs/not-found"),
             (
                 VaultError::Fs(FsError::NotADirectory).into(),
                 "fs/not-a-directory",
             ),
             (VaultError::Fs(FsError::ReadOnly).into(), "fs/read-only"),
+            (VaultError::Fs(FsError::NoSpace).into(), "fs/no-space"),
             (
                 VaultError::Fs(FsError::Io("disk".to_owned())).into(),
                 "fs/io",

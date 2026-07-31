@@ -1,15 +1,20 @@
-//! The vault model: opening a vault, indexing its tree and reading notes.
-//! Everything here runs against the [`FileSystem`](crate::fs::FileSystem)
-//! trait, so the same code paths execute under the deterministic simulator
-//! and on the real filesystem. Opening a vault performs zero writes; the
-//! simulator asserts that mechanically.
+//! The vault model: opening a vault, indexing its tree, reading notes and
+//! writing them through the crash-safe change-set path. Everything here
+//! runs against the [`FileSystem`](crate::fs::FileSystem) trait, so the
+//! same code paths execute under the deterministic simulator and on the
+//! real filesystem. Opening a vault performs zero writes; the simulator
+//! asserts that mechanically.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use sha2::{Digest, Sha256};
+use skribeum_core::{ByteRangeReplace, ChangeSetError, apply_change_set};
 
 use crate::fs::{FileSystem, FsError};
 use crate::path::{PathCollision, VaultPath, VaultPathError, detect_collisions};
+use crate::write::{is_write_temp_name, write_durable};
 
 /// Errors surfaced by vault operations.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -29,9 +34,57 @@ pub enum VaultError {
     /// The requested path exists in the index but is not a markdown note.
     #[error("path is not a note")]
     NotANote,
+    /// A write was attempted for a note this session never read; the
+    /// change-set base is unknown.
+    #[error("note was never read in this session")]
+    NoteNotRead,
+    /// The note is not valid UTF-8 and is never written.
+    #[error("note is read-only")]
+    NoteReadOnly,
+    /// The expected projection hash does not match the base this session
+    /// last read; the caller is out of sync with its own read.
+    #[error("expected hash does not match the last-read base")]
+    BaseMismatch,
+    /// The change set is structurally invalid against the base.
+    #[error(transparent)]
+    ChangeSet(#[from] ChangeSetError),
     /// A filesystem operation failed.
     #[error(transparent)]
     Fs(#[from] FsError),
+}
+
+/// The result of a note write. On projection-hash mismatch the write
+/// returns the conflict variant carrying the current on-disk hash plus a
+/// reconciliation handle, the entry point of the reconciliation UX; the
+/// on-disk file is never overwritten on conflict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteResult {
+    /// The change set was applied and durably written.
+    Written {
+        /// Projection hash of the new on-disk bytes.
+        projection_hash: String,
+    },
+    /// The on-disk projection no longer matches `expected_projection_hash`.
+    Conflict {
+        /// The current on-disk projection hash; absent when the file is
+        /// gone.
+        current_projection_hash: Option<String>,
+        /// Handle for the reconciliation flow; resolves through
+        /// [`Vault::conflict`].
+        reconciliation: u32,
+    },
+}
+
+/// A registered write conflict awaiting reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictInfo {
+    /// The conflicted note.
+    pub path: VaultPath,
+    /// Projection hash this session expected.
+    pub expected_projection_hash: String,
+    /// The on-disk projection hash observed at conflict time, absent when
+    /// the file was gone.
+    pub current_projection_hash: Option<String>,
 }
 
 /// What kind of entry a tree row is.
@@ -81,12 +134,16 @@ pub struct NoteContent {
     pub projection_hash: String,
 }
 
-/// An open vault: the validated root plus the indexed tree.
+/// An open vault: the validated root, the indexed tree, the last-read
+/// bytes of notes (the change-set base for writes) and registered write
+/// conflicts.
 #[derive(Debug, Clone)]
 pub struct Vault {
     root: PathBuf,
     tree: Vec<TreeEntry>,
     collisions: Vec<PathCollision>,
+    notes: Arc<Mutex<HashMap<VaultPath, NoteContent>>>,
+    conflicts: Arc<Mutex<(u32, HashMap<u32, ConflictInfo>)>>,
 }
 
 /// Directory names excluded from indexing and watching, per the
@@ -111,9 +168,10 @@ fn has_tmp_extension(name: &str) -> bool {
 }
 
 /// Whether a file name matches an excluded editor-temp or sync-artifact
-/// pattern.
+/// pattern, including this application's own write-sequence temp files.
 fn is_excluded_file(name: &str) -> bool {
     EXCLUDED_FILES.contains(&name)
+        || is_write_temp_name(name)
         || name.contains(".sync-conflict-")
         || name.starts_with(".goutputstream-")
         || name.starts_with(".~lock.")
@@ -150,6 +208,8 @@ impl Vault {
             root: root.to_owned(),
             tree,
             collisions,
+            notes: Arc::new(Mutex::new(HashMap::new())),
+            conflicts: Arc::new(Mutex::new((0, HashMap::new()))),
         })
     }
 
@@ -195,7 +255,110 @@ impl Vault {
         }
         let absolute = self.root.join(path.as_str());
         let bytes = fs.read(&absolute)?;
-        Ok(classify(bytes))
+        let note = classify(bytes);
+        self.lock_notes().insert(path.clone(), note.clone());
+        Ok(note)
+    }
+
+    /// Writes a note through the crash-safe path: applies `change_set` (a
+    /// list of byte-range replacements) to the bytes this session last
+    /// read, after verifying that `expected_projection_hash` still matches
+    /// the current on-disk projection. On mismatch nothing is written and
+    /// the conflict variant returns the current hash plus a reconciliation
+    /// handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VaultError::NoteNotRead`] when the note was never read in
+    /// this session, [`VaultError::NoteReadOnly`] for non-UTF-8 notes,
+    /// [`VaultError::BaseMismatch`] when `expected_projection_hash` is not
+    /// the hash of the last-read base, [`VaultError::ChangeSet`] for a
+    /// structurally invalid change set, and propagates filesystem
+    /// failures (including out-of-space) from the durable write sequence.
+    pub fn write_note(
+        &self,
+        fs: &dyn FileSystem,
+        path: &VaultPath,
+        change_set: &[ByteRangeReplace],
+        expected_projection_hash: &str,
+    ) -> Result<WriteResult, VaultError> {
+        let entry = self
+            .tree
+            .iter()
+            .find(|entry| &entry.path == path)
+            .ok_or(VaultError::NoteNotFound)?;
+        if entry.kind != EntryKind::Note {
+            return Err(VaultError::NotANote);
+        }
+        let base = self
+            .lock_notes()
+            .get(path)
+            .cloned()
+            .ok_or(VaultError::NoteNotRead)?;
+        if base.encoding == Encoding::NonUtf8 {
+            return Err(VaultError::NoteReadOnly);
+        }
+        if base.projection_hash != expected_projection_hash {
+            return Err(VaultError::BaseMismatch);
+        }
+
+        // Verify the on-disk projection still matches before writing;
+        // anything else is a conflict, never an overwrite.
+        let absolute = self.root.join(path.as_str());
+        let disk_hash = match fs.read(&absolute) {
+            Ok(disk) => Some(classify(disk).projection_hash),
+            Err(FsError::NotFound) => None,
+            Err(error) => return Err(VaultError::Fs(error)),
+        };
+        if disk_hash.as_deref() != Some(expected_projection_hash) {
+            let handle = self.register_conflict(ConflictInfo {
+                path: path.clone(),
+                expected_projection_hash: expected_projection_hash.to_owned(),
+                current_projection_hash: disk_hash.clone(),
+            });
+            return Ok(WriteResult::Conflict {
+                current_projection_hash: disk_hash,
+                reconciliation: handle,
+            });
+        }
+
+        let new_bytes = apply_change_set(&base.bytes, change_set)?;
+        write_durable(fs, &absolute, &new_bytes)?;
+        let note = classify(new_bytes);
+        let projection_hash = note.projection_hash.clone();
+        self.lock_notes().insert(path.clone(), note);
+        Ok(WriteResult::Written { projection_hash })
+    }
+
+    /// The bytes this session last read or wrote for a note, the base the
+    /// next change set applies to.
+    #[must_use]
+    pub fn note_base(&self, path: &VaultPath) -> Option<NoteContent> {
+        self.lock_notes().get(path).cloned()
+    }
+
+    /// Looks up a registered write conflict by reconciliation handle.
+    #[must_use]
+    pub fn conflict(&self, reconciliation: u32) -> Option<ConflictInfo> {
+        self.lock_conflicts().1.get(&reconciliation).cloned()
+    }
+
+    fn register_conflict(&self, info: ConflictInfo) -> u32 {
+        let mut guard = self.lock_conflicts();
+        guard.0 += 1;
+        let handle = guard.0;
+        guard.1.insert(handle, info);
+        handle
+    }
+
+    fn lock_notes(&self) -> MutexGuard<'_, HashMap<VaultPath, NoteContent>> {
+        self.notes.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_conflicts(&self) -> MutexGuard<'_, (u32, HashMap<u32, ConflictInfo>)> {
+        self.conflicts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -341,6 +504,7 @@ mod tests {
         assert!(is_excluded_file(".~lock.note.md#"));
         assert!(is_excluded_file(".syncthing.note.md.tmp"));
         assert!(is_excluded_file("~syncthing~note.md.tmp"));
+        assert!(is_excluded_file(".skribeum-write-note.md.tmp"));
         assert!(!is_excluded_file("note.md"));
         assert!(!is_excluded_file(".hidden.md"));
     }

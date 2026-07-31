@@ -1,4 +1,13 @@
 {
   "description": "The committed IPC command allowlist. CI fails when the tauri-specta generated bindings expose a command set different from this list. Additions are deliberate contract changes, never side effects.",
-  "commands": ["vault_open", "vault_tree", "note_read", "watch_subscribe"]
+  "commands": [
+    "vault_open",
+    "vault_tree",
+    "note_read",
+    "note_write",
+    "watch_subscribe"
+  ],
+  "notes": {
+    "note_write": "Contract addition per design decision 100: change-set based writes verified against the expected projection hash, with a conflict variant carrying the current hash and a reconciliation handle, never a silent overwrite."
+  }
 }

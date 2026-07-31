@@ -2,6 +2,12 @@
 //! these traits so reconciliation logic runs identically under the seeded
 //! deterministic simulator and against the real filesystem. Only
 //! [`crate::real`] touches the operating system.
+//!
+//! The write-related methods are deliberately primitive: create-or-truncate,
+//! fsync a file, fsync a directory, rename, copy permissions. The crash-safe
+//! write sequence composes them in [`crate::write::write_durable`], which is
+//! what lets the simulator treat every step as an interleaving point with
+//! injectable failure and kill points.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -20,6 +26,11 @@ pub enum FsError {
     /// The vault is opened read-only and a mutating operation was attempted.
     #[error("vault is read-only")]
     ReadOnly,
+    /// The device is out of space. Write and fsync sites surface this
+    /// distinctly because a failed save must be visible and must leave the
+    /// on-disk file intact.
+    #[error("no space left on device")]
+    NoSpace,
     /// Any other I/O failure, with a short description that never contains
     /// file content.
     #[error("i/o failure: {0}")]
@@ -36,6 +47,9 @@ pub struct FileMetadata {
     pub mtime: Duration,
     /// Whether the entry is a directory.
     pub is_dir: bool,
+    /// Permission mode bits where the platform exposes them (Unix), used by
+    /// the write path to preserve the target's mode across a replace.
+    pub mode: Option<u32>,
 }
 
 /// One entry of a directory listing.
@@ -89,15 +103,38 @@ pub trait Watcher: Send {
 /// `&dyn FileSystem`.
 #[allow(clippy::missing_errors_doc)] // Every method fails with `FsError`, documented on the type.
 pub trait FileSystem: Send + Sync {
-    /// Reads the full content of a file as bytes.
+    /// Reads the full content of a file as bytes, following symlinks.
     fn read(&self, path: &Path) -> Result<Vec<u8>, FsError>;
 
-    /// Atomically replaces the content of `path` with `bytes`. The real
-    /// implementation writes a temporary file and renames it over the target;
-    /// the simulator models the same all-or-nothing semantics.
-    fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError>;
+    /// Creates or truncates `path` and writes `bytes`, with no durability
+    /// guarantee. A failure (including out-of-space) may leave partial
+    /// content behind, which is why the crash-safe sequence only ever aims
+    /// this at a temporary file.
+    fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError>;
 
-    /// Renames `from` to `to`.
+    /// Appends `bytes` to `path`, creating the file when missing. Used by
+    /// the crash journal; a failure may leave a partial trailing record,
+    /// which replay tolerates by ignoring an unparsable tail.
+    fn append_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError>;
+
+    /// Flushes a file's content to stable storage. On macOS the real
+    /// implementation issues the stronger `F_FULLFSYNC` barrier.
+    fn fsync_file(&self, path: &Path) -> Result<(), FsError>;
+
+    /// Flushes a directory's entries to stable storage, making a completed
+    /// rename in that directory durable.
+    fn fsync_dir(&self, path: &Path) -> Result<(), FsError>;
+
+    /// Copies the permission mode, and ownership where obtainable, from
+    /// `from` onto `to`.
+    fn copy_permissions(&self, from: &Path, to: &Path) -> Result<(), FsError>;
+
+    /// Resolves `path` through any symlinks to the final write target, so a
+    /// save writes through a symlink in place rather than replacing it with
+    /// a regular file. A missing final target resolves to itself.
+    fn resolve_write_target(&self, path: &Path) -> Result<PathBuf, FsError>;
+
+    /// Renames `from` to `to`, replacing any existing `to`.
     fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError>;
 
     /// Removes a file.
@@ -106,7 +143,7 @@ pub trait FileSystem: Send + Sync {
     /// Creates a directory, including missing parents.
     fn create_dir_all(&self, path: &Path) -> Result<(), FsError>;
 
-    /// Returns metadata for a path.
+    /// Returns metadata for a path, following symlinks.
     fn metadata(&self, path: &Path) -> Result<FileMetadata, FsError>;
 
     /// Lists the entries of a directory.

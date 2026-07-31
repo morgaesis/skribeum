@@ -4,7 +4,8 @@
 //! other module and crate reaches the operating system through the traits in
 //! [`crate::fs`].
 
-use std::path::Path;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -42,6 +43,7 @@ fn map_io(error: &std::io::Error) -> FsError {
         std::io::ErrorKind::NotADirectory | std::io::ErrorKind::IsADirectory => {
             FsError::NotADirectory
         }
+        std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded => FsError::NoSpace,
         kind => FsError::Io(kind.to_string()),
     }
 }
@@ -51,18 +53,77 @@ impl FileSystem for RealFs {
         std::fs::read(path).map_err(|e| map_io(&e))
     }
 
-    fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
-        // Write to a sibling temporary file and rename over the target so a
-        // crash mid-write never leaves a truncated file. The M1b write path
-        // extends this with fsync of the file and its parent directory.
-        let parent = path.parent().ok_or(FsError::NotADirectory)?;
-        let file_name = path.file_name().ok_or(FsError::NotADirectory)?;
-        let temp = parent.join(format!(".skribeum-write-{}", file_name.to_string_lossy()));
-        std::fs::write(&temp, bytes).map_err(|e| map_io(&e))?;
-        std::fs::rename(&temp, path).map_err(|e| {
-            let _ = std::fs::remove_file(&temp);
-            map_io(&e)
-        })
+    fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
+        std::fs::write(path, bytes).map_err(|e| map_io(&e))
+    }
+
+    fn append_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| map_io(&e))?;
+        file.write_all(bytes).map_err(|e| map_io(&e))
+    }
+
+    fn fsync_file(&self, path: &Path) -> Result<(), FsError> {
+        let file = std::fs::File::open(path).map_err(|e| map_io(&e))?;
+        // `sync_all` maps to fsync(2); on macOS the standard library issues
+        // the stronger fcntl F_FULLFSYNC barrier, which is the behavior the
+        // write path requires there.
+        file.sync_all().map_err(|e| map_io(&e))
+    }
+
+    #[cfg(not(windows))]
+    fn fsync_dir(&self, path: &Path) -> Result<(), FsError> {
+        let dir = std::fs::File::open(path).map_err(|e| map_io(&e))?;
+        dir.sync_all().map_err(|e| map_io(&e))
+    }
+
+    #[cfg(windows)]
+    fn fsync_dir(&self, path: &Path) -> Result<(), FsError> {
+        // Directories cannot be opened for syncing through the standard
+        // library on Windows; NTFS journals metadata operations, so the
+        // rename itself is the durability point there.
+        let _ = path;
+        Ok(())
+    }
+
+    fn copy_permissions(&self, from: &Path, to: &Path) -> Result<(), FsError> {
+        let meta = std::fs::metadata(from).map_err(|e| map_io(&e))?;
+        std::fs::set_permissions(to, meta.permissions()).map_err(|e| map_io(&e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            // Ownership is preserved where obtainable: without privilege,
+            // chown to another owner fails and the write proceeds under the
+            // current user, which is the correct fallback.
+            let _ = std::os::unix::fs::chown(to, Some(meta.uid()), Some(meta.gid()));
+        }
+        Ok(())
+    }
+
+    fn resolve_write_target(&self, path: &Path) -> Result<PathBuf, FsError> {
+        let mut current = path.to_owned();
+        // Bounded symlink chase; a cycle or an over-deep chain settles on
+        // the last path, where the write will surface the OS error.
+        for _ in 0..8 {
+            let Ok(meta) = std::fs::symlink_metadata(&current) else {
+                return Ok(current);
+            };
+            if !meta.file_type().is_symlink() {
+                return Ok(current);
+            }
+            let target = std::fs::read_link(&current).map_err(|e| map_io(&e))?;
+            current = if target.is_absolute() {
+                target
+            } else {
+                current
+                    .parent()
+                    .map_or(target.clone(), |parent| parent.join(&target))
+            };
+        }
+        Ok(current)
     }
 
     fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError> {
@@ -84,10 +145,19 @@ impl FileSystem for RealFs {
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .unwrap_or(Duration::ZERO);
+        // Permission mode bits are exposed on Unix only.
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            Some(meta.permissions().mode())
+        };
+        #[cfg(not(unix))]
+        let mode = None;
         Ok(FileMetadata {
             size: meta.len(),
             mtime,
             is_dir: meta.is_dir(),
+            mode,
         })
     }
 

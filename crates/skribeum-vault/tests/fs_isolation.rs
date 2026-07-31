@@ -11,9 +11,10 @@ use skribeum_vault::{FileSystem, RealFs};
 const ALLOWED: &[&str] = &[
     // The single production call site; everything else goes through traits.
     "crates/skribeum-vault/src/real.rs",
-    // Fixture loading in the I/O-free core crate's test harness. The core
-    // crate has no dependency on this crate, so it cannot use RealFs.
+    // Fixture loading in the I/O-free core crate's test harnesses. The
+    // core crate has no dependency on this crate, so it cannot use RealFs.
     "crates/skribeum-core/tests/corpus_coverage.rs",
+    "crates/skribeum-core/tests/line_ending_corpus.rs",
 ];
 
 /// Source roots scanned for Rust files.

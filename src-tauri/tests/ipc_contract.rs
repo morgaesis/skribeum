@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use skribeum_vault::{FileSystem, RealFs};
+use skribeum_vault::{FileSystem, RealFs, write_durable};
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
@@ -89,9 +89,7 @@ fn committed_bindings_are_current() {
     let generated = generate_bindings();
 
     if std::env::var("SKRIBEUM_WRITE_BINDINGS").is_ok() {
-        RealFs
-            .write_atomic(&path, generated.as_bytes())
-            .expect("bindings file writes");
+        write_durable(&RealFs, &path, generated.as_bytes()).expect("bindings file writes");
         return;
     }
 

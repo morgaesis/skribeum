@@ -37,7 +37,12 @@ crate contains glue only.
   (`src/lib/ipc/bindings.ts`, also committed and regeneration-checked). It
   grows deliberately, never incidentally. Current commands: `vault_open`
   (the only command accepting an absolute path), `vault_tree`, `note_read`,
-  `watch_subscribe`.
+  `note_write`, `watch_subscribe`.
+- `note_write` is change-set based: a list of byte-range replacements
+  against the last-read projection, plus the expected projection hash. The
+  hash is verified against the current on-disk projection before anything
+  is written; a mismatch returns the conflict variant carrying the current
+  hash and a reconciliation handle, never a silent overwrite.
 - Errors cross IPC as `AppError { code, message, path }` with `code` stable
   and pinned by a committed test. Messages never contain note content.
 - Paths cross IPC as `VaultPath` strings: slash-separated, NFC-normalized,
@@ -52,11 +57,60 @@ crate contains glue only.
 Notes are plain `.md` files. Opening a vault performs no writes, asserted
 mechanically by the simulator's write counter. Saving rewrites only the
 bytes the edit touched: files are read as bytes, a byte-to-buffer mapping
-layer preserves each untouched line's original terminator, UTF-8 BOMs
-survive round trips byte-for-byte, and non-UTF-8 files open read-only with
-a banner and are never written. Every note read carries a `projection_hash`
-(SHA-256 over the exact bytes), the opaque token the reconciliation layer
-tracks. Sync-tool internals, VCS state, Obsidian configuration and
-Skribeum's own vault-local state are excluded from indexing and watching.
+layer in `skribeum-core` records each line's original terminator on open
+and re-emits it for untouched lines when buffer edits convert to byte
+change sets (only lines an edit touched may carry a new terminator), UTF-8
+BOMs survive round trips byte-for-byte, and non-UTF-8 files open read-only
+with a banner and are never written. Every note read carries a
+`projection_hash` (SHA-256 over the exact bytes), the opaque token the
+reconciliation layer tracks. Sync-tool internals, VCS state, Obsidian
+configuration and Skribeum's own vault-local state (including the write
+sequence's own temporary files) are excluded from indexing and watching.
 Device-local state (layout, caches, indexes, keys) lives in the OS app-data
 directory, never inside the vault.
+
+## Crash-safe writes
+
+Every mirror write goes through one durable sequence in `skribeum-vault`:
+resolve symlinks and write through to the final target, write a sibling
+temporary file, fsync it (`F_FULLFSYNC` semantics on macOS), copy the
+target's permission mode and, where obtainable, ownership, rename over the
+target, and fsync the parent directory. A failure before the rename
+removes the temporary file and leaves the target byte-identical;
+out-of-space at any write or fsync site fails the save visibly with the
+on-disk file intact; no reader can ever observe a truncated target. The
+sequence is composed from `FileSystem` trait primitives, so the
+deterministic simulator drives the exact production code through every
+interleaving point with injectable failures (torn writes included) and
+kill points, restarting over precisely the state a crash would leave.
+
+## Crash journal
+
+The crash journal is enabled by default and lives in the OS app-data
+directory (`write-journal.jsonl`), never inside a vault. Before each
+mirror write the note's change set is appended and fsynced as a delta
+record; a commit record follows the completed write. The file is
+size-capped, compacting committed chains away while never discarding
+uncommitted recovery data; a torn trailing record from a crash mid-append
+is ignored on replay. On the next start each uncommitted chain is checked
+against the on-disk bytes: a matching base recovers the pre-crash buffer
+as a delta event, a matching result means the save completed, and anything
+else surfaces the reconciliation banner instead of applying, because a
+file that changed while the app was dead is an external edit.
+
+## Reconciliation
+
+The watcher feeds a reconciliation state machine written entirely against
+the `FileSystem` and `Clock` traits. External changes are detected by
+content hash against the last projection and are never reverted. No read
+classifies until it is stable across a settle interval; a read that shrank
+past a guard fraction or came back empty for a previously non-empty note
+takes the banner path, never silent ingest. An observed hash equal to this
+device's own last projection for the document is an echo of its own mirror
+write and is suppressed; a differing external edit landing within the
+settle window of that write also takes the banner path. When more files
+diverge in one pass than a review threshold, nothing is applied and one
+bulk review event carries the whole set. The editor layer consumes typed
+events: an external update with a byte change set for open notes, an
+external removal, a reconciliation banner with its reason, the bulk
+review, and journal recovery.

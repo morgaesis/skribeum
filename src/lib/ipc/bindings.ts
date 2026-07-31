@@ -19,6 +19,16 @@ export const commands = {
 	 */
 	noteRead: (handle: VaultHandle, relPath: string, content: Channel<number[]>) => typedError<NoteContent, AppError>(__TAURI_INVOKE("note_read", { handle, relPath, content })),
 	/**
+	 *  Writes a note through the crash-safe change-set path: `change_set` (a
+	 *  list of byte-range replacements against the last-read projection)
+	 *  applies only after `expected_projection_hash` is verified against the
+	 *  current on-disk projection. On mismatch nothing is written and the
+	 *  conflict variant returns with the current hash and a reconciliation
+	 *  handle. The delta is journaled durably before the write and committed
+	 *  after it.
+	 */
+	noteWrite: (handle: VaultHandle, relPath: string, changeSet: ByteRangeReplace[], expectedProjectionHash: string) => typedError<WriteResult, AppError>(__TAURI_INVOKE("note_write", { handle, relPath, changeSet, expectedProjectionHash })),
+	/**
 	 *  Subscribes to change events under an open vault. Events arrive as the
 	 *  `VaultChanged` event stream; a second subscription for the same handle is
 	 *  a no-op.
@@ -28,6 +38,11 @@ export const commands = {
 
 /** Events */
 export const events = {
+	bulkDivergenceReview: makeEvent<BulkDivergenceReview>("bulk-divergence-review"),
+	externalNoteRemove: makeEvent<ExternalNoteRemove>("external-note-remove"),
+	externalNoteUpdate: makeEvent<ExternalNoteUpdate>("external-note-update"),
+	noteRecovered: makeEvent<NoteRecovered>("note-recovered"),
+	reconciliationBanner: makeEvent<ReconciliationBanner>("reconciliation-banner"),
 	vaultChanged: makeEvent<VaultChanged>("vault-changed"),
 	vaultCollisionsDetected: makeEvent<VaultCollisionsDetected>("vault-collisions-detected"),
 };
@@ -48,6 +63,72 @@ export type AppError = {
 	message: string,
 	/**  The vault-relative path involved, when one exists. */
 	path: string | null,
+};
+
+/**  Banner reasons over IPC. */
+export type BannerReason = 
+/**  A stable read shrank past the guard fraction. */
+"size-shrank" | 
+/**  A previously non-empty note read back empty. */
+"became-empty" | 
+/**
+ *  An external edit landed within the settle window of this device's
+ *  own last write.
+ */
+"edit-within-write-settle" | 
+/**
+ *  The on-disk file changed between a crash and this start; the crash
+ *  journal was not replayed.
+ */
+"journal-diverged";
+
+/**
+ *  More files diverged in one reconciliation pass than the review
+ *  threshold; nothing was applied and the whole set needs review.
+ */
+export type BulkDivergenceReview = {
+	/**  Handle of the vault concerned. */
+	vault: number,
+	/**  Every divergent vault-relative path. */
+	paths: string[],
+};
+
+/**
+ *  One byte-range replacement over IPC: bytes `start..end` of the base
+ *  (the last-read projection) are replaced by `bytes`. Offsets are UTF-8
+ *  byte offsets, per the boundary invariant.
+ */
+export type ByteRangeReplace = {
+	/**  Inclusive start byte offset into the base. */
+	start: number,
+	/**  Exclusive end byte offset into the base. */
+	end: number,
+	/**  Replacement bytes. */
+	bytes: number[],
+};
+
+/**  An indexed note disappeared from disk. */
+export type ExternalNoteRemove = {
+	/**  Handle of the vault concerned. */
+	vault: number,
+	/**  Vault-relative path. */
+	path: string,
+};
+
+/**
+ *  A stable external change to an indexed note, delivered with a change set
+ *  against this device's last-read projection so an open note ingests it as
+ *  a delta. External changes are never reverted.
+ */
+export type ExternalNoteUpdate = {
+	/**  Handle of the vault concerned. */
+	vault: number,
+	/**  Vault-relative path. */
+	path: string,
+	/**  Projection hash of the new on-disk content. */
+	projection_hash: string,
+	/**  Delta from the last projection to the new content. */
+	change_set: ByteRangeReplace[],
 };
 
 /**
@@ -72,6 +153,36 @@ export type NoteEncoding =
 "utf8-bom" | 
 /**  Not UTF-8; the note is read-only. */
 "non-utf8";
+
+/**
+ *  A crash-journal chain replayed on start: applying `change_set` to the
+ *  current on-disk bytes reproduces the buffer as it was before the crash.
+ */
+export type NoteRecovered = {
+	/**  Handle of the vault concerned. */
+	vault: number,
+	/**  Vault-relative path. */
+	path: string,
+	/**  Delta from the on-disk bytes to the recovered buffer. */
+	change_set: ByteRangeReplace[],
+	/**  Projection hash of the recovered buffer. */
+	projection_hash: string,
+};
+
+/**
+ *  A reconciliation banner: ambiguity the editor must surface; nothing was
+ *  applied automatically.
+ */
+export type ReconciliationBanner = {
+	/**  Handle of the vault concerned. */
+	vault: number,
+	/**  Vault-relative path. */
+	path: string,
+	/**  Why the banner is shown. */
+	reason: BannerReason,
+	/**  The observed on-disk projection hash, when one exists. */
+	disk_hash: string | null,
+};
 
 /**
  *  One vault tree row over IPC. Paths are vault-relative `VaultPath`
@@ -143,6 +254,23 @@ export type VaultHandle = {
 	/**  Session-local identifier; never persisted. */
 	id: number,
 };
+
+/**
+ *  The result of `note_write`. The conflict variant is the entry point of
+ *  the reconciliation UX: it carries the current on-disk projection hash
+ *  plus a reconciliation handle, and nothing was overwritten.
+ */
+export type WriteResult = 
+/**  The change set was applied and durably written. */
+{ result: "written"; 
+/**  Projection hash of the new on-disk bytes. */
+projection_hash: string } | 
+/**  The on-disk projection no longer matches the expected hash. */
+{ result: "conflict"; 
+/**  Current on-disk projection hash; absent when the file is gone. */
+current_projection_hash: string | null; 
+/**  Reconciliation handle for the conflict flow. */
+reconciliation: number };
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

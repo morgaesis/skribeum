@@ -32,3 +32,17 @@ path = "fuzz_targets/encoding_classify.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "read_frontmatter"
+path = "fuzz_targets/read_frontmatter.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "change_set_apply"
+path = "fuzz_targets/change_set_apply.rs"
+test = false
+doc = false
+bench = false

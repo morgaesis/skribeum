@@ -1,9 +1,10 @@
-// The decoration engine: interprets the mapping table in `table.ts` over
-// the Lezer syntax tree, synchronously inside the view plugin's update
-// (decision 11), windowed to the visible ranges. It never touches the
-// document; its one dispatch site (wikilink context updates) is annotated
-// with `decorationOrigin` so the inertness guard in `decorationGuard.ts`
-// asserts `docChanged === false` over everything the engine causes.
+// The decoration engine interprets the mapping table in `table.ts` over
+// the Lezer syntax tree, windowed to the visible ranges. Bulk input remaps
+// existing decorations for the initial paint and rebuilds them after three
+// animation frames. The engine never touches the document; its dispatches
+// are annotated with `decorationOrigin` so the inertness guard in
+// `decorationGuard.ts` asserts `docChanged === false` over everything the
+// engine causes.
 
 import { syntaxTree } from "@codemirror/language";
 import {
@@ -13,6 +14,7 @@ import {
   StateEffect,
   StateField,
   type Text,
+  type Transaction,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -26,6 +28,7 @@ import type { SyntaxNode, Tree } from "@lezer/common";
 import { renderMath } from "../../rendering/math";
 import { renderMermaid } from "../../rendering/mermaid";
 import { STRINGS } from "../../strings";
+import { bulkTextInputAnnotation } from "../bulkInput";
 import { decorationOrigin } from "../decorationGuard";
 import {
   DECORATION_TABLE,
@@ -716,9 +719,42 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
   });
 }
 
-const blockEngineField = StateField.define<DecorationSet>({
-  create: buildBlockDecorations,
+type BlockEngineState = {
+  decorations: DecorationSet;
+  deferred: boolean;
+};
+
+const refreshDeferredDecorations = StateEffect.define<null>();
+
+function refreshRequested(transaction: Transaction) {
+  return transaction.effects.some((effect) =>
+    effect.is(refreshDeferredDecorations),
+  );
+}
+
+const blockEngineField = StateField.define<BlockEngineState>({
+  create: (state) => ({
+    decorations: buildBlockDecorations(state),
+    deferred: false,
+  }),
   update(value, transaction) {
+    if (refreshRequested(transaction)) {
+      return {
+        decorations: buildBlockDecorations(transaction.state),
+        deferred: false,
+      };
+    }
+    if (
+      value.deferred ||
+      transaction.annotation(bulkTextInputAnnotation) === true
+    ) {
+      return {
+        decorations: transaction.docChanged
+          ? value.decorations.map(transaction.changes)
+          : value.decorations,
+        deferred: true,
+      };
+    }
     if (
       transaction.docChanged ||
       transaction.selection !== transaction.startState.selection ||
@@ -726,11 +762,15 @@ const blockEngineField = StateField.define<DecorationSet>({
       transaction.state.facet(decorationTable) !==
         transaction.startState.facet(decorationTable)
     ) {
-      return buildBlockDecorations(transaction.state);
+      return {
+        decorations: buildBlockDecorations(transaction.state),
+        deferred: false,
+      };
     }
     return value;
   },
-  provide: (field) => EditorView.decorations.from(field),
+  provide: (field) =>
+    EditorView.decorations.from(field, (value) => value.decorations),
 });
 
 function needsRebuild(update: ViewUpdate): boolean {
@@ -749,14 +789,64 @@ function needsRebuild(update: ViewUpdate): boolean {
 const enginePlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    private deferred = false;
+    private refreshFrame: number | null = null;
+    private destroyed = false;
 
     constructor(view: EditorView) {
       this.decorations = buildViewDecorations(view);
     }
 
     update(update: ViewUpdate): void {
+      if (update.transactions.some(refreshRequested)) {
+        this.deferred = false;
+        this.decorations = buildViewDecorations(update.view);
+        return;
+      }
+      const bulkInput = update.transactions.some(
+        (transaction) =>
+          transaction.annotation(bulkTextInputAnnotation) === true,
+      );
+      if (this.deferred || bulkInput) {
+        if (update.docChanged) {
+          this.decorations = this.decorations.map(update.changes);
+        }
+        this.deferred = true;
+        this.scheduleRefresh(update.view);
+        return;
+      }
       if (needsRebuild(update)) {
         this.decorations = buildViewDecorations(update.view);
+      }
+    }
+
+    private scheduleRefresh(view: EditorView): void {
+      if (this.refreshFrame !== null) {
+        return;
+      }
+      const afterPaint = (frames: number) => {
+        this.refreshFrame = requestAnimationFrame(() => {
+          if (this.destroyed) {
+            return;
+          }
+          if (frames > 1) {
+            afterPaint(frames - 1);
+            return;
+          }
+          this.refreshFrame = null;
+          view.dispatch({
+            effects: refreshDeferredDecorations.of(null),
+            annotations: decorationOrigin.of(true),
+          });
+        });
+      };
+      afterPaint(3);
+    }
+
+    destroy(): void {
+      this.destroyed = true;
+      if (this.refreshFrame !== null) {
+        cancelAnimationFrame(this.refreshFrame);
       }
     }
   },
@@ -888,7 +978,7 @@ export function decorationEngine(): Extension {
 /** The live decoration set of a view running the engine; null without it. */
 export function engineDecorations(view: EditorView): DecorationSet | null {
   const inline = view.plugin(enginePlugin)?.decorations;
-  const block = view.state.field(blockEngineField, false);
+  const block = view.state.field(blockEngineField, false)?.decorations;
   if (inline === undefined) {
     return block ?? null;
   }

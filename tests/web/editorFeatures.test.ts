@@ -9,6 +9,10 @@ import { searchPanelOpen } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  BULK_TEXT_INPUT_LENGTH,
+  bulkTextInput,
+} from "../../src/lib/editor/bulkInput";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
 import { createAppRegistry } from "../../src/lib/features";
 import { findExtension } from "../../src/lib/features/findPanel";
@@ -81,6 +85,64 @@ function runEditorCommand(id: string): boolean {
 afterEach(() => {
   activeView?.destroy();
   activeView = undefined;
+});
+
+describe("bulk text input", () => {
+  it("applies a large multi-line insertion as one editor transaction", () => {
+    const transactions: string[] = [];
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "start",
+        selection: { anchor: 5 },
+        extensions: [
+          bulkTextInput(),
+          EditorView.updateListener.of((update) => {
+            for (const transaction of update.transactions) {
+              if (transaction.docChanged) {
+                transactions.push(
+                  transaction.isUserEvent("input.type") ? "type" : "other",
+                );
+              }
+            }
+          }),
+        ],
+      }),
+      parent: document.body,
+    });
+    activeView = view;
+    const text = `\n${"bulk input line\n".repeat(BULK_TEXT_INPUT_LENGTH / 8)}`;
+    const event = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      data: text,
+      inputType: "insertText",
+    });
+
+    expect(view.contentDOM.dispatchEvent(event)).toBe(false);
+    expect(view.state.doc.toString()).toBe(`start${text}`);
+    expect(transactions).toEqual(["type"]);
+  });
+
+  it("leaves ordinary typing on the native input path", () => {
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "start",
+        selection: { anchor: 5 },
+        extensions: [bulkTextInput()],
+      }),
+      parent: document.body,
+    });
+    activeView = view;
+    const event = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      data: " ordinary typing",
+      inputType: "insertText",
+    });
+
+    expect(view.contentDOM.dispatchEvent(event)).toBe(true);
+    expect(view.state.doc.toString()).toBe("start");
+  });
 });
 
 describe("slash menu", () => {

@@ -19,7 +19,7 @@ export default defineConfig({
   // runtime instead of the server one under jsdom.
   test: {
     environment: "jsdom",
-    include: ["tests/web/**/*.test.ts"],
+    include: ["tests/web/**/*.test.ts", "tests/demo.test.ts"],
     setupFiles: ["tests/web/setup.ts"],
     server: {
       deps: {

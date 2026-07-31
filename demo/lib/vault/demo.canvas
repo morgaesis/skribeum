@@ -1,0 +1,128 @@
+{
+  "nodes": [
+    {
+      "id": "tour",
+      "type": "file",
+      "file": "quickstart.md",
+      "x": -40,
+      "y": -20,
+      "width": 320,
+      "height": 260,
+      "color": "4"
+    },
+    {
+      "id": "question",
+      "type": "text",
+      "text": "How can a shared room support focus, movement, and choice?",
+      "x": 400,
+      "y": -300,
+      "width": 320,
+      "height": 140,
+      "color": "3"
+    },
+    {
+      "id": "research",
+      "type": "file",
+      "file": "Examples/Research/interview-notes.md",
+      "x": 400,
+      "y": -80,
+      "width": 360,
+      "height": 280
+    },
+    {
+      "id": "meeting",
+      "type": "file",
+      "file": "Examples/Work/meeting-notes.md",
+      "x": 880,
+      "y": -80,
+      "width": 360,
+      "height": 280
+    },
+    {
+      "id": "decision",
+      "type": "file",
+      "file": "Examples/Work/decision-log.md",
+      "x": 1360,
+      "y": -80,
+      "width": 360,
+      "height": 280,
+      "color": "5"
+    },
+    {
+      "id": "review",
+      "type": "file",
+      "file": "Examples/Personal/weekly-review.md",
+      "x": 880,
+      "y": 400,
+      "width": 360,
+      "height": 280
+    },
+    {
+      "id": "event",
+      "type": "file",
+      "file": "Examples/Community/event-plan.md",
+      "x": 1360,
+      "y": 400,
+      "width": 360,
+      "height": 280
+    }
+  ],
+  "edges": [
+    {
+      "id": "tour-to-research",
+      "fromNode": "tour",
+      "fromSide": "right",
+      "toNode": "research",
+      "toSide": "left",
+      "label": "explore"
+    },
+    {
+      "id": "question-to-research",
+      "fromNode": "question",
+      "fromSide": "bottom",
+      "toNode": "research",
+      "toSide": "top",
+      "label": "ask"
+    },
+    {
+      "id": "research-to-meeting",
+      "fromNode": "research",
+      "fromSide": "right",
+      "toNode": "meeting",
+      "toSide": "left",
+      "label": "synthesize"
+    },
+    {
+      "id": "meeting-to-decision",
+      "fromNode": "meeting",
+      "fromSide": "right",
+      "toNode": "decision",
+      "toSide": "left",
+      "label": "record"
+    },
+    {
+      "id": "meeting-to-review",
+      "fromNode": "meeting",
+      "fromSide": "bottom",
+      "toNode": "review",
+      "toSide": "top",
+      "label": "reflect"
+    },
+    {
+      "id": "decision-to-event",
+      "fromNode": "decision",
+      "fromSide": "bottom",
+      "toNode": "event",
+      "toSide": "top",
+      "label": "apply"
+    },
+    {
+      "id": "review-to-event",
+      "fromNode": "review",
+      "fromSide": "right",
+      "toNode": "event",
+      "toSide": "left",
+      "label": "choose next action"
+    }
+  ]
+}

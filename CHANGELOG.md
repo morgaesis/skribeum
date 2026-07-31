@@ -8,6 +8,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Browser-only editor demo with a seeded sample vault, in-memory edits that
+  reset on reload, and a static GitHub Pages build.
 - Local KaTeX rendering for inline and block math with cursor-source reveal,
   MathML output, and visible source-preserving errors for malformed formulas.
 - Lazy Mermaid rendering for `mermaid` fences with cursor-source reveal and

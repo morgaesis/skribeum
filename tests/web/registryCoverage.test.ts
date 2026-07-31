@@ -50,6 +50,7 @@ const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
   ["lib/OutlinePanel.svelte", "ARIA tree pattern internal navigation"],
   ["lib/PaletteOverlay.svelte", "ARIA combobox pattern internal navigation"],
   ["lib/SettingsView.svelte", "ARIA dialog pattern internal dismissal"],
+  ["lib/rendering/CanvasView.svelte", "canvas camera internal navigation"],
   ["lib/features/findPanel.ts", "find widget internal keys"],
 ]);
 
@@ -78,7 +79,8 @@ type Occurrence = { file: string; line: number; text: string };
 function keyWiringOccurrences(): Occurrence[] {
   const occurrences: Occurrence[] = [];
   for (const file of sourceFiles(sourceDirectory)) {
-    const relative = path.relative(sourceDirectory, file);
+    // Normalized to forward slashes so allowlist rows match on Windows.
+    const relative = path.relative(sourceDirectory, file).replaceAll("\\", "/");
     const lines = readFileSync(file, "utf8").split("\n");
     for (const [index, text] of lines.entries()) {
       if (KEY_WIRING.some((pattern) => pattern.test(text))) {

@@ -1187,7 +1187,9 @@ describe("skribeum shell", () => {
             '[role="option"][data-command-id]',
           );
           const paletteCommandIds = await Promise.all(
-            paletteOptions.map((option) => option.getAttribute("data-command-id")),
+            paletteOptions.map((option) =>
+              option.getAttribute("data-command-id"),
+            ),
           );
           expect(paletteCommandIds.length).toBeGreaterThan(50);
           expect(new Set(paletteCommandIds).size).toBe(

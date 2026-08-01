@@ -248,7 +248,7 @@ Modal surfaces measure against the visual viewport, make the background inert,
 trap Tab and Shift+Tab, close with Escape or a visible Close button, and restore
 the invoking control. File and outline rows expand from their desktop geometry
 to 44px touch targets in sheets. The command registry records each user
-command's pointer surfaces; six ARIA widget navigation commands are explicitly
+command's pointer surfaces; ARIA widget navigation commands are explicitly
 marked as widget-internal, and registry coverage rejects an unclassified or
 unreachable user command.
 

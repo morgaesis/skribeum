@@ -6,9 +6,12 @@ import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
-import { computeOutline, flattenOutline } from "../../src/lib/features/outline";
+import {
+  flattenOutline,
+  outlineFromTree,
+} from "../../src/lib/features/outline";
 
-function stateOf(doc: string): EditorState {
+function outlineOf(doc: string) {
   const state = EditorState.create({
     doc,
     extensions: markdown({
@@ -23,7 +26,7 @@ function stateOf(doc: string): EditorState {
   if (tree === null) {
     throw new Error("markdown syntax tree did not complete");
   }
-  return state.update({}).state;
+  return outlineFromTree(state.doc, tree);
 }
 
 const DOCUMENT = [
@@ -45,7 +48,7 @@ const DOCUMENT = [
 
 describe("outline computation", () => {
   it("nests headings by level and records positions", () => {
-    const outline = computeOutline(stateOf(DOCUMENT));
+    const outline = outlineOf(DOCUMENT);
     expect(outline.map((entry) => entry.title)).toEqual(["Top", "Setext"]);
     const top = outline[0];
     expect(top?.children.map((entry) => entry.title)).toEqual([
@@ -60,7 +63,7 @@ describe("outline computation", () => {
   });
 
   it("handles skipped levels without losing entries", () => {
-    const outline = computeOutline(stateOf("# A\n\n#### Deep\n\n## B\n"));
+    const outline = outlineOf("# A\n\n#### Deep\n\n## B\n");
     expect(outline).toHaveLength(1);
     expect(outline[0]?.children.map((entry) => entry.title)).toEqual([
       "Deep",
@@ -69,13 +72,13 @@ describe("outline computation", () => {
   });
 
   it("returns an empty outline for a document without headings", () => {
-    expect(computeOutline(stateOf("plain text\n\nmore text\n"))).toEqual([]);
+    expect(outlineOf("plain text\n\nmore text\n")).toEqual([]);
   });
 });
 
 describe("outline flattening", () => {
   it("flattens in document order with depths", () => {
-    const outline = computeOutline(stateOf(DOCUMENT));
+    const outline = outlineOf(DOCUMENT);
     const rows = flattenOutline(outline, new Set());
     expect(rows.map((row) => `${row.depth}:${row.entry.title}`)).toEqual([
       "1:Top",
@@ -87,7 +90,7 @@ describe("outline flattening", () => {
   });
 
   it("omits descendants of collapsed entries", () => {
-    const outline = computeOutline(stateOf(DOCUMENT));
+    const outline = outlineOf(DOCUMENT);
     const top = outline[0];
     const collapsed = new Set([top?.from ?? -1]);
     const rows = flattenOutline(outline, collapsed);

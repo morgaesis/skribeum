@@ -1,13 +1,17 @@
 <script lang="ts">
+import type { WikilinkResolutionContext } from "../editor/decorations/wikilinks";
 import { STRINGS } from "../strings";
 import { type CanvasDocument, type CanvasNode, edgePoint } from "./canvas";
+import ReadOnlyNote from "./ReadOnlyNote.svelte";
 
 let {
   canvas,
   previews = {},
+  linkContext = null,
 }: {
   canvas: CanvasDocument;
   previews?: Readonly<Record<string, string>>;
+  linkContext?: WikilinkResolutionContext | null;
 } = $props();
 
 let viewport: HTMLElement;
@@ -15,6 +19,7 @@ let panX = $state(24);
 let panY = $state(24);
 let zoom = $state(1);
 let drag = $state<{ pointer: number; x: number; y: number } | null>(null);
+let previousUserSelect = "";
 
 const nodesById = $derived(
   new Map(canvas.nodes.map((node) => [node.id, node])),
@@ -63,30 +68,112 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 function onWheel(event: WheelEvent) {
+  const card =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>(".canvas-card")
+      : null;
+  const linePixels = 16;
+  const pagePixels = viewport.clientHeight || 800;
+  const multiplier =
+    event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? linePixels
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? pagePixels
+        : 1;
+  const deltaX = event.deltaX * multiplier;
+  const deltaY = event.deltaY * multiplier;
+  if (card !== null && cardCanScroll(card, deltaX, deltaY)) {
+    event.preventDefault();
+    card.scrollLeft = Math.max(
+      0,
+      Math.min(card.scrollWidth - card.clientWidth, card.scrollLeft + deltaX),
+    );
+    card.scrollTop = Math.max(
+      0,
+      Math.min(card.scrollHeight - card.clientHeight, card.scrollTop + deltaY),
+    );
+    return;
+  }
   event.preventDefault();
   if (event.ctrlKey || event.metaKey) {
     setZoom(zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1));
   } else {
-    panX -= event.deltaX;
-    panY -= event.deltaY;
+    panX -= deltaX;
+    panY -= deltaY;
   }
+}
+
+function canScrollAxis(
+  position: number,
+  viewportSize: number,
+  contentSize: number,
+  delta: number,
+): boolean {
+  if (delta < 0) return position > 0;
+  if (delta > 0) return position + viewportSize < contentSize;
+  return false;
+}
+
+function cardCanScroll(
+  card: HTMLElement,
+  deltaX: number,
+  deltaY: number,
+): boolean {
+  return (
+    canScrollAxis(
+      card.scrollLeft,
+      card.clientWidth,
+      card.scrollWidth,
+      deltaX,
+    ) ||
+    canScrollAxis(card.scrollTop, card.clientHeight, card.scrollHeight, deltaY)
+  );
+}
+
+function clearSelection() {
+  window.getSelection()?.removeAllRanges();
+}
+
+function suppressSelection() {
+  previousUserSelect = viewport.style.userSelect;
+  viewport.style.userSelect = "none";
+  clearSelection();
+}
+
+function restoreSelection() {
+  viewport.style.userSelect = previousUserSelect;
+  clearSelection();
 }
 
 function onPointerDown(event: PointerEvent) {
   if (event.button !== 0) return;
+  if (
+    event.target instanceof Element &&
+    event.target.closest("button, a, input, select, textarea") !== null
+  ) {
+    return;
+  }
+  event.preventDefault();
+  suppressSelection();
   drag = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
-  viewport.setPointerCapture(event.pointerId);
+  viewport.setPointerCapture?.(event.pointerId);
 }
 
 function onPointerMove(event: PointerEvent) {
   if (drag === null || drag.pointer !== event.pointerId) return;
+  event.preventDefault();
   panX += event.clientX - drag.x;
   panY += event.clientY - drag.y;
   drag = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
 }
 
 function onPointerUp(event: PointerEvent) {
-  if (drag?.pointer === event.pointerId) drag = null;
+  if (drag?.pointer !== event.pointerId) return;
+  drag = null;
+  if (viewport.hasPointerCapture?.(event.pointerId)) {
+    viewport.releasePointerCapture(event.pointerId);
+  }
+  restoreSelection();
 }
 
 function cameraInteractions(node: HTMLElement) {
@@ -96,14 +183,20 @@ function cameraInteractions(node: HTMLElement) {
   node.addEventListener("pointermove", onPointerMove);
   node.addEventListener("pointerup", onPointerUp);
   node.addEventListener("pointercancel", onPointerUp);
+  node.addEventListener("lostpointercapture", onPointerUp);
   return {
     destroy() {
+      if (drag !== null) {
+        drag = null;
+        restoreSelection();
+      }
       node.removeEventListener("keydown", onKeydown);
       node.removeEventListener("wheel", onWheel);
       node.removeEventListener("pointerdown", onPointerDown);
       node.removeEventListener("pointermove", onPointerMove);
       node.removeEventListener("pointerup", onPointerUp);
       node.removeEventListener("pointercancel", onPointerUp);
+      node.removeEventListener("lostpointercapture", onPointerUp);
     },
   };
 }
@@ -112,6 +205,18 @@ function nodeLabel(node: CanvasNode): string {
   return node.type === "text"
     ? STRINGS.canvasTextNodeLabel
     : `${STRINGS.canvasFileNodeLabel}: ${node.file}`;
+}
+
+function contextFor(node: CanvasNode): WikilinkResolutionContext | undefined {
+  if (linkContext === null) return undefined;
+  const currentPath =
+    node.type === "file" ? node.file : (linkContext.currentPath ?? null);
+  return {
+    ...linkContext,
+    currentPath,
+    embedDepth: 0,
+    embedAncestry: currentPath === null ? [] : [currentPath],
+  };
 }
 
 export function focus() {
@@ -167,13 +272,22 @@ export function focus() {
         class="canvas-card"
         data-node-id={node.id}
         aria-label={nodeLabel(node)}
+        tabindex="0"
         style={`left:${node.x}px;top:${node.y}px;width:${node.width}px;height:${node.height}px;--canvas-node-color:${node.color ?? "var(--skr-border)"}`}
       >
         {#if node.type === "text"}
-          <div class="canvas-content">{node.text}</div>
+          <div class="canvas-content">
+            <ReadOnlyNote source={node.text} label={nodeLabel(node)} context={contextFor(node)} />
+          </div>
         {:else}
           <div class="skr-canvas-card-title">{node.file}</div>
-          <pre class="canvas-content">{previews[node.file] ?? STRINGS.canvasFileUnavailable}</pre>
+          <div class="canvas-content">
+            <ReadOnlyNote
+              source={previews[node.file] ?? STRINGS.canvasFileUnavailable}
+              label={nodeLabel(node)}
+              context={contextFor(node)}
+            />
+          </div>
         {/if}
       </article>
     {/each}
@@ -194,6 +308,7 @@ export function focus() {
     background-size: 18px 18px;
   }
   .canvas-viewport.dragging { cursor: grabbing; }
+  .canvas-viewport.dragging { user-select: none; }
   .canvas-toolbar {
     position: absolute;
     z-index: 3;
@@ -263,8 +378,6 @@ export function focus() {
     margin: 0;
     padding: 0.7rem;
     color: var(--skr-text);
-    font: inherit;
-    white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
 </style>

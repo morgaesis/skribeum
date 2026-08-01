@@ -3,7 +3,8 @@
 // selection movement only; the outline never mutates the document.
 
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState } from "@codemirror/state";
+import type { EditorState, Text } from "@codemirror/state";
+import type { Tree } from "@lezer/common";
 
 export type OutlineEntry = {
   /** Heading text without markers. */
@@ -32,7 +33,11 @@ const HEADING_LEVELS = new Map<string, number>([
  * as the background parser extends the tree.
  */
 export function computeOutline(state: EditorState): OutlineEntry[] {
-  const tree = syntaxTree(state);
+  return outlineFromTree(state.doc, syntaxTree(state));
+}
+
+/** Extracts an outline from a specific parser result. */
+export function outlineFromTree(doc: Text, tree: Tree): OutlineEntry[] {
   const root: OutlineEntry = { title: "", level: 0, from: 0, children: [] };
   const stack: OutlineEntry[] = [root];
   tree.iterate({
@@ -41,7 +46,7 @@ export function computeOutline(state: EditorState): OutlineEntry[] {
       if (level === undefined) {
         return undefined;
       }
-      const firstLine = state.doc.lineAt(ref.from);
+      const firstLine = doc.lineAt(ref.from);
       const title = firstLine.text.replace(/^#{1,6}\s+/, "").trim();
       const entry: OutlineEntry = {
         title,

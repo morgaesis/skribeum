@@ -74,9 +74,13 @@ describe("canvas viewer interactions and note rendering", () => {
     expect(card).not.toBeNull();
     expect(card?.tabIndex).toBe(0);
     expect(card?.querySelector('[contenteditable="false"]')).not.toBeNull();
-    expect(card?.querySelector(".cm-skr-heading-1")?.textContent).toBe(
-      "Rendered heading",
-    );
+    const heading = card?.querySelector(".cm-skr-heading-1");
+    const headingMarker = heading?.querySelector(".cm-skr-reveal-marker");
+    expect(heading?.textContent).toBe("# Rendered heading");
+    expect(headingMarker?.textContent).toBe("# ");
+    expect(
+      headingMarker?.classList.contains("cm-skr-reveal-marker-active"),
+    ).toBe(false);
     expect(card?.querySelector(".cm-skr-strong")?.textContent).toBe(
       "strong phrase",
     );
@@ -89,7 +93,6 @@ describe("canvas viewer interactions and note rendering", () => {
     expect(card?.querySelectorAll('[role="row"]')).toHaveLength(2);
     expect(card?.querySelector(".cm-skr-code-block")).not.toBeNull();
     expect(card?.textContent).not.toContain("Hidden metadata");
-    expect(card?.textContent).not.toContain("# Rendered heading");
     expect(card?.textContent).not.toContain("**strong phrase**");
 
     await unmount(component);

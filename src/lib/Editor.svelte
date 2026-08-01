@@ -211,17 +211,17 @@ function registryExtensions(): Extension[] {
 
 function stateFor(content: string, locked: boolean): EditorState {
   const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
-    return EditorState.create({
-      doc: content,
-      extensions: [
-        renderingCompartment.of(
-          noteRenderingExtensions(content, undefined, normalizedTaskStatuses),
-        ),
-        ...(wikilinkNavigationOptions === undefined
-          ? []
-          : [wikilinkPointerNavigation(wikilinkNavigationOptions)]),
-        editorAppearance,
-        settingsCompartment.of(settingsExtensions(settings)),
+  return EditorState.create({
+    doc: content,
+    extensions: [
+      renderingCompartment.of(
+        noteRenderingExtensions(content, undefined, normalizedTaskStatuses),
+      ),
+      ...(wikilinkNavigationOptions === undefined
+        ? []
+        : [wikilinkPointerNavigation(wikilinkNavigationOptions)]),
+      editorAppearance,
+      settingsCompartment.of(settingsExtensions(settings)),
       bulkTextInput(),
       historyCompartment.of(history()),
       ...registryExtensions(),

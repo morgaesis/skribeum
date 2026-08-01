@@ -142,18 +142,18 @@ Existing links continue to follow Obsidian path and shortest-name resolution;
 an old permalink whose path no longer exists opens the not-found surface
 instead of guessing at a renamed target. The desktop surface instructs the
 user to create the Markdown file at that path and provides a refresh action.
-The browser demo explains that its fixed sample vault cannot create the file.
+The browser demo explains that it does not create the file automatically.
 
 The navigation feature (`src/lib/features/navigation.ts`) owns address
 encoding, Obsidian-aware resolution, browser and desktop history adapters,
 fragment lookup, and the registered `navigation.back`, `navigation.forward`,
-and `navigation.follow-link` commands. A plain click follows a decorated
-wikilink or note embed unless the editor cursor is already inside that link's
-text, in which case the click remains an editing gesture. Control-click and
-Command-click follow without moving the cursor. Enter follows the link under
-the editor cursor and otherwise falls through to CodeMirror's ordinary Enter
-behavior. Unresolved links announce the resolution failure and open their
-deterministic missing-note address when one can be formed.
+and `navigation.follow-link` commands. A plain click follows a rendered
+wikilink or the header of a rendered note embed. A click on revealed wikilink
+source remains an editing gesture. Control-click and Command-click follow
+without moving the cursor. Enter follows the link under the editor cursor or a
+focused embed header and otherwise falls through to CodeMirror's ordinary
+Enter behavior. Unresolved links announce the resolution failure and open
+their deterministic missing-note address when one can be formed.
 
 ## Live preview
 

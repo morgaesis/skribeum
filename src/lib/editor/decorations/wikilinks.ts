@@ -4,23 +4,26 @@
 
 import { type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import type { WikilinkResolutionContext } from "../../features/navigation";
 import {
   type FollowWikilinkOptions,
   followWikilinkAt,
   resolveWikilinkTarget,
+  wikilinkNavigationOptionsFacet,
   wikilinkPositionFromElement,
 } from "../../features/navigation";
-import type { WikilinkResolutionContext } from "../../features/navigation";
 
 export {
   candidateAddressForTarget,
   DEFAULT_OBSIDIAN_APP_CONFIG,
   EMPTY_WIKILINK_CONTEXT,
+  followWikilinkTarget,
   type ObsidianAppConfig,
   parseObsidianAppConfig,
   resolveWikilinkTarget,
   type WikilinkResolution,
   type WikilinkResolutionContext,
+  wikilinkNavigationOptionsFacet,
 } from "../../features/navigation";
 
 /** Resolves a local Markdown-link URL to a canonical preview target. */
@@ -86,69 +89,70 @@ export function wikilinkPointerNavigation(
   options: () => FollowWikilinkOptions,
 ): Extension {
   let pendingClick: { position: number; handled: boolean } | null = null;
-  return Prec.high(
-    EditorView.domEventHandlers({
-      mousedown(event, view) {
-        pendingClick = null;
-        if (event.button !== 0 || event.altKey || event.shiftKey) {
-          return false;
-        }
-        const element =
-          event.target instanceof Element
-            ? event.target.closest<HTMLElement>(".cm-skr-wikilink")
-            : null;
-        if (
-          element === null ||
-          !view.dom.contains(element) ||
-          (!(event.ctrlKey || event.metaKey) &&
-            element.classList.contains("cm-skr-reveal-source"))
-        ) {
-          return false;
-        }
-        const position = wikilinkPositionFromElement(view, element);
-        if (position === null) {
-          return false;
-        }
-        event.preventDefault();
-        const handled = followWikilinkAt(view, position, options());
-        pendingClick = { position, handled };
-        return handled;
-      },
-      click(event, view) {
-        if (event.button !== 0 || event.altKey || event.shiftKey) {
+  const activation = (
+    view: EditorView,
+    target: EventTarget | null,
+  ): { element: HTMLElement; position: number } | undefined => {
+    const element =
+      target instanceof Element
+        ? target.closest<HTMLElement>(".cm-skr-wikilink")
+        : null;
+    if (element === null || !view.dom.contains(element)) {
+      return undefined;
+    }
+    const position = wikilinkPositionFromElement(view, element);
+    return position === null ? undefined : { element, position };
+  };
+  return [
+    wikilinkNavigationOptionsFacet.of(options),
+    Prec.high(
+      EditorView.domEventHandlers({
+        mousedown(event, view) {
           pendingClick = null;
-          return false;
-        }
-        const element =
-          event.target instanceof Element
-            ? event.target.closest<HTMLElement>(".cm-skr-wikilink")
-            : null;
-        if (element === null || !view.dom.contains(element)) {
-          pendingClick = null;
-          return false;
-        }
-        const position = wikilinkPositionFromElement(view, element);
-        if (position === null) {
-          pendingClick = null;
-          return false;
-        }
-        const preceding = pendingClick;
-        pendingClick = null;
-        if (preceding?.position === position) {
-          if (preceding.handled) {
-            event.preventDefault();
+          if (event.button !== 0 || event.altKey || event.shiftKey) {
+            return false;
           }
-          return preceding.handled;
-        }
-        if (
-          !(event.ctrlKey || event.metaKey) &&
-          element.classList.contains("cm-skr-reveal-source")
-        ) {
-          return false;
-        }
-        event.preventDefault();
-        return followWikilinkAt(view, position, options());
-      },
-    }),
-  );
+          const candidate = activation(view, event.target);
+          if (
+            candidate === undefined ||
+            (!(event.ctrlKey || event.metaKey) &&
+              candidate.element.classList.contains("cm-skr-reveal-source"))
+          ) {
+            return false;
+          }
+          event.preventDefault();
+          const handled = followWikilinkAt(view, candidate.position, options());
+          pendingClick = { position: candidate.position, handled };
+          return handled;
+        },
+        click(event, view) {
+          if (event.button !== 0 || event.altKey || event.shiftKey) {
+            pendingClick = null;
+            return false;
+          }
+          const candidate = activation(view, event.target);
+          if (candidate === undefined) {
+            pendingClick = null;
+            return false;
+          }
+          const preceding = pendingClick;
+          pendingClick = null;
+          if (preceding?.position === candidate.position) {
+            if (preceding.handled) {
+              event.preventDefault();
+            }
+            return preceding.handled;
+          }
+          if (
+            !(event.ctrlKey || event.metaKey) &&
+            candidate.element.classList.contains("cm-skr-reveal-source")
+          ) {
+            return false;
+          }
+          event.preventDefault();
+          return followWikilinkAt(view, candidate.position, options());
+        },
+      }),
+    ),
+  ];
 }

@@ -5,7 +5,7 @@
 // keyboard, browser, and desktop entry points cannot drift apart.
 
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState } from "@codemirror/state";
+import { type EditorState, Facet } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 import type { CommandRegistry } from "../registry";
@@ -674,17 +674,20 @@ export type FollowWikilinkOptions = {
   unresolved(reason: string): void;
 };
 
-/** Follows the wikilink at an offset, including unresolved not-found routing. */
-export function followWikilinkAt(
-  view: EditorView,
-  position: number,
+/** Navigation capabilities available to rendered editor widgets. */
+export const wikilinkNavigationOptionsFacet = Facet.define<
+  () => FollowWikilinkOptions,
+  (() => FollowWikilinkOptions) | null
+>({
+  combine: (providers) => providers.at(-1) ?? null,
+});
+
+/** Resolves and follows one wikilink target through the shared address model. */
+export function followWikilinkTarget(
+  target: string,
   options: FollowWikilinkOptions,
 ): boolean {
-  const reference = wikilinkReferenceAt(view.state, position);
-  if (reference === null) {
-    return false;
-  }
-  const resolution = resolveWikilinkTarget(reference.target, options.context);
+  const resolution = resolveWikilinkTarget(target, options.context);
   if (resolution.kind === "note") {
     if (!resolution.path.toLowerCase().endsWith(".md")) {
       options.unresolved(STRINGS.wikilinkTargetNotNote);
@@ -714,6 +717,18 @@ export function followWikilinkAt(
     void options.navigate(candidate);
   }
   return true;
+}
+
+/** Follows the wikilink at an offset, including unresolved not-found routing. */
+export function followWikilinkAt(
+  view: EditorView,
+  position: number,
+  options: FollowWikilinkOptions,
+): boolean {
+  const reference = wikilinkReferenceAt(view.state, position);
+  return reference === null
+    ? false
+    : followWikilinkTarget(reference.target, options);
 }
 
 /** Finds a wikilink position from a decorated DOM descendant. */

@@ -68,14 +68,26 @@ function wikilinkTarget(view: EditorView): HTMLElement {
   return target;
 }
 
-function pressLink(view: EditorView, init: MouseEventInit = {}): MouseEvent {
+function embedTarget(view: EditorView): HTMLElement {
+  const target = view.dom.querySelector<HTMLElement>(".cm-skr-embed-header");
+  if (target === null) {
+    throw new Error("rendered embed navigation target missing");
+  }
+  return target;
+}
+
+function pressLink(
+  view: EditorView,
+  init: MouseEventInit = {},
+  target = wikilinkTarget(view),
+): MouseEvent {
   const event = new MouseEvent("mousedown", {
     bubbles: true,
     cancelable: true,
     button: 0,
     ...init,
   });
-  wikilinkTarget(view).dispatchEvent(event);
+  target.dispatchEvent(event);
   return event;
 }
 
@@ -105,7 +117,25 @@ describe("wikilink pointer navigation", () => {
     const options = navigationOptions({ navigate });
     const view = makePointerView("Preview ![[Target note]] here", 0, options);
 
-    const event = pressLink(view);
+    const event = pressLink(view, {}, embedTarget(view));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
+  });
+
+  it("follows a focused embedded note reference with Enter", () => {
+    const navigate = vi.fn();
+    const options = navigationOptions({ navigate });
+    const view = makePointerView("Preview ![[Target note]] here", 0, options);
+    const target = embedTarget(view);
+    target.focus();
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    });
+
+    target.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
@@ -151,11 +181,39 @@ describe("wikilink pointer navigation", () => {
     const cursor = doc.indexOf("Target note") + 3;
     const view = makePointerView(doc, cursor, options);
 
+    expect(view.dom.querySelectorAll(".cm-skr-reveal-source")).toHaveLength(1);
     pressLink(view);
 
     expect(navigate).not.toHaveBeenCalled();
     expect(view.state.doc.toString()).toBe(doc);
     expect(view.contentDOM.getAttribute("contenteditable")).toBe("true");
+  });
+
+  it("follows a rendered link while one other source region is revealed", () => {
+    const navigate = vi.fn();
+    const options = navigationOptions({
+      navigate,
+      context: {
+        paths: ["First note.md", "Target note.md"],
+        config: DEFAULT_OBSIDIAN_APP_CONFIG,
+        currentPath: "source.md",
+      },
+    });
+    const doc = "[[First note]] and [[Target note]]";
+    const view = makePointerView(doc, doc.indexOf("First note") + 2, options);
+    const targets = view.dom.querySelectorAll<HTMLElement>(
+      ".cm-skr-wikilink-target",
+    );
+    const second = targets[1];
+    if (second === undefined) {
+      throw new Error("second rendered wikilink missing");
+    }
+
+    const event = pressLink(view, {}, second);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
+    expect(view.dom.querySelectorAll(".cm-skr-reveal-source")).toHaveLength(1);
   });
 
   it("explains an unresolved link and navigates to its missing candidate", () => {

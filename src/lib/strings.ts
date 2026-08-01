@@ -15,7 +15,7 @@ export const STRINGS = {
   noteNotFoundTitle: "Note not found",
   noteNotFoundPrefix: "No note exists at this vault-relative path:",
   noteNotFoundBrowser:
-    "The browser demo uses a fixed sample vault and cannot create missing notes.",
+    "The browser demo does not create missing notes automatically.",
   noteNotFoundDesktop:
     "Create the Markdown file at this path in the vault, then refresh the vault index.",
   noteNotFoundRefresh: "Refresh and open",

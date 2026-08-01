@@ -60,7 +60,7 @@ export const TAG_COMPLETION_CATALOG_NOTE_CONTENT =
 export const TAG_COMPLETION_TARGET_NOTE_NAME = "zz-tag-completion-target.md";
 export const TAG_COMPLETION_MIDDLE_LINE = "Tag completion target.";
 export const TAG_COMPLETION_FINAL_LINE = "Tag completion final line.";
-export const TAG_COMPLETION_TARGET_NOTE_CONTENT = `${TAG_COMPLETION_MIDDLE_LINE}\n${TAG_COMPLETION_FINAL_LINE}`;
+export const TAG_COMPLETION_TARGET_NOTE_CONTENT = `${TAG_COMPLETION_MIDDLE_LINE}\n\n${TAG_COMPLETION_FINAL_LINE}\n`;
 
 export const VISUAL_NOTE_NAME = "zzz-reading-room.md";
 export const VISUAL_NOTE_CONTENT = [

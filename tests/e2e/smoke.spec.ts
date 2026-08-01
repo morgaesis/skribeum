@@ -275,21 +275,16 @@ function tagCompletionResult(
   replacement: string,
 ): string {
   if (position === "final") {
-    return `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n${replacement}`;
+    return `${TAG_COMPLETION_MIDDLE_LINE}\n\n${TAG_COMPLETION_FINAL_LINE}\n${replacement}`;
   }
-  return `${TAG_COMPLETION_MIDDLE_LINE}\n${replacement}\n${TAG_COMPLETION_FINAL_LINE}`;
+  return `${TAG_COMPLETION_MIDDLE_LINE}\n${replacement}\n${TAG_COMPLETION_FINAL_LINE}\n`;
 }
 
 async function typeTagCompletionQuery(
   position: TagCompletionPosition = "final",
   query = "ced",
 ): Promise<void> {
-  await placeCursorAtLineEnd(
-    position === "final"
-      ? TAG_COMPLETION_FINAL_LINE
-      : TAG_COMPLETION_MIDDLE_LINE,
-  );
-  await browser.keys(Key.Enter);
+  await placeCursorAtTagCompletionPosition(position);
   await $(".cm-content").addValue("#");
   await $(".cm-content").addValue(query);
   await browser.waitUntil(
@@ -310,8 +305,10 @@ async function editorText(): Promise<string> {
 }
 
 async function editorDocumentText(): Promise<string> {
-  return browser.execute(
-    () => document.querySelector<HTMLElement>(".cm-content")?.innerText ?? "",
+  return browser.execute(() =>
+    [...document.querySelectorAll<HTMLElement>(".cm-line")]
+      .map((line) => line.textContent ?? "")
+      .join("\n"),
   );
 }
 
@@ -484,6 +481,38 @@ const demoTagCompletionHarness: TagCompletionHarness = {
     expect(await demoTagCompletionTargetText()).toBe(expected);
   },
 };
+
+async function placeCursorAtTagCompletionPosition(
+  position: TagCompletionPosition,
+) {
+  await browser.execute(
+    (anchorText: string) => {
+      const lines = [...document.querySelectorAll<HTMLElement>(".cm-line")];
+      const anchorIndex = lines.findIndex(
+        (line) => line.textContent === anchorText,
+      );
+      const insertionLine = lines[anchorIndex + 1];
+      if (
+        anchorIndex === -1 ||
+        insertionLine === undefined ||
+        insertionLine.textContent !== ""
+      ) {
+        throw new Error("tag completion insertion line is unavailable");
+      }
+      insertionLine.click();
+      const range = document.createRange();
+      range.selectNodeContents(insertionLine);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    },
+    position === "final"
+      ? TAG_COMPLETION_FINAL_LINE
+      : TAG_COMPLETION_MIDDLE_LINE,
+  );
+  await browser.pause(200);
+}
 
 /** Places the browser selection at the end of the editor line with `text`. */
 async function placeCursorAtLineEnd(text: string) {

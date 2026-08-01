@@ -23,6 +23,7 @@ pub use recon::{BannerReason, ReconEvent, Reconciler, ReconcilerConfig};
 pub use search::{SEARCH_SCHEMA_VERSION, SearchError, SearchHit, SearchIndex, index_file_name};
 pub use settings::{
     SETTINGS_FILE_NAME, SETTINGS_SCHEMA_VERSION, Settings, SettingsError, SettingsStore,
+    TaskStatus, TaskStatusCategory, default_task_statuses,
 };
 pub use sim::{
     NetworkProfile, Scheduler, SchedulerOp, SimClock, SimFs, SimKill, install_quiet_kill_hook,

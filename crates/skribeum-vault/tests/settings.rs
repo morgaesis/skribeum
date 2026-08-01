@@ -7,9 +7,10 @@
 
 use std::path::PathBuf;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use skribeum_vault::{
-    FileSystem, SETTINGS_SCHEMA_VERSION, Settings, SettingsError, SettingsStore, SimFs,
+    FileSystem, SETTINGS_SCHEMA_VERSION, Settings, SettingsError, SettingsStore, SimFs, TaskStatus,
+    TaskStatusCategory, default_task_statuses,
 };
 
 fn store() -> (SimFs, SettingsStore) {
@@ -29,6 +30,7 @@ fn missing_file_yields_defaults() {
     assert_eq!(settings, Settings::default());
     assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
     assert_eq!(settings.theme, "system");
+    assert_eq!(settings.task_statuses, default_task_statuses());
 }
 
 /// A full round trip: unknown keys already in the file, including nested
@@ -171,4 +173,83 @@ fn write_creates_directory_and_themes_round_trip() {
         store.write(&fs, &settings).expect("write succeeds");
         assert_eq!(store.read(&fs).expect("read succeeds").theme, theme);
     }
+}
+
+#[test]
+fn custom_task_statuses_round_trip_in_order() {
+    let (fs, store) = store();
+    let statuses = vec![
+        TaskStatus {
+            symbol: " ".to_owned(),
+            name: "Ready".to_owned(),
+            category: TaskStatusCategory::Todo,
+            glyph: "○".to_owned(),
+            color_token: "--skr-accent".to_owned(),
+            next_status: "~".to_owned(),
+        },
+        TaskStatus {
+            symbol: "~".to_owned(),
+            name: "Paused".to_owned(),
+            category: TaskStatusCategory::OnHold,
+            glyph: "Ⅱ".to_owned(),
+            color_token: "--skr-callout-purple".to_owned(),
+            next_status: " ".to_owned(),
+        },
+    ];
+    let settings = Settings {
+        task_statuses: statuses.clone(),
+        ..Settings::default()
+    };
+    store.write(&fs, &settings).expect("write succeeds");
+    assert_eq!(
+        store.read(&fs).expect("read succeeds").task_statuses,
+        statuses
+    );
+}
+
+#[test]
+fn malformed_task_status_configuration_reads_as_defaults() {
+    let (fs, store) = store();
+    fs.external_write(
+        &PathBuf::from("config/settings.json"),
+        serde_json::to_string(&json!({
+            "task_statuses": [{
+                "symbol": "?",
+                "name": "Question",
+                "category": "TODO",
+                "glyph": "?",
+                "color_token": "--skr-accent",
+                "next_status": "missing"
+            }]
+        }))
+        .expect("fixture serializes")
+        .as_bytes(),
+    );
+    assert_eq!(
+        store.read(&fs).expect("read succeeds").task_statuses,
+        default_task_statuses()
+    );
+}
+
+#[test]
+fn write_preserves_unknown_fields_inside_status_entries() {
+    let (fs, store) = store();
+    let path = PathBuf::from("config/settings.json");
+    let mut first = default_task_statuses()[0].clone();
+    first.next_status = first.symbol.clone();
+    let mut entry = serde_json::to_value(&first).expect("status serializes");
+    entry["future_style"] = json!({"weight": 2});
+    fs.external_write(
+        &path,
+        serde_json::to_string(&json!({"task_statuses": [entry]}))
+            .expect("fixture serializes")
+            .as_bytes(),
+    );
+
+    let mut settings = Settings::default();
+    settings.task_statuses = vec![first];
+    store.write(&fs, &settings).expect("write succeeds");
+    let stored: Value =
+        serde_json::from_slice(&fs.read(&path).expect("file readable")).expect("valid JSON");
+    assert_eq!(stored["task_statuses"][0]["future_style"]["weight"], 2);
 }

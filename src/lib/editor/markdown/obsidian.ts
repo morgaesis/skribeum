@@ -6,16 +6,20 @@
 // place the webview's Obsidian syntax lives.
 
 import {
+  type BlockContext,
   parser as commonmark,
   type Element,
   Emoji,
   GFM,
   type InlineContext,
+  type LeafBlock,
+  type LeafBlockParser,
   type MarkdownConfig,
   Subscript,
   Superscript,
 } from "@lezer/markdown";
 import { mathMarkdownExtension } from "../../rendering/math";
+import { DEFAULT_TASK_STATUSES, type TaskStatus } from "../../taskStatuses";
 
 const CHAR_EXCLAMATION = 33;
 const CHAR_HASH = 35;
@@ -237,6 +241,62 @@ const callouts: MarkdownConfig = {
   ],
 };
 
+class ConfiguredTaskParser implements LeafBlockParser {
+  constructor(private readonly markerLength: number) {}
+
+  nextLine(): boolean {
+    return false;
+  }
+
+  finish(cx: BlockContext, leaf: LeafBlock): boolean {
+    cx.addLeafElement(
+      leaf,
+      cx.elt("Task", leaf.start, leaf.start + leaf.content.length, [
+        cx.elt("TaskMarker", leaf.start, leaf.start + this.markerLength),
+        ...cx.parser.parseInline(
+          leaf.content.slice(this.markerLength),
+          leaf.start + this.markerLength,
+        ),
+      ]),
+    );
+    return true;
+  }
+}
+
+/** A TaskList parser restricted to the configured one-character symbols. */
+export function taskListMarkdownExtension(
+  statuses: readonly TaskStatus[],
+): MarkdownConfig {
+  const symbols = new Set(statuses.map((status) => status.symbol));
+  return {
+    parseBlock: [
+      {
+        name: "TaskList",
+        leaf(cx, leaf) {
+          if (leaf.content[0] !== "[" || cx.parentType().name !== "ListItem") {
+            return null;
+          }
+          const codePoint = leaf.content.codePointAt(1);
+          if (codePoint === undefined) {
+            return null;
+          }
+          const symbol = String.fromCodePoint(codePoint);
+          const close = 1 + symbol.length;
+          if (
+            !symbols.has(symbol) ||
+            leaf.content[close] !== "]" ||
+            !/[ \t]/u.test(leaf.content[close + 1] ?? "")
+          ) {
+            return null;
+          }
+          return new ConfiguredTaskParser(close + 1);
+        },
+        after: "SetextHeading",
+      },
+    ],
+  };
+}
+
 /**
  * Lezer reuses Markdown trees at block boundaries. A paragraph without a
  * blank line is one block, so editing any character in a multi-megabyte
@@ -310,7 +370,7 @@ const frontmatterBlock: MarkdownConfig = {
  * The embed parser is registered before the wikilink parser so `![[` is
  * claimed as one embed rather than an image-plus-wikilink split.
  */
-export const obsidianMarkdownExtensions: MarkdownConfig[] = [
+const obsidianMarkdownExtensionsWithoutTasks: MarkdownConfig[] = [
   boundedParagraphs,
   frontmatterBlock,
   wikilinks,
@@ -319,6 +379,18 @@ export const obsidianMarkdownExtensions: MarkdownConfig[] = [
   callouts,
   mathMarkdownExtension,
 ];
+
+export function obsidianMarkdownExtensionsFor(
+  statuses: readonly TaskStatus[],
+): MarkdownConfig[] {
+  return [
+    ...obsidianMarkdownExtensionsWithoutTasks,
+    taskListMarkdownExtension(statuses),
+  ];
+}
+
+export const obsidianMarkdownExtensions: MarkdownConfig[] =
+  obsidianMarkdownExtensionsFor(DEFAULT_TASK_STATUSES);
 
 const baseExtensions = [GFM, Subscript, Superscript, Emoji];
 

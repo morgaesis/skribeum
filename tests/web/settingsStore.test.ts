@@ -9,12 +9,14 @@ import {
   SettingsStore,
 } from "../../src/lib/features/settingsStore";
 import type { SettingsDocument } from "../../src/lib/ipc/services";
+import { defaultTaskStatuses } from "../../src/lib/taskStatuses";
 
 const PERSISTED: SettingsDocument = {
   schema_version: 1,
   theme: "dark",
   editor_font_size: 18,
   search_result_limit: 25,
+  task_statuses: defaultTaskStatuses(),
 };
 
 function harness(io?: {
@@ -106,5 +108,26 @@ describe("settings store", () => {
     expect(store.snapshot.error).toContain("disk full");
     // The revert re-applied the previous value (font size restored).
     expect(applied.at(-1)?.document.editor_font_size).toBe(18);
+  });
+
+  it("falls back to the complete default graph for malformed task statuses", async () => {
+    const malformed = {
+      ...PERSISTED,
+      task_statuses: [
+        {
+          symbol: "?",
+          name: "Question",
+          category: "TODO",
+          glyph: "?",
+          color_token: "--skr-accent",
+          next_status: "missing",
+        },
+      ],
+    } as unknown as SettingsDocument;
+    const { store } = harness({ read: () => Promise.resolve(malformed) });
+    await store.load();
+    expect(store.snapshot.document.task_statuses).toEqual(
+      defaultTaskStatuses(),
+    );
   });
 });

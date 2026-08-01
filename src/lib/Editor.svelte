@@ -22,6 +22,7 @@ import { assertDecorationsInert } from "./editor/decorationGuard";
 import {
   decorationEngine,
   dispatchWikilinkContext,
+  taskStatusConfiguration,
 } from "./editor/decorations/engine";
 import type { WikilinkResolutionContext } from "./editor/decorations/wikilinks";
 import {
@@ -31,7 +32,7 @@ import {
   parseFrontmatter,
 } from "./editor/frontmatter";
 import { codeLanguage } from "./editor/markdown/codeLanguages";
-import { obsidianMarkdownExtensions } from "./editor/markdown/obsidian";
+import { obsidianMarkdownExtensionsFor } from "./editor/markdown/obsidian";
 import { NoteSession } from "./editor/noteSession";
 import { findExtension } from "./features/findPanel";
 import { selectionToolbar } from "./features/selectionToolbar";
@@ -41,6 +42,11 @@ import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
 import PropertiesPanel from "./PropertiesPanel.svelte";
 import { type CommandContext, CommandRegistry, editorKeymap } from "./registry";
 import { STRINGS } from "./strings";
+import {
+  DEFAULT_TASK_STATUSES,
+  normalizeTaskStatuses,
+  type TaskStatus,
+} from "./taskStatuses";
 
 let {
   doc = "",
@@ -49,6 +55,7 @@ let {
   path = null,
   linkContext = null,
   propertyTypes = null,
+  taskStatuses = DEFAULT_TASK_STATUSES,
   registry = null,
   commandContext = null,
   onConflict,
@@ -64,6 +71,8 @@ let {
   linkContext?: WikilinkResolutionContext | null;
   /** Declared Obsidian property types for the properties panel. */
   propertyTypes?: Readonly<Record<string, FrontmatterValueType>> | null;
+  /** Ordered task marker vocabulary from application settings. */
+  taskStatuses?: readonly TaskStatus[];
   /** The registration API; keybindings, slash menu and toolbar read it. */
   registry?: CommandRegistry | null;
   /** Capability provider for commands fired inside the editor. */
@@ -86,6 +95,8 @@ let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let saveChain: Promise<void> = Promise.resolve();
 
 const historyCompartment = new Compartment();
+const languageCompartment = new Compartment();
+const taskStatusCompartment = new Compartment();
 
 /**
  * Frontmatter is panel-edited only within this many leading characters; a
@@ -167,15 +178,21 @@ function registryExtensions(): Extension[] {
 }
 
 function stateFor(content: string, locked: boolean): EditorState {
+  const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
   return EditorState.create({
     doc: content,
     extensions: [
-      markdown({
-        base: markdownLanguage,
-        codeLanguages: codeLanguage,
-        extensions: obsidianMarkdownExtensions,
-      }),
+      languageCompartment.of(
+        markdown({
+          base: markdownLanguage,
+          codeLanguages: codeLanguage,
+          extensions: obsidianMarkdownExtensionsFor(normalizedTaskStatuses),
+        }),
+      ),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      taskStatusCompartment.of(
+        taskStatusConfiguration.of(normalizedTaskStatuses),
+      ),
       decorationEngine(),
       EditorView.lineWrapping,
       bulkTextInput(),
@@ -498,6 +515,27 @@ $effect(() => {
   if (view !== undefined && note !== initializedNote) {
     initializedNote = note;
     initializeForNote(note);
+  }
+});
+
+// Status settings apply without rebuilding the editor or touching the source.
+$effect(() => {
+  const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
+  if (view !== undefined) {
+    view.dispatch({
+      effects: [
+        languageCompartment.reconfigure(
+          markdown({
+            base: markdownLanguage,
+            codeLanguages: codeLanguage,
+            extensions: obsidianMarkdownExtensionsFor(normalizedTaskStatuses),
+          }),
+        ),
+        taskStatusCompartment.reconfigure(
+          taskStatusConfiguration.of(normalizedTaskStatuses),
+        ),
+      ],
+    });
   }
 });
 

@@ -306,6 +306,41 @@ pub struct SearchHit {
     pub score: f64,
 }
 
+/// Semantic task status category over IPC.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TaskStatusCategory {
+    /// An open task.
+    Todo,
+    /// Work is underway.
+    InProgress,
+    /// Work is intentionally paused.
+    OnHold,
+    /// Work is complete.
+    Done,
+    /// Work was cancelled.
+    Cancelled,
+    /// A checkbox-like marker that is not a task.
+    NonTask,
+}
+
+/// One configured task marker over IPC.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct TaskStatusDoc {
+    /// The single source character between brackets.
+    pub symbol: String,
+    /// Human-readable status name.
+    pub name: String,
+    /// Semantic status category.
+    pub category: TaskStatusCategory,
+    /// Short glyph rendered inside the checkbox.
+    pub glyph: String,
+    /// Existing CSS theme custom property used for the status color.
+    pub color_token: String,
+    /// Symbol written by the default click transition.
+    pub next_status: String,
+}
+
 /// The typed settings document over IPC. Unknown keys in the underlying
 /// `settings.json` never cross the boundary; they are preserved internally
 /// on every write.
@@ -319,6 +354,44 @@ pub struct SettingsDoc {
     pub editor_font_size: u32,
     /// Maximum number of results a search query returns.
     pub search_result_limit: u32,
+    /// Ordered task marker vocabulary and click-transition graph.
+    pub task_statuses: Vec<TaskStatusDoc>,
+}
+
+fn task_status_from_vault(status: skribeum_vault::TaskStatus) -> TaskStatusDoc {
+    TaskStatusDoc {
+        symbol: status.symbol,
+        name: status.name,
+        category: match status.category {
+            skribeum_vault::TaskStatusCategory::Todo => TaskStatusCategory::Todo,
+            skribeum_vault::TaskStatusCategory::InProgress => TaskStatusCategory::InProgress,
+            skribeum_vault::TaskStatusCategory::OnHold => TaskStatusCategory::OnHold,
+            skribeum_vault::TaskStatusCategory::Done => TaskStatusCategory::Done,
+            skribeum_vault::TaskStatusCategory::Cancelled => TaskStatusCategory::Cancelled,
+            skribeum_vault::TaskStatusCategory::NonTask => TaskStatusCategory::NonTask,
+        },
+        glyph: status.glyph,
+        color_token: status.color_token,
+        next_status: status.next_status,
+    }
+}
+
+fn task_status_into_vault(status: TaskStatusDoc) -> skribeum_vault::TaskStatus {
+    skribeum_vault::TaskStatus {
+        symbol: status.symbol,
+        name: status.name,
+        category: match status.category {
+            TaskStatusCategory::Todo => skribeum_vault::TaskStatusCategory::Todo,
+            TaskStatusCategory::InProgress => skribeum_vault::TaskStatusCategory::InProgress,
+            TaskStatusCategory::OnHold => skribeum_vault::TaskStatusCategory::OnHold,
+            TaskStatusCategory::Done => skribeum_vault::TaskStatusCategory::Done,
+            TaskStatusCategory::Cancelled => skribeum_vault::TaskStatusCategory::Cancelled,
+            TaskStatusCategory::NonTask => skribeum_vault::TaskStatusCategory::NonTask,
+        },
+        glyph: status.glyph,
+        color_token: status.color_token,
+        next_status: status.next_status,
+    }
 }
 
 struct OpenVault {
@@ -841,6 +914,11 @@ fn settings_read(settings: State<'_, SettingsState>) -> Result<SettingsDoc, AppE
         theme: doc.theme,
         editor_font_size: doc.editor_font_size,
         search_result_limit: doc.search_result_limit,
+        task_statuses: doc
+            .task_statuses
+            .into_iter()
+            .map(task_status_from_vault)
+            .collect(),
     })
 }
 
@@ -863,6 +941,11 @@ fn settings_write(settings: State<'_, SettingsState>, doc: SettingsDoc) -> Resul
                 theme: doc.theme,
                 editor_font_size: doc.editor_font_size,
                 search_result_limit: doc.search_result_limit,
+                task_statuses: doc
+                    .task_statuses
+                    .into_iter()
+                    .map(task_status_into_vault)
+                    .collect(),
             },
         )
         .map_err(AppError::from)

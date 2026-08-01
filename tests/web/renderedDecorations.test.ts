@@ -6,10 +6,18 @@ import {
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { decorationEngine } from "../../src/lib/editor/decorations/engine";
+import { changedTextSpan } from "../../src/lib/editor/byteChangeSet";
+import {
+  decorationEngine,
+  taskStatusConfiguration,
+} from "../../src/lib/editor/decorations/engine";
 import type { WikilinkResolutionContext } from "../../src/lib/editor/decorations/wikilinks";
 import { codeLanguage } from "../../src/lib/editor/markdown/codeLanguages";
-import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
+import { obsidianMarkdownExtensionsFor } from "../../src/lib/editor/markdown/obsidian";
+import {
+  DEFAULT_TASK_STATUSES,
+  type TaskStatus,
+} from "../../src/lib/taskStatuses";
 
 const views: EditorView[] = [];
 
@@ -17,6 +25,7 @@ function mountedView(
   doc: string,
   cursor = doc.length,
   context?: WikilinkResolutionContext,
+  taskStatuses: readonly TaskStatus[] = DEFAULT_TASK_STATUSES,
 ): EditorView {
   const view = new EditorView({
     state: EditorState.create({
@@ -25,10 +34,11 @@ function mountedView(
       extensions: [
         markdown({
           base: markdownLanguage,
-          extensions: obsidianMarkdownExtensions,
+          extensions: obsidianMarkdownExtensionsFor(taskStatuses),
           codeLanguages: codeLanguage,
         }),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        taskStatusConfiguration.of(taskStatuses),
         decorationEngine(context),
       ],
     }),
@@ -61,6 +71,126 @@ afterEach(() => {
 });
 
 describe("rendered decoration DOM", () => {
+  it("renders every configured status with its glyph and accessible name", () => {
+    for (const status of DEFAULT_TASK_STATUSES) {
+      const view = mountedView(
+        `- [${status.symbol}] ${status.name}\n\noutside`,
+      );
+      const checkbox = view.dom.querySelector<HTMLElement>(
+        ".cm-skr-task-checkbox",
+      );
+      expect(checkbox?.getAttribute("aria-label")).toBe(status.name);
+      expect(checkbox?.getAttribute("data-category")).toBe(status.category);
+      expect(checkbox?.querySelector(".cm-skr-task-glyph")?.textContent).toBe(
+        status.glyph,
+      );
+      view.destroy();
+      views.pop();
+    }
+  }, 15_000);
+
+  it("cycles by replacing only the configured source character", () => {
+    const source = "- [ ] task\n\noutside";
+    const view = mountedView(source);
+    view.dom.querySelector<HTMLElement>(".cm-skr-task-checkbox")?.click();
+    expect(view.state.doc.toString()).toBe("- [/] task\n\noutside");
+    expect(changedTextSpan(source, view.state.doc.toString())).toEqual({
+      from: 3,
+      to: 4,
+      insert: "/",
+    });
+    view.dom.querySelector<HTMLElement>(".cm-skr-task-checkbox")?.click();
+    expect(view.state.doc.toString()).toBe("- [x] task\n\noutside");
+    view.dom.querySelector<HTMLElement>(".cm-skr-task-checkbox")?.click();
+    expect(view.state.doc.toString()).toBe(source);
+  });
+
+  it("renders and cycles a custom status while leaving unknown markers alone", () => {
+    const taskStatuses: TaskStatus[] = [
+      {
+        symbol: " ",
+        name: "Ready",
+        category: "TODO",
+        glyph: "○",
+        color_token: "--skr-accent",
+        next_status: "~",
+      },
+      {
+        symbol: "~",
+        name: "Paused",
+        category: "ON_HOLD",
+        glyph: "Ⅱ",
+        color_token: "--skr-callout-purple",
+        next_status: "x",
+      },
+      {
+        symbol: "x",
+        name: "Finished",
+        category: "DONE",
+        glyph: "✓",
+        color_token: "--skr-success",
+        next_status: " ",
+      },
+    ];
+    const source = "- [~] custom\n- [?] unknown\n\noutside";
+    const view = mountedView(source, source.length, undefined, taskStatuses);
+    const checkbox = view.dom.querySelector<HTMLElement>(
+      ".cm-skr-task-checkbox",
+    );
+    expect(checkbox?.getAttribute("aria-label")).toBe("Paused");
+    expect(checkbox?.textContent).toBe("Ⅱ");
+    expect(view.dom.querySelectorAll(".cm-skr-task-checkbox")).toHaveLength(1);
+    checkbox?.click();
+    expect(view.state.doc.toString()).toBe(
+      "- [x] custom\n- [?] unknown\n\noutside",
+    );
+    const updatedControl = view.dom.querySelector<HTMLElement>(
+      ".cm-skr-task-control",
+    );
+    updatedControl?.dispatchEvent(new Event("pointerenter"));
+    const readyOption = [
+      ...(updatedControl?.querySelectorAll<HTMLElement>('[role="option"]') ??
+        []),
+    ].find((option) => option.textContent?.includes("Ready"));
+    readyOption?.click();
+    expect(view.state.doc.toString()).toBe(
+      "- [ ] custom\n- [?] unknown\n\noutside",
+    );
+    view.dom.querySelector<HTMLElement>(".cm-skr-task-checkbox")?.click();
+    expect(view.state.doc.toString()).toBe(source);
+  });
+
+  it("opens the listbox by pointer and keyboard and selects with arrows", async () => {
+    const source = "- [ ] task\n\noutside";
+    const view = mountedView(source);
+    const control = view.dom.querySelector<HTMLElement>(".cm-skr-task-control");
+    const checkbox = control?.querySelector<HTMLElement>(
+      ".cm-skr-task-checkbox",
+    );
+    const listbox = control?.querySelector<HTMLElement>('[role="listbox"]');
+    expect(listbox?.hidden).toBe(true);
+    control?.dispatchEvent(new Event("pointerenter"));
+    expect(listbox?.hidden).toBe(false);
+    expect(listbox?.querySelectorAll('[role="option"]')).toHaveLength(
+      DEFAULT_TASK_STATUSES.length,
+    );
+
+    control?.dispatchEvent(new Event("pointerleave"));
+    checkbox?.focus();
+    checkbox?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    await Promise.resolve();
+    expect(document.activeElement).toBe(listbox);
+    listbox?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    listbox?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    expect(view.state.doc.toString()).toBe("- [x] task\n\noutside");
+  });
+
   it("renders an aligned bordered table and reveals only the cursor row", () => {
     const source =
       "| Name | Score |\n| :--- | ---: |\n| Ada | 10 |\n| Grace | 9 |\n\noutside";

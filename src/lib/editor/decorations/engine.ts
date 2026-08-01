@@ -1,10 +1,9 @@
 // The decoration engine interprets the mapping table in `table.ts` over
 // the Lezer syntax tree, windowed to the visible ranges. Bulk input remaps
 // existing decorations for the initial paint and rebuilds them after three
-// animation frames. The engine never touches the document; its dispatches
-// are annotated with `decorationOrigin` so the inertness guard in
-// `decorationGuard.ts` asserts `docChanged === false` over everything the
-// engine causes.
+// animation frames. Decoration lifecycle dispatches never touch the document
+// and carry `decorationOrigin`; explicit controls such as task checkboxes
+// dispatch user edits through the editor's normal local-change path.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
@@ -33,6 +32,12 @@ import type { SyntaxNode, Tree } from "@lezer/common";
 import { renderMath } from "../../rendering/math";
 import { renderMermaid } from "../../rendering/mermaid";
 import { STRINGS } from "../../strings";
+import {
+  DEFAULT_TASK_STATUSES,
+  normalizeTaskStatuses,
+  type TaskStatus,
+  taskStatusBySymbol,
+} from "../../taskStatuses";
 import { bulkTextInputAnnotation } from "../bulkInput";
 import { decorationOrigin } from "../decorationGuard";
 import { codeLanguage } from "../markdown/codeLanguages";
@@ -73,6 +78,15 @@ export const decorationTable = Facet.define<
   combine: (values) => (values.length === 0 ? DECORATION_TABLE : values.flat()),
 });
 
+/** Ordered task statuses used by parsing, rendering and task commands. */
+export const taskStatusConfiguration = Facet.define<
+  readonly TaskStatus[],
+  readonly TaskStatus[]
+>({
+  combine: (values) =>
+    normalizeTaskStatuses(values.at(-1) ?? DEFAULT_TASK_STATUSES),
+});
+
 /** Replaces the wikilink resolution context (vault tree and app.json knobs). */
 export const setWikilinkContext =
   StateEffect.define<WikilinkResolutionContext>();
@@ -104,28 +118,252 @@ export function dispatchWikilinkContext(
   });
 }
 
+let nextTaskPaletteId = 0;
+
+function taskAriaChecked(status: TaskStatus): "true" | "false" | "mixed" {
+  if (status.category === "DONE") {
+    return "true";
+  }
+  if (status.category === "TODO") {
+    return "false";
+  }
+  return "mixed";
+}
+
+function applyTaskStatus(
+  view: EditorView,
+  from: number,
+  to: number,
+  currentSymbol: string,
+  symbol: string,
+): void {
+  if (
+    view.state.readOnly ||
+    view.state.doc.sliceString(from, to) !== currentSymbol
+  ) {
+    return;
+  }
+  view.dispatch({
+    changes: { from, to, insert: symbol },
+    userEvent: "input.task-status",
+  });
+}
+
 class TaskCheckboxWidget extends WidgetType {
-  constructor(readonly marker: string) {
+  constructor(
+    readonly status: TaskStatus,
+    readonly statuses: readonly TaskStatus[],
+    readonly markerFrom: number,
+    readonly markerTo: number,
+  ) {
     super();
   }
 
   override eq(other: TaskCheckboxWidget): boolean {
-    return other.marker === this.marker;
+    return (
+      other.status.symbol === this.status.symbol &&
+      other.markerFrom === this.markerFrom &&
+      other.markerTo === this.markerTo &&
+      JSON.stringify(other.statuses) === JSON.stringify(this.statuses)
+    );
   }
 
-  override toDOM(): HTMLElement {
+  override toDOM(view: EditorView): HTMLElement {
+    nextTaskPaletteId += 1;
+    const paletteId = `cm-skr-task-palette-${nextTaskPaletteId}`;
+    const host = document.createElement("span");
+    host.className = "cm-skr-task-control";
+    host.style.setProperty(
+      "--skr-task-color",
+      `var(${this.status.color_token})`,
+    );
+
     const box = document.createElement("span");
     box.className = "cm-skr-task-checkbox";
-    for (const [name, value] of taskCheckboxAttributes(this.marker)) {
+    box.tabIndex = 0;
+    box.setAttribute("contenteditable", "false");
+    box.setAttribute("aria-haspopup", "listbox");
+    box.setAttribute("aria-expanded", "false");
+    box.setAttribute("aria-controls", paletteId);
+    for (const [name, value] of taskCheckboxAttributes(this.status)) {
       box.setAttribute(name, value);
     }
-    return box;
+
+    const glyph = document.createElement("span");
+    glyph.className = "cm-skr-task-glyph";
+    glyph.setAttribute("aria-hidden", "true");
+    glyph.textContent = this.status.glyph;
+    box.append(glyph);
+
+    const palette = document.createElement("span");
+    palette.id = paletteId;
+    palette.className = "cm-skr-task-palette";
+    palette.setAttribute("role", "listbox");
+    palette.setAttribute("aria-label", STRINGS.taskStatusPaletteLabel);
+    palette.tabIndex = -1;
+    palette.hidden = true;
+
+    let activeIndex = Math.max(
+      0,
+      this.statuses.findIndex((entry) => entry.symbol === this.status.symbol),
+    );
+    const options = this.statuses.map((entry, index) => {
+      const option = document.createElement("span");
+      option.id = `${paletteId}-option-${index}`;
+      option.className = "cm-skr-task-option";
+      option.setAttribute("role", "option");
+      option.setAttribute(
+        "aria-selected",
+        entry.symbol === this.status.symbol ? "true" : "false",
+      );
+      option.style.setProperty(
+        "--skr-task-option-color",
+        `var(${entry.color_token})`,
+      );
+
+      const optionGlyph = document.createElement("span");
+      optionGlyph.className = "cm-skr-task-option-glyph";
+      optionGlyph.setAttribute("aria-hidden", "true");
+      optionGlyph.textContent = entry.glyph;
+      const optionName = document.createElement("span");
+      optionName.className = "cm-skr-task-option-name";
+      optionName.textContent = entry.name;
+      option.append(optionGlyph, optionName);
+      option.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      option.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        applyTaskStatus(
+          view,
+          this.markerFrom,
+          this.markerTo,
+          this.status.symbol,
+          entry.symbol,
+        );
+      });
+      option.addEventListener("pointerenter", () => {
+        activeIndex = index;
+        updateActiveOption();
+      });
+      palette.append(option);
+      return option;
+    });
+
+    const updateActiveOption = () => {
+      for (const [index, option] of options.entries()) {
+        option.classList.toggle(
+          "cm-skr-task-option-active",
+          index === activeIndex,
+        );
+      }
+      const active = options[activeIndex];
+      if (active !== undefined) {
+        palette.setAttribute("aria-activedescendant", active.id);
+        active.scrollIntoView?.({ block: "nearest" });
+      }
+    };
+    const openPalette = (keyboard: boolean) => {
+      palette.hidden = false;
+      box.setAttribute("aria-expanded", "true");
+      updateActiveOption();
+      if (keyboard) {
+        queueMicrotask(() => palette.focus());
+      }
+    };
+    const closePalette = (returnFocus: boolean) => {
+      palette.hidden = true;
+      box.setAttribute("aria-expanded", "false");
+      if (returnFocus) {
+        box.focus();
+      }
+    };
+
+    box.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      applyTaskStatus(
+        view,
+        this.markerFrom,
+        this.markerTo,
+        this.status.symbol,
+        this.status.next_status,
+      );
+    });
+    // registry-exempt keydown: ARIA checkbox and listbox internal navigation.
+    box.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        event.stopPropagation();
+        openPalette(true);
+      } else if (event.key === " " || event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        applyTaskStatus(
+          view,
+          this.markerFrom,
+          this.markerTo,
+          this.status.symbol,
+          this.status.next_status,
+        );
+      }
+    });
+    palette.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+        event.preventDefault();
+        activeIndex = (activeIndex + 1) % options.length;
+        updateActiveOption();
+      } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+        event.preventDefault();
+        activeIndex = (activeIndex - 1 + options.length) % options.length;
+        updateActiveOption();
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        activeIndex = 0;
+        updateActiveOption();
+      } else if (event.key === "End") {
+        event.preventDefault();
+        activeIndex = options.length - 1;
+        updateActiveOption();
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        const selected = this.statuses[activeIndex];
+        if (selected !== undefined) {
+          applyTaskStatus(
+            view,
+            this.markerFrom,
+            this.markerTo,
+            this.status.symbol,
+            selected.symbol,
+          );
+        }
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closePalette(true);
+      }
+    });
+    host.addEventListener("pointerenter", () => openPalette(false));
+    host.addEventListener("pointerleave", () => {
+      if (!host.contains(document.activeElement)) {
+        closePalette(false);
+      }
+    });
+    host.addEventListener("focusout", () => {
+      queueMicrotask(() => {
+        if (!host.contains(document.activeElement)) {
+          closePalette(false);
+        }
+      });
+    });
+    host.append(box, palette);
+    return host;
   }
 
   override ignoreEvent(): boolean {
-    // The checkbox looks interactive but is text-inert at M2: events fall
-    // through to the editor so clicking places the cursor.
-    return false;
+    return true;
   }
 }
 
@@ -707,27 +945,20 @@ function splitTable(table: readonly DecorationRule[]) {
 
 /** The marker character between the task brackets, e.g. `x` for `[x]`. */
 function taskMarkerCharacter(markerText: string): string {
-  return markerText.length >= 3 ? (markerText[1] ?? " ") : " ";
+  return markerText.startsWith("[") && markerText.endsWith("]")
+    ? markerText.slice(1, -1)
+    : "";
 }
 
-function taskCheckboxAttributes(marker: string): [string, string][] {
-  const checked = marker === "x" || marker === "X";
-  const custom = !checked && marker !== " ";
-  const label = checked
-    ? STRINGS.taskCheckboxCheckedLabel
-    : custom
-      ? STRINGS.taskCheckboxOtherLabel
-      : STRINGS.taskCheckboxUncheckedLabel;
-  const attributes: [string, string][] = [
+function taskCheckboxAttributes(status: TaskStatus): [string, string][] {
+  return [
     ["role", "checkbox"],
-    ["aria-checked", checked ? "true" : custom ? "mixed" : "false"],
-    ["aria-disabled", "true"],
-    ["aria-label", label],
+    ["aria-checked", taskAriaChecked(status)],
+    ["aria-label", status.name],
+    ["data-task", status.symbol],
+    ["data-category", status.category],
+    ["data-color-token", status.color_token],
   ];
-  if (custom) {
-    attributes.push(["data-task", marker]);
-  }
-  return attributes;
 }
 
 function serializeAttributes(
@@ -748,6 +979,7 @@ type ComputeOptions = {
   /** Windows to decorate; the whole document when omitted. */
   ranges?: readonly { from: number; to: number }[];
   wikilinks?: WikilinkResolutionContext;
+  taskStatuses?: readonly TaskStatus[];
 };
 
 type RuleIndex = Map<string, DecorationRule[]>;
@@ -883,6 +1115,7 @@ function dynamicAttributes(
   node: SyntaxNode,
   doc: Text,
   wikilinks: WikilinkResolutionContext,
+  taskStatuses: readonly TaskStatus[],
 ): Record<string, string> | null {
   switch (rule.dynamic) {
     case "wikilink-resolution": {
@@ -946,6 +1179,23 @@ function dynamicAttributes(
       }
       return { "data-language": "mermaid" };
     }
+    case "task-status": {
+      const marker = node.getChild("TaskMarker");
+      if (marker === null) {
+        return null;
+      }
+      const symbol = taskMarkerCharacter(
+        doc.sliceString(marker.from, marker.to),
+      );
+      const status = taskStatusBySymbol(taskStatuses, symbol);
+      return status === undefined
+        ? null
+        : {
+            "data-task": status.symbol,
+            "data-category": status.category,
+            "data-color-token": status.color_token,
+          };
+    }
     default:
       return {};
   }
@@ -993,14 +1243,24 @@ function widgetFor(
   node: SyntaxNode,
   doc: Text,
   wikilinks: WikilinkResolutionContext,
+  taskStatuses: readonly TaskStatus[],
 ): { widget: WidgetType; block: boolean; attributes: Record<string, string> } {
   switch (widget) {
     case "task-checkbox": {
       const marker = taskMarkerCharacter(doc.sliceString(node.from, node.to));
+      const status = taskStatusBySymbol(taskStatuses, marker);
+      if (status === undefined) {
+        throw new Error("task checkbox requires a configured marker");
+      }
       return {
-        widget: new TaskCheckboxWidget(marker),
+        widget: new TaskCheckboxWidget(
+          status,
+          taskStatuses,
+          node.from + 1,
+          node.to - 1,
+        ),
         block: false,
-        attributes: Object.fromEntries(taskCheckboxAttributes(marker)),
+        attributes: Object.fromEntries(taskCheckboxAttributes(status)),
       };
     }
     case "math-inline":
@@ -1092,6 +1352,9 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
   const selection = options.selection ?? [];
   const ranges = options.ranges ?? [{ from: 0, to: doc.length }];
   const wikilinks = options.wikilinks ?? EMPTY_WIKILINK_CONTEXT;
+  const taskStatuses = normalizeTaskStatuses(
+    options.taskStatuses ?? DEFAULT_TASK_STATUSES,
+  );
   const built: BuiltDecoration[] = [];
   const seenLines = new Set<string>();
 
@@ -1137,7 +1400,13 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (!ruleMatches(rule, node, doc)) {
             continue;
           }
-          const dynamic = dynamicAttributes(rule, node, doc, wikilinks);
+          const dynamic = dynamicAttributes(
+            rule,
+            node,
+            doc,
+            wikilinks,
+            taskStatuses,
+          );
           if (dynamic === null) {
             continue;
           }
@@ -1205,6 +1474,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               node,
               doc,
               wikilinks,
+              taskStatuses,
             );
             const skr = `widget ${presentation.widget}${serializeAttributes(builtWidget.attributes)}`;
             if (presentation.place === "before") {
@@ -1279,6 +1549,7 @@ function buildViewDecorations(view: EditorView): DecorationSet {
     })),
     ranges,
     wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    taskStatuses: state.facet(taskStatusConfiguration),
   });
 }
 
@@ -1292,6 +1563,7 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
       to: range.to,
     })),
     wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    taskStatuses: state.facet(taskStatusConfiguration),
   });
 }
 
@@ -1337,6 +1609,8 @@ const blockEngineField = StateField.define<BlockEngineState>({
       syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ||
       transaction.state.facet(decorationTable) !==
         transaction.startState.facet(decorationTable) ||
+      transaction.state.facet(taskStatusConfiguration) !==
+        transaction.startState.facet(taskStatusConfiguration) ||
       transaction.state.field(wikilinkContext, false) !==
         transaction.startState.field(wikilinkContext, false)
     ) {
@@ -1359,6 +1633,8 @@ function needsRebuild(update: ViewUpdate): boolean {
     syntaxTree(update.state) !== syntaxTree(update.startState) ||
     update.state.facet(decorationTable) !==
       update.startState.facet(decorationTable) ||
+    update.state.facet(taskStatusConfiguration) !==
+      update.startState.facet(taskStatusConfiguration) ||
     update.state.field(wikilinkContext, false) !==
       update.startState.field(wikilinkContext, false)
   );
@@ -1485,22 +1761,113 @@ const engineTheme = EditorView.baseTheme({
     fontStyle: "italic",
   },
   ".cm-skr-list-mark": { color: "var(--skr-accent)" },
-  ".cm-skr-task-checkbox": {
-    display: "inline-block",
-    width: "0.9em",
-    height: "0.9em",
+  ".cm-skr-task-control": {
+    position: "relative",
+    display: "inline-flex",
     verticalAlign: "text-bottom",
-    border: "1.5px solid var(--skr-text-muted)",
-    borderRadius: "3px",
     margin: "0 0.15em",
+    color: "var(--skr-task-color, var(--skr-accent))",
   },
-  '.cm-skr-task-checkbox[aria-checked="true"]': {
-    backgroundColor: "var(--skr-accent)",
-    borderColor: "var(--skr-accent)",
+  ".cm-skr-task-checkbox": {
+    boxSizing: "border-box",
+    display: "inline-grid",
+    placeItems: "center",
+    width: "1.05em",
+    height: "1.05em",
+    padding: "0",
+    color: "inherit",
+    backgroundColor: "transparent",
+    border: "1.5px solid currentColor",
+    borderRadius: "0.28em",
+    cursor: "pointer",
+    userSelect: "none",
   },
-  '.cm-skr-task-checkbox[aria-checked="mixed"]': {
-    backgroundColor: "var(--skr-text-muted)",
-    borderColor: "var(--skr-text-muted)",
+  ".cm-skr-task-checkbox:focus-visible, .cm-skr-task-palette:focus-visible": {
+    outline: "2px solid var(--skr-focus)",
+    outlineOffset: "2px",
+  },
+  ".cm-skr-task-glyph": {
+    fontSize: "0.78em",
+    fontWeight: "800",
+    lineHeight: "1",
+  },
+  '.cm-skr-task-checkbox[data-category="IN_PROGRESS"]': {
+    backgroundColor: "var(--skr-warning-surface)",
+  },
+  '.cm-skr-task-checkbox[data-category="ON_HOLD"]': {
+    borderStyle: "dashed",
+    backgroundColor:
+      "color-mix(in srgb, var(--skr-callout-purple) 12%, transparent)",
+  },
+  '.cm-skr-task-checkbox[data-category="DONE"]': {
+    color: "var(--skr-task-color, var(--skr-success))",
+    backgroundColor:
+      "color-mix(in srgb, var(--skr-task-color, var(--skr-success)) 18%, transparent)",
+  },
+  '.cm-skr-task-checkbox[data-category="CANCELLED"]': {
+    borderRadius: "50%",
+    opacity: "0.72",
+  },
+  '.cm-skr-task-checkbox[data-category="NON_TASK"]': {
+    borderColor: "transparent",
+    borderRadius: "0",
+  },
+  '.cm-skr-task[data-category="DONE"]': {
+    color: "var(--skr-text-muted)",
+    textDecoration: "line-through",
+    textDecorationThickness: "1px",
+  },
+  '.cm-skr-task[data-category="CANCELLED"]': {
+    color: "var(--skr-text-muted)",
+    textDecoration: "line-through",
+    opacity: "0.68",
+  },
+  ".cm-skr-task-palette": {
+    position: "absolute",
+    zIndex: "20",
+    top: "calc(100% + 0.35rem)",
+    left: "-0.4rem",
+    boxSizing: "border-box",
+    display: "grid",
+    gridTemplateColumns: "repeat(2, minmax(7.5rem, 1fr))",
+    gap: "0.15rem",
+    width: "max-content",
+    maxWidth: "min(22rem, calc(100vw - 2rem))",
+    maxHeight: "15rem",
+    padding: "0.35rem",
+    overflow: "auto",
+    color: "var(--skr-text)",
+    backgroundColor: "var(--skr-surface-raised)",
+    border: "1px solid var(--skr-border)",
+    borderRadius: "0.5rem",
+    boxShadow: "var(--skr-shadow)",
+  },
+  ".cm-skr-task-palette[hidden]": { display: "none" },
+  ".cm-skr-task-option": {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    minWidth: "0",
+    padding: "0.28rem 0.42rem",
+    borderRadius: "0.3rem",
+    cursor: "pointer",
+  },
+  ".cm-skr-task-option:hover, .cm-skr-task-option-active": {
+    backgroundColor: "var(--skr-accent-soft)",
+  },
+  ".cm-skr-task-option-glyph": {
+    display: "inline-grid",
+    placeItems: "center",
+    flex: "0 0 1.1rem",
+    color: "var(--skr-task-option-color, var(--skr-accent))",
+    fontWeight: "800",
+  },
+  ".cm-skr-task-option-name": {
+    overflow: "hidden",
+    fontSize: "0.82em",
+    lineHeight: "1.3",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
   },
   ".cm-skr-inline-code": {
     fontFamily: "inherit",

@@ -13,6 +13,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Configurable multi-state task checkboxes with the SlRvb-compatible default
+  vocabulary, per-status glyphs and theme tokens, short click transitions,
+  an accessible pointer and keyboard status listbox, and registry commands
+  for setting any configured status under the cursor. Status edits replace
+  only the source character inside the task marker.
 - Browser-only editor demo with a seeded sample vault, in-memory edits that
   reset on reload, and a static GitHub Pages build.
 - Local KaTeX rendering for inline and block math with cursor-source reveal,
@@ -73,8 +78,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tasks, inline and fenced code, blockquotes, callouts, tags and block
   identifiers as source-text decoration with per-construct cursor-reveal
   (documented in `docs/decoration-rules.md`), windowed to the viewport,
-  disabled on over-long lines, and asserted inert against the buffer over
-  the whole corpus; decoration sets serialize to committed golden
+  disabled on over-long lines, with decoration lifecycle updates asserted
+  inert against the buffer over the whole corpus; decoration sets serialize
+  to committed golden
   snapshots so rendering changes are reviewed diffs.
 - Obsidian syntax extensions for the editor's markdown parser: wikilinks
   with aliases, embeds, tags, block identifiers, callout marks and the

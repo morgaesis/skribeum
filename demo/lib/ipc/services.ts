@@ -1,3 +1,7 @@
+import {
+  defaultTaskStatuses,
+  normalizeTaskStatuses,
+} from "../../../src/lib/taskStatuses";
 import { DEMO_FILES } from "../vault/seed";
 import type {
   SearchHit,
@@ -16,6 +20,7 @@ const DEFAULT_SETTINGS: SettingsDocument = {
   theme: "system",
   editor_font_size: 15,
   search_result_limit: 50,
+  task_statuses: defaultTaskStatuses(),
 };
 const THEMES = new Set(["system", "light", "dark"]);
 const FONT_SIZE_RANGE = [6, 128] as const;
@@ -143,6 +148,7 @@ function normalizeSettings(value: unknown): SettingsDocument {
     )
       ? candidate.search_result_limit
       : DEFAULT_SETTINGS.search_result_limit,
+    task_statuses: normalizeTaskStatuses(candidate.task_statuses),
   };
 }
 
@@ -155,6 +161,12 @@ function validateSettings(doc: SettingsDocument): void {
   }
   if (!integerInRange(doc.search_result_limit, RESULT_LIMIT_RANGE)) {
     throw new Error("settings value out of range: search_result_limit");
+  }
+  if (
+    JSON.stringify(normalizeTaskStatuses(doc.task_statuses)) !==
+    JSON.stringify(doc.task_statuses)
+  ) {
+    throw new Error("settings value out of range: task_statuses");
   }
 }
 

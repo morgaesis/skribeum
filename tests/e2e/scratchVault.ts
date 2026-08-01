@@ -50,6 +50,9 @@ export const TAG_REFRESH_NOTE_CONTENT = "Tag catalog refresh fixture.\n";
 export const TAG_DELETE_NOTE_NAME = "zz-tag-delete.md";
 export const TAG_DELETE_NOTE_CONTENT = "Unopened note with #delete-only.\n";
 
+export const TAG_DELETE_PROBE_NOTE_NAME = "zz-tag-delete-probe.md";
+export const TAG_DELETE_PROBE_NOTE_CONTENT = "Tag deletion probe.\n";
+
 export const VISUAL_NOTE_NAME = "zzz-reading-room.md";
 export const VISUAL_NOTE_CONTENT = [
   "---",
@@ -170,6 +173,10 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, TAG_DELETE_NOTE_NAME),
     TAG_DELETE_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TAG_DELETE_PROBE_NOTE_NAME),
+    TAG_DELETE_PROBE_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, VISUAL_NOTE_NAME),

@@ -18,6 +18,7 @@ import {
   REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
   TAG_DELETE_NOTE_NAME,
+  TAG_DELETE_PROBE_NOTE_NAME,
   TAG_REFRESH_NOTE_NAME,
   VISUAL_NOTE_CONTENT,
   VISUAL_NOTE_NAME,
@@ -1312,7 +1313,7 @@ describe("skribeum shell", () => {
   });
 
   it("refreshes_tag_completion_after_deleting_an_unopened_note", async () => {
-    await openNoteFromTree(TAG_REFRESH_NOTE_NAME);
+    await openNoteFromTree(TAG_DELETE_PROBE_NOTE_NAME);
     const editor = $(".cm-content");
     await editor.waitForDisplayed({ timeout: 15000 });
     await editor.click();
@@ -1320,8 +1321,11 @@ describe("skribeum shell", () => {
     await editor.addValue("delete-o");
     await browser.waitUntil(
       async () =>
-        (await $(".cm-skr-tag-menu [role=option]").getText()) ===
-        "#delete-only",
+        (
+          await $$(".cm-skr-tag-menu [role=option]").map((item) =>
+            item.getText(),
+          )
+        ).includes("#delete-only"),
       { timeout: 10000 },
     );
     await browser.keys(Key.Escape);

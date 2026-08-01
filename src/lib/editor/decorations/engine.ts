@@ -7,11 +7,7 @@
 // engine causes.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import {
-  defaultHighlightStyle,
-  syntaxHighlighting,
-  syntaxTree,
-} from "@codemirror/language";
+import { syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import {
   EditorState,
   type Extension,
@@ -35,6 +31,7 @@ import { renderMermaid } from "../../rendering/mermaid";
 import { STRINGS } from "../../strings";
 import { bulkTextInputAnnotation } from "../bulkInput";
 import { decorationOrigin } from "../decorationGuard";
+import { noteHighlightStyle } from "../highlighting";
 import { codeLanguage } from "../markdown/codeLanguages";
 import {
   obsidianMarkdownExtensions,
@@ -457,7 +454,7 @@ function nestedMarkdownView(
           extensions: obsidianMarkdownExtensions,
           codeLanguages: codeLanguage,
         }),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(noteHighlightStyle, { fallback: true }),
         decorationEngine(context),
         readOnlyDecorationMode,
         EditorView.lineWrapping,
@@ -858,6 +855,15 @@ function dynamicAttributes(
       const type = calloutTypeOf(head, doc);
       return type === null ? {} : { "data-callout": type };
     }
+    case "plain-blockquote": {
+      let blockquote: SyntaxNode | null = node;
+      while (blockquote !== null && blockquote.name !== "Blockquote") {
+        blockquote = blockquote.parent;
+      }
+      return blockquote !== null && calloutHead(blockquote) === null
+        ? {}
+        : null;
+    }
     case "rich-callout": {
       if (node.name !== "Blockquote") {
         return null;
@@ -1161,18 +1167,18 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (dynamic === null) {
             continue;
           }
+          const revealedNow = revealed(rule, node);
           if (
             activeReveal?.descendants === true &&
             ref.from >= activeReveal.from &&
-            ref.to <= activeReveal.to
+            ref.to <= activeReveal.to &&
+            !revealedNow
           ) {
             continue;
           }
           const presentation = rule.presentation;
           if (presentation.present === "line") {
-            const extraClass =
-              "data-callout" in dynamic ? " cm-skr-callout" : "";
-            const lineClass = presentation.class + extraClass;
+            const lineClass = presentation.class;
             let position = Math.max(ref.from, window.from);
             const end = Math.min(ref.to, window.to);
             while (position <= end) {
@@ -1184,6 +1190,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 rule.dynamic === "rich-callout"
                   ? {
                       ...dynamic,
+                      ...(revealedNow ? { "data-revealed": "true" } : {}),
                       ...(firstRichLine ? { role: "note" } : {}),
                       "data-callout-line":
                         firstRichLine && lastRichLine
@@ -1224,7 +1231,6 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (doc.lineAt(ref.from).length > LONG_LINE_DECORATION_LIMIT) {
             continue;
           }
-          const revealedNow = revealed(rule, node);
           // A revealed rule emits nothing, so the source shows through. The
           // exception is a cursor-line reveal, which still emits a marker
           // carrying its active state so the transition has something to
@@ -1335,8 +1341,9 @@ export function serializeDecorationSet(set: DecorationSet): string {
 function buildViewDecorations(view: EditorView): DecorationSet {
   const state = view.state;
   const table = state.facet(decorationTable);
+  const cursor = state.selection.main.head;
   const selection = state.facet(sourceRevealEnabled)
-    ? [{ from: state.selection.main.from, to: state.selection.main.to }]
+    ? [{ from: cursor, to: cursor }]
     : [];
   const wikilinks =
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
@@ -1364,8 +1371,9 @@ function buildViewDecorations(view: EditorView): DecorationSet {
 
 function buildBlockDecorations(state: EditorState): DecorationSet {
   const table = state.facet(decorationTable);
+  const cursor = state.selection.main.head;
   const selection = state.facet(sourceRevealEnabled)
-    ? [{ from: state.selection.main.from, to: state.selection.main.to }]
+    ? [{ from: cursor, to: cursor }]
     : [];
   const wikilinks =
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
@@ -1768,21 +1776,6 @@ const engineTheme = EditorView.baseTheme({
     paddingLeft: "0.5em",
   },
   ".cm-skr-quote-mark": { color: "var(--skr-text-muted)" },
-  ".cm-skr-callout": { backgroundColor: "var(--skr-accent-soft)" },
-  '.cm-skr-callout[data-callout="warning"]': {
-    backgroundColor: "var(--skr-warning-surface)",
-    borderLeftColor: "var(--skr-warning)",
-  },
-  '.cm-skr-callout[data-callout="danger"], .cm-skr-callout[data-callout="error"]':
-    {
-      backgroundColor: "var(--skr-danger-surface)",
-      borderLeftColor: "var(--skr-danger)",
-    },
-  '.cm-skr-callout[data-callout="tip"], .cm-skr-callout[data-callout="success"]':
-    {
-      backgroundColor: "var(--skr-success-surface)",
-      borderLeftColor: "var(--skr-success)",
-    },
   ".cm-skr-callout-mark": { fontWeight: "700", color: "var(--skr-accent)" },
   '.cm-skr-callout-mark[data-callout="warning"]': {
     color: "var(--skr-warning)",

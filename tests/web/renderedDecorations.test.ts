@@ -1,3 +1,4 @@
+import { cursorCharForward } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   defaultHighlightStyle,
@@ -184,7 +185,11 @@ describe("rendered decoration DOM", () => {
     );
 
     view.dispatch({ selection: { anchor: source.indexOf("Rendered answer") } });
-    expect(view.dom.querySelector(".cm-skr-rich-callout")).toBeNull();
+    const revealedLine = view.dom.querySelector<HTMLElement>(
+      '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+    );
+    expect(revealedLine).not.toBeNull();
+    expect(revealedLine?.getAttribute("data-accent")).toBe("yellow");
     expect(view.dom.querySelector(".cm-skr-callout-icon-host")).toBeNull();
     expect(view.dom.querySelector(".cm-skr-strong")).toBeNull();
     expect(view.contentDOM.textContent).toContain(
@@ -194,5 +199,64 @@ describe("rendered decoration DOM", () => {
     view.dispatch({ selection: { anchor: source.indexOf("outside") } });
     expect(view.dom.querySelector(".cm-skr-rich-callout")).not.toBeNull();
     expect(view.dom.querySelector(".cm-skr-strong")).not.toBeNull();
+  });
+
+  it("keeps the callout accent colour while its source is revealed", () => {
+    const source = "> [!tip] Typed identity\n> Source body\n\noutside";
+    const view = mountedView(source);
+    const rendered = view.dom.querySelector<HTMLElement>(
+      '.cm-line.cm-skr-rich-callout[data-accent="cyan"]',
+    );
+    expect(rendered).not.toBeNull();
+    const renderedAccent = getComputedStyle(
+      rendered as HTMLElement,
+    ).getPropertyValue("--skr-callout-color");
+
+    view.dispatch({ selection: { anchor: source.indexOf("Source body") } });
+    const revealed = view.dom.querySelector<HTMLElement>(
+      '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+    );
+    expect(revealed).not.toBeNull();
+    expect(revealed?.getAttribute("data-accent")).toBe("cyan");
+    expect(
+      getComputedStyle(revealed as HTMLElement).getPropertyValue(
+        "--skr-callout-color",
+      ),
+    ).toBe(renderedAccent);
+  });
+
+  it("moves the cursor into and out of callout source by keyboard", () => {
+    const source = "before\n> [!tip] Typed identity\n> Source body\n\nafter";
+    const calloutFrom = source.indexOf("> [!tip]");
+    const calloutTo = source.indexOf("\nafter");
+    const view = mountedView(source, calloutFrom - 1);
+
+    expect(cursorCharForward(view)).toBe(true);
+    expect(view.state.selection.main.head).toBeGreaterThanOrEqual(calloutFrom);
+    expect(view.state.selection.main.head).toBeLessThanOrEqual(calloutTo);
+    expect(
+      view.dom.querySelector(
+        '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+      ),
+    ).not.toBeNull();
+
+    let movements = 0;
+    while (
+      view.dom.querySelector(
+        '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+      ) !== null &&
+      movements < 100
+    ) {
+      expect(cursorCharForward(view)).toBe(true);
+      movements += 1;
+    }
+    expect(movements).toBeLessThan(100);
+    expect(view.state.selection.main.head).toBeGreaterThanOrEqual(calloutTo);
+    expect(
+      view.dom.querySelector(
+        '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+      ),
+    ).toBeNull();
+    expect(view.dom.querySelector(".cm-skr-rich-callout")).not.toBeNull();
   });
 });

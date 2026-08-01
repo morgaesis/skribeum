@@ -84,7 +84,10 @@ function locate(rule: DecorationRule): Located | null {
       const lines = serializeDecorationSet(
         computeDecorations({ doc, tree, table: DECORATION_TABLE }),
       );
-      return { text, doc, node: { from: node.from, to: node.to }, lines };
+      const range = { from: node.from, to: node.to };
+      if (present(lines, rule, doc, range)) {
+        return { text, doc, node: range, lines };
+      }
     }
   }
   return null;
@@ -202,8 +205,8 @@ describe("cursor-reveal behavior per table row", () => {
       rule.reveal === "never" ? located.text.length : located.node.from;
     const at = serializedAt(located.text, cursor);
     const stillThere = present(at, rule, located.doc, located.node);
-    if (rule.reveal === "never") {
-      expect(stillThere, `never-reveal decoration vanished:\n${at}`).toBe(true);
+    if (rule.reveal === "never" || rule.revealDescendants === true) {
+      expect(stillThere, `owning decoration vanished:\n${at}`).toBe(true);
     } else {
       expect(stillThere, `decoration not revealed at cursor:\n${at}`).toBe(
         false,
@@ -252,7 +255,8 @@ describe("cursor-reveal behavior per table row", () => {
     const insideHidden = hiddenUrlRanges(inside);
     expect(hides(insideHidden, outsideUrl)).toBe(true);
     expect(hides(insideHidden, insideUrl)).toBe(false);
-    expect(inside).not.toContain("cm-skr-rich-callout");
+    expect(inside).toContain("cm-skr-rich-callout");
+    expect(inside).toContain('data-revealed="true"');
 
     const outside = serializedAt(text, text.indexOf("outside"));
     const outsideHidden = hiddenUrlRanges(outside);

@@ -26,10 +26,10 @@ Reveal policies:
 
 `revealScope=node` makes the syntax node itself the candidate region instead
 of the row's usual enclosing construct. `revealDescendants` makes that region
-composite: selecting it reveals every nested decoration as part of the same
-plain-source region. Hidden and replaced ranges are atomic while decorated,
-so keyboard motion skips invisible syntax rather than entering a position the
-DOM cannot display.
+composite: selecting it retains the owning presentation while revealing every
+nested decoration as source in the same region. Hidden and replaced ranges are
+atomic while decorated, so keyboard motion skips invisible syntax rather than
+entering a position the DOM cannot display.
 
 ## Source-backed block interaction
 
@@ -43,11 +43,21 @@ move the parent selection. A link in that nested view can remain revealed at
 the same time as a link selected in the parent view because neither engine
 knows the other's active region.
 
+The replacement row also owns the callout type and accent attributes. Revealing
+the row removes that widget, leaving the independent generic blockquote line
+rule to style the same `Blockquote` node. The rendered and revealed states
+therefore derive identity from different rules, which lets a typed callout use
+its accent while rendered and the generic blockquote colour while revealed.
+
 Callouts use line decorations over the parent editor's source and an inserted,
 non-replacing icon. Every visible title and body character therefore retains
 its document position. The callout row is a composite reveal region, so a
 cursor anywhere in the callout reveals the complete block as one unit and
-suppresses independent reveals for nested links or other constructs.
+suppresses independent reveals for nested links or other constructs. Its line
+decoration remains present during reveal, so the callout type and accent stay
+attached to the construct while its source markers are visible. The generic
+blockquote row applies only to plain blockquotes, making the two block
+presentations mutually exclusive.
 
 The alternatives have these tradeoffs:
 
@@ -122,15 +132,16 @@ above. `-` means the row applies to every node of that name.
 | `BlockId` | `-` | `mark cm-skr-block-id` | never |
 | `Frontmatter` | `-` | `line cm-skr-frontmatter` | never |
 
-Context-dependent attributes come from five documented engine builtins a
+Context-dependent attributes come from six documented engine builtins a
 row opts into: `wikilink-resolution` stamps `data-resolved` from the vault
 tree (unresolved links style distinctly), `callout-type` stamps
-`data-callout` and the `cm-skr-callout` line class when a blockquote is
-headed by a callout mark, while `rich-callout` limits source-backed themed
-lines to those blockquotes and stamps canonical type, accent, foldability and
-line-position attributes. `code-language` stamps `data-language` from the
-fence info string. `mermaid-block` restricts the diagram widget to a Mermaid
-fence and stamps its language attribute.
+`data-callout` on source markers and icons inside a typed callout, and
+`plain-blockquote` limits the generic line to untyped blockquotes.
+`rich-callout` limits source-backed themed lines to typed callouts and stamps
+canonical type, accent, foldability and line-position attributes.
+`code-language` stamps `data-language` from the fence info string.
+`mermaid-block` restricts the diagram widget to a Mermaid fence and stamps its
+language attribute.
 
 No decoration is computed on a document line longer than 10,000 characters.
 Marks, line decorations and inline widgets are windowed to visible ranges.

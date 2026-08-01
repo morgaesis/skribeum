@@ -44,12 +44,14 @@ export type Presentation =
  * Named engine behaviors a row may reference for context-dependent
  * attributes. The table stays data; these are the documented builtins the
  * engine implements: `wikilink-resolution` adds `data-resolved`,
- * `callout-type` adds `data-callout` (and only fires inside a Blockquote
- * headed by a callout mark), `code-language` adds `data-language`.
+ * `callout-type` adds `data-callout` inside a typed callout,
+ * `plain-blockquote` excludes typed callouts, and `code-language` adds
+ * `data-language`.
  */
 export type DynamicAttribute =
   | "wikilink-resolution"
   | "callout-type"
+  | "plain-blockquote"
   | "rich-callout"
   | "code-language"
   | "mermaid-block";
@@ -79,7 +81,7 @@ export type DecorationRule = {
   reveal: RevealPolicy;
   /** Override the construct range selected by a cursor reveal. */
   revealScope?: "node" | "parent";
-  /** Reveal this construct as plain source, including nested constructs. */
+  /** Reveal nested constructs as source while retaining this presentation. */
   revealDescendants?: boolean;
   dynamic?: DynamicAttribute;
 };
@@ -346,7 +348,7 @@ const quoteRows: DecorationRule[] = [
     node: "Blockquote",
     presentation: { present: "line", class: "cm-skr-blockquote" },
     reveal: "never",
-    dynamic: "callout-type",
+    dynamic: "plain-blockquote",
   },
   {
     node: "QuoteMark",

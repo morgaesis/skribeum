@@ -210,6 +210,22 @@ async function editorCursor() {
   });
 }
 
+async function calloutVisualIdentity() {
+  return browser.execute(() => {
+    const line = document.querySelector<HTMLElement>(
+      ".cm-line.cm-skr-rich-callout",
+    );
+    if (line === null) {
+      return null;
+    }
+    return {
+      accent: line.dataset.accent ?? "",
+      borderLeftColor: getComputedStyle(line).borderLeftColor,
+      revealed: line.dataset.revealed === "true",
+    };
+  });
+}
+
 /** Sets the theme select's value and fires the change event it binds on. */
 async function selectTheme(value: string) {
   await browser.execute((themeValue: string) => {
@@ -770,6 +786,9 @@ describe("skribeum shell", () => {
     );
     await browser.keys(Key.Enter);
     await $(".cm-line.cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+    const renderedIdentity = await calloutVisualIdentity();
+    expect(renderedIdentity?.accent).toBe("cyan");
+    expect(renderedIdentity?.revealed).toBe(false);
 
     const cases: Array<{
       point: RevealClickPoint;
@@ -779,13 +798,13 @@ describe("skribeum shell", () => {
     }> = [
       {
         point: "top",
-        line: "> [!note] Linked callout",
+        line: "> [!tip] Linked callout",
         minimumOffset: 0,
         maximumOffset: 2,
       },
       {
         point: "title",
-        line: "> [!note] Linked callout",
+        line: "> [!tip] Linked callout",
         minimumOffset: 0,
         maximumOffset: 24,
       },
@@ -805,15 +824,23 @@ describe("skribeum shell", () => {
 
     for (const testCase of cases) {
       await placeCursorAtLineEnd("cursor parking");
-      await $(".cm-line.cm-skr-rich-callout").waitForExist({ timeout: 10000 });
-      await clickRevealPoint(testCase.point);
       await browser.waitUntil(
-        async () => !(await $(".cm-line.cm-skr-rich-callout").isExisting()),
+        async () =>
+          !(await $(
+            '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+          ).isExisting()),
         {
           timeout: 10000,
-          timeoutMsg: `${testCase.point} click did not reveal callout source`,
+          timeoutMsg: "callout source did not collapse after the cursor left",
         },
       );
+      await clickRevealPoint(testCase.point);
+      await $(
+        '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+      ).waitForExist({
+        timeout: 10000,
+        timeoutMsg: `${testCase.point} click did not reveal callout source`,
+      });
       const cursor = await editorCursor();
       expect(cursor.line).toBe(testCase.line);
       expect(cursor.offset).toBeGreaterThanOrEqual(testCase.minimumOffset);
@@ -821,10 +848,25 @@ describe("skribeum shell", () => {
       const text = await editorText();
       expect(text).toContain("inside-target");
       expect(text).not.toContain("outside-target");
+      const revealedIdentity = await calloutVisualIdentity();
+      expect(revealedIdentity?.accent).toBe(renderedIdentity?.accent);
+      expect(revealedIdentity?.borderLeftColor).toBe(
+        renderedIdentity?.borderLeftColor,
+      );
+      expect(revealedIdentity?.revealed).toBe(true);
     }
 
     await placeCursorAtLineEnd("cursor parking");
-    await $(".cm-line.cm-skr-rich-callout").waitForExist({ timeout: 10000 });
+    await browser.waitUntil(
+      async () =>
+        !(await $(
+          '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+        ).isExisting()),
+      {
+        timeout: 10000,
+        timeoutMsg: "callout source did not collapse before outside reveal",
+      },
+    );
     await placeCursorAtLineEnd("Outside link");
     await browser.waitUntil(
       async () => (await editorText()).includes("outside-target"),

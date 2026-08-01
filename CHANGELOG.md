@@ -18,6 +18,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Callouts retain parent-editor source positions under their rendered lines,
   so pointer placement reveals the complete editable block and one cursor
   controls nested and adjacent reveal regions.
+- Syntax highlighting follows the active theme on editable and read-only note
+  surfaces, including Markdown previews in the canvas viewer.
 
 ### Added
 

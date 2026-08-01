@@ -183,6 +183,7 @@ export function registerSlashMenu(registry: CommandRegistry): void {
     keybindings: ["ArrowDown"],
     scope: "editor",
     palette: false,
+    audience: "widget",
     run: (context) =>
       context.view === null ? false : moveSelection(context.view, 1),
   });
@@ -192,6 +193,7 @@ export function registerSlashMenu(registry: CommandRegistry): void {
     keybindings: ["ArrowUp"],
     scope: "editor",
     palette: false,
+    audience: "widget",
     run: (context) =>
       context.view === null ? false : moveSelection(context.view, -1),
   });
@@ -201,6 +203,7 @@ export function registerSlashMenu(registry: CommandRegistry): void {
     keybindings: ["Enter"],
     scope: "editor",
     palette: false,
+    audience: "widget",
     run: (context) =>
       context.view === null || !slashMenuOpen(context.view.state)
         ? false
@@ -212,6 +215,7 @@ export function registerSlashMenu(registry: CommandRegistry): void {
     keybindings: ["Escape"],
     scope: "editor",
     palette: false,
+    audience: "widget",
     run: (context) => {
       const view = context.view;
       if (view === null || !slashMenuOpen(view.state)) {

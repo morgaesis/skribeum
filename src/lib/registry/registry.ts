@@ -5,7 +5,12 @@
 // this registry, and a CI check sweeps the source tree for wiring that
 // bypasses it.
 
-import type { Command, CommandContext, ViewDescriptor } from "./types";
+import type {
+  Command,
+  CommandContext,
+  PointerSurface,
+  ViewDescriptor,
+} from "./types";
 
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+$/;
 
@@ -27,6 +32,22 @@ export class CommandRegistry {
     if (this.commandsById.has(command.id)) {
       throw new Error(
         `command id ${JSON.stringify(command.id)} is already registered`,
+      );
+    }
+    if (
+      (command.audience ?? "user") === "user" &&
+      (command.pointer?.length ?? 0) === 0
+    ) {
+      throw new Error(
+        `user command ${JSON.stringify(command.id)} has no pointer surface`,
+      );
+    }
+    if (
+      command.pointer?.includes("command-palette") === true &&
+      command.palette === false
+    ) {
+      throw new Error(
+        `command ${JSON.stringify(command.id)} opts out of its declared command palette surface`,
       );
     }
     this.commandsById.set(command.id, command);
@@ -64,8 +85,20 @@ export class CommandRegistry {
   /** The palette listing: every command not opted out, sorted by title. */
   paletteCommands(): readonly Command[] {
     return this.commands()
-      .filter((command) => command.palette !== false)
+      .filter(
+        (command) =>
+          (command.audience ?? "user") === "user" && command.palette !== false,
+      )
       .sort((a, b) => a.title.localeCompare(b.title));
+  }
+
+  /** User commands declared on one visible pointer surface. */
+  pointerCommands(surface: PointerSurface): readonly Command[] {
+    return this.commands().filter(
+      (command) =>
+        (command.audience ?? "user") === "user" &&
+        command.pointer?.includes(surface) === true,
+    );
   }
 
   /** The slash-menu listing, in registration order. */

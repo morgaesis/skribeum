@@ -19,6 +19,10 @@ export const SCRATCH_VAULT_PATH = path.join(
   os.tmpdir(),
   `skribeum-e2e-vault-${checkoutKey}`,
 );
+export const SCRATCH_SETTINGS_PATH = path.join(
+  os.tmpdir(),
+  `skribeum-e2e-settings-${checkoutKey}.json`,
+);
 
 export const LF_NOTE_NAME = "note.md";
 export const LF_NOTE_CONTENT = "alpha\nbeta\ngamma\n";
@@ -128,6 +132,7 @@ export const CANVAS_FILE_CONTENT = JSON.stringify({
  * the session. Contents are reset entry by entry instead.
  */
 export function createScratchVault(): void {
+  rmSync(SCRATCH_SETTINGS_PATH, { force: true });
   mkdirSync(SCRATCH_VAULT_PATH, { recursive: true });
   for (const entry of readdirSync(SCRATCH_VAULT_PATH)) {
     rmSync(path.join(SCRATCH_VAULT_PATH, entry), {

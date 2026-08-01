@@ -8,6 +8,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Narrow viewports keep a readable editor measure while the file tree and
+  outline open as focus-managed overlay sheets, and frontmatter starts in its
+  collapsed properties view.
+- Touch controls meet the 44px platform target, avoid hover-only command
+  access, and restore keyboard focus after modal dismissal.
 - Editor blocks share one text column width and left edge, including padded
   callouts and code blocks.
 - Headings no longer inherit hyperlink decoration or forced bold styling from
@@ -27,6 +32,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A responsive bottom action bar and Actions sheet provide pointer and touch
+  routes to files, search, the quick switcher, outline, command palette,
+  settings, note actions, and navigation history.
+- Command registrations declare pointer surfaces or an explicit widget-only
+  audience, with runtime and test coverage for every registered user command.
 - A searchable, sectioned settings surface for appearance, editing, files and
   vaults, search, updates and application information. Every control includes a
   plain-language description, and desktop-only controls remain visible but

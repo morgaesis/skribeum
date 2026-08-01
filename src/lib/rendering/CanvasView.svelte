@@ -339,6 +339,13 @@ export function focus() {
     border-radius: 0.35rem;
     background: var(--skr-surface);
   }
+
+  @media (max-width: 60rem) {
+    .canvas-toolbar button {
+      min-width: 2.75rem;
+      min-height: 2.75rem;
+    }
+  }
   .canvas-toolbar output {
     min-width: 3.5rem;
     text-align: center;

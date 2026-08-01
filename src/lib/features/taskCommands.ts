@@ -74,6 +74,7 @@ export function registerTaskStatusCommands(
       id,
       title: `${STRINGS.taskStatusCommandPrefix} ${status.name}`,
       scope: "editor",
+      pointer: ["command-palette", "task-status-menu"],
       run: (context) => {
         const view = context.view;
         if (view === null || view.state.readOnly) {

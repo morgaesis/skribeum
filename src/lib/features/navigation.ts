@@ -767,12 +767,14 @@ export function registerNavigation(registry: CommandRegistry): void {
     id: "navigation.back",
     title: STRINGS.commandNavigateBack,
     keybindings: ["Alt-ArrowLeft"],
+    pointer: ["app-bar", "action-menu", "command-palette"],
     run: (context) => context.navigateBack?.() ?? false,
   });
   registry.register({
     id: "navigation.forward",
     title: STRINGS.commandNavigateForward,
     keybindings: ["Alt-ArrowRight"],
+    pointer: ["app-bar", "action-menu", "command-palette"],
     run: (context) => context.navigateForward?.() ?? false,
   });
   registry.register({
@@ -780,6 +782,7 @@ export function registerNavigation(registry: CommandRegistry): void {
     title: STRINGS.commandFollowLink,
     keybindings: ["Enter"],
     scope: "editor",
+    pointer: ["command-palette", "editor-link"],
     run: (context) => context.followLink?.(context.view) ?? false,
   });
 }

@@ -44,6 +44,7 @@ import {
 import {
   VIEW_CANVAS,
   VIEW_COMMAND_PALETTE,
+  VIEW_FILE_TREE,
   VIEW_OUTLINE,
   VIEW_QUICK_SWITCHER,
   VIEW_SETTINGS,
@@ -89,7 +90,9 @@ import {
   canvasFilePaths,
   parseCanvas,
 } from "./lib/rendering/canvas";
+import { NARROW_BREAKPOINT_REM } from "./lib/responsive";
 import SettingsView from "./lib/SettingsView.svelte";
+import Sheet from "./lib/Sheet.svelte";
 import { STRINGS } from "./lib/strings";
 import {
   applyAppearance,
@@ -150,6 +153,10 @@ const macPlatform =
 
 /** The transient surface currently open (a registered overlay view id). */
 let activeOverlay = $state<string | null>(null);
+type SheetId = "file-tree" | "outline" | "actions";
+let activeSheet = $state<SheetId | null>(null);
+let narrowViewport = $state(false);
+let surfaceFocusOrigin: HTMLElement | null = null;
 let outlineOpen = $state(false);
 let outlineEntries = $state<OutlineEntry[]>([]);
 /** The live query of the open picker overlay. */
@@ -273,12 +280,62 @@ function scheduleOutlineRefresh() {
 }
 
 function openOverlay(id: string) {
+  if (
+    surfaceFocusOrigin === null &&
+    document.activeElement instanceof HTMLElement
+  ) {
+    surfaceFocusOrigin = document.activeElement;
+  }
+  activeSheet = null;
   activeOverlay = id;
   overlayQuery = "";
   searchResults = [];
   if (id === VIEW_QUICK_SWITCHER) {
     void refreshTreeIndex();
   }
+}
+
+function openSheet(id: SheetId, origin?: HTMLElement) {
+  if (
+    surfaceFocusOrigin === null &&
+    (origin !== undefined || document.activeElement instanceof HTMLElement)
+  ) {
+    surfaceFocusOrigin = origin ?? (document.activeElement as HTMLElement);
+  }
+  activeOverlay = null;
+  activeSheet = id;
+}
+
+function runSurfaceCommand(id: string, origin: HTMLElement) {
+  if (surfaceFocusOrigin === null) {
+    surfaceFocusOrigin = origin;
+  }
+  registry.run(id, commandContext());
+}
+
+function closeSheet() {
+  activeSheet = null;
+  restoreSurfaceFocus();
+}
+
+function restoreSurfaceFocus() {
+  const origin = surfaceFocusOrigin;
+  surfaceFocusOrigin = null;
+  void tick().then(() => {
+    if (origin?.isConnected) {
+      origin.focus();
+    } else {
+      focusContent();
+    }
+  });
+}
+
+function focusFileTree() {
+  document
+    .querySelector<HTMLElement>(
+      '.skr-desktop-sidebar [role="treeitem"][tabindex="0"]',
+    )
+    ?.focus();
 }
 
 /** Re-indexes the tree so the switcher lists just-created notes. */
@@ -333,7 +390,7 @@ function focusContent() {
 
 function closeOverlay() {
   activeOverlay = null;
-  focusContent();
+  restoreSurfaceFocus();
 }
 
 function commandContext(): CommandContext {
@@ -343,16 +400,35 @@ function commandContext(): CommandContext {
     createNote: createNewNote,
     openView: (id) => {
       if (id === VIEW_OUTLINE) {
-        outlineOpen = true;
         refreshOutline();
+        if (narrowViewport) {
+          openSheet("outline");
+        } else {
+          outlineOpen = true;
+        }
+      } else if (id === VIEW_FILE_TREE) {
+        if (narrowViewport) {
+          openSheet("file-tree");
+        } else {
+          focusFileTree();
+        }
       } else {
         openOverlay(id);
       }
     },
     toggleView: (id) => {
       if (id === VIEW_OUTLINE) {
-        outlineOpen = !outlineOpen;
-        if (outlineOpen) {
+        if (narrowViewport) {
+          if (activeSheet === "outline") {
+            closeSheet();
+          } else {
+            refreshOutline();
+            openSheet("outline");
+          }
+        } else {
+          outlineOpen = !outlineOpen;
+        }
+        if (!narrowViewport && outlineOpen) {
           refreshOutline();
         }
       } else if (activeOverlay === id) {
@@ -374,6 +450,25 @@ function commandContext(): CommandContext {
 }
 
 const onGlobalKeydown = globalKeydownHandler(registry, commandContext);
+const actionCommands = $derived(registry.pointerCommands("action-menu"));
+
+$effect(() => {
+  if (narrowViewport && outlineOpen) {
+    outlineOpen = false;
+    refreshOutline();
+    openSheet("outline");
+  }
+});
+
+function runActionCommand(id: string) {
+  activeSheet = null;
+  void tick().then(() => {
+    registry.run(id, commandContext());
+    if (activeOverlay === null && activeSheet === null) {
+      restoreSurfaceFocus();
+    }
+  });
+}
 
 // Derived from the tree alone: the switcher's candidate list must not be
 // rebuilt from every tree entry on each keystroke, which is what made the
@@ -431,8 +526,8 @@ function onOverlayPick(id: string) {
     // change before the command reads the CodeMirror state.
     activeOverlay = null;
     registry.run(id, commandContext());
-    if (activeOverlay === null) {
-      focusContent();
+    if (activeOverlay === null && activeSheet === null) {
+      restoreSurfaceFocus();
     }
   } else if (overlay === VIEW_QUICK_SWITCHER) {
     closeOverlay();
@@ -888,6 +983,9 @@ async function openCanvas(path: string) {
 }
 
 function openPath(path: string) {
+  if (activeSheet === "file-tree") {
+    closeSheet();
+  }
   if (path.toLowerCase().endsWith(".canvas")) {
     void openCanvas(path);
   } else {
@@ -963,6 +1061,14 @@ function pollEndToEndVault() {
 }
 
 onMount(() => {
+  const narrowQuery = window.matchMedia(
+    `(max-width: ${NARROW_BREAKPOINT_REM}rem)`,
+  );
+  const updateNarrowViewport = () => {
+    narrowViewport = narrowQuery.matches;
+  };
+  updateNarrowViewport();
+  narrowQuery.addEventListener("change", updateNarrowViewport);
   navigation = createNoteNavigator({
     mode: navigationSurface,
     browserWindow: window,
@@ -1102,6 +1208,7 @@ onMount(() => {
   }
   const pollTimer = pollEndToEndVault();
   return () => {
+    narrowQuery.removeEventListener("change", updateNarrowViewport);
     navigation?.dispose();
     navigation = null;
     delete debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__;
@@ -1119,34 +1226,77 @@ onMount(() => {
      keybinding. -->
 <svelte:window onkeydown={onGlobalKeydown} />
 
-<div class="flex h-screen flex-col overflow-hidden">
-  <header class="skr-app-header flex items-center gap-3 border-b px-3 py-1.5">
+<div
+  class="skr-shell flex h-screen flex-col overflow-hidden"
+  inert={activeSheet !== null || activeOverlay !== null}
+>
+  <header class="skr-app-header flex items-center gap-3 border-b px-3">
     <h1 class="m-0 text-sm font-semibold">{STRINGS.appTitle}</h1>
     <button
       type="button"
-      class="skr-control rounded border px-2 py-0.5 text-sm"
+      class="skr-control skr-open-vault rounded border px-2 text-sm"
       onclick={pickVault}
       disabled={openVaultDisabledReason !== null}
       title={openVaultDisabledReason ?? undefined}
     >
       {STRINGS.openVault}
     </button>
-    <div class="flex items-center gap-1" aria-label={STRINGS.navigationHistoryLabel}>
+    <div class="skr-history flex items-center gap-1" aria-label={STRINGS.navigationHistoryLabel}>
       <button
         type="button"
-        class="rounded border border-gray-300 px-2 py-0.5 text-sm outline-offset-1 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+        class="skr-control rounded border px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
         disabled={!navigationState.canGoBack}
+        data-command-id="navigation.back"
         onclick={() => registry.run("navigation.back", commandContext())}
       >
         {STRINGS.navigationBack}
       </button>
       <button
         type="button"
-        class="rounded border border-gray-300 px-2 py-0.5 text-sm outline-offset-1 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+        class="skr-control rounded border px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
         disabled={!navigationState.canGoForward}
+        data-command-id="navigation.forward"
         onclick={() => registry.run("navigation.forward", commandContext())}
       >
         {STRINGS.navigationForward}
+      </button>
+    </div>
+    <div class="skr-desktop-actions ml-auto flex items-center gap-1">
+      <button
+        type="button"
+        class="skr-control rounded border px-2 text-sm"
+        data-command-id="quick-switcher.open"
+        onclick={(event) =>
+          runSurfaceCommand("quick-switcher.open", event.currentTarget)}
+      >
+        {STRINGS.quickSwitcherLabel}
+      </button>
+      <button
+        type="button"
+        class="skr-control rounded border px-2 text-sm"
+        data-command-id="vault-search.open"
+        onclick={(event) =>
+          runSurfaceCommand("vault-search.open", event.currentTarget)}
+      >
+        {STRINGS.mobileSearch}
+      </button>
+      <button
+        type="button"
+        class="skr-control rounded border px-2 text-sm"
+        data-testid="command-palette-entry-desktop"
+        data-command-id="palette.open"
+        onclick={(event) =>
+          runSurfaceCommand("palette.open", event.currentTarget)}
+      >
+        {STRINGS.mobileCommands}
+      </button>
+      <button
+        type="button"
+        class="skr-control rounded border px-2 text-sm"
+        aria-haspopup="dialog"
+        onclick={(event) => openSheet("actions", event.currentTarget)}
+      >
+        {STRINGS.actionsLabel}
       </button>
     </div>
     {#if note?.readOnly || contentView === VIEW_CANVAS}
@@ -1174,7 +1324,7 @@ onMount(() => {
 
   <main class="flex min-h-0 flex-1 overflow-hidden">
     {#if vault !== null}
-      <nav class="skr-sidebar w-64 shrink-0 overflow-hidden border-r">
+      <nav class="skr-sidebar skr-desktop-sidebar w-64 shrink-0 overflow-hidden border-r">
         <FileTree entries={tree} {selectedPath} onOpenPath={openPath} />
       </nav>
     {/if}
@@ -1206,7 +1356,7 @@ onMount(() => {
             <p>{STRINGS.noteNotFoundDesktop}</p>
             <button
               type="button"
-              class="rounded border border-current px-2 py-1 outline-offset-2 focus-visible:outline-2 focus-visible:outline-blue-500"
+              class="skr-control rounded border px-2 py-1"
               onclick={refreshMissingNote}
             >
               {STRINGS.noteNotFoundRefresh}
@@ -1248,12 +1398,103 @@ onMount(() => {
       {/if}
     </section>
     {#if outlineOpen}
-      <aside class="skr-panel w-60 shrink-0 overflow-y-auto border-l">
+      <aside class="skr-panel skr-desktop-outline w-60 shrink-0 overflow-y-auto border-l">
         <OutlinePanel entries={outlineEntries} onNavigate={outlineNavigate} />
       </aside>
     {/if}
   </main>
+  <nav class="skr-mobile-actions" aria-label={STRINGS.mobileActionsLabel}>
+    <button
+      type="button"
+      disabled={vault === null}
+      data-command-id="file-tree.open"
+      aria-haspopup="dialog"
+      onclick={(event) =>
+        runSurfaceCommand("file-tree.open", event.currentTarget)}
+    >
+      {STRINGS.mobileFiles}
+    </button>
+    <button
+      type="button"
+      data-command-id="quick-switcher.open"
+      onclick={(event) =>
+        runSurfaceCommand("quick-switcher.open", event.currentTarget)}
+    >
+      {STRINGS.mobileSwitcher}
+    </button>
+    <button
+      type="button"
+      data-command-id="vault-search.open"
+      onclick={(event) =>
+        runSurfaceCommand("vault-search.open", event.currentTarget)}
+    >
+      {STRINGS.mobileSearch}
+    </button>
+    <button
+      type="button"
+      data-testid="command-palette-entry"
+      data-command-id="palette.open"
+      onclick={(event) =>
+        runSurfaceCommand("palette.open", event.currentTarget)}
+    >
+      {STRINGS.mobileCommands}
+    </button>
+    <button
+      type="button"
+      aria-haspopup="dialog"
+      onclick={(event) => openSheet("actions", event.currentTarget)}
+    >
+      {STRINGS.actionsLabel}
+    </button>
+  </nav>
 </div>
+
+{#if activeSheet === "file-tree" && vault !== null}
+  <Sheet label={STRINGS.vaultTreeLabel} onClose={closeSheet} restoreFocus={false}>
+    <FileTree
+      entries={tree}
+      {selectedPath}
+      onOpenPath={openPath}
+      touchMode={true}
+    />
+  </Sheet>
+{:else if activeSheet === "outline"}
+  <Sheet label={STRINGS.outlineLabel} onClose={closeSheet} restoreFocus={false}>
+    <OutlinePanel
+      entries={outlineEntries}
+      onNavigate={(from) => {
+        closeSheet();
+        outlineNavigate(from);
+      }}
+      touchMode={true}
+    />
+  </Sheet>
+{:else if activeSheet === "actions"}
+  <Sheet label={STRINGS.actionsLabel} onClose={closeSheet} restoreFocus={false}>
+    <nav class="skr-action-menu" aria-label={STRINGS.actionsLabel}>
+      {#each actionCommands as command (command.id)}
+        <button
+          type="button"
+          data-command-id={command.id}
+          onclick={() => runActionCommand(command.id)}
+        >
+          {command.title}
+        </button>
+      {/each}
+      <button
+        type="button"
+        disabled={openVaultDisabledReason !== null}
+        title={openVaultDisabledReason ?? undefined}
+        onclick={() => {
+          closeSheet();
+          void pickVault();
+        }}
+      >
+        {STRINGS.openVault}
+      </button>
+    </nav>
+  </Sheet>
+{/if}
 
 {#if activeOverlay === VIEW_COMMAND_PALETTE}
   <PaletteOverlay
@@ -1263,6 +1504,7 @@ onMount(() => {
     onQueryChange={onOverlayQuery}
     onPick={onOverlayPick}
     onClose={closeOverlay}
+    restoreFocus={false}
   />
 {:else if activeOverlay === VIEW_QUICK_SWITCHER}
   <PaletteOverlay
@@ -1272,6 +1514,7 @@ onMount(() => {
     onQueryChange={onOverlayQuery}
     onPick={onOverlayPick}
     onClose={closeOverlay}
+    restoreFocus={false}
   />
 {:else if activeOverlay === VIEW_VAULT_SEARCH}
   <PaletteOverlay
@@ -1281,6 +1524,7 @@ onMount(() => {
     onQueryChange={onOverlayQuery}
     onPick={onOverlayPick}
     onClose={closeOverlay}
+    restoreFocus={false}
   />
 {:else if activeOverlay === VIEW_SETTINGS}
   <SettingsView
@@ -1289,6 +1533,7 @@ onMount(() => {
     onPreview={(patch) =>
       applySettings({ ...settingsState.document, ...patch })}
     onClose={closeOverlay}
+    restoreFocus={false}
     desktopAvailable={hasDesktopRuntime()}
     currentVersion={tauriConfig.version}
     {settingsFilePath}

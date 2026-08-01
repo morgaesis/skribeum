@@ -307,9 +307,7 @@ describe("in-note find through the registry", () => {
     const replaceAllButton = [
       ...view.dom.querySelectorAll<HTMLButtonElement>(".cm-skr-find-button"),
     ].find((element) => element.getAttribute("aria-label") === "Replace all");
-    replaceAllButton?.dispatchEvent(
-      new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
-    );
+    replaceAllButton?.click();
     expect(view.state.doc.toString()).toBe("gamma gamma gamma\n");
 
     expect(runEditorCommand("find.close")).toBe(true);

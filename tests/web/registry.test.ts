@@ -29,25 +29,51 @@ function contextStub(): CommandContext {
 describe("command registry", () => {
   it("rejects duplicate and malformed ids", () => {
     const registry = new CommandRegistry();
-    registry.register({ id: "test.command", title: "Test", run: () => {} });
+    registry.register({
+      id: "test.command",
+      title: "Test",
+      pointer: ["command-palette"],
+      run: () => {},
+    });
     expect(() =>
-      registry.register({ id: "test.command", title: "Test", run: () => {} }),
+      registry.register({
+        id: "test.command",
+        title: "Test",
+        pointer: ["command-palette"],
+        run: () => {},
+      }),
     ).toThrow(/already registered/);
     for (const bad of ["single", "Upper.case", "test..gap", "test.", ""]) {
       expect(() =>
-        registry.register({ id: bad, title: "Bad", run: () => {} }),
+        registry.register({
+          id: bad,
+          title: "Bad",
+          pointer: ["command-palette"],
+          run: () => {},
+        }),
       ).toThrow(/dot-namespaced/);
     }
   });
 
   it("lists palette commands sorted by title and honors opt-out", () => {
     const registry = new CommandRegistry();
-    registry.register({ id: "b.two", title: "Zeta", run: () => {} });
-    registry.register({ id: "a.one", title: "Alpha", run: () => {} });
+    registry.register({
+      id: "b.two",
+      title: "Zeta",
+      pointer: ["command-palette"],
+      run: () => {},
+    });
+    registry.register({
+      id: "a.one",
+      title: "Alpha",
+      pointer: ["command-palette"],
+      run: () => {},
+    });
     registry.register({
       id: "c.hidden",
       title: "Hidden",
       palette: false,
+      audience: "widget",
       run: () => {},
     });
     expect(registry.paletteCommands().map((command) => command.id)).toEqual([
@@ -58,11 +84,17 @@ describe("command registry", () => {
 
   it("lists slash commands exactly when slash metadata exists", () => {
     const registry = new CommandRegistry();
-    registry.register({ id: "a.plain", title: "Plain", run: () => {} });
+    registry.register({
+      id: "a.plain",
+      title: "Plain",
+      pointer: ["command-palette"],
+      run: () => {},
+    });
     registry.register({
       id: "a.slash",
       title: "Slash",
       slash: { keywords: ["s"] },
+      pointer: ["command-palette", "slash-menu"],
       run: () => {},
     });
     expect(registry.slashCommands().map((command) => command.id)).toEqual([
@@ -76,6 +108,7 @@ describe("command registry", () => {
     registry.register({
       id: "test.handled",
       title: "Handled",
+      pointer: ["command-palette"],
       run: () => {
         runs.push("handled");
       },
@@ -83,6 +116,7 @@ describe("command registry", () => {
     registry.register({
       id: "test.declined",
       title: "Declined",
+      pointer: ["command-palette"],
       run: () => false,
     });
     expect(registry.run("test.handled", contextStub())).toBe(true);

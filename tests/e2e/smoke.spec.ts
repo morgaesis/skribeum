@@ -69,6 +69,65 @@ async function openNoteFromTree(name: string) {
   await row.click();
 }
 
+type ViewportSize = { width: number; height: number };
+
+async function viewportAfterPaint(): Promise<ViewportSize> {
+  return browser.executeAsync<ViewportSize, []>((done) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        done({ width: window.innerWidth, height: window.innerHeight });
+      });
+    });
+  });
+}
+
+async function setNarrowViewport(
+  width: number,
+  height: number,
+): Promise<ViewportSize> {
+  let outerWidth = width;
+  let outerHeight = height;
+  let actual = { width: 0, height: 0 };
+  let previous = actual;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await browser.setWindowSize(outerWidth, outerHeight);
+    actual = await viewportAfterPaint();
+    if (actual.width === width && actual.height === height) return actual;
+    if (
+      attempt > 0 &&
+      actual.width === previous.width &&
+      actual.height === previous.height
+    ) {
+      break;
+    }
+
+    previous = actual;
+    outerWidth += width - actual.width;
+    outerHeight += height - actual.height;
+  }
+
+  // Hosted macOS displays cap native window height below 844 pixels. The
+  // exact requested viewport is exercised when the display permits it; a
+  // capped host still exercises the same width at the smaller phone height.
+  if (actual.width === width && actual.height >= 640) return actual;
+
+  throw new Error(
+    `viewport did not become ${width}x${height}; got ${actual.width}x${actual.height}`,
+  );
+}
+
+async function restoreDesktopViewport() {
+  await browser.setWindowSize(1100, 750);
+  await browser.waitUntil(
+    async () => (await viewportAfterPaint()).width > 960,
+    {
+      timeout: 10000,
+      timeoutMsg: "viewport did not return above the narrow breakpoint",
+    },
+  );
+}
+
 async function editorText(): Promise<string> {
   return $(".cm-content").getText();
 }
@@ -396,6 +455,158 @@ describe("skribeum shell", () => {
     await tree.waitForExist({ timeout: 15000 });
     await $(`li=${LF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
     await $(`li=${CRLF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
+  });
+
+  it("reaches_primary_surfaces_by_pointer_at_narrow_viewports", async () => {
+    try {
+      for (const [width, height] of [
+        [360, 640],
+        [390, 844],
+      ] as const) {
+        await setNarrowViewport(width, height);
+        const mobileActions = $('[aria-label="Primary actions"]');
+        await mobileActions.waitForDisplayed({ timeout: 10000 });
+
+        const layout = await browser.execute(() => {
+          const editor = document.querySelector<HTMLElement>(".cm-content");
+          const pane = document.querySelector<HTMLElement>("main > section");
+          const sidebar = document.querySelector<HTMLElement>(
+            ".skr-desktop-sidebar",
+          );
+          if (editor === null || pane === null || sidebar === null) {
+            return null;
+          }
+          const style = getComputedStyle(editor);
+          return {
+            paneWidth: pane.getBoundingClientRect().width,
+            readingWidth:
+              editor.getBoundingClientRect().width -
+              Number.parseFloat(style.paddingLeft) -
+              Number.parseFloat(style.paddingRight),
+            sidebarDisplay: getComputedStyle(sidebar).display,
+            overflow: document.documentElement.scrollWidth > window.innerWidth,
+          };
+        });
+        expect(layout).not.toBeNull();
+        expect(layout?.sidebarDisplay).toBe("none");
+        expect(layout?.paneWidth).toBeGreaterThanOrEqual(width - 1);
+        expect(layout?.readingWidth).toBeGreaterThanOrEqual(width - 49);
+        expect(layout?.overflow).toBe(false);
+
+        const launchTargets = await browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              '[aria-label="Primary actions"] button:not(:disabled)',
+            ),
+          ].map((element) => {
+            const rect = element.getBoundingClientRect();
+            return { width: rect.width, height: rect.height };
+          }),
+        );
+        expect(launchTargets.length).toBeGreaterThanOrEqual(4);
+        for (const target of launchTargets) {
+          expect(target.width).toBeGreaterThanOrEqual(44);
+          expect(target.height).toBeGreaterThanOrEqual(44);
+        }
+
+        const actionsButton = mobileActions.$("button=Actions");
+        await actionsButton.click();
+        const actionsSheet = $('[data-testid="overlay-sheet"]');
+        await actionsSheet.waitForDisplayed({ timeout: 10000 });
+        const paneWidthWithSheet = await browser.execute(
+          () =>
+            document
+              .querySelector<HTMLElement>("main > section")
+              ?.getBoundingClientRect().width ?? 0,
+        );
+        expect(paneWidthWithSheet).toBe(layout?.paneWidth);
+        const sheetTargets = await browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              '[data-testid="overlay-sheet"] button:not(:disabled)',
+            ),
+          ].map((element) => {
+            const rect = element.getBoundingClientRect();
+            return { width: rect.width, height: rect.height };
+          }),
+        );
+        for (const target of sheetTargets) {
+          expect(target.width).toBeGreaterThanOrEqual(44);
+          expect(target.height).toBeGreaterThanOrEqual(44);
+        }
+
+        await actionsSheet.$("button=Open settings").click();
+        const settings = $('[data-testid="settings-view"]');
+        await settings.waitForDisplayed({ timeout: 10000 });
+        await settings.$("button=Close").click();
+        await settings.waitForExist({ reverse: true, timeout: 10000 });
+        await browser.waitUntil(
+          () =>
+            browser.execute(
+              () => document.activeElement?.textContent?.trim() === "Actions",
+            ),
+          {
+            timeout: 10000,
+            timeoutMsg: "settings did not restore focus to the Actions button",
+          },
+        );
+
+        await mobileActions.$("button=Actions").click();
+        const saveActionsSheet = $('[data-testid="overlay-sheet"]');
+        await saveActionsSheet.waitForDisplayed({ timeout: 10000 });
+        await saveActionsSheet.$("button=Save note").click();
+        await saveActionsSheet.waitForExist({
+          reverse: true,
+          timeout: 10000,
+        });
+        await browser.waitUntil(
+          () =>
+            browser.execute(
+              () => document.activeElement?.textContent?.trim() === "Actions",
+            ),
+          {
+            timeout: 10000,
+            timeoutMsg: "Actions did not restore focus after saving",
+          },
+        );
+
+        await mobileActions.$("button=Search").click();
+        const searchInput = $('[role="combobox"]');
+        await searchInput.waitForDisplayed({ timeout: 10000 });
+        await searchInput.setValue("third");
+        const searchResult = $('[role="option"]');
+        await searchResult.waitForDisplayed({ timeout: 10000 });
+        await searchResult.click();
+        await browser.waitUntil(
+          async () => (await editorText()).includes("third"),
+          { timeout: 15000 },
+        );
+
+        const filesButton = mobileActions.$("button=Files");
+        await filesButton.click();
+        const filesSheet = $('[data-testid="overlay-sheet"]');
+        await filesSheet.waitForDisplayed({ timeout: 10000 });
+        await filesSheet.$(`li=${VISUAL_NOTE_NAME}`).click();
+        await filesSheet.waitForExist({ reverse: true, timeout: 10000 });
+        await browser.waitUntil(
+          async () => (await editorText()).includes("A room for reading"),
+          { timeout: 15000 },
+        );
+        const properties = $(".skr-properties-toggle");
+        expect(await properties.getAttribute("aria-expanded")).toBe("false");
+        expect(
+          await browser.execute(() =>
+            [
+              ...document.querySelectorAll<HTMLElement>(
+                ".cm-line.cm-skr-frontmatter",
+              ),
+            ].every((line) => getComputedStyle(line).display === "none"),
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      await restoreDesktopViewport();
+    }
   });
 
   it("presents_a_reading_surface_and_captures_both_themes", async () => {
@@ -1662,14 +1873,14 @@ describe("skribeum core editing surfaces", () => {
     expect(await $('[role="combobox"]').isExisting()).toBe(false);
   });
 
-  it("keyboard_traversal_covers_the_new_surfaces_without_traps", async () => {
+  it("keyboard_traversal_traps_modals_and_restores_focus", async () => {
     await closeAnyOverlay();
 
-    // The palette input leaves Tab uncanceled (no keyboard trap) and
-    // Escape returns focus to the editor.
+    // The modal palette keeps Tab on its combobox and Escape returns focus
+    // to the editor that opened it.
     await browser.keys([modifierKey, "p"]);
     await overlayInput();
-    const tabUncanceled = await browser.execute(() => {
+    const tabTrapped = await browser.execute(() => {
       const input = document.querySelector('[role="combobox"]');
       if (input === null) {
         return false;
@@ -1682,9 +1893,13 @@ describe("skribeum core editing surfaces", () => {
         cancelable: true,
       });
       input.dispatchEvent(event);
-      return !event.defaultPrevented;
+      return (
+        event.defaultPrevented &&
+        input.closest('[role="dialog"]')?.contains(document.activeElement) ===
+          true
+      );
     });
-    expect(tabUncanceled).toBe(true);
+    expect(tabTrapped).toBe(true);
     await browser.keys(Key.Escape);
     await browser.waitUntil(
       async () => !(await $('[role="combobox"]').isExisting()),

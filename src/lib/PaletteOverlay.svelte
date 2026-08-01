@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
 import type { PickerItem } from "./features/pickers";
 import { STRINGS } from "./strings";
 
@@ -10,6 +11,7 @@ let {
   onQueryChange,
   onPick,
   onClose,
+  restoreFocus = true,
 }: {
   label: string;
   placeholder: string;
@@ -18,11 +20,18 @@ let {
   onQueryChange: (query: string) => void;
   onPick: (id: string) => void;
   onClose: () => void;
+  restoreFocus?: boolean;
 } = $props();
 
 let query = $state("");
 let active = $state(0);
 let inputElement = $state<HTMLInputElement | undefined>();
+let closeElement = $state<HTMLButtonElement | undefined>();
+const returnFocusElement =
+  typeof document !== "undefined" &&
+  document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
 
 const LISTBOX_ID = "skr-picker-listbox";
 
@@ -69,18 +78,41 @@ function onKeydown(event: KeyboardEvent) {
     case "Enter":
       pickActive();
       break;
-    case "Escape":
-      onClose();
-      break;
     default:
       return;
   }
   event.preventDefault();
 }
+
+function onDialogKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    onClose();
+  } else if (event.key === "Tab") {
+    event.preventDefault();
+    if (event.shiftKey) {
+      (document.activeElement === inputElement
+        ? closeElement
+        : inputElement
+      )?.focus();
+    } else {
+      (document.activeElement === closeElement
+        ? inputElement
+        : closeElement
+      )?.focus();
+    }
+  }
+}
+
+onDestroy(() => {
+  if (restoreFocus && returnFocusElement?.isConnected) {
+    returnFocusElement.focus();
+  }
+});
 </script>
 
 <div
-  class="skr-overlay fixed inset-0 z-40 flex items-start justify-center pt-24"
+    class="skr-overlay picker-backdrop fixed inset-0 z-40 flex items-start justify-center pt-24"
   role="presentation"
   onclick={(event) => {
     if (event.target === event.currentTarget) {
@@ -93,24 +125,36 @@ function onKeydown(event: KeyboardEvent) {
     role="dialog"
     aria-modal="true"
     aria-label={label}
+    tabindex="-1"
+    onkeydown={onDialogKeydown}
   >
-    <input
-      bind:this={inputElement}
-      bind:value={query}
-      type="text"
-      class="w-full rounded-t-lg border-b px-3 py-2 text-sm outline-none"
-      role="combobox"
-      aria-expanded="true"
-      aria-haspopup="listbox"
-      aria-controls={LISTBOX_ID}
-      aria-activedescendant={items.length > 0 ? `skr-picker-option-${active}` : undefined}
-      aria-label={label}
-      {placeholder}
-      autocomplete="off"
-      spellcheck="false"
-      oninput={onInput}
-      onkeydown={onKeydown}
-    />
+    <div class="picker-input-row">
+      <input
+        bind:this={inputElement}
+        bind:value={query}
+        type="text"
+        class="min-w-0 flex-1 rounded-tl-lg px-3 py-2 text-sm outline-none"
+        role="combobox"
+        aria-expanded="true"
+        aria-haspopup="listbox"
+        aria-controls={LISTBOX_ID}
+        aria-activedescendant={items.length > 0 ? `skr-picker-option-${active}` : undefined}
+        aria-label={label}
+        {placeholder}
+        autocomplete="off"
+        spellcheck="false"
+        oninput={onInput}
+        onkeydown={onKeydown}
+      />
+      <button
+        bind:this={closeElement}
+        type="button"
+        class="picker-close"
+        onclick={onClose}
+      >
+        {STRINGS.closeAction}
+      </button>
+    </div>
     <ul
       id={LISTBOX_ID}
       class="m-0 max-h-80 list-none overflow-y-auto p-1 text-sm"
@@ -123,6 +167,7 @@ function onKeydown(event: KeyboardEvent) {
         <li
           id={`skr-picker-option-${index}`}
           role="option"
+          data-command-id={item.id}
           aria-selected={index === active}
           class="cursor-pointer rounded px-2 py-1"
           onclick={() => onPick(item.id)}
@@ -157,3 +202,48 @@ function onKeydown(event: KeyboardEvent) {
     {/if}
   </div>
 </div>
+
+<style>
+  .picker-input-row {
+    display: flex;
+    border-bottom: 1px solid var(--skr-border);
+  }
+
+  .picker-input-row input {
+    border: 0;
+  }
+
+  .picker-close {
+    min-width: 2.75rem;
+    border: 0;
+    border-left: 1px solid var(--skr-border);
+    border-radius: 0 0.75rem 0 0;
+    padding: 0.5rem 0.75rem;
+  }
+
+  @media (max-width: 60rem) {
+    .picker-backdrop {
+      align-items: flex-end;
+      padding: 0;
+    }
+
+    .picker-backdrop > [role="dialog"] {
+      max-height: 80dvh;
+      max-width: none;
+      border-bottom: 0;
+      border-radius: 0.75rem 0.75rem 0 0;
+      width: 100%;
+    }
+
+    input,
+    [role="option"] {
+      min-height: 2.75rem;
+    }
+
+    [role="option"] {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+  }
+</style>

@@ -132,6 +132,14 @@ const editorAppearance = EditorView.theme({
 const FRONTMATTER_SCAN_LIMIT = 16384;
 let frontmatter = $state<Frontmatter | null>(null);
 let showRawFrontmatter = $state(false);
+let frontmatterNoteIdentity = $state<string | null>(null);
+
+$effect(() => {
+  if (path !== frontmatterNoteIdentity) {
+    frontmatterNoteIdentity = path;
+    showRawFrontmatter = false;
+  }
+});
 
 function refreshFrontmatter() {
   if (view === undefined || session === null) {
@@ -615,6 +623,7 @@ $effect(() => {
       rawSourceVisible={showRawFrontmatter}
       onRawSourceVisibleChange={(visible) => (showRawFrontmatter = visible)}
       onEditValue={editFrontmatterValue}
+      noteIdentity={path}
     />
   {/if}
   <div
@@ -665,5 +674,15 @@ $effect(() => {
   .editor:not(.skr-show-raw-frontmatter)
     :global(.cm-line.cm-skr-frontmatter) {
     display: none;
+  }
+
+  @media (max-width: 60rem) {
+    .editor
+      > :global(.cm-editor)
+      > :global(.cm-scroller)
+      > :global(.cm-sizer)
+      > :global(.cm-content) {
+      padding-block: 1.5rem;
+    }
   }
 </style>

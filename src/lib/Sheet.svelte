@@ -1,0 +1,157 @@
+<script lang="ts">
+import { onDestroy, onMount, type Snippet, tick } from "svelte";
+import { STRINGS } from "./strings";
+
+let {
+  label,
+  onClose,
+  children,
+  restoreFocus = true,
+}: {
+  label: string;
+  onClose: () => void;
+  children?: Snippet;
+  restoreFocus?: boolean;
+} = $props();
+
+let dialog = $state<HTMLElement>();
+let returnFocus: HTMLElement | null = null;
+const titleId = "skr-sheet-title";
+const focusableSelector =
+  'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
+
+function focusableElements(): HTMLElement[] {
+  return dialog === undefined
+    ? []
+    : [...dialog.querySelectorAll<HTMLElement>(focusableSelector)].filter(
+        (element) => !element.hasAttribute("inert"),
+      );
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    onClose();
+    return;
+  }
+  if (event.key !== "Tab") {
+    return;
+  }
+  const focusable = focusableElements();
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (first === undefined || last === undefined) {
+    event.preventDefault();
+    dialog?.focus();
+  } else if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+// registry-exempt keydown: modal dialog focus trapping and Escape dismissal
+// are internal to the sheet. Commands only open the registered surface.
+
+onMount(() => {
+  returnFocus =
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+  void tick().then(() => {
+    (focusableElements()[0] ?? dialog)?.focus();
+  });
+});
+
+onDestroy(() => {
+  if (restoreFocus && returnFocus?.isConnected) {
+    returnFocus.focus();
+  }
+});
+</script>
+
+<div
+  class="sheet-backdrop"
+  role="presentation"
+  onclick={(event) => event.target === event.currentTarget && onClose()}
+>
+  <div
+    bind:this={dialog}
+    class="sheet"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby={titleId}
+    tabindex="-1"
+    data-testid="overlay-sheet"
+    onkeydown={onKeydown}
+  >
+    <header>
+      <h2 id={titleId}>{label}</h2>
+      <button type="button" class="sheet-close" onclick={onClose}>
+        {STRINGS.closeAction}
+      </button>
+    </header>
+    <div class="sheet-content">
+      {#if children !== undefined}
+        {@render children()}
+      {/if}
+    </div>
+  </div>
+</div>
+
+<style>
+  .sheet-backdrop {
+    align-items: flex-end;
+    background: var(--skr-overlay);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    position: fixed;
+    z-index: 45;
+  }
+
+  .sheet {
+    background: var(--skr-surface-raised);
+    border: 1px solid var(--skr-border);
+    border-bottom: 0;
+    border-radius: 0.75rem 0.75rem 0 0;
+    box-shadow: var(--skr-shadow);
+    color: var(--skr-text);
+    display: flex;
+    flex-direction: column;
+    height: min(80dvh, 40rem);
+    max-width: 32rem;
+    outline: none;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  header {
+    align-items: center;
+    border-bottom: 1px solid var(--skr-border);
+    display: flex;
+    flex: none;
+    justify-content: space-between;
+    min-height: 3.5rem;
+    padding-inline: 1rem;
+  }
+
+  h2 {
+    font-size: 1rem;
+    margin: 0;
+  }
+
+  .sheet-close {
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .sheet-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+</style>

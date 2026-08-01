@@ -192,6 +192,7 @@ let {
   onUpdate,
   onPreview = () => {},
   onClose,
+  restoreFocus = true,
   desktopAvailable = true,
   currentVersion = "0.0.0",
   settingsFilePath = null,
@@ -202,6 +203,7 @@ let {
   onUpdate: (patch: Partial<SettingsDocument>) => void;
   onPreview?: (patch: Partial<SettingsDocument>) => void;
   onClose: () => void;
+  restoreFocus?: boolean;
   desktopAvailable?: boolean;
   currentVersion?: string;
   settingsFilePath?: string | null;
@@ -210,6 +212,11 @@ let {
 } = $props();
 
 let dialogElement = $state<HTMLElement | undefined>();
+const returnFocusElement =
+  typeof document !== "undefined" &&
+  document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
 let searchQuery = $state("");
 let activeSection = $state<SectionId>("appearance");
 let previewSettings = $state<Partial<SettingsDocument>>({});
@@ -519,7 +526,12 @@ function closeSettings() {
   onClose();
 }
 
-onDestroy(restorePreview);
+onDestroy(() => {
+  restorePreview();
+  if (restoreFocus && returnFocusElement?.isConnected) {
+    returnFocusElement.focus();
+  }
+});
 
 function matches(label: string, description: string): boolean {
   const query = searchQuery.trim().toLocaleLowerCase();
@@ -2132,10 +2144,12 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .switch {
+    align-items: center;
     display: inline-flex;
-    height: 1.25rem;
+    height: 2.75rem;
+    justify-content: center;
     position: relative;
-    width: 2.25rem;
+    width: 2.75rem;
   }
 
   .switch input {
@@ -2152,9 +2166,9 @@ function onKeydown(event: KeyboardEvent) {
     background: var(--skr-border-strong);
     border-radius: 1rem;
     display: block;
-    height: 100%;
+    height: 1.25rem;
     transition: background-color 50ms linear;
-    width: 100%;
+    width: 2.25rem;
   }
 
   .switch > span::after {
@@ -2367,7 +2381,7 @@ function onKeydown(event: KeyboardEvent) {
     white-space: nowrap;
   }
 
-  @media (max-width: 42rem) {
+  @media (max-width: 60rem) {
     .settings-backdrop {
       padding: 0;
     }
@@ -2415,6 +2429,39 @@ function onKeydown(event: KeyboardEvent) {
 
     .settings-footer span {
       display: none;
+    }
+
+    .task-status-table {
+      border: 0;
+      overflow: visible;
+    }
+
+    .task-status-header {
+      display: none;
+    }
+
+    .task-status-row {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      min-width: 0;
+      padding-block: 0.75rem;
+    }
+
+    .task-status-actions {
+      grid-column: 1 / -1;
+    }
+
+    button,
+    input:not([type="range"]),
+    a {
+      min-height: 2.75rem;
+    }
+
+    button {
+      min-width: 2.75rem;
+    }
+
+    input[type="range"] {
+      min-height: 2.75rem;
     }
   }
 </style>

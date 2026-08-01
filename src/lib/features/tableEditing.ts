@@ -151,6 +151,7 @@ export function registerTableEditing(registry: CommandRegistry): void {
     keybindings: ["Tab"],
     scope: "editor",
     palette: false,
+    audience: "widget",
     run: (context) => (context.view === null ? false : nextCell(context.view)),
   });
   registry.register({
@@ -159,6 +160,7 @@ export function registerTableEditing(registry: CommandRegistry): void {
     keybindings: ["Shift-Tab"],
     scope: "editor",
     palette: false,
+    audience: "widget",
     run: (context) =>
       context.view === null ? false : previousCell(context.view),
   });
@@ -198,6 +200,7 @@ export function registerTableEditing(registry: CommandRegistry): void {
       id: entry.id,
       title: entry.title,
       scope: "editor",
+      pointer: ["command-palette", "slash-menu"],
       slash: { keywords: ["table", "row", "column"] },
       run: (context) =>
         context.view === null

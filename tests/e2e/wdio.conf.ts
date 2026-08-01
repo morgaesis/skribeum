@@ -1,7 +1,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TauriCapabilities } from "@wdio/tauri-service";
-import { createScratchVault, SCRATCH_VAULT_PATH } from "./scratchVault";
+import {
+  createScratchVault,
+  SCRATCH_SETTINGS_PATH,
+  SCRATCH_VAULT_PATH,
+} from "./scratchVault";
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(configDirectory, "../..");
@@ -11,6 +15,7 @@ const repositoryRoot = path.resolve(configDirectory, "../..");
 // the environment the app binary inherits.
 createScratchVault();
 process.env.SKRIBEUM_E2E_VAULT = SCRATCH_VAULT_PATH;
+process.env.SKRIBEUM_E2E_SETTINGS = SCRATCH_SETTINGS_PATH;
 
 // The workspace places build output in target/ at the repository root. The
 // e2e suite runs against the debug binary built with the webdriver feature

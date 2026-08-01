@@ -198,7 +198,8 @@ renders as a properties panel above the editor: a positional parser
 records each value's exact character range, typed inputs (dates, numbers,
 booleans, lists, honoring `.obsidian/types.json`) replace precisely that
 range through a normal editor transaction, and untouched keys are
-byte-preserved through the ordinary change-set save path.
+byte-preserved through the ordinary change-set save path. The panel starts
+collapsed for each note, and raw frontmatter stays hidden until requested.
 
 The two-parser split (decision 11) is held together by a permanent
 conformance gate: `tests/syntax-spec.toml` is the shared syntax contract,
@@ -229,6 +230,22 @@ mode follows `prefers-color-scheme` through a reactive media query. Unit tests
 compute WCAG contrast ratios from the deployed variables. The Linux end-to-end
 suite runs axe against the vault, decorated editor, palette, settings and
 canvas surfaces, alongside keyboard-only traversal and camera controls.
+
+The shell switches to its narrow layout at 60rem (960 CSS pixels). This point
+keeps the 16rem file tree, 15rem outline, 45-character minimum reading measure,
+and specified gutters from competing for the same inline space. At and below
+the breakpoint, permanent side columns become modal overlay sheets, settings
+fills the viewport, and palette surfaces rise from the bottom edge. The editor
+keeps the design-system gutter floor of 1.5rem on each side. A 3.5rem bottom
+action bar provides the primary touch routes while the desktop header remains
+2.5rem high.
+
+Modal surfaces make the background inert, trap Tab and Shift+Tab, close with
+Escape or a visible Close button, and restore the invoking control. File and
+outline rows expand from their desktop geometry to 44px touch targets in
+sheets. The command registry records each user command's pointer surfaces;
+six ARIA widget navigation commands are explicitly marked as widget-internal,
+and registry coverage rejects an unclassified or unreachable user command.
 
 ## Two parsers, one contract
 

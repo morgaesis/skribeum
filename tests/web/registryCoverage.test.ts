@@ -50,6 +50,7 @@ const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
   ["lib/OutlinePanel.svelte", "ARIA tree pattern internal navigation"],
   ["lib/PaletteOverlay.svelte", "ARIA combobox pattern internal navigation"],
   ["lib/SettingsView.svelte", "ARIA dialog pattern internal dismissal"],
+  ["lib/Sheet.svelte", "ARIA modal dialog focus trapping and dismissal"],
   [
     "lib/editor/decorations/engine.ts",
     "task checkbox and listbox internal navigation",
@@ -162,5 +163,43 @@ describe("registration coverage (criterion 1)", () => {
         expect(() => parseKeybinding(binding)).not.toThrow();
       }
     }
+  });
+
+  it("every user command reaches a visible pointer surface", () => {
+    const registry = createAppRegistry();
+    const visibleCommands = new Set([
+      ...registry.paletteCommands().map((command) => command.id),
+      ...registry.pointerCommands("action-menu").map((command) => command.id),
+      "palette.open",
+      "file-tree.open",
+      "quick-switcher.open",
+      "vault-search.open",
+      "navigation.back",
+      "navigation.forward",
+      "find.close",
+    ]);
+    const unreachable = registry
+      .commands()
+      .filter((command) => (command.audience ?? "user") === "user")
+      .filter((command) => !visibleCommands.has(command.id))
+      .map((command) => command.id);
+    expect(unreachable).toEqual([]);
+
+    expect(
+      registry
+        .commands()
+        .filter((command) => command.audience === "widget")
+        .map((command) => command.id),
+    ).toEqual([
+      "slash.next",
+      "slash.previous",
+      "slash.accept",
+      "slash.close",
+      "table.cell.next",
+      "table.cell.previous",
+    ]);
+    expect(
+      registry.commands().filter((command) => command.audience === "developer"),
+    ).toEqual([]);
   });
 });

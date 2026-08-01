@@ -49,11 +49,25 @@ export type CommandContext = {
  */
 export type CommandScope = "global" | "editor";
 
+/** Who invokes a command and whether it belongs on user action surfaces. */
+export type CommandAudience = "user" | "widget" | "developer";
+
+/** A visible pointer surface that invokes a user command. */
+export type PointerSurface =
+  | "app-bar"
+  | "command-palette"
+  | "action-menu"
+  | "editor-link"
+  | "find-panel"
+  | "selection-toolbar"
+  | "slash-menu"
+  | "task-status-menu";
+
 /**
  * One registered command. `run` returns `false` to decline (the key event
  * falls through to the next binding), anything else counts as handled.
  */
-export type Command = {
+type CommandBase = {
   /**
    * Stable dot-namespaced identifier (`"table.row.insert-below"`).
    * Ids are the forward-compatibility contract: they never change meaning
@@ -80,6 +94,23 @@ export type Command = {
   slash?: { keywords?: readonly string[]; label?: string };
   run(context: CommandContext): boolean | void | Promise<void>;
 };
+
+/**
+ * User commands declare every pointer surface that can invoke them. Widget
+ * commands are internal ARIA interactions, while developer commands are
+ * intentionally absent from product surfaces.
+ */
+export type Command = CommandBase &
+  (
+    | {
+        audience?: "user";
+        pointer: readonly PointerSurface[];
+      }
+    | {
+        audience: "widget" | "developer";
+        pointer?: readonly PointerSurface[];
+      }
+  );
 
 /** The kinds of surface a view occupies. */
 export type ViewKind = "overlay" | "panel" | "content";

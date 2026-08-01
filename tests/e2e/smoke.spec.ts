@@ -81,7 +81,7 @@ async function viewportAfterPaint(): Promise<ViewportSize> {
   });
 }
 
-async function setNarrowViewport(
+async function setViewportSize(
   width: number,
   height: number,
 ): Promise<ViewportSize> {
@@ -126,6 +126,48 @@ async function restoreDesktopViewport() {
       timeoutMsg: "viewport did not return above the narrow breakpoint",
     },
   );
+}
+
+type HorizontalEscape = {
+  element: string;
+  left: number;
+  right: number;
+  viewportWidth: number;
+};
+
+async function horizontalViewportEscapes(): Promise<HorizontalEscape[]> {
+  return browser.execute(() => {
+    const viewportWidth = window.innerWidth;
+    const tolerance = 0.5;
+    return [...document.querySelectorAll<HTMLElement>("*")].flatMap(
+      (element) => {
+        const style = getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          box.width === 0 ||
+          box.height === 0 ||
+          (box.left >= -tolerance && box.right <= viewportWidth + tolerance)
+        ) {
+          return [];
+        }
+        const identity = [
+          element.tagName.toLowerCase(),
+          element.id === "" ? "" : `#${element.id}`,
+          ...[...element.classList].map((name) => `.${name}`),
+        ].join("");
+        return [
+          {
+            element: identity,
+            left: box.left,
+            right: box.right,
+            viewportWidth,
+          },
+        ];
+      },
+    );
+  });
 }
 
 async function editorText(): Promise<string> {
@@ -463,7 +505,7 @@ describe("skribeum shell", () => {
         [360, 640],
         [390, 844],
       ] as const) {
-        await setNarrowViewport(width, height);
+        await setViewportSize(width, height);
         const mobileActions = $('[aria-label="Primary actions"]');
         await mobileActions.waitForDisplayed({ timeout: 10000 });
 
@@ -479,6 +521,7 @@ describe("skribeum shell", () => {
           const style = getComputedStyle(editor);
           return {
             paneWidth: pane.getBoundingClientRect().width,
+            contentWidth: editor.getBoundingClientRect().width,
             readingWidth:
               editor.getBoundingClientRect().width -
               Number.parseFloat(style.paddingLeft) -
@@ -490,7 +533,9 @@ describe("skribeum shell", () => {
         expect(layout).not.toBeNull();
         expect(layout?.sidebarDisplay).toBe("none");
         expect(layout?.paneWidth).toBeGreaterThanOrEqual(width - 1);
-        expect(layout?.readingWidth).toBeGreaterThanOrEqual(width - 49);
+        expect(layout?.readingWidth).toBeGreaterThanOrEqual(
+          (layout?.contentWidth ?? 0) - 49,
+        );
         expect(layout?.overflow).toBe(false);
 
         const launchTargets = await browser.execute(() =>
@@ -606,6 +651,206 @@ describe("skribeum shell", () => {
       }
     } finally {
       await restoreDesktopViewport();
+    }
+  });
+
+  it("applies_the_prose_font_and_bounds_the_reading_column", async () => {
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+
+    const measurements: Array<{
+      label: string;
+      viewportWidth: number;
+      fontFamily: string;
+      proseFontToken: string;
+      readingWidth: number;
+      minimumWidth: number;
+      maximumWidth: number;
+      scrollerWidth: number;
+      leftGutter: number;
+      rightGutter: number;
+      viewportLeftGutter: number;
+      viewportRightGutter: number;
+      contentLeft: number;
+      contentRight: number;
+      calloutLeft: number;
+      calloutRight: number;
+    }> = [];
+
+    try {
+      for (const [label, width, height] of [
+        ["desktop", 1280, 800],
+        ["narrow", 390, 844],
+      ] as const) {
+        await setViewportSize(width, height);
+        const measurement = await browser.execute(() => {
+          const content = document.querySelector<HTMLElement>(".cm-content");
+          const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+          const callout = document.querySelector<HTMLElement>(
+            ".cm-line.cm-skr-rich-callout",
+          );
+          if (content === null || scroller === null || callout === null) {
+            throw new Error("reading column fixture missing");
+          }
+
+          const style = getComputedStyle(content);
+          const contentBox = content.getBoundingClientRect();
+          const scrollerBox = scroller.getBoundingClientRect();
+          const calloutBox = callout.getBoundingClientRect();
+          const paddingLeft = Number.parseFloat(style.paddingLeft);
+          const paddingRight = Number.parseFloat(style.paddingRight);
+          const readingLeft = contentBox.left + paddingLeft;
+          const readingRight = contentBox.right - paddingRight;
+          const probe = document.createElement("span");
+          probe.style.position = "absolute";
+          probe.style.visibility = "hidden";
+          probe.style.fontFamily = style.fontFamily;
+          probe.style.fontSize = style.fontSize;
+          probe.style.fontWeight = style.fontWeight;
+          probe.style.width = "45ch";
+          document.body.append(probe);
+          const minimumWidth = probe.getBoundingClientRect().width;
+          probe.style.width = "72ch";
+          const maximumWidth = probe.getBoundingClientRect().width;
+          probe.style.fontFamily = "var(--skr-font-prose)";
+          const proseFontToken = getComputedStyle(probe).fontFamily;
+          probe.remove();
+
+          return {
+            viewportWidth: window.innerWidth,
+            fontFamily: style.fontFamily,
+            proseFontToken,
+            readingWidth: readingRight - readingLeft,
+            minimumWidth: Math.min(minimumWidth, contentBox.width - 2 * 24),
+            maximumWidth,
+            scrollerWidth: scrollerBox.width,
+            leftGutter: readingLeft - scrollerBox.left,
+            rightGutter: scrollerBox.right - readingRight,
+            viewportLeftGutter: readingLeft,
+            viewportRightGutter: window.innerWidth - readingRight,
+            contentLeft: contentBox.left,
+            contentRight: contentBox.right,
+            calloutLeft: calloutBox.left,
+            calloutRight: calloutBox.right,
+          };
+        });
+        measurements.push({ label, ...measurement });
+      }
+    } finally {
+      await restoreDesktopViewport();
+    }
+
+    for (const measurement of measurements) {
+      console.info(
+        `reading column ${measurement.label}: viewport=${measurement.viewportWidth.toFixed(2)}, measure=${measurement.readingWidth.toFixed(2)}, scroller=${measurement.scrollerWidth.toFixed(2)}, gutters=${measurement.leftGutter.toFixed(2)}/${measurement.rightGutter.toFixed(2)}, viewport-gutters=${measurement.viewportLeftGutter.toFixed(2)}/${measurement.viewportRightGutter.toFixed(2)}, callout=${measurement.calloutLeft.toFixed(2)}/${measurement.calloutRight.toFixed(2)}`,
+      );
+    }
+    for (const measurement of measurements) {
+      expect(measurement.fontFamily).toBe(measurement.proseFontToken);
+      expect(measurement.readingWidth).toBeLessThan(
+        measurement.scrollerWidth - 1,
+      );
+      expect(measurement.readingWidth).toBeGreaterThanOrEqual(
+        measurement.minimumWidth - 1,
+      );
+      expect(measurement.readingWidth).toBeLessThanOrEqual(
+        measurement.maximumWidth + 1,
+      );
+      expect(measurement.calloutLeft).toBeGreaterThanOrEqual(
+        measurement.contentLeft - 0.5,
+      );
+      expect(measurement.calloutRight).toBeLessThanOrEqual(
+        measurement.contentRight + 0.5,
+      );
+      if (measurement.label === "narrow") {
+        expect(measurement.viewportLeftGutter).toBeGreaterThanOrEqual(23.5);
+        expect(measurement.viewportRightGutter).toBeGreaterThanOrEqual(23.5);
+      }
+    }
+  });
+
+  it("keeps_major_narrow_surfaces_inside_the_viewport", async () => {
+    const surfaces: Array<{
+      surface: string;
+      escapes: HorizontalEscape[];
+    }> = [];
+
+    try {
+      await setViewportSize(390, 844);
+      const mobileActions = $('[aria-label="Primary actions"]');
+      await mobileActions.waitForDisplayed({ timeout: 10000 });
+
+      await mobileActions.$("button=Files").click();
+      let sheet = $('[data-testid="overlay-sheet"]');
+      await sheet.waitForDisplayed({ timeout: 10000 });
+      await sheet.$(`li=${VISUAL_NOTE_NAME}`).click();
+      await sheet.waitForExist({ reverse: true, timeout: 10000 });
+      await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+      surfaces.push({
+        surface: "note",
+        escapes: await horizontalViewportEscapes(),
+      });
+
+      await mobileActions.$("button=Actions").click();
+      sheet = $('[data-testid="overlay-sheet"]');
+      await sheet.waitForDisplayed({ timeout: 10000 });
+      surfaces.push({
+        surface: "actions sheet",
+        escapes: await horizontalViewportEscapes(),
+      });
+
+      await sheet.$("button=Open settings").click();
+      const settings = $('[data-testid="settings-view"]');
+      await settings.waitForDisplayed({ timeout: 10000 });
+      surfaces.push({
+        surface: "settings",
+        escapes: await horizontalViewportEscapes(),
+      });
+      await settings.$("button=Close").click();
+      await settings.waitForExist({ reverse: true, timeout: 10000 });
+
+      await mobileActions.$("button=Search").click();
+      const search = $('[role="combobox"]');
+      await search.waitForDisplayed({ timeout: 10000 });
+      surfaces.push({
+        surface: "vault search",
+        escapes: await horizontalViewportEscapes(),
+      });
+      await browser.keys(Key.Escape);
+      await search.waitForExist({ reverse: true, timeout: 10000 });
+
+      await mobileActions.$("button=Files").click();
+      sheet = $('[data-testid="overlay-sheet"]');
+      await sheet.waitForDisplayed({ timeout: 10000 });
+      surfaces.push({
+        surface: "file tree sheet",
+        escapes: await horizontalViewportEscapes(),
+      });
+      await browser.keys(Key.Escape);
+      await sheet.waitForExist({ reverse: true, timeout: 10000 });
+    } finally {
+      await restoreDesktopViewport();
+    }
+
+    expect(surfaces.map(({ surface }) => surface)).toEqual([
+      "note",
+      "actions sheet",
+      "settings",
+      "vault search",
+      "file tree sheet",
+    ]);
+    const failures = surfaces.flatMap(({ surface, escapes }) =>
+      escapes.map((viewportEscape) => ({ surface, ...viewportEscape })),
+    );
+    console.info(
+      `horizontal viewport escape counts: ${surfaces
+        .map(({ surface, escapes }) => `${surface}=${escapes.length}`)
+        .join(", ")}`,
+    );
+    if (failures.length > 0) {
+      throw new Error(
+        `horizontal viewport escapes: ${JSON.stringify(failures.slice(0, 20))}`,
+      );
     }
   });
 

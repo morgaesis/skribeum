@@ -1849,6 +1849,7 @@ function onKeydown(event: KeyboardEvent) {
   .settings-rail {
     background: var(--skr-surface-subtle);
     border-right: 1px solid var(--skr-border);
+    min-width: 0;
     overflow-y: auto;
     padding: 0.875rem 0.75rem;
   }
@@ -2405,12 +2406,12 @@ function onKeydown(event: KeyboardEvent) {
     }
 
     .settings-nav {
-      flex-direction: row;
-      overflow-x: auto;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .settings-nav button {
-      white-space: nowrap;
+      min-width: 0;
     }
 
     .palette-options {

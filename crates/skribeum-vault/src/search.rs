@@ -421,7 +421,7 @@ impl SearchIndex {
                 title,
                 snippet,
                 match_ranges,
-                score: occurrences as f64,
+                score: f64::from(u32::try_from(occurrences).unwrap_or(u32::MAX)),
             });
         }
         Ok(hits)
@@ -445,13 +445,12 @@ impl SearchIndex {
         if source_terms.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        if source_terms.len() == 1 {
-            if let Some(tag) = source_terms[0]
+        if source_terms.len() == 1
+            && let Some(tag) = source_terms[0]
                 .strip_prefix('#')
                 .filter(|tag| !tag.is_empty())
-            {
-                return self.query_tag(tag, limit);
-            }
+        {
+            return self.query_tag(tag, limit);
         }
         let match_expression = regular_match_expression(&source_terms, search_note_bodies);
         if match_expression.is_empty() {
@@ -579,7 +578,7 @@ fn source_lines(text: &str, range: core::ops::Range<usize>) -> Vec<SourceLine<'_
     lines
 }
 
-fn frontmatter_tag_item<'a>(raw: &'a str, start: usize) -> Option<(&'a str, usize, usize)> {
+fn frontmatter_tag_item(raw: &str, start: usize) -> Option<(&str, usize, usize)> {
     let trimmed_start = raw.trim_start();
     let leading = raw.len().saturating_sub(trimmed_start.len());
     let trimmed = trimmed_start.trim_end();

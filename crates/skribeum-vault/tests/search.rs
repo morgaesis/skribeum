@@ -374,7 +374,7 @@ fn exact_tag_query_matches_inline_and_frontmatter_occurrences() {
         ["flow.md", "scalar.md"],
         "frequency orders exact matches and excludes the longer tag"
     );
-    assert_eq!(hits[0].score, 3.0);
+    assert!((hits[0].score - 3.0).abs() < f64::EPSILON);
     for hit in &hits {
         assert_eq!(hit.match_ranges.len(), 1);
         let [start, end] = hit.match_ranges[0];

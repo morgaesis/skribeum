@@ -6,12 +6,20 @@
   "benchmarks": {
     "parse_extract/parse": {
       "samples_ns": [
-        2722.9
+        2722.9,
+        4434.0,
+        3819.0,
+        4397.0,
+        4363.0
       ]
     },
     "parse_extract/extract": {
       "samples_ns": [
-        2412.2
+        2412.2,
+        4145.0,
+        3429.0,
+        4056.0,
+        4022.0
       ]
     }
   },

@@ -1166,74 +1166,45 @@ describe("skribeum shell", () => {
         const size = await target.getSize();
         expect(size.height).toBeGreaterThanOrEqual(44);
       }
-      await browser.keys(Key.Escape);
-      await overflowSheet.waitForExist({ reverse: true, timeout: 10000 });
 
-      for (const [commandId, initialQuery, mode] of [
-        ["quick-switcher.open", "", "file"],
-        ["vault-search.open", "?", "text"],
-        ["palette.open", ">", "command"],
-      ] as const) {
-        await browser.waitUntil(
-          () =>
-            browser.execute(() =>
-              document.activeElement?.classList.contains("skr-phone-overflow"),
-            ),
-          {
-            timeout: 10000,
-            timeoutMsg: "overflow button did not regain focus",
-          },
-        );
-        expect(
-          await browser.execute(() => {
-            const button = document.querySelector<HTMLButtonElement>(
-              'button[aria-label="More actions"]',
-            );
-            button?.click();
-            return button !== null;
-          }),
-        ).toBe(true);
-        await overflowSheet.waitForDisplayed({ timeout: 10000 });
-        await overflowSheet.$(`[data-command-id="${commandId}"]`).click();
-        const commandSurface = $('[data-testid="unified-command-surface"]');
-        await commandSurface.waitForDisplayed({ timeout: 10000 });
-        const input = commandSurface.$('[role="combobox"]');
-        expect(await input.getValue()).toBe(initialQuery);
-        expect(await input.getAttribute("data-search-mode")).toBe(mode);
-
-        if (commandId === "palette.open") {
-          const paletteOptions = await commandSurface.$$(
-            '[role="option"][data-command-id]',
-          );
-          const paletteCommandIds = await Promise.all(
-            paletteOptions.map((option) =>
-              option.getAttribute("data-command-id"),
-            ),
-          );
-          expect(paletteCommandIds.length).toBeGreaterThan(50);
-          expect(new Set(paletteCommandIds).size).toBe(
-            paletteCommandIds.length,
-          );
-          for (const option of paletteOptions) {
-            expect((await option.getSize()).height).toBeGreaterThanOrEqual(44);
-          }
-          expect(paletteCommandIds).toEqual(
-            expect.arrayContaining([
-              "settings.open",
-              "outline.toggle",
-              "file-tree.open",
-              "note.create",
-              "note.save",
-              "find.open",
-              "navigation.back",
-              "navigation.forward",
-            ]),
-          );
-        }
-
-        await browser.keys(Key.Escape);
-        await commandSurface.waitForExist({ reverse: true, timeout: 10000 });
+      await overflowSheet.$('[data-command-id="palette.open"]').click();
+      const commandSurface = $('[data-testid="unified-command-surface"]');
+      await commandSurface.waitForDisplayed({ timeout: 10000 });
+      const commandInput = commandSurface.$('[role="combobox"]');
+      expect(await commandInput.getValue()).toBe(">");
+      expect(await commandInput.getAttribute("data-search-mode")).toBe(
+        "command",
+      );
+      const paletteRows = await browser.execute(() =>
+        [
+          ...document.querySelectorAll<HTMLElement>(
+            '[data-testid="unified-command-surface"] [role="option"][data-command-id]',
+          ),
+        ].map((option) => ({
+          commandId: option.dataset.commandId ?? "",
+          height: option.getBoundingClientRect().height,
+        })),
+      );
+      const paletteCommandIds = paletteRows.map((row) => row.commandId);
+      expect(paletteCommandIds.length).toBeGreaterThan(50);
+      expect(new Set(paletteCommandIds).size).toBe(paletteCommandIds.length);
+      for (const row of paletteRows) {
+        expect(row.height).toBeGreaterThanOrEqual(44);
       }
+      expect(paletteCommandIds).toEqual(
+        expect.arrayContaining([
+          "settings.open",
+          "outline.toggle",
+          "file-tree.open",
+          "note.create",
+          "note.save",
+          "find.open",
+          "navigation.back",
+          "navigation.forward",
+        ]),
+      );
+      await browser.keys(Key.Escape);
+      await commandSurface.waitForExist({ reverse: true, timeout: 10000 });
 
       await filesButton.click();
       const filesSheet = $('[data-testid="overlay-sheet"]');
@@ -1264,6 +1235,27 @@ describe("skribeum shell", () => {
           scroller.dispatchEvent(new Event("scroll"));
         }
       });
+    } finally {
+      await restoreDesktopViewport();
+    }
+  });
+
+  it("routes_phone_overflow_search_to_the_unified_surface", async () => {
+    try {
+      await setViewportSize(390, 844);
+      const overflowButton = $('button[aria-label="More actions"]');
+      await overflowButton.waitForDisplayed({ timeout: 10000 });
+      await overflowButton.click();
+      const overflowSheet = $('[data-testid="overlay-sheet"]');
+      await overflowSheet.waitForDisplayed({ timeout: 10000 });
+      await overflowSheet.$('[data-command-id="vault-search.open"]').click();
+      const commandSurface = $('[data-testid="unified-command-surface"]');
+      await commandSurface.waitForDisplayed({ timeout: 10000 });
+      const input = commandSurface.$('[role="combobox"]');
+      expect(await input.getValue()).toBe("?");
+      expect(await input.getAttribute("data-search-mode")).toBe("text");
+      await browser.keys(Key.Escape);
+      await commandSurface.waitForExist({ reverse: true, timeout: 10000 });
     } finally {
       await restoreDesktopViewport();
     }

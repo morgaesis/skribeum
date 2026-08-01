@@ -70,7 +70,6 @@ async function editorText(): Promise<string> {
 
 /** Places the browser selection at the end of the editor line with `text`. */
 async function placeCursorAtLineEnd(text: string) {
-  await $(`.cm-line=${text}`).click();
   await browser.execute((lineText: string) => {
     const line = [...document.querySelectorAll(".cm-line")].find(
       (candidate) => {
@@ -86,6 +85,7 @@ async function placeCursorAtLineEnd(text: string) {
     if (line === undefined) {
       throw new Error(`no editor line with text ${lineText}`);
     }
+    (line as HTMLElement).click();
     const range = document.createRange();
     range.selectNodeContents(line);
     range.collapse(false);

@@ -125,7 +125,7 @@ $effect(() => {
             type="number"
             min="45"
             max="120"
-            class="w-24 rounded border border-gray-300 px-2 py-1"
+            class="skr-settings-input w-24 rounded border px-2 py-1"
             value={settings.document.editor_reading_measure}
             data-testid="settings-reading-measure"
             onchange={(event) => {
@@ -135,7 +135,7 @@ $effect(() => {
               }
             }}
           />
-          <span class="text-xs text-gray-500">
+          <span class="skr-settings-unit text-xs">
             {STRINGS.settingsReadingMeasureUnit}
           </span>
         </span>
@@ -161,3 +161,16 @@ $effect(() => {
     </div>
   </div>
 </div>
+
+<style>
+  .skr-settings-input {
+    border-color: var(--skr-border);
+    background: var(--skr-surface);
+    color: var(--skr-text);
+    caret-color: var(--skr-caret);
+  }
+
+  .skr-settings-unit {
+    color: var(--skr-text-muted);
+  }
+</style>

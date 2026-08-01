@@ -18,10 +18,12 @@ import {
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
+  TABLE_GEOMETRY_NOTE_CONTENT,
+  TAG_COMPLETION_TARGET_NOTE_CONTENT,
+  TAG_COMPLETION_TARGET_NOTE_NAME,
   TAG_DELETE_NOTE_NAME,
   TAG_DELETE_PROBE_NOTE_NAME,
   TAG_REFRESH_NOTE_NAME,
-  TABLE_GEOMETRY_NOTE_CONTENT,
   VISUAL_NOTE_CONTENT,
   VISUAL_NOTE_NAME,
 } from "./scratchVault";
@@ -235,6 +237,44 @@ async function prepareTableGeometryNote(): Promise<void> {
     TABLE_GEOMETRY_NOTE_CONTENT,
   );
   await waitForDisk(RENDERING_NOTE_NAME, TABLE_GEOMETRY_NOTE_CONTENT);
+}
+
+async function prepareTagCompletionTarget(): Promise<void> {
+  await openNoteFromTree(VISUAL_NOTE_NAME);
+  await browser.waitUntil(
+    async () => (await editorText()).includes("A room for reading"),
+    { timeout: 15000, timeoutMsg: "visual note did not open" },
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TAG_COMPLETION_TARGET_NOTE_NAME),
+    TAG_COMPLETION_TARGET_NOTE_CONTENT,
+  );
+  await waitForDisk(
+    TAG_COMPLETION_TARGET_NOTE_NAME,
+    TAG_COMPLETION_TARGET_NOTE_CONTENT,
+  );
+  await openNoteFromTree(TAG_COMPLETION_TARGET_NOTE_NAME);
+  await browser.waitUntil(
+    async () =>
+      (await editorText()).includes(TAG_COMPLETION_TARGET_NOTE_CONTENT),
+    { timeout: 15000, timeoutMsg: "tag completion target did not open" },
+  );
+}
+
+async function typeTagCompletionQuery(query = "ced"): Promise<void> {
+  await placeCursorAtLineEnd(TAG_COMPLETION_TARGET_NOTE_CONTENT);
+  await browser.keys(Key.Enter);
+  await $(".cm-content").addValue("#");
+  await $(".cm-content").addValue(query);
+  await browser.waitUntil(
+    async () => (await $$(".cm-skr-tag-menu [role=option]")).length > 0,
+    { timeout: 10000, timeoutMsg: "tag completion menu did not open" },
+  );
+}
+
+async function saveAndExpectTagCompletionTarget(expected: string) {
+  await browser.keys([modifierKey, "s"]);
+  await waitForDisk(TAG_COMPLETION_TARGET_NOTE_NAME, expected);
 }
 
 async function editorText(): Promise<string> {
@@ -855,10 +895,7 @@ describe("skribeum shell", () => {
       { timeout: 15000, timeoutMsg: "table geometry fixture did not render" },
     );
 
-    const measurements: Array<{
-      label: string;
-      tables: TableGeometry[];
-    }> = [];
+    const measurements: TableGeometry[][] = [];
     const originalFonts = await browser.execute(() => {
       const root = document.documentElement.style;
       const prose = root.getPropertyValue("--skr-font-prose");
@@ -868,22 +905,13 @@ describe("skribeum shell", () => {
       return { prose, interfaceFont };
     });
     try {
-      for (const [label, width, height] of [
-        ["desktop", 1280, 800],
-        ["narrow", 390, 844],
+      for (const [width, height] of [
+        [1280, 800],
+        [390, 844],
       ] as const) {
         await setViewportSize(width, height);
         const tables = await renderedTableGeometry();
-        console.info(
-          `table geometry ${label}: ${JSON.stringify(
-            tables.map((table) => ({
-              templates: table.rows.map((row) => row.columns),
-              cellLefts: table.rows.map((row) => row.cellLefts),
-              rowBounds: table.rows.map((row) => [row.left, row.right]),
-            })),
-          )}`,
-        );
-        measurements.push({ label, tables });
+        measurements.push(tables);
       }
     } finally {
       await browser.execute(({ prose, interfaceFont }) => {
@@ -902,7 +930,7 @@ describe("skribeum shell", () => {
       await restoreDesktopViewport();
     }
 
-    for (const { tables } of measurements) {
+    for (const tables of measurements) {
       expect(tables).toHaveLength(2);
       expect(tables.map((table) => table.rows.length)).toEqual([4, 4]);
 
@@ -1432,6 +1460,81 @@ describe("skribeum shell", () => {
     );
     expect(await $("[role=option]").getText()).toContain("shared");
     await browser.keys(Key.Escape);
+  });
+
+  it("accepts_tag_completion_with_enter_and_control_enter", async () => {
+    for (const chord of [[Key.Enter], [Key.Ctrl, Key.Enter]]) {
+      await prepareTagCompletionTarget();
+      await typeTagCompletionQuery();
+      expect(
+        await $$(".cm-skr-tag-menu [role=option]").map((item) =>
+          item.getText(),
+        ),
+      ).toEqual(["#project/cedar-room", "#context/outdoors"]);
+
+      await browser.keys(chord);
+      await $(".cm-skr-tag-menu").waitForExist({
+        reverse: true,
+        timeout: 3000,
+      });
+      await browser.waitUntil(
+        async () => (await editorText()).includes("#project/cedar-room"),
+        { timeout: 3000 },
+      );
+      expect(await editorText()).not.toContain("#ced");
+      await saveAndExpectTagCompletionTarget(
+        `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n#project/cedar-room`,
+      );
+    }
+  });
+
+  it("inserts_the_arrow_selected_tag_and_ranks_it_as_recent", async () => {
+    await prepareTagCompletionTarget();
+    await typeTagCompletionQuery();
+    await browser.keys(Key.ArrowDown);
+    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
+      "#context/outdoors",
+    );
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("#context/outdoors"),
+      { timeout: 3000 },
+    );
+    expect(await editorText()).not.toContain("#ced");
+    await saveAndExpectTagCompletionTarget(
+      `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n#context/outdoors`,
+    );
+
+    await placeCursorAtLineEnd("#context/outdoors");
+    await browser.keys(Key.Enter);
+    await $(".cm-content").addValue("#");
+    await browser.waitUntil(
+      async () => (await $$(".cm-skr-tag-menu [role=option]")).length > 0,
+      { timeout: 10000, timeoutMsg: "recent tag menu did not open" },
+    );
+    const recentlyOrdered = await $$(".cm-skr-tag-menu [role=option]").map(
+      (item) => item.getText(),
+    );
+    expect(recentlyOrdered[0]).toBe("#context/outdoors");
+    expect(recentlyOrdered).toContain("#project/cedar-room");
+    expect(recentlyOrdered.indexOf("#context/outdoors")).toBeLessThan(
+      recentlyOrdered.indexOf("#project/cedar-room"),
+    );
+    await browser.keys(Key.Escape);
+  });
+
+  it("dismisses_tag_completion_without_leaving_query_text", async () => {
+    await prepareTagCompletionTarget();
+    await typeTagCompletionQuery();
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(
+      async () => !(await $(".cm-skr-tag-menu").isExisting()),
+      { timeout: 3000 },
+    );
+    expect(await editorText()).not.toContain("#ced");
+    await saveAndExpectTagCompletionTarget(
+      `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n`,
+    );
   });
 
   it("refreshes_tag_completion_after_saving_a_new_tag", async () => {

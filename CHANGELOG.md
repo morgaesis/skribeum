@@ -42,6 +42,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Packaged-browser regression coverage for tag completion verifies Enter and
+  Control+Enter acceptance, arrow-key selection, Escape cleanup, saved source,
+  and recent-tag ordering.
 - A responsive bottom action bar and Actions sheet provide pointer and touch
   routes to files, search, the quick switcher, outline, command palette,
   settings, note actions, and navigation history.

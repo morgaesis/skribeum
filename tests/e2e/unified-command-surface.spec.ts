@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
 
@@ -12,7 +13,11 @@ async function overlayInput() {
 
 async function readClipboardText() {
   if (process.platform === "win32") {
-    await browser.setPermissions({ name: "clipboard-read" }, "granted");
+    return execFileSync(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"],
+      { encoding: "utf8" },
+    ).trimEnd();
   }
   return browser.execute(() => navigator.clipboard.readText());
 }

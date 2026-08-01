@@ -347,14 +347,22 @@ function focusFileTree() {
     ?.focus();
 }
 
-/** Re-indexes the tree so the switcher lists just-created notes. */
-async function refreshTreeIndex() {
-  if (vault === null) {
+/** Re-indexes the tree so newly discovered notes reach indexed surfaces. */
+async function refreshTreeIndex(refreshTags = false) {
+  const activeVault = vault;
+  if (activeVault === null) {
     return;
   }
   try {
-    tree = await vaultTreeRefresh(vault);
+    const refreshedTree = await vaultTreeRefresh(activeVault);
+    if (vault?.id !== activeVault.id) {
+      return;
+    }
+    tree = refreshedTree;
     refreshLinkContext();
+    if (refreshTags) {
+      await refreshTagCatalog(activeVault);
+    }
   } catch {
     // The watcher-maintained tree remains authoritative when the
     // refresh command is unavailable.
@@ -1174,11 +1182,12 @@ onMount(() => {
     // notes arrives through the typed events below, never through raw
     // (possibly unstable) modification events.
     events.vaultChanged.listen((event) => {
-      if (
-        vault !== null &&
-        event.payload.vault === vault.id &&
-        event.payload.change !== "modified"
-      ) {
+      if (vault === null || event.payload.vault !== vault.id) {
+        return;
+      }
+      if (event.payload.change === "overflow") {
+        void refreshTreeIndex(true);
+      } else if (event.payload.change !== "modified") {
         void refreshTree();
       }
     }),

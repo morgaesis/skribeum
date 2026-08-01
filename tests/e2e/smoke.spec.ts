@@ -17,6 +17,7 @@ import {
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
+  TAG_REFRESH_NOTE_NAME,
   VISUAL_NOTE_CONTENT,
   VISUAL_NOTE_NAME,
 } from "./scratchVault";
@@ -1273,13 +1274,13 @@ describe("skribeum shell", () => {
   });
 
   it("refreshes_tag_completion_after_saving_a_new_tag", async () => {
-    await openNoteFromTree(LF_NOTE_NAME);
+    await openNoteFromTree(TAG_REFRESH_NOTE_NAME);
     const editor = $(".cm-content");
     await editor.waitForDisplayed({ timeout: 15000 });
     await editor.click();
     await editor.addValue(" #catalog-refresh ");
     await browser.waitUntil(
-      () => noteOnDisk(LF_NOTE_NAME).includes("#catalog-refresh"),
+      () => noteOnDisk(TAG_REFRESH_NOTE_NAME).includes("#catalog-refresh"),
       { timeout: 10000 },
     );
 

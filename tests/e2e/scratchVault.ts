@@ -44,6 +44,9 @@ export const RENDERING_NOTE_NAME = "zz-rendering.md";
 export const RENDERING_NOTE_CONTENT =
   "# Rendered content\n\nInline $a^2 + b^2 = c^2$.\n\n$$\nE = mc^2\n$$\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\nthis is not valid mermaid\n```\n";
 
+export const TAG_REFRESH_NOTE_NAME = "zz-tag-refresh.md";
+export const TAG_REFRESH_NOTE_CONTENT = "Tag catalog refresh fixture.\n";
+
 export const VISUAL_NOTE_NAME = "zzz-reading-room.md";
 export const VISUAL_NOTE_CONTENT = [
   "---",
@@ -156,6 +159,10 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),
     RENDERING_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TAG_REFRESH_NOTE_NAME),
+    TAG_REFRESH_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, VISUAL_NOTE_NAME),

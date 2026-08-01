@@ -467,6 +467,13 @@ fn tag_catalog_bounds_indexed_values_and_result_count() {
     let catalog = index.tag_frequencies().expect("bounded catalog reads");
     assert_eq!(catalog.len(), 1000);
     assert!(catalog.iter().all(|entry| entry.tag.len() <= 512));
+    assert!(
+        index
+            .query("#tag-1000", 10)
+            .expect("tag query runs")
+            .is_empty(),
+        "tags beyond the per-note storage bound are not indexed"
+    );
 }
 
 fn test_config() -> ReconcilerConfig {

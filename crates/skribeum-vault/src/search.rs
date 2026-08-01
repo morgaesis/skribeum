@@ -85,6 +85,8 @@ const SNIPPET_MAX_BYTES: usize = 180;
 const SNIPPET_LEAD_BYTES: usize = 40;
 /// Maximum stored tag length, aligned with the search query byte limit.
 const MAX_INDEXED_TAG_BYTES: usize = 512;
+/// Maximum number of distinct tags indexed from one note.
+const MAX_INDEXED_TAGS_PER_NOTE: usize = 1000;
 /// Maximum number of distinct tags returned to one catalog consumer.
 const MAX_TAG_CATALOG_ENTRIES: u32 = 1000;
 /// BM25 column weights: title, headings, body.
@@ -198,7 +200,8 @@ impl SearchIndex {
                 first_start INTEGER NOT NULL,
                 first_end INTEGER NOT NULL,
                 PRIMARY KEY(path, normalized)
-             );",
+             );
+             CREATE INDEX IF NOT EXISTS note_tags_normalized ON note_tags(normalized);",
         )?;
         // Verify the FTS table is actually usable; a corrupt database can
         // survive DDL and fail only on first use.
@@ -556,10 +559,12 @@ fn record_tag(tags: &mut IndexedTags, raw: &str, start: usize, end: usize) {
     if display.is_empty() || display.len() > MAX_INDEXED_TAG_BYTES {
         return;
     }
-    let entry = tags
-        .entry(display.to_lowercase())
-        .or_insert_with(|| (display.to_owned(), 0, start, end));
-    entry.1 = entry.1.saturating_add(1);
+    let normalized = display.to_lowercase();
+    if let Some(entry) = tags.get_mut(&normalized) {
+        entry.1 = entry.1.saturating_add(1);
+    } else if tags.len() < MAX_INDEXED_TAGS_PER_NOTE {
+        tags.insert(normalized, (display.to_owned(), 1, start, end));
+    }
 }
 
 #[derive(Clone, Copy)]

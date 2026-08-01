@@ -507,11 +507,15 @@ pub struct JournalState(pub Option<Journal>);
 pub struct SettingsState(pub Option<SettingsStore>);
 
 /// Rebuilds a vault's search index on a background thread. The index reads
-/// notes only; a rebuild never writes inside the vault.
+/// notes only; a rebuild never writes inside the vault. The function returns
+/// after the worker acquires the index lock, so a subsequent query waits for
+/// the complete rebuild instead of racing ahead of it.
 fn spawn_index_rebuild(search: &Arc<Mutex<Option<SearchIndex>>>, vault: Vault) {
     let search = Arc::clone(search);
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let guard = search.lock().unwrap_or_else(PoisonError::into_inner);
+        let _ = started_tx.send(());
         if let Some(index) = guard.as_ref() {
             #[cfg(debug_assertions)]
             let rebuilt = index.rebuild(&RealFs, &vault).is_ok();
@@ -525,6 +529,7 @@ fn spawn_index_rebuild(search: &Arc<Mutex<Option<SearchIndex>>>, vault: Vault) {
             }
         }
     });
+    let _ = started_rx.recv();
 }
 
 /// Opens a vault at an absolute path, validates it and indexes its tree.

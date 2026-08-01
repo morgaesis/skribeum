@@ -397,6 +397,28 @@ fn exact_tag_query_matches_inline_and_frontmatter_occurrences() {
     );
 }
 
+#[test]
+fn frontmatter_tags_follow_inline_tag_grammar() {
+    let index = SearchIndex::in_memory().expect("index opens");
+    index
+        .index_note(
+            "grammar.md",
+            b"---\ntags: [two words, 123, trailing/, valid_tag, nested/tag]\n---\n",
+        )
+        .expect("frontmatter indexes");
+
+    let tags = index
+        .tag_frequencies()
+        .expect("tag catalog reads")
+        .into_iter()
+        .map(|entry| entry.tag)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        tags,
+        BTreeSet::from(["nested/tag".to_owned(), "valid_tag".to_owned()])
+    );
+}
+
 /// The catalog folds spelling for counts while retaining a display spelling,
 /// and re-indexing or removing a note updates the derived totals.
 #[test]

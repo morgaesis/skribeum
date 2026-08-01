@@ -164,18 +164,20 @@ above. `-` means the row applies to every node of that name.
 | `BlockId` | `-` | `mark cm-skr-block-id` | never |
 | `Frontmatter` | `revealScope=node revealDescendants` | `line cm-skr-frontmatter` | cursor-inside |
 
-Context-dependent attributes come from eight documented engine builtins a
-row opts into: `wikilink-resolution` stamps `data-resolved` from the vault
-tree (unresolved links style distinctly), `callout-type` stamps
+Context-dependent attributes come from nine documented engine builtins a row
+opts into: `markdown-link-preview` adds preview targets and link semantics to
+supported Markdown links, `wikilink-resolution` stamps `data-resolved` from
+the vault tree (unresolved links style distinctly), `callout-type` stamps
 `data-callout` on source markers and icons inside a typed callout, and
 `plain-blockquote` limits the generic line to untyped blockquotes.
 `rich-callout` limits source-backed themed lines to typed callouts and stamps
 canonical type, accent, foldability and line-position attributes.
 `code-language` stamps `data-language` from the fence info string.
 `mermaid-block` restricts the diagram widget to a Mermaid fence and stamps its
-language attribute. `tag-search` stamps rendered tags with their normalized
-tag value, link semantics and an accessible search label. `task-status` stamps
-the configured symbol, category and theme color token on the enclosing task.
+language attribute. `tag-search` stamps rendered tags with their source text
+without the leading hash, link semantics and an accessible search label.
+`task-status` stamps the configured symbol, category and theme color token on
+the enclosing task.
 
 ## Task status configuration
 

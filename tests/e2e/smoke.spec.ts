@@ -17,6 +17,7 @@ import {
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
+  TAG_DELETE_NOTE_NAME,
   TAG_REFRESH_NOTE_NAME,
   VISUAL_NOTE_CONTENT,
   VISUAL_NOTE_NAME,
@@ -1308,6 +1309,35 @@ describe("skribeum shell", () => {
     expect(await $(".cm-skr-tag-menu [role=option]").getText()).toBe(
       "#catalog-refresh",
     );
+  });
+
+  it("refreshes_tag_completion_after_deleting_an_unopened_note", async () => {
+    await openNoteFromTree(TAG_REFRESH_NOTE_NAME);
+    const editor = $(".cm-content");
+    await editor.waitForDisplayed({ timeout: 15000 });
+    await editor.click();
+    await editor.addValue(" #");
+    await editor.addValue("delete-o");
+    await browser.waitUntil(
+      async () =>
+        (await $(".cm-skr-tag-menu [role=option]").getText()) ===
+        "#delete-only",
+      { timeout: 10000 },
+    );
+    await browser.keys(Key.Escape);
+
+    rmSync(path.join(SCRATCH_VAULT_PATH, TAG_DELETE_NOTE_NAME));
+    await $(`li=${TAG_DELETE_NOTE_NAME}`).waitForExist({
+      reverse: true,
+      timeout: 15000,
+    });
+
+    await editor.addValue(" #");
+    await editor.addValue("delete-o");
+    await $(".cm-skr-tag-menu").waitForExist({
+      reverse: true,
+      timeout: 10000,
+    });
   });
 
   it("keyboard_reaches_every_surface_in_order_without_traps", async () => {

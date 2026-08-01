@@ -589,6 +589,13 @@ async function refreshTagCatalog(handle = vault) {
   }
 }
 
+async function refreshTreeAfterTagCatalog(handle: VaultHandle) {
+  await refreshTagCatalog(handle);
+  if (vault?.id === handle.id) {
+    await refreshTree();
+  }
+}
+
 function onOverlayPick(id: string) {
   const overlay = activeOverlay;
   if (overlay === VIEW_COMMAND_PALETTE) {
@@ -1187,6 +1194,8 @@ onMount(() => {
       }
       if (event.payload.change === "overflow") {
         void refreshTreeIndex(true);
+      } else if (event.payload.change === "removed") {
+        void refreshTreeAfterTagCatalog(vault);
       } else if (event.payload.change !== "modified") {
         void refreshTree();
       }
@@ -1212,8 +1221,7 @@ onMount(() => {
       if (vault === null || event.payload.vault !== vault.id) {
         return;
       }
-      void refreshTagCatalog(vault);
-      void refreshTree();
+      void refreshTreeAfterTagCatalog(vault);
       if (event.payload.path === selectedPath) {
         editor?.markRemoved();
         pushBanner({

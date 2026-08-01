@@ -243,9 +243,7 @@ impl SearchIndex {
         let extractions = extract(bytes);
         let mut headings = String::new();
         let mut tags = BTreeMap::<String, (String, u32, usize, usize)>::new();
-        for (raw, start, end) in frontmatter_tags(body) {
-            record_tag(&mut tags, raw, start, end);
-        }
+        record_frontmatter_tags(body, &mut tags);
         for extraction in &extractions {
             match extraction.kind {
                 ExtractionKind::Heading => {
@@ -556,7 +554,14 @@ type IndexedTags = BTreeMap<String, (String, u32, usize, usize)>;
 
 fn record_tag(tags: &mut IndexedTags, raw: &str, start: usize, end: usize) {
     let display = raw.strip_prefix('#').unwrap_or(raw);
-    if display.is_empty() || display.len() > MAX_INDEXED_TAG_BYTES {
+    if display.is_empty()
+        || display.len() > MAX_INDEXED_TAG_BYTES
+        || display.ends_with('/')
+        || !display
+            .chars()
+            .all(|character| character.is_alphanumeric() || matches!(character, '-' | '_' | '/'))
+        || display.chars().all(|character| character.is_ascii_digit())
+    {
         return;
     }
     let normalized = display.to_lowercase();
@@ -573,10 +578,15 @@ struct SourceLine<'a> {
     text: &'a str,
 }
 
-fn source_lines(text: &str, range: core::ops::Range<usize>) -> Vec<SourceLine<'_>> {
-    let mut lines = Vec::new();
+fn source_lines(
+    text: &str,
+    range: core::ops::Range<usize>,
+) -> impl Iterator<Item = SourceLine<'_>> {
     let mut from = range.start;
-    while from < range.end {
+    std::iter::from_fn(move || {
+        if from >= range.end {
+            return None;
+        }
         let rest = &text[from..range.end];
         let terminator = rest
             .char_indices()
@@ -588,13 +598,13 @@ fn source_lines(text: &str, range: core::ops::Range<usize>) -> Vec<SourceLine<'_
             Some((offset, _)) => (from + offset, from + offset + 1),
             None => (range.end, range.end),
         };
-        lines.push(SourceLine {
+        let line = SourceLine {
             from,
             text: &text[from..line_end],
-        });
+        };
         from = next;
-    }
-    lines
+        Some(line)
+    })
 }
 
 fn frontmatter_tag_item(raw: &str, start: usize) -> Option<(&str, usize, usize)> {
@@ -607,28 +617,26 @@ fn frontmatter_tag_item(raw: &str, start: usize) -> Option<(&str, usize, usize)>
     Some((trimmed, start + leading, start + leading + trimmed.len()))
 }
 
-/// Reads only the scalar, simple flow-list and block-list forms understood
-/// by the browser's positional frontmatter parser. Quoted and nested flow
-/// values remain plain metadata rather than being interpreted as tags.
-fn frontmatter_tags(body: &str) -> Vec<(&str, usize, usize)> {
+/// Records the scalar, simple flow-list and block-list forms understood by
+/// the browser's positional frontmatter parser. Quoted and nested flow values
+/// remain plain metadata rather than being interpreted as tags.
+fn record_frontmatter_tags(body: &str, tags: &mut IndexedTags) {
     let Some(range) = read_frontmatter(body.as_bytes()) else {
-        return Vec::new();
+        return;
     };
-    let lines = source_lines(body, range);
-    if lines.len() < 2 {
-        return Vec::new();
+    let mut lines = source_lines(body, range).peekable();
+    if lines.next().is_none() {
+        return;
     }
 
-    let mut tags = Vec::new();
-    let mut line_index = 1usize;
-    while line_index + 1 < lines.len() {
-        let line = lines[line_index];
+    while let Some(line) = lines.next() {
+        if lines.peek().is_none() {
+            break;
+        }
         let Some((key, after_colon)) = line.text.split_once(':') else {
-            line_index += 1;
             continue;
         };
         if key.is_empty() || key.chars().next().is_some_and(char::is_whitespace) || key != "tags" {
-            line_index += 1;
             continue;
         }
 
@@ -639,9 +647,7 @@ fn frontmatter_tags(body: &str) -> Vec<(&str, usize, usize)> {
             .saturating_sub(after_colon.trim_start().len());
         let trimmed_start = value_start + leading;
         if value.is_empty() {
-            let mut item_index = line_index + 1;
-            while item_index + 1 < lines.len() {
-                let item_line = lines[item_index];
+            while let Some(item_line) = lines.peek().copied() {
                 let indentation = item_line.text.len() - item_line.text.trim_start().len();
                 let after_indent = &item_line.text[indentation..];
                 let Some(after_dash) = after_indent.strip_prefix('-') else {
@@ -651,12 +657,11 @@ fn frontmatter_tags(body: &str) -> Vec<(&str, usize, usize)> {
                     break;
                 }
                 let item_start = item_line.from + indentation + 1;
-                if let Some(item) = frontmatter_tag_item(after_dash, item_start) {
-                    tags.push(item);
+                if let Some((raw, start, end)) = frontmatter_tag_item(after_dash, item_start) {
+                    record_tag(tags, raw, start, end);
                 }
-                item_index += 1;
+                lines.next();
             }
-            line_index = item_index;
             continue;
         }
 
@@ -666,22 +671,21 @@ fn frontmatter_tags(body: &str) -> Vec<(&str, usize, usize)> {
                 .chars()
                 .any(|character| matches!(character, '"' | '\'' | '['))
             {
-                line_index += 1;
                 continue;
             }
             let mut offset = 0usize;
             for part in inner.split(',') {
-                if let Some(item) = frontmatter_tag_item(part, trimmed_start + 1 + offset) {
-                    tags.push(item);
+                if let Some((raw, start, end)) =
+                    frontmatter_tag_item(part, trimmed_start + 1 + offset)
+                {
+                    record_tag(tags, raw, start, end);
                 }
                 offset += part.len() + 1;
             }
-        } else if let Some(item) = frontmatter_tag_item(value, trimmed_start) {
-            tags.push(item);
+        } else if let Some((raw, start, end)) = frontmatter_tag_item(value, trimmed_start) {
+            record_tag(tags, raw, start, end);
         }
-        line_index += 1;
     }
-    tags
 }
 
 fn regular_match_expression(source_terms: &[String], search_note_bodies: bool) -> String {

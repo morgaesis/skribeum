@@ -7,6 +7,7 @@ let {
   rawSourceVisible,
   onRawSourceVisibleChange,
   onEditValue,
+  noteIdentity = null,
 }: {
   frontmatter: Frontmatter;
   rawSourceVisible: boolean;
@@ -17,10 +18,19 @@ let {
    * the editor's normal change-set save path.
    */
   onEditValue: (from: number, to: number, insert: string) => void;
+  noteIdentity?: string | null;
 } = $props();
 
 let expanded = $state(false);
+let expandedIdentity = $state<string | null>(null);
 const panelContentId = "skr-properties-content";
+
+$effect(() => {
+  if (noteIdentity !== expandedIdentity) {
+    expandedIdentity = noteIdentity;
+    expanded = false;
+  }
+});
 
 function commitScalar(entry: FrontmatterEntry, value: string) {
   if (value !== entry.raw) {
@@ -234,7 +244,7 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
     );
     box-sizing: border-box;
     margin-inline: auto;
-    padding-inline: clamp(1.5rem, 5vw, 3rem);
+    padding-inline: var(--skr-gutter);
   }
 
   .skr-properties-actions {
@@ -314,6 +324,28 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
     .skr-properties-chevron,
     .skr-properties-reveal {
       transition: none;
+    }
+  }
+
+  @media (max-width: 60rem) {
+    .skr-properties-toggle,
+    .skr-raw-toggle,
+    input {
+      min-height: 2.75rem;
+    }
+
+    .skr-properties-list {
+      grid-template-columns: 1fr;
+      gap: 0.25rem;
+    }
+
+    dd input[type="checkbox"] {
+      width: 2.75rem;
+      min-width: 2.75rem;
+    }
+
+    dd {
+      margin-bottom: 0.5rem;
     }
   }
 </style>

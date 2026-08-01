@@ -11,6 +11,7 @@ export const VIEW_QUICK_SWITCHER = "view.quick-switcher";
 export const VIEW_VAULT_SEARCH = "view.vault-search";
 export const VIEW_SETTINGS = "view.settings";
 export const VIEW_OUTLINE = "view.outline";
+export const VIEW_FILE_TREE = "view.file-tree";
 export const VIEW_CANVAS = "view.canvas";
 
 /** Registers the surface views and their commands. */
@@ -41,6 +42,11 @@ export function registerSurfaces(registry: CommandRegistry): void {
     kind: "panel",
   });
   registry.registerView({
+    id: VIEW_FILE_TREE,
+    title: STRINGS.vaultTreeLabel,
+    kind: "panel",
+  });
+  registry.registerView({
     id: VIEW_CANVAS,
     title: STRINGS.canvasViewerLabel,
     kind: "content",
@@ -51,6 +57,7 @@ export function registerSurfaces(registry: CommandRegistry): void {
     title: STRINGS.commandOpenPalette,
     keybindings: ["Mod-p", "Mod-Shift-p"],
     palette: false,
+    pointer: ["app-bar"],
     run: (context) => {
       context.openView(VIEW_COMMAND_PALETTE);
     },
@@ -59,6 +66,7 @@ export function registerSurfaces(registry: CommandRegistry): void {
     id: "quick-switcher.open",
     title: STRINGS.commandOpenQuickSwitcher,
     keybindings: ["Mod-o"],
+    pointer: ["app-bar", "action-menu", "command-palette"],
     run: (context) => {
       context.openView(VIEW_QUICK_SWITCHER);
     },
@@ -67,6 +75,7 @@ export function registerSurfaces(registry: CommandRegistry): void {
     id: "vault-search.open",
     title: STRINGS.commandOpenVaultSearch,
     keybindings: ["Mod-Shift-f"],
+    pointer: ["app-bar", "action-menu", "command-palette"],
     run: (context) => {
       context.openView(VIEW_VAULT_SEARCH);
     },
@@ -75,6 +84,7 @@ export function registerSurfaces(registry: CommandRegistry): void {
     id: "settings.open",
     title: STRINGS.commandOpenSettings,
     keybindings: ["Mod-,"],
+    pointer: ["action-menu", "command-palette"],
     run: (context) => {
       context.openView(VIEW_SETTINGS);
     },
@@ -83,14 +93,25 @@ export function registerSurfaces(registry: CommandRegistry): void {
     id: "outline.toggle",
     title: STRINGS.commandToggleOutline,
     keybindings: ["Mod-Shift-o"],
+    pointer: ["action-menu", "command-palette"],
     run: (context) => {
       context.toggleView(VIEW_OUTLINE);
+    },
+  });
+  registry.register({
+    id: "file-tree.open",
+    title: STRINGS.commandOpenFileTree,
+    keybindings: ["Mod-Shift-e"],
+    pointer: ["app-bar", "action-menu", "command-palette"],
+    run: (context) => {
+      context.openView(VIEW_FILE_TREE);
     },
   });
   registry.register({
     id: "note.create",
     title: STRINGS.commandCreateNote,
     keybindings: ["Mod-n"],
+    pointer: ["action-menu", "command-palette"],
     run: (context) => context.createNote?.(),
   });
   registry.register({
@@ -98,6 +119,7 @@ export function registerSurfaces(registry: CommandRegistry): void {
     title: STRINGS.commandSaveNote,
     keybindings: ["Mod-s"],
     scope: "editor",
+    pointer: ["action-menu", "command-palette"],
     run: (context) => {
       context.requestSave();
     },

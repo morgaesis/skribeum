@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import FileTree from "../../src/lib/FileTree.svelte";
 import type { TreeEntry } from "../../src/lib/ipc/bindings";
 
-const ROW_HEIGHT = 24;
+const ROW_HEIGHT = 28;
 
 function notes(count: number): TreeEntry[] {
   return Array.from({ length: count }, (_, index) => ({

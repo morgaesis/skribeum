@@ -3,7 +3,8 @@ import { tick } from "svelte";
 import type { TreeEntry } from "./ipc/bindings";
 import { STRINGS } from "./strings";
 
-const ROW_HEIGHT = 24;
+const DESKTOP_ROW_HEIGHT = 28;
+const TOUCH_ROW_HEIGHT = 44;
 const TREE_PADDING = 4;
 const OVERSCAN_ROWS = 12;
 
@@ -11,11 +12,15 @@ let {
   entries,
   selectedPath = null,
   onOpenPath,
+  touchMode = false,
 }: {
   entries: TreeEntry[];
   selectedPath?: string | null;
   onOpenPath: (path: string) => void;
+  touchMode?: boolean;
 } = $props();
+
+const rowHeight = $derived(touchMode ? TOUCH_ROW_HEIGHT : DESKTOP_ROW_HEIGHT);
 
 let expanded = $state<Record<string, boolean>>({});
 let focusIndex = $state(0);
@@ -70,7 +75,7 @@ const rows = $derived.by((): Row[] => {
 const windowStart = $derived(
   Math.max(
     0,
-    Math.floor(Math.max(0, scrollTop - TREE_PADDING) / ROW_HEIGHT) -
+    Math.floor(Math.max(0, scrollTop - TREE_PADDING) / rowHeight) -
       OVERSCAN_ROWS,
   ),
 );
@@ -78,7 +83,7 @@ const windowEnd = $derived(
   Math.min(
     rows.length,
     Math.ceil(
-      Math.max(0, scrollTop + viewportHeight - TREE_PADDING) / ROW_HEIGHT,
+      Math.max(0, scrollTop + viewportHeight - TREE_PADDING) / rowHeight,
     ) + OVERSCAN_ROWS,
   ),
 );
@@ -124,8 +129,8 @@ async function focusRow(index: number) {
   const nextIndex = Math.max(0, Math.min(index, rows.length - 1));
   focusIndex = nextIndex;
   if (treeElement !== undefined) {
-    const rowTop = TREE_PADDING + nextIndex * ROW_HEIGHT;
-    const rowBottom = rowTop + ROW_HEIGHT;
+    const rowTop = TREE_PADDING + nextIndex * rowHeight;
+    const rowBottom = rowTop + rowHeight;
     const viewportBottom = treeElement.scrollTop + treeElement.clientHeight;
     let nextScrollTop = treeElement.scrollTop;
     if (rowTop < treeElement.scrollTop) {
@@ -223,7 +228,7 @@ function onKeydown(event: KeyboardEvent) {
     role="presentation"
     aria-hidden="true"
     class="pointer-events-none"
-    style={`height: ${TREE_PADDING * 2 + rows.length * ROW_HEIGHT}px`}
+    style={`height: ${TREE_PADDING * 2 + rows.length * rowHeight}px`}
   ></li>
   {#each renderedIndices as index (rows[index]?.path)}
     {@const row = rows[index]}
@@ -241,9 +246,9 @@ function onKeydown(event: KeyboardEvent) {
       aria-selected={row.kind === "note" || row.path.toLowerCase().endsWith(".canvas") ? row.path === selectedPath : undefined}
       aria-disabled={row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas") ? true : undefined}
       tabindex={index === focusIndex ? 0 : -1}
-      class="absolute right-0 left-0 h-6 cursor-pointer overflow-hidden rounded px-2 py-0.5 whitespace-nowrap"
+      class="absolute right-0 left-0 flex cursor-pointer items-center overflow-hidden rounded px-2 whitespace-nowrap"
       class:opacity-60={row.hidden || (row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas"))}
-      style={`top: ${TREE_PADDING + index * ROW_HEIGHT}px; padding-left: ${0.5 + row.depth}rem`}
+      style={`top: ${TREE_PADDING + index * rowHeight}px; height: ${rowHeight}px; padding-left: ${0.5 + row.depth}rem`}
       onclick={() => {
         void focusRow(index);
         activate(row);

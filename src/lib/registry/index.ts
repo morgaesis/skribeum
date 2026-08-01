@@ -13,8 +13,10 @@ export {
 export { CommandRegistry } from "./registry";
 export type {
   Command,
+  CommandAudience,
   CommandContext,
   CommandScope,
+  PointerSurface,
   ViewDescriptor,
   ViewKind,
 } from "./types";

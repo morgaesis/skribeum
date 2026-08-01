@@ -13,11 +13,32 @@ API, with its storage behavior stated directly above the editor.
 Skribeum is pre-alpha software and has not received an independent security
 audit. Use it only with files that are backed up and versioned.
 
+## Navigation and controls
+
+The application bar provides the quick switcher, vault search, command palette,
+and an Actions menu. The Actions menu includes the file tree, outline, in-note
+find, settings, note creation, saving, and history commands. The command palette
+lists every user command, including formatting, insertion, table, and configured
+task-status actions.
+
+At 60rem (960 CSS pixels) and narrower, the file tree and outline leave the
+editor column and open as modal bottom sheets. A one-hand action bar stays at
+the bottom of the viewport with 44px or larger targets for Files, Switch,
+Search, Commands, and Actions. The editor retains 24px inline gutters, which
+leaves 312px for prose on a 360px viewport and 342px on a 390px viewport.
+Properties remain collapsed above the note, and raw frontmatter remains hidden
+until explicitly requested.
+
+Every visible control accepts pointer, touch, and keyboard activation. Tab and
+Shift+Tab stay inside an open modal sheet, Escape closes it, and focus returns
+to the control that opened it. Keyboard shortcuts remain available through the
+labels shown in the command palette.
+
 ## Settings
 
-Open Settings with `mod+,`. The surface is organized into Appearance, Editor,
-Files and vault, Search, Updates and About. Its search box filters settings by
-their names and plain-language descriptions.
+Open Settings from Actions or with `mod+,`. The surface is organized into
+Appearance, Editor, Files and vault, Search, Updates and About. Its search box
+filters settings by their names and plain-language descriptions.
 
 Appearance controls the light, dark or system theme, separate named palettes
 for light and dark modes, prose and code font stacks, font size, line spacing,

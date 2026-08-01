@@ -55,15 +55,25 @@ function matchCountText(count: number): string {
   return `${count}${count >= MATCH_COUNT_LIMIT ? "+" : ""} ${noun}`;
 }
 
-function button(label: string, text: string, onPress: () => void): HTMLElement {
+function button(
+  commandId: string | null,
+  label: string,
+  text: string,
+  onPress: () => void,
+): HTMLElement {
   const element = document.createElement("button");
   element.type = "button";
   element.className = "cm-skr-find-button";
+  if (commandId !== null) {
+    element.dataset.commandId = commandId;
+  }
   element.setAttribute("aria-label", label);
   element.title = label;
   element.textContent = text;
-  element.addEventListener("mousedown", (event) => {
+  element.addEventListener("pointerdown", (event) => {
     event.preventDefault();
+  });
+  element.addEventListener("click", () => {
     onPress();
   });
   return element;
@@ -136,18 +146,20 @@ function buildFindPanel(view: EditorView): Panel {
   dom.append(
     findInput,
     count,
-    button(STRINGS.findPreviousLabel, "↑", () => findPrevious(view)),
-    button(STRINGS.findNextLabel, "↓", () => findNext(view)),
+    button("find.previous", STRINGS.findPreviousLabel, "↑", () =>
+      findPrevious(view),
+    ),
+    button("find.next", STRINGS.findNextLabel, "↓", () => findNext(view)),
     replaceInput,
-    button(STRINGS.replaceOneLabel, STRINGS.replaceOneLabel, () => {
+    button(null, STRINGS.replaceOneLabel, STRINGS.replaceOneLabel, () => {
       replaceNext(view);
       refreshCount();
     }),
-    button(STRINGS.replaceAllLabel, STRINGS.replaceAllLabel, () => {
+    button(null, STRINGS.replaceAllLabel, STRINGS.replaceAllLabel, () => {
       replaceAll(view);
       refreshCount();
     }),
-    button(STRINGS.findCloseLabel, "×", () => {
+    button("find.close", STRINGS.findCloseLabel, "×", () => {
       closeSearchPanel(view);
       view.focus();
     }),
@@ -211,6 +223,7 @@ export function registerFind(registry: CommandRegistry): void {
     title: STRINGS.commandFindInNote,
     keybindings: ["Mod-f"],
     scope: "editor",
+    pointer: ["action-menu", "command-palette"],
     run: (context) =>
       context.view === null ? false : openSearchPanel(context.view),
   });
@@ -219,6 +232,7 @@ export function registerFind(registry: CommandRegistry): void {
     title: STRINGS.commandFindNext,
     keybindings: ["Mod-g"],
     scope: "editor",
+    pointer: ["command-palette", "find-panel"],
     run: (context) => (context.view === null ? false : findNext(context.view)),
   });
   registry.register({
@@ -226,6 +240,7 @@ export function registerFind(registry: CommandRegistry): void {
     title: STRINGS.commandFindPrevious,
     keybindings: ["Mod-Shift-g"],
     scope: "editor",
+    pointer: ["command-palette", "find-panel"],
     run: (context) =>
       context.view === null ? false : findPrevious(context.view),
   });
@@ -235,6 +250,7 @@ export function registerFind(registry: CommandRegistry): void {
     keybindings: ["Escape"],
     scope: "editor",
     palette: false,
+    pointer: ["find-panel"],
     run: (context) => {
       const view = context.view;
       if (view === null || !searchPanelOpen(view.state)) {

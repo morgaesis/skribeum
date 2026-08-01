@@ -9,9 +9,11 @@ import { STRINGS } from "./strings";
 let {
   entries,
   onNavigate,
+  touchMode = false,
 }: {
   entries: OutlineEntry[];
   onNavigate: (from: number) => void;
+  touchMode?: boolean;
 } = $props();
 
 let collapsed = $state<Set<number>>(new Set());
@@ -116,8 +118,8 @@ function onKeydown(event: KeyboardEvent) {
           aria-selected={index === focusIndex}
           aria-expanded={row.hasChildren ? !collapsed.has(row.entry.from) : undefined}
           tabindex={index === focusIndex ? 0 : -1}
-          class="cursor-pointer truncate rounded px-2 py-0.5"
-          style={`padding-left: ${0.5 + (row.depth - 1) * 0.75}rem`}
+          class="flex cursor-pointer items-center truncate rounded px-2"
+          style={`min-height: ${touchMode ? 44 : 28}px; padding-left: ${0.5 + (row.depth - 1) * 0.75}rem`}
           onclick={() => {
             focusRow(index);
             activate(row);

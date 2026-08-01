@@ -54,12 +54,16 @@ function toolbarTooltip(view: EditorView): Tooltip | null {
         const element = document.createElement("button");
         element.type = "button";
         element.className = "cm-skr-toolbar-button";
+        element.dataset.commandId = button.id;
         element.setAttribute("aria-label", button.label);
         element.title = button.label;
         element.textContent = button.glyph;
-        // Mousedown instead of click so the editor selection survives.
-        element.addEventListener("mousedown", (event) => {
+        // Prevent pointer focus from replacing the editor selection. Click
+        // still handles both pointer activation and keyboard activation.
+        element.addEventListener("pointerdown", (event) => {
           event.preventDefault();
+        });
+        element.addEventListener("click", () => {
           if (config !== null) {
             config.registry.run(button.id, {
               ...config.contextProvider(),

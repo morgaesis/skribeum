@@ -83,6 +83,7 @@ export function registerInsertions(registry: CommandRegistry): void {
       id: entry.id,
       title: entry.title,
       scope: "editor",
+      pointer: ["command-palette", "slash-menu"],
       slash: { keywords: entry.keywords, label: entry.shortLabel },
       run: (context) =>
         context.view === null
@@ -94,6 +95,7 @@ export function registerInsertions(registry: CommandRegistry): void {
     id: "insert.code-fence",
     title: STRINGS.insertCodeFence,
     scope: "editor",
+    pointer: ["command-palette", "slash-menu"],
     slash: {
       keywords: ["code", "fence", "block"],
       label: STRINGS.slashCodeFence,
@@ -107,6 +109,7 @@ export function registerInsertions(registry: CommandRegistry): void {
     id: "insert.table",
     title: STRINGS.insertTable,
     scope: "editor",
+    pointer: ["command-palette", "slash-menu"],
     slash: { keywords: ["table", "grid"], label: STRINGS.slashTable },
     run: (context) =>
       context.view === null
@@ -117,6 +120,7 @@ export function registerInsertions(registry: CommandRegistry): void {
     id: "insert.wikilink",
     title: STRINGS.insertWikilink,
     scope: "editor",
+    pointer: ["command-palette", "slash-menu"],
     slash: { keywords: ["link", "note"], label: STRINGS.slashWikilink },
     run: (context) =>
       context.view === null ? false : insertSnippet(context.view, "[[]]", 2),

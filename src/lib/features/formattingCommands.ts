@@ -52,6 +52,7 @@ export function registerFormatting(registry: CommandRegistry): void {
         ? {}
         : { keybindings: entry.keybindings }),
       scope: "editor",
+      pointer: ["command-palette", "selection-toolbar"],
       run: (context) => {
         const view = context.view;
         if (view === null || view.state.readOnly) {

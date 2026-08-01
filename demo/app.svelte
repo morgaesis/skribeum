@@ -127,8 +127,8 @@ if (typeof window !== "undefined") {
 
   .demo-notice__dismiss {
     display: grid;
-    width: 2rem;
-    height: 2rem;
+    width: 2.75rem;
+    height: 2.75rem;
     flex: none;
     place-items: center;
     border: 1px solid transparent;
@@ -168,7 +168,7 @@ if (typeof window !== "undefined") {
     height: 100%;
   }
 
-  @media (max-width: 42rem) {
+  @media (max-width: 60rem) {
     .demo-notice {
       padding-left: 0.75rem;
       font-size: 0.75rem;

@@ -14,6 +14,11 @@ matching region wins. Every table row is evaluated against that one region,
 so moving the cursor selects a new region and restores decorations in the
 previous one.
 
+Frontmatter follows the same rule as other source-backed constructs. Its
+properties panel is the primary presentation while the cursor is elsewhere.
+Entering any line in the frontmatter block reveals the complete source block
+and replaces the panel, while leaving the block restores the panel.
+
 Reveal policies:
 
 - **cursor-inside**: hidden or replaced text returns as plain source, and
@@ -157,7 +162,7 @@ above. `-` means the row applies to every node of that name.
 | `CalloutType` | `ancestor=Blockquote` | `mark cm-skr-callout-type` | never |
 | `HashTag` | `-` | `mark cm-skr-tag` | never |
 | `BlockId` | `-` | `mark cm-skr-block-id` | never |
-| `Frontmatter` | `-` | `line cm-skr-frontmatter` | never |
+| `Frontmatter` | `revealScope=node revealDescendants` | `line cm-skr-frontmatter` | cursor-inside |
 
 Context-dependent attributes come from seven documented engine builtins a
 row opts into: `wikilink-resolution` stamps `data-resolved` from the vault

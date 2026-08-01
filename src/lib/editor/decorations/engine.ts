@@ -1333,6 +1333,15 @@ function dynamicAttributes(
             "data-color-token": status.color_token,
           };
     }
+    case "tag-search": {
+      const tag = doc.sliceString(node.from + 1, node.to);
+      return {
+        "data-tag": tag,
+        role: "link",
+        tabindex: "0",
+        "aria-label": `${STRINGS.tagSearchLabel}: #${tag}`,
+      };
+    }
     default:
       return {};
   }
@@ -1661,11 +1670,11 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               const firstRichLine = line.from === doc.lineAt(ref.from).from;
               const lastRichLine =
                 line.from === doc.lineAt(Math.min(ref.to, doc.length)).from;
-              const lineDynamic =
-                rule.dynamic === "rich-callout"
+              const lineDynamic = {
+                ...dynamic,
+                ...(revealedNow ? { "data-revealed": "true" } : {}),
+                ...(rule.dynamic === "rich-callout"
                   ? {
-                      ...dynamic,
-                      ...(revealedNow ? { "data-revealed": "true" } : {}),
                       ...(firstRichLine ? { role: "note" } : {}),
                       "data-callout-line":
                         firstRichLine && lastRichLine
@@ -1676,7 +1685,8 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                               ? "last"
                               : "middle",
                     }
-                  : dynamic;
+                  : {}),
+              };
               const nestedActiveLine =
                 rule.dynamic === "rich-callout" &&
                 activeReveal !== null &&
@@ -2840,6 +2850,11 @@ const engineTheme = EditorView.baseTheme({
     backgroundColor: "var(--skr-accent-subtle)",
     borderRadius: "8px",
     padding: "0 4px",
+    cursor: "pointer",
+  },
+  '.cm-skr-tag[role="link"]:focus-visible': {
+    outline: "2px solid var(--skr-focus)",
+    outlineOffset: "2px",
   },
   ".cm-skr-block-id": { color: "var(--skr-text-muted)" },
   ".cm-skr-frontmatter": {

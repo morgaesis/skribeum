@@ -7,6 +7,7 @@ let {
   label,
   placeholder,
   items,
+  initialQuery = "",
   emptyText = STRINGS.noMatches,
   onQueryChange,
   onPick,
@@ -16,6 +17,7 @@ let {
   label: string;
   placeholder: string;
   items: PickerItem[];
+  initialQuery?: string;
   emptyText?: string;
   onQueryChange: (query: string) => void;
   onPick: (id: string) => void;
@@ -23,7 +25,8 @@ let {
   restoreFocus?: boolean;
 } = $props();
 
-let query = $state("");
+const initialQueryValue = () => initialQuery;
+let query = $state(initialQueryValue());
 let active = $state(0);
 let inputElement = $state<HTMLInputElement | undefined>();
 let closeElement = $state<HTMLButtonElement | undefined>();

@@ -17,6 +17,8 @@ export type ParsedKeybinding = {
   key: string;
   /** The platform primary modifier (Control, or Command on macOS). */
   mod: boolean;
+  /** The physical Control key, independent of the platform primary key. */
+  ctrl: boolean;
   shift: boolean;
   alt: boolean;
 };
@@ -30,7 +32,12 @@ export function parseKeybinding(binding: string): ParsedKeybinding {
   }
   const modifiers = segments.slice(0, -1);
   for (const modifier of modifiers) {
-    if (modifier !== "Mod" && modifier !== "Shift" && modifier !== "Alt") {
+    if (
+      modifier !== "Mod" &&
+      modifier !== "Ctrl" &&
+      modifier !== "Shift" &&
+      modifier !== "Alt"
+    ) {
       throw new Error(
         `unknown modifier ${JSON.stringify(modifier)} in ${JSON.stringify(binding)}`,
       );
@@ -39,6 +46,7 @@ export function parseKeybinding(binding: string): ParsedKeybinding {
   return {
     key: key.length === 1 ? key.toLowerCase() : key,
     mod: modifiers.includes("Mod"),
+    ctrl: modifiers.includes("Ctrl"),
     shift: modifiers.includes("Shift"),
     alt: modifiers.includes("Alt"),
   };
@@ -53,13 +61,13 @@ export function keybindingMatches(
   >,
   macPlatform: boolean,
 ): boolean {
-  const primary = macPlatform ? event.metaKey : event.ctrlKey;
-  const secondary = macPlatform ? event.ctrlKey : event.metaKey;
+  const expectedControl = binding.ctrl || (binding.mod && !macPlatform);
+  const expectedMeta = binding.mod && macPlatform;
   const eventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   return (
     eventKey === binding.key &&
-    primary === binding.mod &&
-    !secondary &&
+    event.ctrlKey === expectedControl &&
+    event.metaKey === expectedMeta &&
     event.shiftKey === binding.shift &&
     event.altKey === binding.alt
   );
@@ -73,10 +81,10 @@ export function formatKeybinding(
   const parsed = parseKeybinding(binding);
   const key = parsed.key.length === 1 ? parsed.key.toUpperCase() : parsed.key;
   if (macPlatform) {
-    return `${parsed.mod ? "⌘" : ""}${parsed.alt ? "⌥" : ""}${parsed.shift ? "⇧" : ""}${key}`;
+    return `${parsed.ctrl ? "⌃" : ""}${parsed.mod ? "⌘" : ""}${parsed.alt ? "⌥" : ""}${parsed.shift ? "⇧" : ""}${key}`;
   }
   const parts: string[] = [];
-  if (parsed.mod) {
+  if (parsed.mod || parsed.ctrl) {
     parts.push("Ctrl");
   }
   if (parsed.alt) {

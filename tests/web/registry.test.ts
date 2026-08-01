@@ -140,16 +140,19 @@ describe("keybinding interpretation", () => {
     expect(parseKeybinding("Mod-Shift-p")).toEqual({
       key: "p",
       mod: true,
+      ctrl: false,
       shift: true,
       alt: false,
     });
     expect(parseKeybinding("Tab")).toEqual({
       key: "Tab",
       mod: false,
+      ctrl: false,
       shift: false,
       alt: false,
     });
     expect(parseKeybinding("Mod-,").key).toBe(",");
+    expect(parseKeybinding("Ctrl-Enter").ctrl).toBe(true);
     expect(() => parseKeybinding("Hyper-x")).toThrow(/unknown modifier/);
   });
 
@@ -197,5 +200,6 @@ describe("keybinding interpretation", () => {
   it("formats bindings for display per platform", () => {
     expect(formatKeybinding("Mod-Shift-p", false)).toBe("Ctrl+Shift+P");
     expect(formatKeybinding("Mod-Shift-p", true)).toBe("⌘⇧P");
+    expect(formatKeybinding("Ctrl-Enter", true)).toBe("⌃Enter");
   });
 });

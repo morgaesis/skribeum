@@ -15,6 +15,7 @@ export type {
   NoteContent,
   SearchHit,
   SettingsDoc,
+  TagFrequency,
   TreeEntry,
   TreeEntryKind,
   VaultHandle,

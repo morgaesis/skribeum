@@ -18,12 +18,12 @@
 //! through the trait, which is what lets the simulator assert that
 //! indexing never writes inside the vault.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 
 use rusqlite::{Connection, Transaction, params};
 use sha2::{Digest, Sha256};
-use skribeum_core::{ExtractionKind, extract};
+use skribeum_core::{ExtractionKind, extract, read_frontmatter};
 
 use crate::fs::FileSystem;
 use crate::real::RealFs;
@@ -32,7 +32,7 @@ use crate::vault::{EntryKind, Vault};
 
 /// Version of the on-disk index schema. A file carrying any other version
 /// is dropped and rebuilt rather than migrated: the index is derived state.
-pub const SEARCH_SCHEMA_VERSION: u32 = 4;
+pub const SEARCH_SCHEMA_VERSION: u32 = 5;
 
 /// Search failures. The index is derived state, so every failure is
 /// recoverable by a rebuild; messages never contain note content.
@@ -66,6 +66,17 @@ pub struct SearchHit {
     /// Relevance score; higher ranks better. Derived from BM25 with title
     /// matches weighted above heading matches above body matches.
     pub score: f64,
+}
+
+/// One existing vault tag and its aggregate usage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagFrequency {
+    /// Tag text without its leading hash, preserving one vault spelling.
+    pub tag: String,
+    /// Number of notes containing the tag.
+    pub note_count: u32,
+    /// Total inline and frontmatter occurrences across indexed notes.
+    pub occurrence_count: u32,
 }
 
 /// Maximum snippet length in bytes, before character-boundary snapping.
@@ -158,6 +169,7 @@ impl SearchIndex {
         if version.as_deref() != Some(&SEARCH_SCHEMA_VERSION.to_string()) {
             self.conn.execute_batch(
                 "DROP TABLE IF EXISTS note_index;
+                 DROP TABLE IF EXISTS note_tags;
                  DROP TABLE IF EXISTS note_case_index;
                  DROP TABLE IF EXISTS note_case_paths;",
             )?;
@@ -173,7 +185,16 @@ impl SearchIndex {
                 headings,
                 body,
                 tokenize = 'unicode61 remove_diacritics 2'
-            );",
+            );
+             CREATE TABLE IF NOT EXISTS note_tags(
+                path TEXT NOT NULL,
+                normalized TEXT NOT NULL,
+                display TEXT NOT NULL,
+                occurrences INTEGER NOT NULL,
+                first_start INTEGER NOT NULL,
+                first_end INTEGER NOT NULL,
+                PRIMARY KEY(path, normalized)
+             );",
         )?;
         // Verify the FTS table is actually usable; a corrupt database can
         // survive DDL and fail only on first use.
@@ -204,11 +225,14 @@ impl SearchIndex {
         bytes: &[u8],
     ) -> Result<(), SearchError> {
         tx.execute("DELETE FROM note_index WHERE path = ?1", [path])?;
+        tx.execute("DELETE FROM note_tags WHERE path = ?1", [path])?;
         let Ok(text) = core::str::from_utf8(bytes) else {
             return Ok(());
         };
         let body = text.strip_prefix('\u{FEFF}').unwrap_or(text);
-        let headings = extract(bytes)
+        let body_byte_offset = bytes.len().saturating_sub(body.len());
+        let extractions = extract(bytes);
+        let headings = extractions
             .iter()
             .filter(|extraction| extraction.kind == ExtractionKind::Heading)
             .filter_map(|extraction| {
@@ -220,6 +244,41 @@ impl SearchIndex {
             "INSERT INTO note_index(path, title, headings, body) VALUES(?1, ?2, ?3, ?4)",
             [path, &note_title(path), &headings, body],
         )?;
+        let mut tags = BTreeMap::<String, (String, u32, usize, usize)>::new();
+        for (raw, start, end) in frontmatter_tags(body) {
+            record_tag(&mut tags, raw, start, end);
+        }
+        for extraction in extractions
+            .iter()
+            .filter(|extraction| extraction.kind == ExtractionKind::Tag)
+        {
+            let Some(raw) = bytes
+                .get(extraction.start_byte + 1..extraction.end_byte)
+                .and_then(|slice| core::str::from_utf8(slice).ok())
+            else {
+                continue;
+            };
+            record_tag(
+                &mut tags,
+                raw,
+                extraction.start_byte.saturating_sub(body_byte_offset),
+                extraction.end_byte.saturating_sub(body_byte_offset),
+            );
+        }
+        for (normalized, (display, occurrences, first_start, first_end)) in tags {
+            tx.execute(
+                "INSERT INTO note_tags(path, normalized, display, occurrences, first_start, first_end)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    path,
+                    normalized,
+                    display,
+                    i64::from(occurrences),
+                    i64::try_from(first_start).unwrap_or(i64::MAX),
+                    i64::try_from(first_end).unwrap_or(i64::MAX)
+                ],
+            )?;
+        }
         Ok(())
     }
 
@@ -229,8 +288,10 @@ impl SearchIndex {
     ///
     /// Returns [`SearchError::Storage`] when the index cannot be updated.
     pub fn remove_note(&self, path: &str) -> Result<(), SearchError> {
-        self.conn
-            .execute("DELETE FROM note_index WHERE path = ?1", [path])?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM note_index WHERE path = ?1", [path])?;
+        tx.execute("DELETE FROM note_tags WHERE path = ?1", [path])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -247,6 +308,7 @@ impl SearchIndex {
     pub fn rebuild(&self, fs: &dyn FileSystem, vault: &Vault) -> Result<usize, SearchError> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM note_index", [])?;
+        tx.execute("DELETE FROM note_tags", [])?;
         let mut indexed = 0usize;
         for entry in vault.tree() {
             if entry.kind != EntryKind::Note {
@@ -301,6 +363,70 @@ impl SearchIndex {
         self.query_with_options(query, limit, true, false)
     }
 
+    /// Returns the vault's tags with note and occurrence counts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SearchError::Storage`] when the catalog cannot be read.
+    pub fn tag_frequencies(&self) -> Result<Vec<TagFrequency>, SearchError> {
+        let mut statement = self.conn.prepare(
+            "SELECT MIN(display), COUNT(*), SUM(occurrences)
+             FROM note_tags
+             GROUP BY normalized
+             ORDER BY SUM(occurrences) DESC, normalized ASC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let note_count = row.get::<_, i64>(1)?;
+            let occurrence_count = row.get::<_, i64>(2)?;
+            Ok(TagFrequency {
+                tag: row.get(0)?,
+                note_count: u32::try_from(note_count).unwrap_or(u32::MAX),
+                occurrence_count: u32::try_from(occurrence_count).unwrap_or(u32::MAX),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(SearchError::from)
+    }
+
+    fn query_tag(&self, tag: &str, limit: u32) -> Result<Vec<SearchHit>, SearchError> {
+        let mut statement = self.conn.prepare(
+            "SELECT note_index.path, note_index.title, note_index.body,
+                    note_tags.occurrences, note_tags.first_start, note_tags.first_end
+             FROM note_tags
+             JOIN note_index ON note_index.path = note_tags.path
+             WHERE note_tags.normalized = ?1
+             ORDER BY note_tags.occurrences DESC, note_index.path ASC
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![tag.to_lowercase(), i64::from(limit)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })?;
+        let mut hits = Vec::new();
+        for row in rows {
+            let (path, title, body, occurrences, first_start, first_end) = row?;
+            let start = usize::try_from(first_start).unwrap_or(0).min(body.len());
+            let end = usize::try_from(first_end)
+                .unwrap_or(start)
+                .clamp(start, body.len());
+            let (snippet, match_ranges) = build_range_snippet(&body, start, end);
+            hits.push(SearchHit {
+                path,
+                title,
+                snippet,
+                match_ranges,
+                score: occurrences as f64,
+            });
+        }
+        Ok(hits)
+    }
+
     /// Runs a ranked query with title-only and case-sensitive filtering.
     /// FTS5 identifies the complete candidate set before exact-case filtering,
     /// so case-sensitive matches cannot be hidden by higher-ranked case variants.
@@ -318,6 +444,14 @@ impl SearchIndex {
         let source_terms: Vec<String> = query.split_whitespace().map(str::to_owned).collect();
         if source_terms.is_empty() || limit == 0 {
             return Ok(Vec::new());
+        }
+        if source_terms.len() == 1 {
+            if let Some(tag) = source_terms[0]
+                .strip_prefix('#')
+                .filter(|tag| !tag.is_empty())
+            {
+                return self.query_tag(tag, limit);
+            }
         }
         let match_expression = regular_match_expression(&source_terms, search_note_bodies);
         if match_expression.is_empty() {
@@ -400,6 +534,136 @@ impl SearchIndex {
         }
         Ok(hits)
     }
+}
+
+type IndexedTags = BTreeMap<String, (String, u32, usize, usize)>;
+
+fn record_tag(tags: &mut IndexedTags, raw: &str, start: usize, end: usize) {
+    let display = raw.strip_prefix('#').unwrap_or(raw);
+    if display.is_empty() {
+        return;
+    }
+    let entry = tags
+        .entry(display.to_lowercase())
+        .or_insert_with(|| (display.to_owned(), 0, start, end));
+    entry.1 = entry.1.saturating_add(1);
+}
+
+#[derive(Clone, Copy)]
+struct SourceLine<'a> {
+    from: usize,
+    text: &'a str,
+}
+
+fn source_lines(text: &str, range: core::ops::Range<usize>) -> Vec<SourceLine<'_>> {
+    let mut lines = Vec::new();
+    let mut from = range.start;
+    while from < range.end {
+        let rest = &text[from..range.end];
+        let terminator = rest
+            .char_indices()
+            .find(|(_, character)| matches!(character, '\n' | '\r'));
+        let (line_end, next) = match terminator {
+            Some((offset, '\r')) if rest.as_bytes().get(offset + 1) == Some(&b'\n') => {
+                (from + offset, from + offset + 2)
+            }
+            Some((offset, _)) => (from + offset, from + offset + 1),
+            None => (range.end, range.end),
+        };
+        lines.push(SourceLine {
+            from,
+            text: &text[from..line_end],
+        });
+        from = next;
+    }
+    lines
+}
+
+fn frontmatter_tag_item<'a>(raw: &'a str, start: usize) -> Option<(&'a str, usize, usize)> {
+    let trimmed_start = raw.trim_start();
+    let leading = raw.len().saturating_sub(trimmed_start.len());
+    let trimmed = trimmed_start.trim_end();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some((trimmed, start + leading, start + leading + trimmed.len()))
+}
+
+/// Reads only the scalar, simple flow-list and block-list forms understood
+/// by the browser's positional frontmatter parser. Quoted and nested flow
+/// values remain plain metadata rather than being interpreted as tags.
+fn frontmatter_tags(body: &str) -> Vec<(&str, usize, usize)> {
+    let Some(range) = read_frontmatter(body.as_bytes()) else {
+        return Vec::new();
+    };
+    let lines = source_lines(body, range);
+    if lines.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut tags = Vec::new();
+    let mut line_index = 1usize;
+    while line_index + 1 < lines.len() {
+        let line = lines[line_index];
+        let Some((key, after_colon)) = line.text.split_once(':') else {
+            line_index += 1;
+            continue;
+        };
+        if key.is_empty() || key.chars().next().is_some_and(char::is_whitespace) || key != "tags" {
+            line_index += 1;
+            continue;
+        }
+
+        let value_start = line.from + key.len() + 1;
+        let value = after_colon.trim();
+        let leading = after_colon
+            .len()
+            .saturating_sub(after_colon.trim_start().len());
+        let trimmed_start = value_start + leading;
+        if value.is_empty() {
+            let mut item_index = line_index + 1;
+            while item_index + 1 < lines.len() {
+                let item_line = lines[item_index];
+                let indentation = item_line.text.len() - item_line.text.trim_start().len();
+                let after_indent = &item_line.text[indentation..];
+                let Some(after_dash) = after_indent.strip_prefix('-') else {
+                    break;
+                };
+                if !after_dash.chars().next().is_some_and(char::is_whitespace) {
+                    break;
+                }
+                let item_start = item_line.from + indentation + 1;
+                if let Some(item) = frontmatter_tag_item(after_dash, item_start) {
+                    tags.push(item);
+                }
+                item_index += 1;
+            }
+            line_index = item_index;
+            continue;
+        }
+
+        if value.starts_with('[') && value.ends_with(']') {
+            let inner = &value[1..value.len() - 1];
+            if inner
+                .chars()
+                .any(|character| matches!(character, '"' | '\'' | '['))
+            {
+                line_index += 1;
+                continue;
+            }
+            let mut offset = 0usize;
+            for part in inner.split(',') {
+                if let Some(item) = frontmatter_tag_item(part, trimmed_start + 1 + offset) {
+                    tags.push(item);
+                }
+                offset += part.len() + 1;
+            }
+        } else if let Some(item) = frontmatter_tag_item(value, trimmed_start) {
+            tags.push(item);
+        }
+        line_index += 1;
+    }
+    tags
 }
 
 fn regular_match_expression(source_terms: &[String], search_note_bodies: bool) -> String {
@@ -590,6 +854,23 @@ fn build_snippet(body: &str, terms_lower: &[String]) -> (String, Vec<[u32; 2]>) 
         })
         .collect();
     (snippet, ranges)
+}
+
+/// Builds a snippet around one known byte range and translates that range
+/// into snippet-relative byte offsets.
+fn build_range_snippet(body: &str, start: usize, end: usize) -> (String, Vec<[u32; 2]>) {
+    let match_start = snap_to_char_boundary(body, start);
+    let match_end = snap_to_char_boundary(body, end.max(match_start)).max(match_start);
+    let window_start = snap_to_char_boundary(body, match_start.saturating_sub(SNIPPET_LEAD_BYTES));
+    let window_end = snap_to_char_boundary(body, (window_start + SNIPPET_MAX_BYTES).max(match_end));
+    let snippet = body[window_start..window_end].to_owned();
+    let range_start = match_start.saturating_sub(window_start);
+    let range_end = match_end.saturating_sub(window_start);
+    let match_ranges = match (u32::try_from(range_start), u32::try_from(range_end)) {
+        (Ok(start), Ok(end)) if start < end => vec![[start, end]],
+        _ => Vec::new(),
+    };
+    (snippet, match_ranges)
 }
 
 fn build_case_sensitive_snippet(body: &str, terms: &[String]) -> (String, Vec<[u32; 2]>) {

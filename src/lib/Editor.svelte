@@ -39,6 +39,7 @@ import {
   type SettingsDocument,
 } from "./features/settingsStore";
 import { slashMenu } from "./features/slashMenu";
+import { type TagAffordanceOptions, tagAffordances } from "./features/tags";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
 import PropertiesPanel from "./PropertiesPanel.svelte";
@@ -68,6 +69,7 @@ let {
   onWriteError,
   onDocChanged,
   wikilinkNavigationOptions,
+  tagAffordanceOptions,
 }: {
   /** Fallback document when no note is open (the scaffold fixture). */
   doc?: string;
@@ -92,6 +94,8 @@ let {
   onDocChanged?: () => void;
   /** Supplies the shared navigator capabilities for pointer activation. */
   wikilinkNavigationOptions?: () => FollowWikilinkOptions;
+  /** Supplies vault tags and the existing search callback. */
+  tagAffordanceOptions?: () => TagAffordanceOptions;
 } = $props();
 
 let host: HTMLDivElement;
@@ -207,10 +211,18 @@ function registryExtensions(): Extension[] {
       followLink: () => false,
     }));
   if (activeRegistry === null) {
-    return [editorKeymap(new CommandRegistry(), provider)];
+    return [
+      editorKeymap(new CommandRegistry(), provider),
+      ...(tagAffordanceOptions === undefined
+        ? []
+        : [tagAffordances(tagAffordanceOptions)]),
+    ];
   }
   return [
     editorKeymap(activeRegistry, provider),
+    ...(tagAffordanceOptions === undefined
+      ? []
+      : [tagAffordances(tagAffordanceOptions)]),
     slashMenu(activeRegistry, provider),
     selectionToolbar(activeRegistry, provider),
     findExtension(),
@@ -219,8 +231,14 @@ function registryExtensions(): Extension[] {
 
 function stateFor(content: string, locked: boolean): EditorState {
   const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
+  const initialFrontmatter = parseFrontmatter(content);
+  const initialCursor =
+    initialFrontmatter === null
+      ? 0
+      : Math.min(initialFrontmatter.to + 1, content.length);
   return EditorState.create({
     doc: content,
+    selection: { anchor: initialCursor },
     extensions: [
       renderingCompartment.of(
         noteRenderingExtensions(content, undefined, normalizedTaskStatuses),
@@ -616,7 +634,7 @@ $effect(() => {
 });
 </script>
 
-<div class="flex h-full min-h-0 flex-col">
+<div class="skr-editor-shell flex h-full min-h-0 flex-col">
   {#if frontmatter !== null && frontmatter.entries.length > 0}
     <PropertiesPanel
       {frontmatter}
@@ -671,7 +689,13 @@ $effect(() => {
     line-height: 1.6;
   }
   .editor:not(.skr-show-raw-frontmatter)
-    :global(.cm-line.cm-skr-frontmatter) {
+    :global(.cm-line.cm-skr-frontmatter:not([data-revealed="true"])) {
+    display: none;
+  }
+  .skr-editor-shell:has(
+      :global(.cm-line.cm-skr-frontmatter[data-revealed="true"])
+    )
+    :global(.skr-properties) {
     display: none;
   }
 

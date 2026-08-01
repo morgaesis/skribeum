@@ -308,6 +308,17 @@ pub struct SearchHit {
     pub score: f64,
 }
 
+/// One tag in the indexed vault with aggregate usage counts.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct TagFrequency {
+    /// Tag text without its leading hash.
+    pub tag: String,
+    /// Number of notes containing the tag.
+    pub note_count: u32,
+    /// Total inline and frontmatter occurrences across indexed notes.
+    pub occurrence_count: u32,
+}
+
 /// Result of checking the selected release channel.
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -1008,6 +1019,34 @@ fn search_query(
         .collect())
 }
 
+/// Returns the indexed vault tag catalog with aggregate usage counts.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn tag_catalog(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+) -> Result<Vec<TagFrequency>, AppError> {
+    let search = {
+        let vaults = registry.lock();
+        let open = vaults
+            .get(&handle.id)
+            .ok_or_else(AppError::unknown_handle)?;
+        Arc::clone(&open.search)
+    };
+    let guard = search.lock().unwrap_or_else(PoisonError::into_inner);
+    let index = guard.as_ref().ok_or_else(AppError::search_unavailable)?;
+    let tags = index.tag_frequencies().map_err(AppError::from)?;
+    Ok(tags
+        .into_iter()
+        .map(|entry| TagFrequency {
+            tag: entry.tag,
+            note_count: entry.note_count,
+            occurrence_count: entry.occurrence_count,
+        })
+        .collect())
+}
+
 /// Checks the signed manifest for the selected release channel.
 #[cfg(any(not(feature = "webdriver"), test))]
 fn update_manifest_names(channel: &str) -> Option<&'static [&'static str]> {
@@ -1395,6 +1434,7 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             note_write,
             watch_subscribe::<tauri::Wry>,
             search_query,
+            tag_catalog,
             update_check,
             settings_read,
             settings_path,

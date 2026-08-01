@@ -17,6 +17,7 @@ import {
   noteFragmentPosition,
   urlForNoteAddress,
 } from "../../src/lib/features/navigation";
+import { paletteItems } from "../../src/lib/features/pickers";
 import { type CommandContext, editorKeymap } from "../../src/lib/registry";
 import { STRINGS } from "../../src/lib/strings";
 
@@ -104,12 +105,15 @@ describe("wikilink pointer navigation", () => {
     const navigate = vi.fn();
     const options = navigationOptions({ navigate });
     const view = makePointerView("Before [[Target note]] after", 0, options);
+    view.focus();
+    expect(view.hasFocus).toBe(true);
 
     const event = pressLink(view);
 
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledOnce();
     expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
+    expect(view.hasFocus).toBe(false);
   });
 
   it("follows an embedded note reference", () => {
@@ -265,6 +269,8 @@ describe("wikilink keyboard navigation", () => {
       parent: document.body,
     });
     views.push(view);
+    view.focus();
+    expect(view.hasFocus).toBe(true);
 
     const event = new KeyboardEvent("keydown", {
       key: "Enter",
@@ -278,6 +284,18 @@ describe("wikilink keyboard navigation", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
     expect(view.state.doc.toString()).toBe(doc);
+    expect(view.hasFocus).toBe(false);
+  });
+
+  it("shows the cross-platform follow binding in the palette", () => {
+    const registry = createAppRegistry();
+    const command = registry.command("navigation.follow-link");
+    const item = paletteItems(registry, "Follow link", false).find(
+      (candidate) => candidate.id === "navigation.follow-link",
+    );
+
+    expect(command?.keybindings).toEqual(["Mod-Enter", "Enter"]);
+    expect(item?.keybinding).toBe("Ctrl+Enter");
   });
 });
 

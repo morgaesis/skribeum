@@ -880,6 +880,42 @@ describe("skribeum shell", () => {
     });
     expect(rawSourceHidden).toBe(true);
 
+    await browser.execute(() =>
+      document.querySelector<HTMLElement>(".cm-content")?.focus(),
+    );
+    await browser.keys(Key.ArrowUp);
+    await browser.waitUntil(
+      () =>
+        browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              ".cm-line.cm-skr-frontmatter",
+            ),
+          ].some((line) => getComputedStyle(line).display !== "none"),
+        ),
+      { timeout: 5000 },
+    );
+    expect(
+      await browser.execute(() => {
+        const panel = document.querySelector<HTMLElement>(".skr-properties");
+        return panel === null || getComputedStyle(panel).display === "none";
+      }),
+    ).toBe(true);
+    for (let step = 0; step < 12; step += 1) {
+      await browser.keys(Key.ArrowDown);
+    }
+    await browser.waitUntil(
+      () =>
+        browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              ".cm-line.cm-skr-frontmatter",
+            ),
+          ].every((line) => getComputedStyle(line).display === "none"),
+        ),
+      { timeout: 5000 },
+    );
+
     const typography = await browser.execute(() => {
       const prose = document.querySelector<HTMLElement>(".cm-content");
       const code = document.querySelector<HTMLElement>(".cm-skr-inline-code");
@@ -1162,11 +1198,13 @@ describe("skribeum shell", () => {
 
     const link = $(".cm-skr-wikilink-target");
     await link.waitForExist({ timeout: 15000 });
+    await placeCursorAtLineEnd("Navigation source");
     await link.click();
     await browser.waitUntil(
       async () => (await editorText()).includes("Wikilink destination content"),
       { timeout: 15000 },
     );
+    expect(await activeElementDescriptor()).not.toContain("cm-content");
 
     const back = $("button=Back");
     await back.waitForEnabled({ timeout: 15000 });
@@ -1175,6 +1213,38 @@ describe("skribeum shell", () => {
       async () => (await editorText()).includes("Navigation source"),
       { timeout: 15000 },
     );
+
+    await browser.execute(() =>
+      document.querySelector<HTMLElement>(".cm-content")?.focus(),
+    );
+    await selectEditorText("zzz-navigation-target");
+    await browser.keys([modifierKey, Key.Enter]);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Wikilink destination content"),
+      { timeout: 15000 },
+    );
+    expect(await activeElementDescriptor()).not.toContain("cm-content");
+  });
+
+  it("opens_vault_search_from_a_tag", async () => {
+    await openNoteFromTree(NAVIGATION_SOURCE_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Navigation source"),
+      { timeout: 15000 },
+    );
+    const tag = $(".cm-skr-tag");
+    await tag.waitForExist({ timeout: 15000 });
+    await tag.click();
+
+    const input = $('[role="combobox"]');
+    await input.waitForExist({ timeout: 10000 });
+    expect(await input.getValue()).toBe("#shared");
+    await browser.waitUntil(
+      async () => (await $$('[role="option"]').length) >= 2,
+      { timeout: 20000, timeoutMsg: "tag search did not list its notes" },
+    );
+    expect(await $("[role=option]").getText()).toContain("shared");
+    await browser.keys(Key.Escape);
   });
 
   it("keyboard_reaches_every_surface_in_order_without_traps", async () => {

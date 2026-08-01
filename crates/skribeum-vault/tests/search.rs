@@ -344,6 +344,112 @@ fn query_syntax_is_inert() {
     );
 }
 
+/// A hash-prefixed query uses the tag index rather than FTS tokenization,
+/// so similar tags and untagged prose do not enter the result set.
+#[test]
+fn exact_tag_query_matches_inline_and_frontmatter_occurrences() {
+    let index = SearchIndex::in_memory().expect("index opens");
+    index
+        .index_note(
+            "scalar.md",
+            b"---\ntags: Alpha\n---\n\nalpha appears as ordinary prose\n",
+        )
+        .expect("scalar frontmatter indexes");
+    index
+        .index_note(
+            "flow.md",
+            b"---\ntags: [alpha, beta-two]\n---\n\n#alpha and #Alpha plus #alphabet\n",
+        )
+        .expect("flow and inline tags index");
+    index
+        .index_note(
+            "block.md",
+            b"---\ntags:\n  - listed/tag\n  - beta-two\n---\n\nNo inline tags.\n",
+        )
+        .expect("block frontmatter indexes");
+
+    let hits = index.query("#ALPHA", 10).expect("exact tag query runs");
+    assert_eq!(
+        hits.iter().map(|hit| hit.path.as_str()).collect::<Vec<_>>(),
+        ["flow.md", "scalar.md"],
+        "frequency orders exact matches and excludes the longer tag"
+    );
+    assert_eq!(hits[0].score, 3.0);
+    for hit in &hits {
+        assert_eq!(hit.match_ranges.len(), 1);
+        let [start, end] = hit.match_ranges[0];
+        let matched = &hit.snippet[start as usize..end as usize];
+        assert_eq!(matched.trim_start_matches('#').to_lowercase(), "alpha");
+    }
+    assert!(
+        index
+            .query("#alp", 10)
+            .expect("short tag query runs")
+            .is_empty(),
+        "tag queries do not perform prefix matching"
+    );
+    assert_eq!(
+        index
+            .query("#listed/tag", 10)
+            .expect("nested tag query runs")[0]
+            .path,
+        "block.md"
+    );
+}
+
+/// The catalog folds spelling for counts while retaining a display spelling,
+/// and re-indexing or removing a note updates the derived totals.
+#[test]
+fn tag_catalog_counts_and_tracks_index_updates() {
+    let index = SearchIndex::in_memory().expect("index opens");
+    index
+        .index_note(
+            "one.md",
+            b"---\ntags: [Alpha, beta]\n---\n\n#alpha #alpha\n",
+        )
+        .expect("first note indexes");
+    index
+        .index_note("two.md", b"#ALPHA #gamma\n")
+        .expect("second note indexes");
+
+    let catalog = index.tag_frequencies().expect("catalog reads");
+    let alpha = catalog
+        .iter()
+        .find(|entry| entry.tag.eq_ignore_ascii_case("alpha"))
+        .expect("alpha is cataloged");
+    assert_eq!(alpha.note_count, 2);
+    assert_eq!(alpha.occurrence_count, 4);
+
+    index
+        .index_note("one.md", b"---\ntags: beta\n---\n")
+        .expect("first note re-indexes");
+    let alpha = index
+        .tag_frequencies()
+        .expect("updated catalog reads")
+        .into_iter()
+        .find(|entry| entry.tag.eq_ignore_ascii_case("alpha"))
+        .expect("second note still contributes alpha");
+    assert_eq!(alpha.note_count, 1);
+    assert_eq!(alpha.occurrence_count, 1);
+
+    index.remove_note("two.md").expect("second note removes");
+    assert!(
+        index
+            .tag_frequencies()
+            .expect("catalog after removal reads")
+            .iter()
+            .all(|entry| !entry.tag.eq_ignore_ascii_case("alpha")),
+        "removal drops the final alpha occurrence"
+    );
+    assert!(
+        index
+            .query("#alpha", 10)
+            .expect("tag query runs")
+            .is_empty(),
+        "exact tag search uses the same updated index"
+    );
+}
+
 fn test_config() -> ReconcilerConfig {
     ReconcilerConfig {
         settle: Duration::from_millis(3),

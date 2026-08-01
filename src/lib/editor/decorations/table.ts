@@ -46,7 +46,7 @@ export type Presentation =
  * engine implements: `wikilink-resolution` adds `data-resolved`,
  * `callout-type` adds `data-callout` inside a typed callout,
  * `plain-blockquote` excludes typed callouts, and `code-language` adds
- * `data-language`.
+ * `data-language`. `tag-search` exposes tag text to the search affordance.
  */
 export type DynamicAttribute =
   | "markdown-link-preview"
@@ -56,7 +56,8 @@ export type DynamicAttribute =
   | "rich-callout"
   | "code-language"
   | "mermaid-block"
-  | "task-status";
+  | "task-status"
+  | "tag-search";
 
 export type DecorationRule = {
   /** Lezer markdown node name this row decorates. */
@@ -409,6 +410,7 @@ const inlineRows: DecorationRule[] = [
     node: "HashTag",
     presentation: { present: "mark", class: "cm-skr-tag" },
     reveal: "never",
+    dynamic: "tag-search",
   },
   {
     node: "BlockId",
@@ -418,7 +420,9 @@ const inlineRows: DecorationRule[] = [
   {
     node: "Frontmatter",
     presentation: { present: "line", class: "cm-skr-frontmatter" },
-    reveal: "never",
+    reveal: "cursor-inside",
+    revealScope: "node",
+    revealDescendants: true,
   },
 ];
 

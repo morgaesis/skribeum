@@ -85,10 +85,10 @@ export const REVEAL_NOTE_CONTENT =
 
 export const NAVIGATION_SOURCE_NOTE_NAME = "zzz-navigation-source.md";
 export const NAVIGATION_SOURCE_NOTE_CONTENT =
-  "# Navigation source\n\nFollow [[zzz-navigation-target]].\n";
+  "# Navigation source\n\nFollow [[zzz-navigation-target]].\n\n#shared\n";
 export const NAVIGATION_TARGET_NOTE_NAME = "zzz-navigation-target.md";
 export const NAVIGATION_TARGET_NOTE_CONTENT =
-  "# Navigation target\n\nWikilink destination content.\n";
+  "# Navigation target\n\nWikilink destination content.\n\n#shared\n";
 
 export const CANVAS_FILE_NAME = "zzz-board.canvas";
 export const CANVAS_REFERENCE_NAME = "z-live-preview.md";

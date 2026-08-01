@@ -726,9 +726,14 @@ export function followWikilinkAt(
   options: FollowWikilinkOptions,
 ): boolean {
   const reference = wikilinkReferenceAt(view.state, position);
-  return reference === null
-    ? false
-    : followWikilinkTarget(reference.target, options);
+  if (reference === null) {
+    return false;
+  }
+  const followed = followWikilinkTarget(reference.target, options);
+  if (followed) {
+    view.contentDOM.blur();
+  }
+  return followed;
 }
 
 /** Finds a wikilink position from a decorated DOM descendant. */
@@ -761,7 +766,7 @@ export function followWikilinkUnderCursor(
   );
 }
 
-/** Registers back, forward, and Enter-to-follow through the command registry. */
+/** Registers history movement and cursor-link following through the registry. */
 export function registerNavigation(registry: CommandRegistry): void {
   registry.register({
     id: "navigation.back",
@@ -780,7 +785,7 @@ export function registerNavigation(registry: CommandRegistry): void {
   registry.register({
     id: "navigation.follow-link",
     title: STRINGS.commandFollowLink,
-    keybindings: ["Enter"],
+    keybindings: ["Mod-Enter", "Enter"],
     scope: "editor",
     pointer: ["command-palette", "editor-link"],
     run: (context) => context.followLink?.(context.view) ?? false,

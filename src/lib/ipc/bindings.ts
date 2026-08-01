@@ -60,6 +60,8 @@ export const commands = {
 	 *  that snippet. At most `limit` hits return, best first.
 	 */
 	searchQuery: (handle: VaultHandle, query: string, limit: number, searchNoteBodies: boolean, caseSensitive: boolean) => typedError<SearchHit[], AppError>(__TAURI_INVOKE("search_query", { handle, query, limit, searchNoteBodies, caseSensitive })),
+	/**  Returns the indexed vault tag catalog with aggregate usage counts. */
+	tagCatalog: (handle: VaultHandle) => typedError<TagFrequency[], AppError>(__TAURI_INVOKE("tag_catalog", { handle })),
 	updateCheck: (channel: string) => typedError<UpdateCheckDoc, AppError>(__TAURI_INVOKE("update_check", { channel })),
 	/**
 	 *  Reads the settings document from `settings.json` in the OS app-config
@@ -314,6 +316,16 @@ export type SettingsDoc = {
 	update_channel: string,
 	/**  Ordered task marker vocabulary and click-transition graph. */
 	task_statuses: TaskStatusDoc[],
+};
+
+/**  One tag in the indexed vault with aggregate usage counts. */
+export type TagFrequency = {
+	/**  Tag text without its leading hash. */
+	tag: string,
+	/**  Number of notes containing the tag. */
+	note_count: number,
+	/**  Total inline and frontmatter occurrences across indexed notes. */
+	occurrence_count: number,
 };
 
 /**  Semantic task status category over IPC. */

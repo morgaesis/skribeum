@@ -264,6 +264,32 @@ describe("cursor-reveal behavior per table row", () => {
     expect(hides(outsideHidden, insideUrl)).toBe(true);
     expect(outside).toContain("cm-skr-rich-callout");
   });
+
+  it("reveals frontmatter from every line and restores it for another region", () => {
+    const text =
+      "---\ntitle: Source access\ntags: [alpha, beta]\n---\n\n[body](target)\n";
+    for (const cursor of [
+      0,
+      text.indexOf("Source access"),
+      text.indexOf("---", 3),
+    ]) {
+      const revealed = serializedAt(text, cursor);
+      expect(revealed).toContain("cm-skr-frontmatter");
+      expect(revealed).toContain('data-revealed="true"');
+    }
+
+    const body = serializedAt(text, text.indexOf("body"));
+    expect(body).toContain("cm-skr-frontmatter");
+    expect(body).not.toContain('data-revealed="true"');
+    expect(body).not.toContain("hide node=LinkMark");
+  });
+
+  it("exposes hash tag text to the search affordance", () => {
+    const decorated = serializedAt("A #project/alpha tag.\n", null);
+    expect(decorated).toContain('class="cm-skr-tag"');
+    expect(decorated).toContain('data-tag="project/alpha"');
+    expect(decorated).toContain('aria-label="Search for tag: #project/alpha"');
+  });
 });
 
 describe("docs/decoration-rules.md mirrors the table", () => {

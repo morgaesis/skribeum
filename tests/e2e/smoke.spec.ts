@@ -1113,15 +1113,23 @@ describe("skribeum shell", () => {
         element.className = className;
         document.body.append(element);
         const style = getComputedStyle(element);
+        const transitionProperties = style.transitionProperty
+          .split(",")
+          .map((part) => part.trim());
+        const transitionMs = style.transitionDuration.split(",").map((part) => {
+          const duration = part.trim();
+          return duration.endsWith("ms")
+            ? Number.parseFloat(duration)
+            : Number.parseFloat(duration) * 1000;
+        });
         const measurement = {
           className,
           prefersReducedMotion,
-          transitionMs: style.transitionDuration.split(",").map((part) => {
-            const duration = part.trim();
-            return duration.endsWith("ms")
-              ? Number.parseFloat(duration)
-              : Number.parseFloat(duration) * 1000;
-          }),
+          transitionProperties,
+          transitionMs,
+          effectiveTransitionMs: transitionProperties.map(
+            (_, index) => transitionMs[index % transitionMs.length],
+          ),
           animationMs: style.animationDuration.split(",").map((part) => {
             const duration = part.trim();
             return duration.endsWith("ms")
@@ -1147,15 +1155,15 @@ describe("skribeum shell", () => {
       }
     }
     const expectedDuration = measurements[0]?.transitionMs[0] ?? 0;
-    expect(measurements[0]?.transitionMs).toEqual([
+    expect(measurements[0]?.effectiveTransitionMs).toEqual([
       expectedDuration,
       expectedDuration,
     ]);
-    expect(measurements[1]?.transitionMs).toEqual([
+    expect(measurements[1]?.effectiveTransitionMs).toEqual([
       expectedDuration,
       expectedDuration,
     ]);
-    expect(measurements[2]?.transitionMs).toEqual([
+    expect(measurements[2]?.effectiveTransitionMs).toEqual([
       expectedDuration,
       expectedDuration,
     ]);

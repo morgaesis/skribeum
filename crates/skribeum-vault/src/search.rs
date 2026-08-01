@@ -18,9 +18,10 @@
 //! through the trait, which is what lets the simulator assert that
 //! indexing never writes inside the vault.
 
+use std::collections::VecDeque;
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use sha2::{Digest, Sha256};
 use skribeum_core::{ExtractionKind, extract};
 
@@ -31,7 +32,7 @@ use crate::vault::{EntryKind, Vault};
 
 /// Version of the on-disk index schema. A file carrying any other version
 /// is dropped and rebuilt rather than migrated: the index is derived state.
-pub const SEARCH_SCHEMA_VERSION: u32 = 3;
+pub const SEARCH_SCHEMA_VERSION: u32 = 4;
 
 /// Search failures. The index is derived state, so every failure is
 /// recoverable by a rebuild; messages never contain note content.
@@ -172,28 +173,12 @@ impl SearchIndex {
                 headings,
                 body,
                 tokenize = 'unicode61 remove_diacritics 2'
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS note_case_index USING fts5(
-                title_terms,
-                heading_terms,
-                body_terms,
-                tokenize = 'ascii',
-                content = '',
-                contentless_delete = 1
-            );
-            CREATE TABLE IF NOT EXISTS note_case_paths(
-                rowid INTEGER PRIMARY KEY,
-                path TEXT UNIQUE NOT NULL
             );",
         )?;
         // Verify the FTS table is actually usable; a corrupt database can
         // survive DDL and fail only on first use.
         self.conn
             .query_row("SELECT count(*) FROM note_index", [], |row| {
-                row.get::<_, i64>(0)
-            })?;
-        self.conn
-            .query_row("SELECT count(*) FROM note_case_index", [], |row| {
                 row.get::<_, i64>(0)
             })?;
         Ok(())
@@ -219,7 +204,6 @@ impl SearchIndex {
         bytes: &[u8],
     ) -> Result<(), SearchError> {
         tx.execute("DELETE FROM note_index WHERE path = ?1", [path])?;
-        Self::delete_case_note(tx, path)?;
         let Ok(text) = core::str::from_utf8(bytes) else {
             return Ok(());
         };
@@ -232,39 +216,10 @@ impl SearchIndex {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let title = note_title(path);
         tx.execute(
             "INSERT INTO note_index(path, title, headings, body) VALUES(?1, ?2, ?3, ?4)",
-            [path, &title, &headings, body],
+            [path, &note_title(path), &headings, body],
         )?;
-        tx.execute("INSERT INTO note_case_paths(path) VALUES(?1)", [path])?;
-        let rowid = tx.last_insert_rowid();
-        tx.execute(
-            "INSERT INTO note_case_index(
-                rowid, title_terms, heading_terms, body_terms
-             ) VALUES(?1, ?2, ?3, ?4)",
-            params![
-                rowid,
-                case_terms(&title),
-                case_terms(&headings),
-                case_terms(body),
-            ],
-        )?;
-        Ok(())
-    }
-
-    fn delete_case_note(tx: &Transaction<'_>, path: &str) -> Result<(), SearchError> {
-        let rowid = tx
-            .query_row(
-                "SELECT rowid FROM note_case_paths WHERE path = ?1",
-                [path],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
-        if let Some(rowid) = rowid {
-            tx.execute("DELETE FROM note_case_index WHERE rowid = ?1", [rowid])?;
-            tx.execute("DELETE FROM note_case_paths WHERE rowid = ?1", [rowid])?;
-        }
         Ok(())
     }
 
@@ -274,10 +229,8 @@ impl SearchIndex {
     ///
     /// Returns [`SearchError::Storage`] when the index cannot be updated.
     pub fn remove_note(&self, path: &str) -> Result<(), SearchError> {
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM note_index WHERE path = ?1", [path])?;
-        Self::delete_case_note(&tx, path)?;
-        tx.commit()?;
+        self.conn
+            .execute("DELETE FROM note_index WHERE path = ?1", [path])?;
         Ok(())
     }
 
@@ -294,8 +247,6 @@ impl SearchIndex {
     pub fn rebuild(&self, fs: &dyn FileSystem, vault: &Vault) -> Result<usize, SearchError> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM note_index", [])?;
-        tx.execute("DELETE FROM note_case_index", [])?;
-        tx.execute("DELETE FROM note_case_paths", [])?;
         let mut indexed = 0usize;
         for entry in vault.tree() {
             if entry.kind != EntryKind::Note {
@@ -351,8 +302,8 @@ impl SearchIndex {
     }
 
     /// Runs a ranked query with title-only and case-sensitive filtering.
-    /// Case-preserving encoded terms use a separate FTS5 index so exact-case
-    /// matching remains complete and bounded by the requested result limit.
+    /// FTS5 identifies the complete candidate set before exact-case filtering,
+    /// so case-sensitive matches cannot be hidden by higher-ranked case variants.
     ///
     /// # Errors
     ///
@@ -368,11 +319,7 @@ impl SearchIndex {
         if source_terms.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        let match_expression = if case_sensitive {
-            case_match_expression(&source_terms, search_note_bodies)
-        } else {
-            regular_match_expression(&source_terms, search_note_bodies)
-        };
+        let match_expression = regular_match_expression(&source_terms, search_note_bodies);
         if match_expression.is_empty() {
             return Ok(Vec::new());
         }
@@ -381,40 +328,36 @@ impl SearchIndex {
         // bm25() takes one weight per column in declaration order, the
         // UNINDEXED path column included; its weight is inert and passed as
         // zero.
-        let sql = if case_sensitive {
-            "SELECT normal.path, normal.title, normal.body,
-                    bm25(note_case_index, ?2, ?3, ?4) AS rank
-             FROM note_case_index
-             JOIN note_case_paths AS paths
-               ON paths.rowid = note_case_index.rowid
-             JOIN note_index AS normal
-               ON normal.path = paths.path
-             WHERE note_case_index MATCH ?1
-             ORDER BY rank
-             LIMIT ?5"
-        } else {
-            "SELECT path, title, body,
-                    bm25(note_index, 0.0, ?2, ?3, ?4) AS rank
-             FROM note_index
-             WHERE note_index MATCH ?1
-             ORDER BY rank
-             LIMIT ?5"
-        };
+        let sql = "SELECT path, title, headings, body,
+                          bm25(note_index, 0.0, ?2, ?3, ?4) AS rank
+                   FROM note_index
+                   WHERE note_index MATCH ?1
+                   ORDER BY rank
+                   LIMIT ?5";
         let mut statement = self.conn.prepare(sql)?;
+        // Exact-case filtering happens after FTS ranking, so it must inspect
+        // every case-insensitive candidate to remain complete. Other queries
+        // retain SQLite's bounded result limit.
+        let candidate_limit = if case_sensitive {
+            i64::MAX
+        } else {
+            i64::from(limit)
+        };
         let rows = statement.query_map(
             params![
                 match_expression,
                 title_weight,
                 heading_weight,
                 body_weight,
-                limit
+                candidate_limit
             ],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, f64>(3)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, f64>(4)?,
                 ))
             },
         )?;
@@ -425,7 +368,17 @@ impl SearchIndex {
             .collect();
         let mut hits = Vec::new();
         for row in rows {
-            let (path, title, body, rank) = row?;
+            let (path, title, headings, body, rank) = row?;
+            if case_sensitive
+                && !source_terms.iter().all(|term| {
+                    case_phrase_matches(&title, term)
+                        || (search_note_bodies
+                            && (case_phrase_matches(&headings, term)
+                                || case_phrase_matches(&body, term)))
+                })
+            {
+                continue;
+            }
             let searchable = if search_note_bodies { &body } else { &title };
             let (snippet, match_ranges) = if case_sensitive {
                 build_case_sensitive_snippet(searchable, &source_terms)
@@ -441,6 +394,9 @@ impl SearchIndex {
                 // matches); negate so higher ranks better for callers.
                 score: -rank,
             });
+            if hits.len() == limit as usize {
+                break;
+            }
         }
         Ok(hits)
     }
@@ -461,38 +417,34 @@ fn regular_match_expression(source_terms: &[String], search_note_bodies: bool) -
         .join(" ")
 }
 
-fn case_match_expression(source_terms: &[String], search_note_bodies: bool) -> String {
-    source_terms
-        .iter()
-        .map(|term| case_terms(term))
-        .filter(|term| !term.is_empty())
-        .map(|term| {
-            if search_note_bodies {
-                format!("\"{term}\"")
-            } else {
-                format!("title_terms : \"{term}\"")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Encodes case-preserving Unicode word tokens as lowercase hexadecimal.
-/// FTS5 may then normalize the encoding without erasing the source case.
-fn case_terms(text: &str) -> String {
+fn case_tokens(text: &str) -> impl Iterator<Item = &str> {
     text.split(|character: char| !character.is_alphanumeric() && character != '_')
         .filter(|term| !term.is_empty())
-        .map(|term| {
-            let mut encoded = String::with_capacity(1 + term.len() * 2);
-            encoded.push('x');
-            for byte in term.as_bytes() {
-                use std::fmt::Write;
-                let _ = write!(encoded, "{byte:02x}");
-            }
-            encoded
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+}
+
+/// Matches one FTS phrase without folding case. Punctuation remains a token
+/// separator, matching the index tokenizer while preserving Unicode bytes.
+fn case_phrase_matches(text: &str, phrase: &str) -> bool {
+    let expected = case_tokens(phrase).collect::<Vec<_>>();
+    if expected.is_empty() {
+        return false;
+    }
+    let mut window = VecDeque::with_capacity(expected.len());
+    for token in case_tokens(text) {
+        window.push_back(token);
+        if window.len() > expected.len() {
+            window.pop_front();
+        }
+        if window.len() == expected.len()
+            && window
+                .iter()
+                .zip(&expected)
+                .all(|(actual, expected)| actual == expected)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// The index database file name for a vault root: a hash, so no vault path
@@ -716,6 +668,18 @@ mod tests {
     }
 
     #[test]
+    fn case_phrase_matching_preserves_case_and_tokenizes_punctuation() {
+        assert!(case_phrase_matches(
+            "before Case Phrase after",
+            "Case-Phrase"
+        ));
+        assert!(!case_phrase_matches(
+            "before case phrase after",
+            "Case-Phrase"
+        ));
+    }
+
+    #[test]
     fn query_options_control_scope_and_case() {
         let index = SearchIndex::in_memory().expect("index opens");
         index
@@ -732,6 +696,13 @@ mod tests {
             index
                 .query_with_options("Needle", 10, true, true)
                 .expect("case-sensitive query runs")
+                .len(),
+            1
+        );
+        assert_eq!(
+            index
+                .query_with_options("Upper", 10, true, true)
+                .expect("case-sensitive title query runs")
                 .len(),
             1
         );

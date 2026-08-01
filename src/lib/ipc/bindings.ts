@@ -250,12 +250,18 @@ export type SettingsDoc = {
 	schema_version: number,
 	/**  Color theme: `system`, `light` or `dark`. */
 	theme: string,
+	/**  Palette used in light mode. */
+	light_palette: string,
+	/**  Palette used in dark mode. */
+	dark_palette: string,
 	/**  Editor font size in CSS pixels. */
 	editor_font_size: number,
 	/**  Editor reading measure in characters. */
 	editor_reading_measure: number,
 	/**  Maximum number of results a search query returns. */
 	search_result_limit: number,
+	/**  Whether note links show rendered previews. */
+	link_previews: boolean,
 	/**  Ordered task marker vocabulary and click-transition graph. */
 	task_statuses: TaskStatusDoc[],
 };

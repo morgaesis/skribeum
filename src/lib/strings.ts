@@ -2,9 +2,9 @@
 // file swap rather than a component sweep.
 export const STRINGS = {
   appTitle: "Skribeum",
-  openVault: "Open vault",
+  openVault: "Open folder",
   vaultTreeLabel: "Vault files",
-  emptyStateHint: "No vault is open. Use “Open vault” to browse one read-only.",
+  emptyStateHint: "No vault is open. Use “Open folder” to choose one.",
   readOnlyBadge: "read-only",
   nonUtf8Banner:
     "This file is not UTF-8. It is shown read-only with unmappable bytes replaced and will never be written.",
@@ -13,6 +13,8 @@ export const STRINGS = {
   vaultOpenFailed: "Opening the vault failed",
   noteReadFailed: "Reading the note failed",
   noteWriteFailed: "Saving the note failed",
+  contentSwitchUnsaved:
+    "The current note could not be saved. Its edits remain open in memory.",
   conflictBanner:
     "This note changed on disk while your edit was unsaved. The disk version was loaded and your edits were kept on top of it; review the result before saving.",
   noteRemovedBanner:
@@ -48,6 +50,7 @@ export const STRINGS = {
   embedSectionUnavailable: "Embedded section unavailable",
   embedDepthLimit: "Embed depth limit reached",
   embedCycle: "Embed cycle detected",
+  linkPreviewLabel: "Link preview",
   currentNote: "Current note",
   canvasViewerLabel: "Canvas viewer",
   canvasControlsLabel: "Canvas view controls",
@@ -91,10 +94,20 @@ export const STRINGS = {
   settingsThemeSystem: "System",
   settingsThemeLight: "Light",
   settingsThemeDark: "Dark",
+  settingsLightPalette: "Light palette",
+  settingsDarkPalette: "Dark palette",
+  settingsPaletteManuscript: "Manuscript",
+  settingsPaletteStudio: "Studio",
+  settingsPaletteGazette: "Gazette",
+  settingsPaletteLamplight: "Lamplight",
+  settingsPaletteGraphite: "Graphite",
+  settingsPaletteSignal: "Signal",
   settingsFontSize: "Editor font size",
   settingsReadingMeasure: "Reading measure",
   settingsReadingMeasureUnit: "characters",
   settingsSearchLimit: "Search result limit",
+  settingsLinkPreviews: "Link previews",
+  settingsLinkPreviewsHint: "Hover a note link, or focus it and press P.",
   settingsTaskStatuses: "Task statuses",
   settingsTaskStatusesHelp:
     "Order controls the status palette. Next status controls a checkbox click.",

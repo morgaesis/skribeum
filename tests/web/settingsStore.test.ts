@@ -14,9 +14,12 @@ import { defaultTaskStatuses } from "../../src/lib/taskStatuses";
 const PERSISTED: SettingsDocument = {
   schema_version: 1,
   theme: "dark",
+  light_palette: "studio",
+  dark_palette: "graphite",
   editor_font_size: 18,
   editor_reading_measure: 84,
   search_result_limit: 25,
+  link_previews: false,
   task_statuses: defaultTaskStatuses(),
 };
 
@@ -97,6 +100,21 @@ describe("settings store", () => {
     await store.update({ theme: "light" });
     expect(written.at(-1)?.theme).toBe("light");
     expect(store.snapshot.document.theme).toBe("light");
+  });
+
+  it("persists palette and link preview preferences", async () => {
+    const { store, written } = harness();
+    await store.load();
+    await store.update({
+      light_palette: "gazette",
+      dark_palette: "signal",
+      link_previews: true,
+    });
+    expect(written.at(-1)).toMatchObject({
+      light_palette: "gazette",
+      dark_palette: "signal",
+      link_previews: true,
+    });
   });
 
   it("reverts and surfaces the error when the write fails", async () => {

@@ -82,7 +82,7 @@ let session: NoteSession | null = null;
 let removed = false;
 let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
 /** Serializes saves so change sets always apply to the base they expect. */
-let saveChain: Promise<void> = Promise.resolve();
+let saveChain: Promise<boolean> = Promise.resolve(true);
 
 const historyCompartment = new Compartment();
 const renderingCompartment = new Compartment();
@@ -307,7 +307,7 @@ function dispatchSessionChanges(changes: ChangeSet) {
   }
 }
 
-async function performSave(): Promise<void> {
+async function performSave(): Promise<boolean> {
   if (
     view === undefined ||
     session === null ||
@@ -315,7 +315,7 @@ async function performSave(): Promise<void> {
     path === null ||
     removed
   ) {
-    return;
+    return session?.dirty !== true;
   }
   let request: ReturnType<NoteSession["beginSave"]>;
   try {
@@ -325,10 +325,10 @@ async function performSave(): Promise<void> {
     // document; recover by re-reading the note.
     onWriteError?.(String(error));
     await rereadAndReconcile();
-    return;
+    return false;
   }
   if (request === null) {
-    return;
+    return true;
   }
   try {
     const result = await noteWrite(
@@ -342,6 +342,7 @@ async function performSave(): Promise<void> {
         session.commitSave(result.projection_hash);
       } catch {
         await rereadAndReconcile();
+        return false;
       }
     } else {
       // The on-disk projection moved: never overwrite. Roll the save
@@ -349,23 +350,26 @@ async function performSave(): Promise<void> {
       session.rollbackSave();
       onConflict?.();
       await rereadAndReconcile();
+      return false;
     }
   } catch (error) {
     session.rollbackSave();
     onWriteError?.(
       error instanceof IpcError ? error.app.message : String(error),
     );
+    return false;
   }
+  return true;
 }
 
 /** Queues a save; consecutive requests coalesce onto one serialized chain. */
-export function requestSave(): Promise<void> {
+export function requestSave(): Promise<boolean> {
   saveChain = saveChain.then(performSave);
   return saveChain;
 }
 
-/** Saves any pending edits and resolves when the write concluded. */
-export function flush(): Promise<void> {
+/** Saves pending edits and reports whether the buffer is safe to replace. */
+export function flush(): Promise<boolean> {
   clearTimeout(idleSaveTimer);
   return requestSave();
 }

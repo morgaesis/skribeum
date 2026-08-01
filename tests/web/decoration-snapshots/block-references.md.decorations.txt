@@ -15,7 +15,7 @@
 396..396 line class="cm-skr-heading cm-skr-heading-2"
 396..399 hide node=HeaderMark
 449..451 hide node=WikilinkMark
-449..466 mark class="cm-skr-wikilink" data-resolved="true"
+449..466 mark class="cm-skr-wikilink" aria-haspopup="dialog" aria-keyshortcuts="P" data-preview-target="#^para-anchor" data-resolved="true" role="link" tabindex="0"
 451..464 mark class="cm-skr-wikilink-target"
 464..466 hide node=WikilinkMark
 511..513 hide node=WikilinkMark

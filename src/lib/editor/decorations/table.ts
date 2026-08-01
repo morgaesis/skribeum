@@ -49,6 +49,7 @@ export type Presentation =
  * `data-language`.
  */
 export type DynamicAttribute =
+  | "markdown-link-preview"
   | "wikilink-resolution"
   | "callout-type"
   | "plain-blockquote"
@@ -163,6 +164,7 @@ const linkRows: DecorationRule[] = [
     node: "Link",
     presentation: { present: "mark", class: "cm-skr-link" },
     reveal: "never",
+    dynamic: "markdown-link-preview",
   },
   {
     node: "Image",

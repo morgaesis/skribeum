@@ -39,9 +39,12 @@ function settingsState(): SettingsState {
     document: {
       schema_version: 1,
       theme: "system",
+      light_palette: "manuscript",
+      dark_palette: "lamplight",
       editor_font_size: 16,
       editor_reading_measure: 72,
       search_result_limit: 50,
+      link_previews: true,
       task_statuses: TASK_STATUSES.map((status) => ({ ...status })),
     },
   };
@@ -72,6 +75,28 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("task status settings", () => {
+  it("updates palette and link preview preferences", () => {
+    const { component, updates } = renderSettings();
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="settings-light-palette-studio"]',
+      )
+      ?.click();
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="settings-dark-palette-signal"]',
+      )
+      ?.click();
+    document
+      .querySelector<HTMLInputElement>('[data-testid="settings-link-previews"]')
+      ?.click();
+
+    expect(updates).toContainEqual({ light_palette: "studio" });
+    expect(updates).toContainEqual({ dark_palette: "signal" });
+    expect(updates).toContainEqual({ link_previews: false });
+    unmount(component);
+  });
+
   it("remaps a symbol and every transition that targets it", async () => {
     const { component, updates } = renderSettings();
     expect(

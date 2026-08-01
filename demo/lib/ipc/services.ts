@@ -2,7 +2,6 @@ import {
   defaultTaskStatuses,
   normalizeTaskStatuses,
 } from "../../../src/lib/taskStatuses";
-import { DEMO_FILES } from "../vault/seed";
 import type {
   SearchHit,
   SettingsDoc,
@@ -18,12 +17,17 @@ const SETTINGS_KEY = "skribeum.demo.settings";
 const DEFAULT_SETTINGS: SettingsDocument = {
   schema_version: 1,
   theme: "system",
+  light_palette: "manuscript",
+  dark_palette: "lamplight",
   editor_font_size: 16,
   editor_reading_measure: 72,
   search_result_limit: 50,
+  link_previews: true,
   task_statuses: defaultTaskStatuses(),
 };
 const THEMES = new Set(["system", "light", "dark"]);
+const LIGHT_PALETTES = new Set(["manuscript", "studio", "gazette"]);
+const DARK_PALETTES = new Set(["lamplight", "graphite", "signal"]);
 const FONT_SIZE_RANGE = [8, 40] as const;
 const READING_MEASURE_RANGE = [45, 120] as const;
 const RESULT_LIMIT_RANGE = [1, 1000] as const;
@@ -75,10 +79,11 @@ export async function searchQuery(
   }
 
   const results: Array<SearchResult & { firstPosition: number }> = [];
-  for (const path of Object.keys(DEMO_FILES)) {
-    if (!path.toLowerCase().endsWith(".md")) {
+  for (const entry of await vaultTree(handle)) {
+    if (entry.kind !== "note") {
       continue;
     }
+    const path = entry.path;
     const text = (await readNote(handle, path)).text;
     const folded = text.toLocaleLowerCase();
     const matches = terms
@@ -138,6 +143,16 @@ function normalizeSettings(value: unknown): SettingsDocument {
       typeof candidate.theme === "string" && THEMES.has(candidate.theme)
         ? candidate.theme
         : DEFAULT_SETTINGS.theme,
+    light_palette:
+      typeof candidate.light_palette === "string" &&
+      LIGHT_PALETTES.has(candidate.light_palette)
+        ? candidate.light_palette
+        : DEFAULT_SETTINGS.light_palette,
+    dark_palette:
+      typeof candidate.dark_palette === "string" &&
+      DARK_PALETTES.has(candidate.dark_palette)
+        ? candidate.dark_palette
+        : DEFAULT_SETTINGS.dark_palette,
     editor_font_size: integerInRange(
       candidate.editor_font_size,
       FONT_SIZE_RANGE,
@@ -156,6 +171,10 @@ function normalizeSettings(value: unknown): SettingsDocument {
     )
       ? candidate.search_result_limit
       : DEFAULT_SETTINGS.search_result_limit,
+    link_previews:
+      typeof candidate.link_previews === "boolean"
+        ? candidate.link_previews
+        : DEFAULT_SETTINGS.link_previews,
     task_statuses: normalizeTaskStatuses(candidate.task_statuses),
   };
 }
@@ -163,6 +182,12 @@ function normalizeSettings(value: unknown): SettingsDocument {
 function validateSettings(doc: SettingsDocument): void {
   if (!THEMES.has(doc.theme)) {
     throw new Error("settings value out of range: theme");
+  }
+  if (!LIGHT_PALETTES.has(doc.light_palette)) {
+    throw new Error("settings value out of range: light_palette");
+  }
+  if (!DARK_PALETTES.has(doc.dark_palette)) {
+    throw new Error("settings value out of range: dark_palette");
   }
   if (!integerInRange(doc.editor_font_size, FONT_SIZE_RANGE)) {
     throw new Error("settings value out of range: editor_font_size");
@@ -172,6 +197,9 @@ function validateSettings(doc: SettingsDocument): void {
   }
   if (!integerInRange(doc.search_result_limit, RESULT_LIMIT_RANGE)) {
     throw new Error("settings value out of range: search_result_limit");
+  }
+  if (typeof doc.link_previews !== "boolean") {
+    throw new Error("settings value out of range: link_previews");
   }
   if (
     JSON.stringify(normalizeTaskStatuses(doc.task_statuses)) !==

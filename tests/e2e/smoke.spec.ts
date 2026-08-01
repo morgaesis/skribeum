@@ -1434,6 +1434,29 @@ describe("skribeum core editing surfaces", () => {
     });
   }
 
+  /** Reads the persisted link-preview preference through IPC. */
+  async function persistedLinkPreviews(): Promise<boolean | string> {
+    return browser.executeAsync<boolean | string, []>((done) => {
+      const tauri = (
+        window as unknown as {
+          __TAURI__?: {
+            core: {
+              invoke: (name: string) => Promise<{ link_previews: boolean }>;
+            };
+          };
+        }
+      ).__TAURI__;
+      if (tauri === undefined) {
+        done("no-global-tauri");
+        return;
+      }
+      tauri.core
+        .invoke("settings_read")
+        .then((doc) => done(doc.link_previews))
+        .catch((error: unknown) => done(String(error)));
+    });
+  }
+
   /** Sets the settings font size through the open dialog's input. */
   async function setFontSizeThroughDialog(value: number) {
     const fontInput = $('[data-testid="settings-font-size"]');
@@ -1458,6 +1481,13 @@ describe("skribeum core editing surfaces", () => {
         )
         ?.dispatchEvent(new Event("change", { bubbles: true }));
     });
+  }
+
+  async function setLinkPreviewsThroughDialog(value: boolean) {
+    const checkbox = $('[data-testid="settings-link-previews"]');
+    if ((await checkbox.isSelected()) !== value) {
+      await checkbox.click();
+    }
   }
 
   it("settings_round_trip_applies_restart_free_and_persists", async () => {
@@ -1534,6 +1564,42 @@ describe("skribeum core editing surfaces", () => {
       async () => !(await $('[data-testid="settings-view"]').isExisting()),
       { timeout: 5000 },
     );
+  });
+
+  it("link_preview_setting_changes_affordances_and_persists", async () => {
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    const original = await persistedLinkPreviews();
+    expect(typeof original).toBe("boolean");
+    const target = !(original as boolean);
+
+    await browser.keys([modifierKey, ","]);
+    const dialog = $('[data-testid="settings-view"]');
+    await dialog.waitForExist({ timeout: 10000 });
+    await setLinkPreviewsThroughDialog(target);
+    await browser.waitUntil(
+      async () => (await persistedLinkPreviews()) === target,
+      { timeout: 10000, timeoutMsg: "link preview setting did not persist" },
+    );
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(async () => !(await dialog.isExisting()), {
+      timeout: 5000,
+    });
+    expect(await $("[data-preview-target]").isExisting()).toBe(target);
+
+    await browser.keys([modifierKey, ","]);
+    await dialog.waitForExist({ timeout: 10000 });
+    expect(await $('[data-testid="settings-link-previews"]').isSelected()).toBe(
+      target,
+    );
+    await setLinkPreviewsThroughDialog(original as boolean);
+    await browser.waitUntil(
+      async () => (await persistedLinkPreviews()) === original,
+      { timeout: 10000 },
+    );
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(async () => !(await dialog.isExisting()), {
+      timeout: 5000,
+    });
   });
 
   it("ranked_search_finds_notes_with_highlighted_snippets", async () => {

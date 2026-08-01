@@ -407,12 +407,18 @@ pub struct Settings {
     pub schema_version: u32,
     /// Color theme: `system`, `light` or `dark`.
     pub theme: String,
+    /// Palette used in light mode.
+    pub light_palette: String,
+    /// Palette used in dark mode.
+    pub dark_palette: String,
     /// Editor font size in CSS pixels.
     pub editor_font_size: u32,
     /// Editor reading measure in characters.
     pub editor_reading_measure: u32,
     /// Maximum number of results a search query returns.
     pub search_result_limit: u32,
+    /// Whether note links show rendered previews.
+    pub link_previews: bool,
     /// Ordered task marker vocabulary and click-transition graph.
     pub task_statuses: Vec<TaskStatus>,
 }
@@ -422,9 +428,12 @@ impl Default for Settings {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
             theme: "system".to_owned(),
+            light_palette: "manuscript".to_owned(),
+            dark_palette: "lamplight".to_owned(),
             editor_font_size: 16,
             editor_reading_measure: 72,
             search_result_limit: 50,
+            link_previews: true,
             task_statuses: default_task_statuses(),
         }
     }
@@ -432,6 +441,10 @@ impl Default for Settings {
 
 /// Accepted theme values.
 const THEMES: &[&str] = &["system", "light", "dark"];
+/// Accepted light palette values.
+const LIGHT_PALETTES: &[&str] = &["manuscript", "studio", "gazette"];
+/// Accepted dark palette values.
+const DARK_PALETTES: &[&str] = &["lamplight", "graphite", "signal"];
 /// Accepted editor font size range in CSS pixels.
 const FONT_SIZE_RANGE: (u32, u32) = (8, 40);
 /// Accepted editor reading measure range in characters.
@@ -448,6 +461,12 @@ impl Settings {
     pub fn validate(&self) -> Result<(), SettingsError> {
         if !THEMES.contains(&self.theme.as_str()) {
             return Err(SettingsError::InvalidValue("theme"));
+        }
+        if !LIGHT_PALETTES.contains(&self.light_palette.as_str()) {
+            return Err(SettingsError::InvalidValue("light_palette"));
+        }
+        if !DARK_PALETTES.contains(&self.dark_palette.as_str()) {
+            return Err(SettingsError::InvalidValue("dark_palette"));
         }
         if self.editor_font_size < FONT_SIZE_RANGE.0 || self.editor_font_size > FONT_SIZE_RANGE.1 {
             return Err(SettingsError::InvalidValue("editor_font_size"));
@@ -516,6 +535,18 @@ impl SettingsStore {
                 .filter(|theme| THEMES.contains(theme))
                 .unwrap_or(&defaults.theme)
                 .to_owned(),
+            light_palette: object
+                .get("light_palette")
+                .and_then(Value::as_str)
+                .filter(|palette| LIGHT_PALETTES.contains(palette))
+                .unwrap_or(&defaults.light_palette)
+                .to_owned(),
+            dark_palette: object
+                .get("dark_palette")
+                .and_then(Value::as_str)
+                .filter(|palette| DARK_PALETTES.contains(palette))
+                .unwrap_or(&defaults.dark_palette)
+                .to_owned(),
             editor_font_size: read_u32(&object, "editor_font_size")
                 .filter(|size| (FONT_SIZE_RANGE.0..=FONT_SIZE_RANGE.1).contains(size))
                 .unwrap_or(defaults.editor_font_size),
@@ -527,6 +558,10 @@ impl SettingsStore {
             search_result_limit: read_u32(&object, "search_result_limit")
                 .filter(|limit| (RESULT_LIMIT_RANGE.0..=RESULT_LIMIT_RANGE.1).contains(limit))
                 .unwrap_or(defaults.search_result_limit),
+            link_previews: object
+                .get("link_previews")
+                .and_then(Value::as_bool)
+                .unwrap_or(defaults.link_previews),
             task_statuses: object
                 .get("task_statuses")
                 .cloned()
@@ -560,6 +595,14 @@ impl SettingsStore {
         );
         object.insert("theme".to_owned(), Value::from(settings.theme.clone()));
         object.insert(
+            "light_palette".to_owned(),
+            Value::from(settings.light_palette.clone()),
+        );
+        object.insert(
+            "dark_palette".to_owned(),
+            Value::from(settings.dark_palette.clone()),
+        );
+        object.insert(
             "editor_font_size".to_owned(),
             Value::from(settings.editor_font_size),
         );
@@ -570,6 +613,10 @@ impl SettingsStore {
         object.insert(
             "search_result_limit".to_owned(),
             Value::from(settings.search_result_limit),
+        );
+        object.insert(
+            "link_previews".to_owned(),
+            Value::from(settings.link_previews),
         );
         let task_statuses =
             merged_task_statuses(object.get("task_statuses"), &settings.task_statuses)?;

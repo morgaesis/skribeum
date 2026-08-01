@@ -49,8 +49,12 @@ describe("ipc service wrappers", () => {
     const doc = {
       schema_version: 1,
       theme: "dark",
+      light_palette: "studio",
+      dark_palette: "graphite",
       editor_font_size: 17,
+      editor_reading_measure: 72,
       search_result_limit: 40,
+      link_previews: false,
       task_statuses: defaultTaskStatuses(),
     };
     invoke.mockResolvedValueOnce(doc);

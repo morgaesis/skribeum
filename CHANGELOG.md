@@ -37,14 +37,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the source character inside the task marker.
 - Browser-only editor demo with a seeded sample vault, in-memory edits that
   reset on reload, and a static GitHub Pages build.
+- Browser demo folder access through the File System Access API, with recursive
+  Markdown loading, permission-aware writes to selected files, explicit
+  in-memory fallback, and an unsupported-browser explanation.
+- Delayed rendered previews for resolved note links, shared with the embed
+  renderer, dismissed by pointer out or Escape, keyboard-accessible with `P`,
+  and controlled by a persisted setting.
 - Local KaTeX rendering for inline and block math with cursor-source reveal,
   MathML output, and visible source-preserving errors for malformed formulas.
 - Lazy Mermaid rendering for `mermaid` fences with cursor-source reveal and
   inline parse errors; Mermaid stays outside the initial application chunk.
 - Registered read-only JSON Canvas view with stored-position cards, file
   previews, SVG edges, and pointer plus keyboard pan and zoom controls.
-- Persisted system, light and dark themes over shared CSS variables, reactive
-  system color-scheme tracking, and programmatic WCAG AA contrast checks.
+- Persisted system, light and dark themes with Manuscript, Studio and Gazette
+  light palettes plus Lamplight, Graphite and Signal dark palettes. Every
+  palette uses shared CSS variables and carries programmatic WCAG contrast
+  checks.
 - Linux axe accessibility gates for the vault, decorated editor, command
   palette, settings and canvas surfaces, with expanded keyboard traversal.
 - Rendered GFM table rows, recursive whole-note and section embeds, lazy

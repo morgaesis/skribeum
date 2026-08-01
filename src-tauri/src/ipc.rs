@@ -350,12 +350,18 @@ pub struct SettingsDoc {
     pub schema_version: u32,
     /// Color theme: `system`, `light` or `dark`.
     pub theme: String,
+    /// Palette used in light mode.
+    pub light_palette: String,
+    /// Palette used in dark mode.
+    pub dark_palette: String,
     /// Editor font size in CSS pixels.
     pub editor_font_size: u32,
     /// Editor reading measure in characters.
     pub editor_reading_measure: u32,
     /// Maximum number of results a search query returns.
     pub search_result_limit: u32,
+    /// Whether note links show rendered previews.
+    pub link_previews: bool,
     /// Ordered task marker vocabulary and click-transition graph.
     pub task_statuses: Vec<TaskStatusDoc>,
 }
@@ -914,9 +920,12 @@ fn settings_read(settings: State<'_, SettingsState>) -> Result<SettingsDoc, AppE
     Ok(SettingsDoc {
         schema_version: doc.schema_version,
         theme: doc.theme,
+        light_palette: doc.light_palette,
+        dark_palette: doc.dark_palette,
         editor_font_size: doc.editor_font_size,
         editor_reading_measure: doc.editor_reading_measure,
         search_result_limit: doc.search_result_limit,
+        link_previews: doc.link_previews,
         task_statuses: doc
             .task_statuses
             .into_iter()
@@ -942,9 +951,12 @@ fn settings_write(settings: State<'_, SettingsState>, doc: SettingsDoc) -> Resul
             &Settings {
                 schema_version: doc.schema_version,
                 theme: doc.theme,
+                light_palette: doc.light_palette,
+                dark_palette: doc.dark_palette,
                 editor_font_size: doc.editor_font_size,
                 editor_reading_measure: doc.editor_reading_measure,
                 search_result_limit: doc.search_result_limit,
+                link_previews: doc.link_previews,
                 task_statuses: doc
                     .task_statuses
                     .into_iter()

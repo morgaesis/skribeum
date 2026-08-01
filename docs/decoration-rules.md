@@ -109,6 +109,7 @@ above. `-` means the row applies to every node of that name.
 | `TableDelimiter` | `parent=Table` | `widget table-separator` | cursor-inside |
 | `TableRow` | `-` | `widget table-row` | cursor-inside |
 | `ListMark` | `-` | `mark cm-skr-list-mark` | never |
+| `Task` | `-` | `mark cm-skr-task` | never |
 | `TaskMarker` | `-` | `widget task-checkbox` | cursor-inside |
 | `InlineMath` | `-` | `widget math-inline` | cursor-inside |
 | `BlockMath` | `-` | `widget math-block` | cursor-inside |
@@ -132,7 +133,7 @@ above. `-` means the row applies to every node of that name.
 | `BlockId` | `-` | `mark cm-skr-block-id` | never |
 | `Frontmatter` | `-` | `line cm-skr-frontmatter` | never |
 
-Context-dependent attributes come from six documented engine builtins a
+Context-dependent attributes come from seven documented engine builtins a
 row opts into: `wikilink-resolution` stamps `data-resolved` from the vault
 tree (unresolved links style distinctly), `callout-type` stamps
 `data-callout` on source markers and icons inside a typed callout, and
@@ -141,7 +142,90 @@ tree (unresolved links style distinctly), `callout-type` stamps
 canonical type, accent, foldability and line-position attributes.
 `code-language` stamps `data-language` from the fence info string.
 `mermaid-block` restricts the diagram widget to a Mermaid fence and stamps its
-language attribute.
+language attribute. `task-status` stamps the configured symbol, category and
+theme color token on the enclosing task.
+
+## Task status configuration
+
+`settings.json` stores the task vocabulary as an ordered `task_statuses`
+array. Each entry has this shape:
+
+```json
+{
+  "symbol": " ",
+  "name": "Unchecked",
+  "category": "TODO",
+  "glyph": "○",
+  "color_token": "--skr-accent",
+  "next_status": "/"
+}
+```
+
+`symbol` and `next_status` are single source characters. `category` is one of
+`TODO`, `IN_PROGRESS`, `ON_HOLD`, `DONE`, `CANCELLED` or `NON_TASK`.
+`color_token` names an existing `--skr-*` theme custom property. Array order
+drives the listbox and command palette. Symbols must be unique, and every
+`next_status` must refer to another entry. A malformed array, duplicate symbol
+or dangling transition loads the complete default list. Unknown keys in the
+settings document and inside retained status entries survive writes.
+The settings surface edits every field, preserves graph validity while symbols
+are remapped or removed, and provides controls for adding and reordering rows.
+
+Clicking the checkbox writes `next_status`. The default primary cycle is
+Unchecked to Half Done to Regular to Unchecked. Pointer hover opens the full
+status listbox. With the checkbox focused, Arrow Down opens the same listbox,
+the arrow keys move through options, Enter or Space selects, and Escape
+dismisses it.
+
+The six categories remain visually distinct from the configured glyph and
+color. TODO uses the strong unfilled border, IN_PROGRESS uses a tinted active
+box, ON_HOLD uses a dashed tinted box, DONE uses a filled box and strikes the
+task text, CANCELLED dims and strikes the task text, and NON_TASK removes the
+box border. All colors resolve through the configured theme token and the
+shared design-system variables.
+
+The shipped SlRvb-compatible status list is:
+
+| Symbol | Name | Category | Glyph | Color token | Next |
+| --- | --- | --- | --- | --- | --- |
+| `(space)` | Unchecked | `TODO` | ○ | `--skr-accent` | `/` |
+| `x` | Regular | `DONE` | ✓ | `--skr-success` | `(space)` |
+| `X` | Checked | `DONE` | ✔ | `--skr-success` | `(space)` |
+| `-` | Dropped | `CANCELLED` | ✕ | `--skr-danger` | `(space)` |
+| `>` | Forward | `TODO` | → | `--skr-accent` | `/` |
+| `<` | Migrated | `TODO` | ← | `--skr-accent` | `/` |
+| `D` | Date | `TODO` | ◷ | `--skr-accent` | `/` |
+| `?` | Question | `TODO` | ? | `--skr-accent` | `/` |
+| `/` | Half Done | `IN_PROGRESS` | ◐ | `--skr-warning` | `x` |
+| `+` | Add | `TODO` | + | `--skr-accent` | `/` |
+| `R` | Research | `TODO` | ⌕ | `--skr-accent` | `/` |
+| `!` | Important | `TODO` | ! | `--skr-accent` | `/` |
+| `i` | Idea | `TODO` | ◇ | `--skr-accent` | `/` |
+| `B` | Brainstorm | `TODO` | ◎ | `--skr-accent` | `/` |
+| `P` | Pro | `TODO` | + | `--skr-accent` | `/` |
+| `C` | Con | `TODO` | − | `--skr-accent` | `/` |
+| `Q` | Quote | `TODO` | ❝ | `--skr-accent` | `/` |
+| `N` | Note | `TODO` | ▤ | `--skr-accent` | `/` |
+| `b` | Bookmark | `TODO` | ◆ | `--skr-accent` | `/` |
+| `I` | Information | `TODO` | ⓘ | `--skr-accent` | `/` |
+| `p` | Paraphrase | `TODO` | ¶ | `--skr-accent` | `/` |
+| `L` | Location | `TODO` | ⌖ | `--skr-accent` | `/` |
+| `E` | Example | `TODO` | ◇ | `--skr-accent` | `/` |
+| `A` | Answer | `TODO` | ↳ | `--skr-accent` | `/` |
+| `r` | Reward | `TODO` | ★ | `--skr-accent` | `/` |
+| `c` | Choice | `TODO` | ◆ | `--skr-accent` | `/` |
+| `d` | Doing | `IN_PROGRESS` | ◒ | `--skr-warning` | `x` |
+| `T` | Time | `TODO` | ◷ | `--skr-accent` | `/` |
+| `@` | Character | `TODO` | @ | `--skr-accent` | `/` |
+| `t` | Talk | `TODO` | ◖ | `--skr-accent` | `/` |
+| `O` | Outline | `TODO` | ☰ | `--skr-accent` | `/` |
+| `~` | Conflict | `TODO` | ≈ | `--skr-accent` | `/` |
+| `W` | World | `TODO` | ◉ | `--skr-accent` | `/` |
+| `f` | Clue | `TODO` | ? | `--skr-accent` | `/` |
+| `F` | Foreshadow | `TODO` | ⋙ | `--skr-accent` | `/` |
+| `H` | Favorite | `TODO` | ♥ | `--skr-accent` | `/` |
+| `&` | Symbolism | `TODO` | § | `--skr-accent` | `/` |
+| `s` | Secret | `TODO` | ◆ | `--skr-accent` | `/` |
 
 No decoration is computed on a document line longer than 10,000 characters.
 Marks, line decorations and inline widgets are windowed to visible ranges.

@@ -18,6 +18,7 @@ import {
   vaultTreeRefresh,
 } from "../../src/lib/ipc/services";
 import { IpcError } from "../../src/lib/ipc/vault";
+import { defaultTaskStatuses } from "../../src/lib/taskStatuses";
 
 describe("ipc service wrappers", () => {
   beforeEach(() => {
@@ -50,6 +51,7 @@ describe("ipc service wrappers", () => {
       theme: "dark",
       editor_font_size: 17,
       search_result_limit: 40,
+      task_statuses: defaultTaskStatuses(),
     };
     invoke.mockResolvedValueOnce(doc);
     await expect(settingsRead()).resolves.toEqual(doc);

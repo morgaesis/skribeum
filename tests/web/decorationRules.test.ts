@@ -316,7 +316,7 @@ describe("docs/decoration-rules.md mirrors the table", () => {
     );
     const documentRows = documentText
       .split("\n")
-      .filter((line) => /^\| `/.test(line))
+      .filter((line) => /\| (?:cursor-inside|cursor-line|never) \|$/.test(line))
       .map((line) => {
         const cells = line
           .split("|")

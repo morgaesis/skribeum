@@ -32,6 +32,11 @@ import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
 import PropertiesPanel from "./PropertiesPanel.svelte";
 import { type CommandContext, CommandRegistry, editorKeymap } from "./registry";
 import { STRINGS } from "./strings";
+import {
+  DEFAULT_TASK_STATUSES,
+  normalizeTaskStatuses,
+  type TaskStatus,
+} from "./taskStatuses";
 
 let {
   doc = "",
@@ -40,6 +45,7 @@ let {
   path = null,
   linkContext = null,
   propertyTypes = null,
+  taskStatuses = DEFAULT_TASK_STATUSES,
   registry = null,
   commandContext = null,
   onConflict,
@@ -55,6 +61,8 @@ let {
   linkContext?: WikilinkResolutionContext | null;
   /** Declared Obsidian property types for the properties panel. */
   propertyTypes?: Readonly<Record<string, FrontmatterValueType>> | null;
+  /** Ordered task marker vocabulary from application settings. */
+  taskStatuses?: readonly TaskStatus[];
   /** The registration API; keybindings, slash menu and toolbar read it. */
   registry?: CommandRegistry | null;
   /** Capability provider for commands fired inside the editor. */
@@ -77,6 +85,7 @@ let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let saveChain: Promise<void> = Promise.resolve();
 
 const historyCompartment = new Compartment();
+const renderingCompartment = new Compartment();
 
 const editorAppearance = EditorView.theme({
   ".cm-content": {
@@ -177,10 +186,13 @@ function registryExtensions(): Extension[] {
 }
 
 function stateFor(content: string, locked: boolean): EditorState {
+  const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
   return EditorState.create({
     doc: content,
     extensions: [
-      ...noteRenderingExtensions(content),
+      renderingCompartment.of(
+        noteRenderingExtensions(content, undefined, normalizedTaskStatuses),
+      ),
       editorAppearance,
       EditorView.lineWrapping,
       bulkTextInput(),
@@ -504,6 +516,22 @@ $effect(() => {
   if (view !== undefined && note !== initializedNote) {
     initializedNote = note;
     initializeForNote(note);
+  }
+});
+
+// Status settings apply without rebuilding the editor or touching the source.
+$effect(() => {
+  const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
+  if (view !== undefined) {
+    view.dispatch({
+      effects: renderingCompartment.reconfigure(
+        noteRenderingExtensions(
+          view.state.doc,
+          undefined,
+          normalizedTaskStatuses,
+        ),
+      ),
+    });
   }
 });
 

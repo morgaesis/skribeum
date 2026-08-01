@@ -2,6 +2,7 @@ import { flushSync, mount, unmount } from "svelte";
 import { describe, expect, it, vi } from "vitest";
 import CanvasView from "../../src/lib/rendering/CanvasView.svelte";
 import type { CanvasDocument } from "../../src/lib/rendering/canvas";
+import type { TaskStatus } from "../../src/lib/taskStatuses";
 
 const MARKDOWN = `---
 title: Hidden metadata
@@ -95,6 +96,37 @@ describe("canvas viewer interactions and note rendering", () => {
     expect(card?.textContent).not.toContain("Hidden metadata");
     expect(card?.textContent).not.toContain("**strong phrase**");
 
+    await unmount(component);
+  });
+
+  it("uses configured task statuses in read-only cards", async () => {
+    const taskStatuses: TaskStatus[] = [
+      {
+        symbol: "~",
+        name: "Waiting for review",
+        category: "ON_HOLD",
+        glyph: "Ⅱ",
+        color_token: "--skr-warning",
+        next_status: "~",
+      },
+    ];
+    const component = mount(CanvasView, {
+      target: document.body,
+      props: {
+        canvas: canvasWithNote(),
+        previews: { "Note.md": "- [~] Review" },
+        taskStatuses,
+      },
+    });
+    flushSync();
+
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector(
+          '.cm-skr-task-checkbox[aria-label="Waiting for review"]',
+        ),
+      ).not.toBeNull();
+    });
     await unmount(component);
   });
 

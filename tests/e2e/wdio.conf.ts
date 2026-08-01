@@ -30,6 +30,13 @@ async function availablePort(): Promise<number> {
   return address.port;
 }
 
+const inheritedEmbeddedPort = process.env.TAURI_WEBDRIVER_PORT;
+const embeddedPort =
+  inheritedEmbeddedPort === undefined
+    ? await availablePort()
+    : Number.parseInt(inheritedEmbeddedPort, 10);
+process.env.TAURI_WEBDRIVER_PORT = String(embeddedPort);
+
 async function startDemoServer(): Promise<void> {
   const port = await availablePort();
   const url = `http://127.0.0.1:${port}/skribeum/`;
@@ -119,7 +126,7 @@ export const config: WebdriverIO.Config = {
   // The embedded driver provider is the @wdio/tauri-service default: the app
   // itself serves WebDriver via tauri-plugin-wdio-webdriver, so no external
   // tauri-driver process is needed on any platform.
-  services: [["@wdio/tauri-service", { appBinaryPath }]],
+  services: [["@wdio/tauri-service", { appBinaryPath, embeddedPort }]],
   capabilities,
   logLevel: "warn",
   waitforTimeout: 10000,

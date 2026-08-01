@@ -73,13 +73,39 @@ function button(label: string): HTMLButtonElement {
 }
 
 function openSection(label: string) {
-  [...document.querySelectorAll<HTMLButtonElement>(".settings-nav button")]
+  document
+    .querySelector<HTMLButtonElement>('[data-testid="settings-jump"]')
+    ?.click();
+  flushSync();
+  [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
     .find(({ textContent }) => textContent === label)
     ?.click();
   flushSync();
 }
 
 describe("task status settings", () => {
+  it("reopens the section menu after a jump", async () => {
+    const { component } = renderSettings();
+    const jump = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-jump"]',
+    );
+    jump?.click();
+    flushSync();
+    document.querySelector<HTMLButtonElement>('[role="menuitem"]')?.click();
+    flushSync();
+
+    expect(jump?.closest(".settings-header")?.hasAttribute("inert")).toBe(
+      false,
+    );
+    jump?.click();
+    flushSync();
+    expect(
+      document.querySelector('[data-testid="settings-jump-menu"]'),
+    ).not.toBeNull();
+
+    await unmount(component);
+  });
+
   it("updates palette and link preview preferences", () => {
     const { component, updates } = renderSettings();
     document
@@ -240,6 +266,23 @@ describe("task status settings", () => {
 });
 
 describe("settings surface", () => {
+  it("names every section once in one scrolling pane", async () => {
+    const { component } = renderSettings();
+    const headings = [
+      ...document.querySelectorAll<HTMLElement>("[data-settings-section] > h3"),
+    ].map(({ textContent }) => textContent?.trim());
+    expect(headings).toEqual([
+      STRINGS.settingsSectionAppearance,
+      STRINGS.settingsSectionEditor,
+      STRINGS.settingsSectionFiles,
+      STRINGS.settingsSectionSearch,
+      STRINGS.settingsSectionUpdates,
+      STRINGS.settingsSectionAbout,
+    ]);
+    expect(document.querySelector(".settings-nav")).toBeNull();
+    await unmount(component);
+  });
+
   it("changes the direct theme control with arrow keys", async () => {
     const { component, updates } = renderSettings();
     const system = document.querySelector<HTMLButtonElement>(
@@ -354,13 +397,7 @@ describe("settings surface", () => {
       },
     });
     flushSync();
-    const navigation = [
-      ...document.querySelectorAll<HTMLButtonElement>(".settings-nav button"),
-    ];
-    navigation
-      .find(({ textContent }) => textContent === "Files and vault")
-      ?.click();
-    flushSync();
+    openSection(STRINGS.settingsSectionFiles);
     expect(
       document
         .querySelector<HTMLElement>(
@@ -373,8 +410,7 @@ describe("settings surface", () => {
         '[data-testid="settings-default-note-folder"]',
       )?.disabled,
     ).toBe(true);
-    navigation.find(({ textContent }) => textContent === "Updates")?.click();
-    flushSync();
+    openSection(STRINGS.settingsSectionUpdates);
     expect(
       document
         .querySelector<HTMLElement>(

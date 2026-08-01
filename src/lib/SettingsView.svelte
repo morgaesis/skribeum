@@ -212,13 +212,16 @@ let {
 } = $props();
 
 let dialogElement = $state<HTMLElement | undefined>();
+let contentElement = $state<HTMLElement | undefined>();
+let jumpButtonElement = $state<HTMLButtonElement | undefined>();
+let jumpMenuElement = $state<HTMLElement | undefined>();
 const returnFocusElement =
   typeof document !== "undefined" &&
   document.activeElement instanceof HTMLElement
     ? document.activeElement
     : null;
 let searchQuery = $state("");
-let activeSection = $state<SectionId>("appearance");
+let jumpMenuOpen = $state(false);
 let previewSettings = $state<Partial<SettingsDocument>>({});
 let taskStatusError = $state<string | null>(null);
 let openTaskListbox = $state<string | null>(null);
@@ -228,7 +231,6 @@ const displayedSettings = $derived({
   ...documentSettings,
   ...previewSettings,
 });
-const isSearching = $derived(searchQuery.trim().length > 0);
 const searchScope = $derived<SearchScope>(
   documentSettings.search_note_bodies ? "full-text" : "titles",
 );
@@ -548,8 +550,60 @@ function hasMatches(section: SectionId): boolean {
   );
 }
 
-function sectionVisible(section: SectionId): boolean {
-  return !isSearching || hasMatches(section);
+async function openJumpMenu() {
+  jumpMenuOpen = true;
+  await tick();
+  jumpMenuElement
+    ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
+    ?.focus();
+}
+
+function onJumpButtonKeydown(event: KeyboardEvent) {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  void openJumpMenu();
+}
+
+async function closeJumpMenu() {
+  jumpMenuOpen = false;
+  await tick();
+  jumpButtonElement?.focus();
+}
+
+async function jumpToSection(section: SectionId) {
+  jumpMenuOpen = false;
+  await tick();
+  const target = contentElement?.querySelector<HTMLElement>(
+    `[data-settings-section="${section}"]`,
+  );
+  if (contentElement !== undefined && target !== null && target !== undefined) {
+    const contentBox = contentElement.getBoundingClientRect();
+    const targetBox = target.getBoundingClientRect();
+    contentElement.scrollTop += targetBox.top - contentBox.top;
+  }
+  jumpButtonElement?.focus();
+}
+
+function onJumpMenuKeydown(event: KeyboardEvent) {
+  if (jumpMenuElement === undefined) return;
+  const items = [
+    ...jumpMenuElement.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+  ];
+  const index = items.indexOf(event.target as HTMLButtonElement);
+  if ((event.key === "Enter" || event.key === " ") && index >= 0) {
+    event.preventDefault();
+    items[index]?.click();
+    return;
+  }
+  let nextIndex: number | null = null;
+  if (event.key === "ArrowDown") nextIndex = (index + 1) % items.length;
+  else if (event.key === "ArrowUp")
+    nextIndex = (index - 1 + items.length) % items.length;
+  else if (event.key === "Home") nextIndex = 0;
+  else if (event.key === "End") nextIndex = items.length - 1;
+  if (nextIndex === null) return;
+  event.preventDefault();
+  items[nextIndex]?.focus();
 }
 
 function segmentedKeydown<T extends string>(
@@ -584,7 +638,8 @@ function segmentedKeydown<T extends string>(
 function onKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
     event.preventDefault();
-    closeSettings();
+    if (jumpMenuOpen) void closeJumpMenu();
+    else closeSettings();
     return;
   }
   if (event.metaKey || event.ctrlKey || event.altKey) {
@@ -600,6 +655,26 @@ function onKeydown(event: KeyboardEvent) {
     return;
   }
   if (event.key !== "Tab" || dialogElement === undefined) {
+    return;
+  }
+  if (jumpMenuOpen && jumpMenuElement !== undefined) {
+    const menuFocusable = [
+      ...jumpMenuElement.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      ),
+    ];
+    const menuFirst = menuFocusable[0];
+    const menuLast = menuFocusable.at(-1);
+    if (menuFirst === undefined || menuLast === undefined) {
+      event.preventDefault();
+      jumpMenuElement.focus();
+    } else if (event.shiftKey && document.activeElement === menuFirst) {
+      event.preventDefault();
+      menuLast.focus();
+    } else if (!event.shiftKey && document.activeElement === menuLast) {
+      event.preventDefault();
+      menuFirst.focus();
+    }
     return;
   }
   const focusable = [
@@ -630,6 +705,35 @@ function onKeydown(event: KeyboardEvent) {
   {/if}
 {/snippet}
 
+{#snippet palettePreview(
+  label: string,
+  palette: LightPaletteName | DarkPaletteName,
+  mode: "light" | "dark",
+)}
+  <div
+    class="palette-live-preview skr-palette-swatch"
+    data-palette={palette}
+    data-testid={`settings-${mode}-palette-preview`}
+  >
+    <strong class="palette-live-heading">{label}</strong>
+    <div class="palette-live-rule" aria-hidden="true"></div>
+    <p class="palette-live-body">
+      {STRINGS.settingsPalettePreviewBeforeLink}<a href="#settings-appearance-heading"
+        >{STRINGS.settingsPalettePreviewLink}</a
+      >{STRINGS.settingsPalettePreviewAfterLink}
+      <code>{STRINGS.settingsPalettePreviewCode}</code>
+    </p>
+    <div class="palette-live-task">
+      <span class="palette-live-box" aria-hidden="true"></span>
+      <span>{STRINGS.settingsPalettePreviewUncheckedTask}</span>
+    </div>
+    <div class="palette-live-task palette-live-task-complete">
+      <span class="palette-live-box" aria-hidden="true">✓</span>
+      <span>{STRINGS.settingsPalettePreviewCheckedTask}</span>
+    </div>
+  </div>
+{/snippet}
+
 <div
   class="settings-backdrop"
   role="presentation"
@@ -645,20 +749,21 @@ function onKeydown(event: KeyboardEvent) {
     data-testid="settings-view"
     onkeydown={onKeydown}
   >
-    <div class="settings-header">
-      <div>
+    <div class="settings-header" inert={jumpMenuOpen ? true : undefined}>
+      <div class="settings-header-primary">
         <h2>{STRINGS.settingsLabel}</h2>
-        <p>{STRINGS.settingsIntro}</p>
+        <button
+          class="icon-button"
+          type="button"
+          aria-label={STRINGS.closeAction}
+          onclick={closeSettings}
+        >
+          <span aria-hidden="true">×</span>
+        </button>
       </div>
-      <button class="icon-button" type="button" onclick={closeSettings}
-        >{STRINGS.closeAction}</button
-      >
-    </div>
-
-    <div class="settings-layout">
-      <aside class="settings-rail">
+      <div class="settings-header-tools">
         <label class="settings-search">
-          <span>{STRINGS.settingsSearchLabel}</span>
+          <span class="visually-hidden">{STRINGS.settingsSearchLabel}</span>
           <input
             bind:value={searchQuery}
             data-testid="settings-search"
@@ -666,26 +771,71 @@ function onKeydown(event: KeyboardEvent) {
             placeholder={STRINGS.settingsSearchPlaceholder}
           />
         </label>
-        <nav class="settings-nav" aria-label={STRINGS.settingsSectionsLabel}>
-          {#each sections as section}
-            {#if sectionVisible(section.id)}
+        <button
+          bind:this={jumpButtonElement}
+          class="jump-button"
+          type="button"
+          aria-label={STRINGS.settingsJumpSections}
+          aria-haspopup="menu"
+          aria-expanded={jumpMenuOpen}
+          data-testid="settings-jump"
+          onclick={openJumpMenu}
+          onkeydown={onJumpButtonKeydown}
+        >
+          <span aria-hidden="true">⋯</span>
+        </button>
+      </div>
+    </div>
+
+    {#if jumpMenuOpen}
+      <div
+        class="settings-jump-layer"
+        role="presentation"
+        onclick={(event) =>
+          event.target === event.currentTarget && void closeJumpMenu()}
+      >
+        <div
+          bind:this={jumpMenuElement}
+          class="settings-jump-menu"
+          tabindex="-1"
+          data-testid="settings-jump-menu"
+        >
+          <div class="settings-jump-heading">
+            <span>{STRINGS.settingsJumpSections}</span>
+            <button type="button" onclick={closeJumpMenu}
+              >{STRINGS.closeAction}</button
+            >
+          </div>
+          <div
+            class="settings-jump-items"
+            role="menu"
+            aria-label={STRINGS.settingsSectionsLabel}
+            tabindex="-1"
+            onkeydown={onJumpMenuKeydown}
+          >
+            {#each sections as section}
               <button
                 type="button"
-                class:active={activeSection === section.id && !isSearching}
-                aria-current={activeSection === section.id && !isSearching
-                  ? "page"
-                  : undefined}
-                onclick={() => (activeSection = section.id)}
+                role="menuitem"
+                onclick={() => jumpToSection(section.id)}
                 >{section.label}</button
               >
-            {/if}
-          {/each}
-        </nav>
-      </aside>
+            {/each}
+          </div>
+        </div>
+      </div>
+    {/if}
 
-      <div class="settings-content">
-        {#if (activeSection === "appearance" || isSearching) && hasMatches("appearance")}
-          <section aria-labelledby="settings-appearance-heading">
+    <div
+      bind:this={contentElement}
+      class="settings-content"
+      inert={jumpMenuOpen ? true : undefined}
+    >
+        {#if hasMatches("appearance")}
+          <section
+            aria-labelledby="settings-appearance-heading"
+            data-settings-section="appearance"
+          >
             <h3 id="settings-appearance-heading">
               {STRINGS.settingsSectionAppearance}
             </h3>
@@ -738,39 +888,46 @@ function onKeydown(event: KeyboardEvent) {
                   <p>{STRINGS.settingsPaletteDescription}</p>
                   {@render settingError(["light_palette"])}
                 </div>
-                <div
-                  class="palette-options"
-                  role="radiogroup"
-                  aria-label={STRINGS.settingsLightPalette}
-                >
-                  {#each lightPaletteCards as palette}
-                    <button
-                      type="button"
-                      class:active={documentSettings.light_palette === palette.value}
-                      role="radio"
-                      aria-checked={documentSettings.light_palette === palette.value}
-                      tabindex={documentSettings.light_palette === palette.value
-                        ? 0
-                        : -1}
-                      data-choice={`light_palette-${palette.value}`}
-                      data-testid={`settings-light-palette-${palette.value}`}
-                      onclick={() => update({ light_palette: palette.value })}
-                      onkeydown={(event) =>
-                        segmentedKeydown(
-                          event,
-                          ["manuscript", "studio", "gazette"],
-                          palette.value,
-                          "light_palette",
-                        )}
-                    >
-                      <span class="palette-preview" aria-hidden="true">
-                        <span class={`palette-mode ${palette.value}`}>
-                          <i></i><b></b>
-                        </span>
-                      </span>
-                      <strong>{palette.label}</strong>
-                    </button>
-                  {/each}
+                <div class="palette-picker">
+                  <div
+                    class="palette-options"
+                    role="radiogroup"
+                    aria-label={STRINGS.settingsLightPalette}
+                  >
+                    {#each lightPaletteCards as palette}
+                      <button
+                        type="button"
+                        class="palette-card skr-palette-swatch"
+                        class:active={documentSettings.light_palette === palette.value}
+                        role="radio"
+                        aria-checked={documentSettings.light_palette === palette.value}
+                        tabindex={documentSettings.light_palette === palette.value
+                          ? 0
+                          : -1}
+                        data-palette={palette.value}
+                        data-choice={`light_palette-${palette.value}`}
+                        data-testid={`settings-light-palette-${palette.value}`}
+                        onclick={() => update({ light_palette: palette.value })}
+                        onkeydown={(event) =>
+                          segmentedKeydown(
+                            event,
+                            ["manuscript", "studio", "gazette"],
+                            palette.value,
+                            "light_palette",
+                          )}
+                      >
+                        <strong>{palette.label}</strong>
+                        <span class="palette-card-dot" aria-hidden="true"></span>
+                      </button>
+                    {/each}
+                  </div>
+                  {@render palettePreview(
+                    lightPaletteCards.find(
+                      ({ value }) => value === documentSettings.light_palette,
+                    )?.label ?? STRINGS.settingsPaletteManuscript,
+                    documentSettings.light_palette as LightPaletteName,
+                    "light",
+                  )}
                 </div>
               </div>
             {/if}
@@ -782,39 +939,46 @@ function onKeydown(event: KeyboardEvent) {
                   <p>{STRINGS.settingsPaletteDescription}</p>
                   {@render settingError(["dark_palette"])}
                 </div>
-                <div
-                  class="palette-options"
-                  role="radiogroup"
-                  aria-label={STRINGS.settingsDarkPalette}
-                >
-                  {#each darkPaletteCards as palette}
-                    <button
-                      type="button"
-                      class:active={documentSettings.dark_palette === palette.value}
-                      role="radio"
-                      aria-checked={documentSettings.dark_palette === palette.value}
-                      tabindex={documentSettings.dark_palette === palette.value
-                        ? 0
-                        : -1}
-                      data-choice={`dark_palette-${palette.value}`}
-                      data-testid={`settings-dark-palette-${palette.value}`}
-                      onclick={() => update({ dark_palette: palette.value })}
-                      onkeydown={(event) =>
-                        segmentedKeydown(
-                          event,
-                          ["lamplight", "graphite", "signal"],
-                          palette.value,
-                          "dark_palette",
-                        )}
-                    >
-                      <span class="palette-preview" aria-hidden="true">
-                        <span class={`palette-mode ${palette.value}`}>
-                          <i></i><b></b>
-                        </span>
-                      </span>
-                      <strong>{palette.label}</strong>
-                    </button>
-                  {/each}
+                <div class="palette-picker">
+                  <div
+                    class="palette-options"
+                    role="radiogroup"
+                    aria-label={STRINGS.settingsDarkPalette}
+                  >
+                    {#each darkPaletteCards as palette}
+                      <button
+                        type="button"
+                        class="palette-card skr-palette-swatch"
+                        class:active={documentSettings.dark_palette === palette.value}
+                        role="radio"
+                        aria-checked={documentSettings.dark_palette === palette.value}
+                        tabindex={documentSettings.dark_palette === palette.value
+                          ? 0
+                          : -1}
+                        data-palette={palette.value}
+                        data-choice={`dark_palette-${palette.value}`}
+                        data-testid={`settings-dark-palette-${palette.value}`}
+                        onclick={() => update({ dark_palette: palette.value })}
+                        onkeydown={(event) =>
+                          segmentedKeydown(
+                            event,
+                            ["lamplight", "graphite", "signal"],
+                            palette.value,
+                            "dark_palette",
+                          )}
+                      >
+                        <strong>{palette.label}</strong>
+                        <span class="palette-card-dot" aria-hidden="true"></span>
+                      </button>
+                    {/each}
+                  </div>
+                  {@render palettePreview(
+                    darkPaletteCards.find(
+                      ({ value }) => value === documentSettings.dark_palette,
+                    )?.label ?? STRINGS.settingsPaletteLamplight,
+                    documentSettings.dark_palette as DarkPaletteName,
+                    "dark",
+                  )}
                 </div>
               </div>
             {/if}
@@ -983,8 +1147,11 @@ function onKeydown(event: KeyboardEvent) {
           </section>
         {/if}
 
-        {#if (activeSection === "editor" || isSearching) && hasMatches("editor")}
-          <section aria-labelledby="settings-editor-heading">
+        {#if hasMatches("editor")}
+          <section
+            aria-labelledby="settings-editor-heading"
+            data-settings-section="editor"
+          >
             <h3 id="settings-editor-heading">
               {STRINGS.settingsSectionEditor}
             </h3>
@@ -1361,8 +1528,11 @@ function onKeydown(event: KeyboardEvent) {
           </section>
         {/if}
 
-        {#if (activeSection === "files" || isSearching) && hasMatches("files")}
-          <section aria-labelledby="settings-files-heading">
+        {#if hasMatches("files")}
+          <section
+            aria-labelledby="settings-files-heading"
+            data-settings-section="files"
+          >
             <h3 id="settings-files-heading">
               {STRINGS.settingsSectionFiles}
             </h3>
@@ -1476,8 +1646,11 @@ function onKeydown(event: KeyboardEvent) {
           </section>
         {/if}
 
-        {#if (activeSection === "search" || isSearching) && hasMatches("search")}
-          <section aria-labelledby="settings-search-heading">
+        {#if hasMatches("search")}
+          <section
+            aria-labelledby="settings-search-heading"
+            data-settings-section="search"
+          >
             <h3 id="settings-search-heading">
               {STRINGS.settingsSectionSearch}
             </h3>
@@ -1581,8 +1754,11 @@ function onKeydown(event: KeyboardEvent) {
           </section>
         {/if}
 
-        {#if (activeSection === "updates" || isSearching) && hasMatches("updates")}
-          <section aria-labelledby="settings-updates-heading">
+        {#if hasMatches("updates")}
+          <section
+            aria-labelledby="settings-updates-heading"
+            data-settings-section="updates"
+          >
             <h3 id="settings-updates-heading">
               {STRINGS.settingsSectionUpdates}
             </h3>
@@ -1661,8 +1837,11 @@ function onKeydown(event: KeyboardEvent) {
           </section>
         {/if}
 
-        {#if (activeSection === "about" || isSearching) && hasMatches("about")}
-          <section aria-labelledby="settings-about-heading">
+        {#if hasMatches("about")}
+          <section
+            aria-labelledby="settings-about-heading"
+            data-settings-section="about"
+          >
             <h3 id="settings-about-heading">
               {STRINGS.settingsSectionAbout}
             </h3>
@@ -1724,10 +1903,12 @@ function onKeydown(event: KeyboardEvent) {
             <p class="prealpha-note">{STRINGS.settingsPreAlphaNote}</p>
           </section>
         {/if}
-      </div>
     </div>
 
-    <footer class="settings-footer">
+    <footer
+      class="settings-footer"
+      inert={jumpMenuOpen ? true : undefined}
+    >
       <button
         type="button"
         class="secondary-button"
@@ -1772,10 +1953,10 @@ function onKeydown(event: KeyboardEvent) {
     max-height: calc(100vh - 2rem);
     outline: none;
     overflow: hidden;
+    position: relative;
     width: min(44rem, calc(100vw - 2rem));
   }
 
-  .settings-header,
   .settings-footer {
     align-items: center;
     display: flex;
@@ -1785,8 +1966,31 @@ function onKeydown(event: KeyboardEvent) {
 
   .settings-header {
     border-bottom: 1px solid var(--skr-border);
-    gap: 1rem;
-    padding: 1rem 1.125rem;
+    flex: none;
+    padding: 0.625rem 1.125rem;
+  }
+
+  .settings-header-primary,
+  .settings-header-tools,
+  .settings-jump-heading {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .settings-header-primary {
+    min-height: 2.75rem;
+  }
+
+  .settings-header-primary .icon-button {
+    font-size: 1.125rem;
+    height: 2.75rem;
+    padding: 0;
+    width: 2.75rem;
+  }
+
+  .settings-header-tools {
+    gap: 0.5rem;
   }
 
   .settings-header h2 {
@@ -1794,7 +1998,6 @@ function onKeydown(event: KeyboardEvent) {
     margin: 0;
   }
 
-  .settings-header p,
   .setting-copy p,
   .setting-copy > span:last-child {
     color: var(--skr-text-muted);
@@ -1840,27 +2043,21 @@ function onKeydown(event: KeyboardEvent) {
     margin-top: 0.35rem;
   }
 
-  .settings-layout {
-    display: grid;
-    flex: 1;
-    grid-template-columns: 11rem minmax(0, 1fr);
-    min-height: 0;
-  }
-
-  .settings-rail {
-    background: var(--skr-surface-subtle);
-    border-right: 1px solid var(--skr-border);
-    min-width: 0;
-    overflow-y: auto;
-    padding: 0.875rem 0.75rem;
+  .visually-hidden {
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
   }
 
   .settings-search {
-    display: grid;
-    gap: 0.35rem;
+    flex: 1;
+    min-width: 0;
   }
 
-  .settings-search span,
   .setting-label {
     font-size: 0.8125rem;
     font-weight: 600;
@@ -1878,17 +2075,12 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .settings-search input {
+    min-height: 2.75rem;
     width: 100%;
   }
 
-  .settings-nav {
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-    margin-top: 0.75rem;
-  }
-
-  .settings-nav button,
+  .jump-button,
+  .settings-jump-menu button,
   .icon-button,
   .secondary-button,
   .segmented button,
@@ -1901,26 +2093,75 @@ function onKeydown(event: KeyboardEvent) {
     font: inherit;
   }
 
-  .settings-nav button {
+  .jump-button {
+    align-items: center;
+    border-color: var(--skr-border-strong);
     border-radius: 0.35rem;
-    font-size: 0.8125rem;
-    padding: 0.45rem 0.55rem;
+    display: flex;
+    flex: 0 0 2.75rem;
+    font-size: 1.25rem;
+    height: 2.75rem;
+    justify-content: center;
+    padding: 0;
+    width: 2.75rem;
+  }
+
+  .jump-button:hover,
+  .settings-jump-menu button:hover,
+  .icon-button:hover,
+  .secondary-button:hover {
+    background: var(--skr-surface-subtle);
+  }
+
+  .settings-jump-layer {
+    inset: 0;
+    position: absolute;
+    z-index: 3;
+  }
+
+  .settings-jump-menu {
+    background: var(--skr-surface-raised);
+    border: 1px solid var(--skr-border);
+    border-radius: 0.375rem;
+    box-shadow: var(--skr-shadow);
+    display: grid;
+    padding: 0.5rem;
+    position: absolute;
+    right: 1.125rem;
+    top: 6.75rem;
+    width: 14rem;
+  }
+
+  .settings-jump-items {
+    display: grid;
+  }
+
+  .settings-jump-heading {
+    color: var(--skr-text-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0 0 0.5rem 0.5rem;
+  }
+
+  .settings-jump-heading button,
+  .settings-jump-items > button {
+    border: 1px solid transparent;
+    border-radius: 0.35rem;
+    min-height: 2.75rem;
+  }
+
+  .settings-jump-heading button {
+    padding-inline: 0.75rem;
+  }
+
+  .settings-jump-items > button {
+    padding: 0.5rem 0.75rem;
     text-align: left;
   }
 
-  .settings-nav button:hover,
-  .settings-nav button.active,
-  .icon-button:hover,
-  .secondary-button:hover {
-    background: var(--skr-surface);
-  }
-
-  .settings-nav button.active {
-    color: var(--skr-accent);
-    font-weight: 600;
-  }
-
   .settings-content {
+    flex: 1;
+    min-height: 0;
     min-width: 0;
     overflow-y: auto;
     padding: 1rem 1.125rem 1.5rem;
@@ -1989,100 +2230,125 @@ function onKeydown(event: KeyboardEvent) {
   .palette-options {
     display: grid;
     gap: 0.5rem;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
   }
 
-  .palette-options button {
-    border-color: var(--skr-border);
-    border-radius: 0.5rem;
-    display: grid;
-    gap: 0.35rem;
+  .palette-card {
+    align-items: center;
+    background: var(--skr-surface);
+    border: 1px solid var(--skr-border);
+    border-radius: 0.375rem;
+    box-sizing: border-box;
+    color: var(--skr-heading);
+    display: flex;
+    font-family: var(--skr-font-prose);
+    justify-content: space-between;
+    min-height: 2.75rem;
     min-width: 0;
-    padding: 0.45rem;
+    padding: 0.5rem 0.75rem;
     text-align: left;
   }
 
-  .palette-options button:hover {
-    background: var(--skr-surface-subtle);
+  .palette-card:hover {
+    background: var(--skr-surface);
   }
 
-  .palette-options button.active {
+  .palette-card.active {
     border-color: var(--skr-accent);
-    box-shadow: inset 0 0 0 1px var(--skr-accent);
+    border-width: 2px;
   }
 
-  .palette-options strong {
+  .palette-card strong {
+    font-size: 0.875rem;
+    font-weight: 700;
     overflow-wrap: anywhere;
-    font-size: 0.75rem;
   }
 
-  .palette-preview {
-    border: 1px solid var(--skr-border);
-    border-radius: 0.3rem;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    height: 2.5rem;
-    overflow: hidden;
-  }
-
-  .palette-mode {
-    align-items: center;
-    background: var(--preview-surface);
-    color: var(--preview-text);
-    display: flex;
-    gap: 0.3rem;
-    padding: 0.35rem;
-  }
-
-  .palette-mode i {
-    background: currentColor;
-    display: block;
-    height: 0.15rem;
-    width: 65%;
-  }
-
-  .palette-mode b {
-    background: var(--preview-accent);
+  .palette-card-dot {
+    background: var(--skr-accent);
     border-radius: 50%;
-    display: block;
-    height: 0.45rem;
-    width: 0.45rem;
+    flex: 0 0 0.5rem;
+    height: 0.5rem;
+    margin-left: 0.5rem;
+    width: 0.5rem;
   }
 
-  .palette-mode.manuscript {
-    --preview-surface: var(--skr-preview-manuscript-surface);
-    --preview-text: var(--skr-preview-manuscript-text);
-    --preview-accent: var(--skr-preview-manuscript-accent);
+  .palette-live-preview {
+    background: var(--skr-surface);
+    border: 1px solid var(--skr-border);
+    border-radius: 0.375rem;
+    color: var(--skr-text);
+    display: grid;
+    font-family: var(--skr-font-prose);
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    padding: 1rem;
   }
 
-  .palette-mode.lamplight {
-    --preview-surface: var(--skr-preview-lamplight-surface);
-    --preview-text: var(--skr-preview-lamplight-text);
-    --preview-accent: var(--skr-preview-lamplight-accent);
+  .palette-live-heading {
+    color: var(--skr-heading);
+    font-size: 1.25rem;
+    font-weight: 700;
   }
 
-  .palette-mode.studio {
-    --preview-surface: var(--skr-preview-studio-surface);
-    --preview-text: var(--skr-preview-studio-text);
-    --preview-accent: var(--skr-preview-studio-accent);
+  .palette-live-rule {
+    border-top: 1px solid var(--skr-border);
+    margin-top: 0;
   }
 
-  .palette-mode.graphite {
-    --preview-surface: var(--skr-preview-graphite-surface);
-    --preview-text: var(--skr-preview-graphite-text);
-    --preview-accent: var(--skr-preview-graphite-accent);
+  .palette-live-body {
+    color: var(--skr-text);
+    font-size: 0.8125rem;
+    font-weight: 400;
+    line-height: 1.4;
+    margin: 0;
   }
 
-  .palette-mode.gazette {
-    --preview-surface: var(--skr-preview-gazette-surface);
-    --preview-text: var(--skr-preview-gazette-text);
-    --preview-accent: var(--skr-preview-gazette-accent);
+  .palette-live-body a {
+    color: var(--skr-link);
+    font-size: inherit;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
   }
 
-  .palette-mode.signal {
-    --preview-surface: var(--skr-preview-signal-surface);
-    --preview-text: var(--skr-preview-signal-text);
-    --preview-accent: var(--skr-preview-signal-accent);
+  .palette-live-body code {
+    background: var(--skr-code-surface);
+    border-radius: 0.2rem;
+    font-family: var(--skr-font-mono);
+    padding: 0.1rem 0.25rem;
+  }
+
+  .palette-live-task {
+    align-items: center;
+    color: var(--skr-text);
+    display: flex;
+    font-size: 0.8125rem;
+    gap: 0.5rem;
+  }
+
+  .palette-live-box {
+    align-items: center;
+    border: 1px solid var(--skr-border-strong);
+    border-radius: 0.2rem;
+    display: flex;
+    flex: 0 0 0.875rem;
+    font-family: var(--skr-font-interface);
+    font-size: 0.7rem;
+    height: 0.875rem;
+    justify-content: center;
+    line-height: 1;
+    width: 0.875rem;
+  }
+
+  .palette-live-task-complete {
+    color: var(--skr-text-muted);
+    text-decoration: line-through;
+  }
+
+  .palette-live-task-complete .palette-live-box {
+    background: var(--skr-accent);
+    border-color: var(--skr-accent);
+    color: var(--skr-surface);
   }
 
   .slider-control {
@@ -2396,27 +2662,25 @@ function onKeydown(event: KeyboardEvent) {
       width: 100%;
     }
 
-    .settings-layout {
-      grid-template-columns: 1fr;
+    .settings-header {
+      padding-top: calc(0.625rem + env(safe-area-inset-top));
     }
 
-    .settings-rail {
-      border-bottom: 1px solid var(--skr-border);
-      border-right: 0;
-      overflow: visible;
+    .settings-jump-layer {
+      background: var(--skr-overlay);
     }
 
-    .settings-nav {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .settings-nav button {
-      min-width: 0;
-    }
-
-    .palette-options {
-      grid-template-columns: 1fr;
+    .settings-jump-menu {
+      border-bottom: 0;
+      border-radius: 0.75rem 0.75rem 0 0;
+      bottom: 0;
+      left: 0;
+      max-height: 80%;
+      overflow-y: auto;
+      padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+      right: 0;
+      top: auto;
+      width: auto;
     }
 
     .setting-row {
@@ -2431,6 +2695,10 @@ function onKeydown(event: KeyboardEvent) {
 
     .settings-footer span {
       display: none;
+    }
+
+    .settings-footer {
+      padding-bottom: calc(0.65rem + env(safe-area-inset-bottom));
     }
 
     .task-status-table {

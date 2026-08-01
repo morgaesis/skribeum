@@ -90,8 +90,14 @@
 
 .skr-palette-swatch[data-palette="manuscript"] {
   --skr-surface: #fffdf8;
+  --skr-code-surface: #f1ece1;
   --skr-text: #2a2418;
+  --skr-text-muted: #6b5f4b;
+  --skr-heading: #211b10;
   --skr-accent: #8c3a2b;
+  --skr-link: #8c3a2b;
+  --skr-border: #d6cdbb;
+  --skr-border-strong: #998c72;
 }
 
 :root[data-theme="light"][data-light-palette="studio"],
@@ -200,8 +206,14 @@
 
 .skr-palette-swatch[data-palette="lamplight"] {
   --skr-surface: #1d1815;
+  --skr-code-surface: #251e18;
   --skr-text: #ece4d5;
+  --skr-text-muted: #b0a28a;
+  --skr-heading: #f6efe2;
   --skr-accent: #e2a15c;
+  --skr-link: #e2a15c;
+  --skr-border: #3d332a;
+  --skr-border-strong: #78684f;
 }
 
 :root[data-theme="dark"][data-dark-palette="graphite"],

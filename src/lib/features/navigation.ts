@@ -1,0 +1,785 @@
+// Note navigation has one address model and one controller on every surface.
+// The browser adapter projects addresses onto the History API; the desktop
+// adapter keeps the same addresses in memory. Wikilink parsing, resolution,
+// follow behavior, and command registration also live here so pointer,
+// keyboard, browser, and desktop entry points cannot drift apart.
+
+import { syntaxTree } from "@codemirror/language";
+import { type EditorState, Facet } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
+import type { CommandRegistry } from "../registry";
+import { STRINGS } from "../strings";
+
+export type ObsidianAppConfig = {
+  /** Link format the vault is configured to emit. */
+  newLinkFormat: "shortest" | "relative" | "absolute";
+  /** Whether the vault prefers markdown links over wikilinks. */
+  useMarkdownLinks: boolean;
+  /** Configured attachment folder mode, null when none is configured. */
+  attachmentFolderPath: string | null;
+};
+
+export const DEFAULT_OBSIDIAN_APP_CONFIG: ObsidianAppConfig = {
+  newLinkFormat: "shortest",
+  useMarkdownLinks: false,
+  attachmentFolderPath: null,
+};
+
+/** Parses the supported `.obsidian/app.json` link settings tolerantly. */
+export function parseObsidianAppConfig(jsonText: string): ObsidianAppConfig {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return DEFAULT_OBSIDIAN_APP_CONFIG;
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return DEFAULT_OBSIDIAN_APP_CONFIG;
+  }
+  const record = parsed as Record<string, unknown>;
+  const format = record.newLinkFormat;
+  const useMarkdown = record.useMarkdownLinks;
+  const attachments = record.attachmentFolderPath;
+  return {
+    newLinkFormat:
+      format === "relative" || format === "absolute" ? format : "shortest",
+    useMarkdownLinks: useMarkdown === true,
+    attachmentFolderPath:
+      typeof attachments === "string" && attachments.length > 0
+        ? attachments
+        : null,
+  };
+}
+
+export type WikilinkResolutionContext = {
+  /** Every note and file path in the open vault, vault-root-relative. */
+  paths: readonly string[];
+  config: ObsidianAppConfig;
+  /** The note whose editor owns this context. */
+  currentPath?: string | null;
+  /** Read-only note loader used by rendered embeds and link previews. */
+  loadNote?: (path: string) => Promise<string | null>;
+  /** Resolved note paths enclosing a nested embed. */
+  embedAncestry?: readonly string[];
+  /** Current rendered-embed nesting depth. */
+  embedDepth?: number;
+  /** Whether note links expose delayed rendered previews. */
+  linkPreviews?: boolean;
+};
+
+export const EMPTY_WIKILINK_CONTEXT: WikilinkResolutionContext = {
+  paths: [],
+  config: DEFAULT_OBSIDIAN_APP_CONFIG,
+};
+
+export type NoteAddress = {
+  /** NFC, slash-separated, vault-root-relative note path including `.md`. */
+  path: string;
+  /** Obsidian heading or block suffix without the leading `#`. */
+  fragment?: string;
+};
+
+function sameAddress(left: NoteAddress | null, right: NoteAddress): boolean {
+  return left?.path === right.path && left.fragment === right.fragment;
+}
+
+export type WikilinkResolution =
+  | { kind: "self"; fragment?: string }
+  | { kind: "note"; path: string; fragment?: string }
+  | { kind: "unresolved"; candidate: NoteAddress | null };
+
+type SplitTarget = { path: string; fragment?: string };
+
+function splitWikilinkTarget(target: string): SplitTarget {
+  const hash = target.indexOf("#");
+  const path = (hash === -1 ? target : target.slice(0, hash)).trim();
+  const fragment = hash === -1 ? "" : target.slice(hash + 1).trim();
+  return fragment.length === 0 ? { path } : { path, fragment };
+}
+
+function joinVaultPath(baseDirectory: string, target: string): string | null {
+  const segments = `${baseDirectory}/${target}`.split("/");
+  const normalized: string[] = [];
+  for (const segment of segments) {
+    if (segment === "" || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (normalized.length === 0) {
+        return null;
+      }
+      normalized.pop();
+      continue;
+    }
+    normalized.push(segment);
+  }
+  return normalized.join("/").normalize("NFC");
+}
+
+function sourceDirectory(sourcePath: string | null | undefined): string {
+  if (sourcePath === null || sourcePath === undefined) {
+    return "";
+  }
+  const slash = sourcePath.lastIndexOf("/");
+  return slash === -1 ? "" : sourcePath.slice(0, slash);
+}
+
+function resolutionTarget(
+  path: string,
+  context: WikilinkResolutionContext,
+): string | null {
+  const rootPath = path.startsWith("/") ? path.slice(1) : path;
+  if (path.startsWith("./") || path.startsWith("../")) {
+    return joinVaultPath(sourceDirectory(context.currentPath), rootPath);
+  }
+  return rootPath.normalize("NFC");
+}
+
+function targetHasExtension(target: string): boolean {
+  const name = target.slice(target.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return (
+    dot > 0 &&
+    dot < name.length - 1 &&
+    [...name.slice(dot + 1)].every((character) => /[A-Za-z0-9]/.test(character))
+  );
+}
+
+function exactWikilinkMatch(path: string, target: string): boolean {
+  return (
+    path === target ||
+    (!targetHasExtension(target) &&
+      path.endsWith(".md") &&
+      path.slice(0, -3) === target)
+  );
+}
+
+function suffixWikilinkMatch(path: string, target: string): boolean {
+  const tailMatches = (candidate: string) => {
+    const prefix = candidate.slice(0, -target.length);
+    return candidate.endsWith(target) && prefix.endsWith("/");
+  };
+  return (
+    tailMatches(path) ||
+    (!targetHasExtension(target) &&
+      path.endsWith(".md") &&
+      tailMatches(path.slice(0, -3)))
+  );
+}
+
+function deterministicPathOrder(left: string, right: string): number {
+  const segmentDifference = left.split("/").length - right.split("/").length;
+  if (segmentDifference !== 0) {
+    return segmentDifference;
+  }
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function attachmentCandidate(
+  target: string,
+  context: WikilinkResolutionContext,
+): string | null {
+  const configured = context.config.attachmentFolderPath;
+  if (configured === null || target.includes("/")) {
+    return null;
+  }
+  if (configured === "/") {
+    return target;
+  }
+  if (configured === "./") {
+    return joinVaultPath(sourceDirectory(context.currentPath), target);
+  }
+  return joinVaultPath(configured, target);
+}
+
+/** Mirrors the Rust index's exact, suffix, then case-folded match tiers. */
+function resolvePath(target: string, paths: readonly string[]): string | null {
+  const foldedTarget = target.toLowerCase();
+  const tiers = [
+    (path: string) => exactWikilinkMatch(path, target),
+    (path: string) => suffixWikilinkMatch(path, target),
+    (path: string) => exactWikilinkMatch(path.toLowerCase(), foldedTarget),
+    (path: string) => suffixWikilinkMatch(path.toLowerCase(), foldedTarget),
+  ];
+  for (const matches of tiers) {
+    const candidates = paths.filter(matches).sort(deterministicPathOrder);
+    if (candidates.length > 0) {
+      return candidates[0] ?? null;
+    }
+  }
+  return null;
+}
+
+/** Resolves a target with Obsidian-compatible path, suffix, and fragment rules. */
+export function resolveWikilinkTarget(
+  target: string,
+  context: WikilinkResolutionContext,
+): WikilinkResolution {
+  const split = splitWikilinkTarget(target);
+  if (split.path.length === 0) {
+    return split.fragment === undefined
+      ? { kind: "self" }
+      : { kind: "self", fragment: split.fragment };
+  }
+
+  const targetPath = resolutionTarget(split.path, context);
+  const attachment = attachmentCandidate(split.path, context);
+  const resolved =
+    (attachment === null ? null : resolvePath(attachment, context.paths)) ??
+    (targetPath === null ? null : resolvePath(targetPath, context.paths));
+  if (resolved !== null) {
+    return split.fragment === undefined
+      ? { kind: "note", path: resolved }
+      : { kind: "note", path: resolved, fragment: split.fragment };
+  }
+  return {
+    kind: "unresolved",
+    candidate: candidateAddressForTarget(target, context),
+  };
+}
+
+/** Produces the deterministic note path shown by the not-found surface. */
+export function candidateAddressForTarget(
+  target: string,
+  context: WikilinkResolutionContext,
+): NoteAddress | null {
+  const split = splitWikilinkTarget(target);
+  if (split.path.length === 0) {
+    const source = context.currentPath;
+    if (source === null || source === undefined) {
+      return null;
+    }
+    return split.fragment === undefined
+      ? { path: source }
+      : { path: source, fragment: split.fragment };
+  }
+  const candidate = resolutionTarget(split.path, context);
+  if (candidate === null || candidate.length === 0) {
+    return null;
+  }
+  const path = /\.[^/]+$/.test(candidate) ? candidate : `${candidate}.md`;
+  const normalized = normalizeNotePath(path);
+  if (normalized === null) {
+    return null;
+  }
+  return split.fragment === undefined
+    ? { path: normalized }
+    : { path: normalized, fragment: split.fragment };
+}
+
+/** Validates and normalizes a permalink path without allowing vault escape. */
+export function normalizeNotePath(path: string): string | null {
+  const slashPath = path.replaceAll("\\", "/").normalize("NFC");
+  if (slashPath.startsWith("/") || slashPath.length === 0) {
+    return null;
+  }
+  const segments = slashPath.split("/");
+  if (
+    segments.some(
+      (segment) => segment.length === 0 || segment === "." || segment === "..",
+    )
+  ) {
+    return null;
+  }
+  return slashPath;
+}
+
+export const NOTE_ADDRESS_PARAMETER = "note";
+
+/** Decodes the browser demo's `?note=<vault path>#<note fragment>` form. */
+export function noteAddressFromUrl(url: URL): NoteAddress | null {
+  const rawPath = url.searchParams.get(NOTE_ADDRESS_PARAMETER);
+  if (rawPath === null) {
+    return null;
+  }
+  const notePath = rawPath.toLowerCase().endsWith(".md")
+    ? rawPath
+    : `${rawPath}.md`;
+  const path = normalizeNotePath(notePath);
+  if (path === null) {
+    return null;
+  }
+  let fragment: string;
+  try {
+    fragment = decodeURIComponent(url.hash.slice(1));
+  } catch {
+    fragment = url.hash.slice(1);
+  }
+  return fragment.length === 0 ? { path } : { path, fragment };
+}
+
+/** Encodes a note address while preserving unrelated demo query parameters. */
+export function urlForNoteAddress(address: NoteAddress, current: URL): URL {
+  const url = new URL(current);
+  url.searchParams.set(NOTE_ADDRESS_PARAMETER, address.path);
+  url.hash =
+    address.fragment === undefined ? "" : encodeURIComponent(address.fragment);
+  return url;
+}
+
+type HistoryListener = (address: NoteAddress) => void;
+
+interface NavigationHistory {
+  current(): NoteAddress | null;
+  replace(address: NoteAddress): void;
+  push(address: NoteAddress): void;
+  back(): boolean;
+  forward(): boolean;
+  canGoBack(): boolean;
+  canGoForward(): boolean;
+  subscribe(listener: HistoryListener): () => void;
+}
+
+class MemoryNavigationHistory implements NavigationHistory {
+  private entries: NoteAddress[] = [];
+  private index = -1;
+  private listener: HistoryListener | null = null;
+
+  current(): NoteAddress | null {
+    return this.entries[this.index] ?? null;
+  }
+
+  replace(address: NoteAddress): void {
+    if (this.index < 0) {
+      this.entries = [address];
+      this.index = 0;
+    } else {
+      this.entries[this.index] = address;
+    }
+  }
+
+  push(address: NoteAddress): void {
+    this.entries = [...this.entries.slice(0, this.index + 1), address];
+    this.index = this.entries.length - 1;
+  }
+
+  back(): boolean {
+    if (this.index <= 0) {
+      return false;
+    }
+    this.index -= 1;
+    this.listener?.(this.entries[this.index] as NoteAddress);
+    return true;
+  }
+
+  forward(): boolean {
+    if (this.index >= this.entries.length - 1) {
+      return false;
+    }
+    this.index += 1;
+    this.listener?.(this.entries[this.index] as NoteAddress);
+    return true;
+  }
+
+  canGoBack(): boolean {
+    return this.index > 0;
+  }
+
+  canGoForward(): boolean {
+    return this.index >= 0 && this.index < this.entries.length - 1;
+  }
+
+  subscribe(listener: HistoryListener): () => void {
+    this.listener = listener;
+    return () => {
+      if (this.listener === listener) {
+        this.listener = null;
+      }
+    };
+  }
+}
+
+const BROWSER_HISTORY_KEY = "skribeumNavigationIndex";
+
+class BrowserNavigationHistory implements NavigationHistory {
+  private index = 0;
+  private maximumIndex = 0;
+  private listener: HistoryListener | null = null;
+
+  constructor(private readonly browserWindow: Window) {
+    const state = browserWindow.history.state as Record<string, unknown> | null;
+    const stored = state?.[BROWSER_HISTORY_KEY];
+    if (typeof stored === "number" && Number.isInteger(stored) && stored >= 0) {
+      this.index = stored;
+      this.maximumIndex = stored;
+    } else {
+      browserWindow.history.replaceState(
+        { ...(state ?? {}), [BROWSER_HISTORY_KEY]: 0 },
+        "",
+        browserWindow.location.href,
+      );
+    }
+  }
+
+  current(): NoteAddress | null {
+    return noteAddressFromUrl(new URL(this.browserWindow.location.href));
+  }
+
+  replace(address: NoteAddress): void {
+    const url = urlForNoteAddress(
+      address,
+      new URL(this.browserWindow.location.href),
+    );
+    this.browserWindow.history.replaceState(
+      {
+        ...(this.browserWindow.history.state ?? {}),
+        [BROWSER_HISTORY_KEY]: this.index,
+      },
+      "",
+      url,
+    );
+  }
+
+  push(address: NoteAddress): void {
+    this.index += 1;
+    this.maximumIndex = this.index;
+    const url = urlForNoteAddress(
+      address,
+      new URL(this.browserWindow.location.href),
+    );
+    this.browserWindow.history.pushState(
+      {
+        ...(this.browserWindow.history.state ?? {}),
+        [BROWSER_HISTORY_KEY]: this.index,
+      },
+      "",
+      url,
+    );
+  }
+
+  back(): boolean {
+    if (this.index <= 0) {
+      return false;
+    }
+    this.browserWindow.history.back();
+    return true;
+  }
+
+  forward(): boolean {
+    if (this.index >= this.maximumIndex) {
+      return false;
+    }
+    this.browserWindow.history.forward();
+    return true;
+  }
+
+  canGoBack(): boolean {
+    return this.index > 0;
+  }
+
+  canGoForward(): boolean {
+    return this.index < this.maximumIndex;
+  }
+
+  subscribe(listener: HistoryListener): () => void {
+    this.listener = listener;
+    const onPopState = (event: PopStateEvent) => {
+      const state = event.state as Record<string, unknown> | null;
+      const stored = state?.[BROWSER_HISTORY_KEY];
+      if (typeof stored === "number" && Number.isInteger(stored)) {
+        this.index = stored;
+      }
+      const address = this.current();
+      if (address !== null) {
+        this.listener?.(address);
+      }
+    };
+    this.browserWindow.addEventListener("popstate", onPopState);
+    return () => {
+      this.browserWindow.removeEventListener("popstate", onPopState);
+      if (this.listener === listener) {
+        this.listener = null;
+      }
+    };
+  }
+}
+
+export type NavigationMode = "browser" | "desktop";
+
+export type NoteNavigator = {
+  start(fallback: NoteAddress | null): Promise<void>;
+  open(address: NoteAddress): Promise<void>;
+  back(): boolean;
+  forward(): boolean;
+  state(): NavigationState;
+  dispose(): void;
+};
+
+export type NavigationState = {
+  address: NoteAddress | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+};
+
+/** Builds the shared navigation controller over the selected history adapter. */
+export function createNoteNavigator(options: {
+  mode: NavigationMode;
+  load(address: NoteAddress): Promise<void>;
+  browserWindow?: Window;
+  changed?: (state: NavigationState) => void;
+}): NoteNavigator {
+  const history: NavigationHistory =
+    options.mode === "browser"
+      ? new BrowserNavigationHistory(options.browserWindow ?? window)
+      : new MemoryNavigationHistory();
+  let queue = Promise.resolve();
+  const state = (): NavigationState => ({
+    address: history.current(),
+    canGoBack: history.canGoBack(),
+    canGoForward: history.canGoForward(),
+  });
+  const enqueue = (address: NoteAddress) => {
+    queue = queue
+      .catch(() => {})
+      .then(() => options.load(address))
+      .finally(() => {
+        options.changed?.(state());
+      });
+    return queue;
+  };
+  const unsubscribe = history.subscribe((address) => {
+    void enqueue(address);
+  });
+  return {
+    async start(fallback) {
+      const current = history.current();
+      const address = current ?? fallback;
+      if (address === null) {
+        return;
+      }
+      history.replace(address);
+      await enqueue(address);
+    },
+    async open(address) {
+      await enqueue(address);
+      if (!sameAddress(history.current(), address)) {
+        history.push(address);
+      }
+      options.changed?.(state());
+    },
+    back: () => history.back(),
+    forward: () => history.forward(),
+    state,
+    dispose: unsubscribe,
+  };
+}
+
+/** Locates an Obsidian heading or block fragment in the open note. */
+export function noteFragmentPosition(
+  state: EditorState,
+  fragment: string | undefined,
+): number | null {
+  if (fragment === undefined || fragment.length === 0) {
+    return null;
+  }
+  const wanted = fragment.normalize("NFC").toLocaleLowerCase();
+  let found: number | null = null;
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (found !== null) {
+        return false;
+      }
+      if (fragment.startsWith("^") && node.name === "BlockId") {
+        const source = state.doc.sliceString(node.from, node.to);
+        if (source.normalize("NFC").toLocaleLowerCase() === wanted) {
+          found = node.from;
+        }
+        return undefined;
+      }
+      if (!/^ATXHeading[1-6]$|^SetextHeading[12]$/.test(node.name)) {
+        return undefined;
+      }
+      const source = state.doc.sliceString(node.from, node.to);
+      const firstLine = source.split(/\r?\n/, 1)[0] ?? "";
+      const heading = firstLine
+        .replace(/^\s{0,3}#{1,6}\s+/, "")
+        .replace(/\s+#+\s*$/, "")
+        .trim()
+        .normalize("NFC")
+        .toLocaleLowerCase();
+      if (heading === wanted) {
+        found = node.from;
+      }
+      return undefined;
+    },
+  });
+  return found;
+}
+
+export type WikilinkReference = {
+  from: number;
+  to: number;
+  textFrom: number;
+  textTo: number;
+  target: string;
+  embedded: boolean;
+};
+
+function wikilinkNodeAt(
+  state: EditorState,
+  position: number,
+): SyntaxNode | null {
+  const bounded = Math.max(0, Math.min(position, state.doc.length));
+  for (const side of [1, -1] as const) {
+    let node: SyntaxNode | null = syntaxTree(state).resolveInner(bounded, side);
+    while (node !== null && node.name !== "Wikilink") {
+      node = node.parent;
+    }
+    if (node !== null) {
+      return node;
+    }
+  }
+  return null;
+}
+
+/** Returns the editable target range and navigation target at a document offset. */
+export function wikilinkReferenceAt(
+  state: EditorState,
+  position: number,
+): WikilinkReference | null {
+  const node = wikilinkNodeAt(state, position);
+  const target = node?.getChild("WikilinkTarget") ?? null;
+  if (node === null || target === null) {
+    return null;
+  }
+  const alias = node.getChild("WikilinkAlias");
+  return {
+    from: node.from,
+    to: node.to,
+    textFrom: target.from,
+    textTo: alias?.to ?? target.to,
+    target: state.doc.sliceString(target.from, target.to),
+    embedded: node.parent?.name === "Embed",
+  };
+}
+
+/** True when the active editor selection is editing this link's visible text. */
+export function cursorInsideWikilinkText(
+  state: EditorState,
+  reference: WikilinkReference,
+): boolean {
+  const selection = state.selection.main;
+  return (
+    selection.empty &&
+    selection.head >= reference.textFrom &&
+    selection.head <= reference.textTo
+  );
+}
+
+export type FollowWikilinkOptions = {
+  context: WikilinkResolutionContext;
+  currentPath: string | null;
+  navigate(address: NoteAddress): Promise<void> | void;
+  unresolved(reason: string): void;
+};
+
+/** Navigation capabilities available to rendered editor widgets. */
+export const wikilinkNavigationOptionsFacet = Facet.define<
+  () => FollowWikilinkOptions,
+  (() => FollowWikilinkOptions) | null
+>({
+  combine: (providers) => providers.at(-1) ?? null,
+});
+
+/** Resolves and follows one wikilink target through the shared address model. */
+export function followWikilinkTarget(
+  target: string,
+  options: FollowWikilinkOptions,
+): boolean {
+  const resolution = resolveWikilinkTarget(target, options.context);
+  if (resolution.kind === "note") {
+    if (!resolution.path.toLowerCase().endsWith(".md")) {
+      options.unresolved(STRINGS.wikilinkTargetNotNote);
+      return true;
+    }
+    void options.navigate(
+      resolution.fragment === undefined
+        ? { path: resolution.path }
+        : { path: resolution.path, fragment: resolution.fragment },
+    );
+    return true;
+  }
+  if (resolution.kind === "self") {
+    if (options.currentPath === null) {
+      return false;
+    }
+    void options.navigate(
+      resolution.fragment === undefined
+        ? { path: options.currentPath }
+        : { path: options.currentPath, fragment: resolution.fragment },
+    );
+    return true;
+  }
+  options.unresolved(STRINGS.wikilinkUnresolvedReason);
+  const candidate = resolution.candidate;
+  if (candidate?.path.toLowerCase().endsWith(".md")) {
+    void options.navigate(candidate);
+  }
+  return true;
+}
+
+/** Follows the wikilink at an offset, including unresolved not-found routing. */
+export function followWikilinkAt(
+  view: EditorView,
+  position: number,
+  options: FollowWikilinkOptions,
+): boolean {
+  const reference = wikilinkReferenceAt(view.state, position);
+  return reference === null
+    ? false
+    : followWikilinkTarget(reference.target, options);
+}
+
+/** Finds a wikilink position from a decorated DOM descendant. */
+export function wikilinkPositionFromElement(
+  view: EditorView,
+  target: EventTarget | null,
+): number | null {
+  const element = target instanceof Element ? target : null;
+  const link = element?.closest(".cm-skr-wikilink");
+  if (link === null || link === undefined || !view.dom.contains(link)) {
+    return null;
+  }
+  try {
+    return view.posAtDOM(link, 0);
+  } catch {
+    return null;
+  }
+}
+
+/** Follows the cursor link, or the decorated link that owns DOM focus. */
+export function followWikilinkUnderCursor(
+  view: EditorView,
+  options: FollowWikilinkOptions,
+): boolean {
+  const focused = wikilinkPositionFromElement(view, document.activeElement);
+  return followWikilinkAt(
+    view,
+    focused ?? view.state.selection.main.head,
+    options,
+  );
+}
+
+/** Registers back, forward, and Enter-to-follow through the command registry. */
+export function registerNavigation(registry: CommandRegistry): void {
+  registry.register({
+    id: "navigation.back",
+    title: STRINGS.commandNavigateBack,
+    keybindings: ["Alt-ArrowLeft"],
+    run: (context) => context.navigateBack?.() ?? false,
+  });
+  registry.register({
+    id: "navigation.forward",
+    title: STRINGS.commandNavigateForward,
+    keybindings: ["Alt-ArrowRight"],
+    run: (context) => context.navigateForward?.() ?? false,
+  });
+  registry.register({
+    id: "navigation.follow-link",
+    title: STRINGS.commandFollowLink,
+    keybindings: ["Enter"],
+    scope: "editor",
+    run: (context) => context.followLink?.(context.view) ?? false,
+  });
+}

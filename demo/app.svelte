@@ -73,7 +73,10 @@ if (typeof window !== "undefined") {
     </aside>
   {/if}
   <div class="demo-app">
-    <Skribeum openVaultDisabledReason={unsupportedReason} />
+    <Skribeum
+      openVaultDisabledReason={unsupportedReason}
+      navigationSurface="browser"
+    />
   </div>
 </div>
 

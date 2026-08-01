@@ -43,6 +43,9 @@ function context(): CommandContext {
     requestSave: () => {},
     notePaths: () => [],
     recentNotePaths: () => [],
+    navigateBack: () => false,
+    navigateForward: () => false,
+    followLink: () => false,
   };
 }
 

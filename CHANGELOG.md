@@ -43,6 +43,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   commands for applying any configured status without rewriting task text.
 - `Create new note` command (`mod+n`) with no-overwrite naming in the configured
   default folder.
+- Wikilink and note-embed navigation with click and Enter activation,
+  unresolved-target notices, vault-relative browser permalinks, shared
+  browser and desktop history, back and forward commands, and explicit
+  missing-note states.
 - Browser-only editor demo with a seeded sample vault, in-memory edits that
   reset on reload, and a static GitHub Pages build.
 - Browser demo folder access through the File System Access API, with recursive

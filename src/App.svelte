@@ -4,8 +4,10 @@ import { onMount, tick } from "svelte";
 import tauriConfig from "../src-tauri/tauri.conf.json";
 import Banners, { type BannerItem } from "./lib/Banners.svelte";
 import Editor from "./lib/Editor.svelte";
+import { currentWikilinkContext } from "./lib/editor/decorations/engine";
 import {
   DEFAULT_OBSIDIAN_APP_CONFIG,
+  EMPTY_WIKILINK_CONTEXT,
   type ObsidianAppConfig,
   parseObsidianAppConfig,
   type WikilinkResolutionContext,
@@ -17,6 +19,15 @@ import {
 import FileTree from "./lib/FileTree.svelte";
 import { createAppRegistry } from "./lib/features";
 import { ContentRequestGate } from "./lib/features/contentRequestGate";
+import {
+  createNoteNavigator,
+  type FollowWikilinkOptions,
+  followWikilinkUnderCursor,
+  type NavigationState,
+  type NoteAddress,
+  type NoteNavigator,
+  noteFragmentPosition,
+} from "./lib/features/navigation";
 import { computeOutline, type OutlineEntry } from "./lib/features/outline";
 import {
   firstMatchText,
@@ -91,8 +102,10 @@ import {
 
 let {
   openVaultDisabledReason = null,
+  navigationSurface = "desktop",
 }: {
   openVaultDisabledReason?: string | null;
+  navigationSurface?: "browser" | "desktop";
 } = $props();
 
 let vault = $state<VaultHandle | null>(null);
@@ -113,6 +126,13 @@ let canvasPreviews = $state<Record<string, string>>({});
 let canvasError = $state<string | null>(null);
 let canvasViewer = $state<ReturnType<typeof CanvasView> | undefined>();
 const contentRequests = new ContentRequestGate();
+let missingAddress = $state<NoteAddress | null>(null);
+let navigationState = $state<NavigationState>({
+  address: null,
+  canGoBack: false,
+  canGoForward: false,
+});
+let navigation: NoteNavigator | null = null;
 
 let nextBannerId = 0;
 // Journal-recovered deltas for notes that are not open yet, applied as
@@ -319,7 +339,7 @@ function closeOverlay() {
 function commandContext(): CommandContext {
   return {
     view: editor?.getView() ?? null,
-    openNote: (path) => openNote(path),
+    openNote: (path) => navigateToNote(path),
     createNote: createNewNote,
     openView: (id) => {
       if (id === VIEW_OUTLINE) {
@@ -347,6 +367,9 @@ function commandContext(): CommandContext {
     },
     notePaths: () => notePathsOf(tree),
     recentNotePaths: () => recents,
+    navigateBack: () => navigation?.back() ?? false,
+    navigateForward: () => navigation?.forward() ?? false,
+    followLink: followLinkUnderCursor,
   };
 }
 
@@ -413,7 +436,7 @@ function onOverlayPick(id: string) {
     }
   } else if (overlay === VIEW_QUICK_SWITCHER) {
     closeOverlay();
-    void openNote(id);
+    void navigateToNote(id);
   } else if (overlay === VIEW_VAULT_SEARCH) {
     closeOverlay();
     void openSearchResult(id);
@@ -423,7 +446,7 @@ function onOverlayPick(id: string) {
 /** Opens a search hit and selects its first match in the note. */
 async function openSearchResult(path: string) {
   const result = searchResults.find((entry) => entry.path === path);
-  await openNote(path);
+  await navigateToNote(path);
   const view = editor?.getView();
   const match = result === undefined ? null : firstMatchText(result);
   if (view === undefined || match === null || match.length === 0) {
@@ -612,6 +635,7 @@ async function openVaultAtPath(path: string) {
     tree = nextTree;
     selectedPath = null;
     note = null;
+    missingAddress = null;
     contentView = null;
     canvas = null;
     canvasError = null;
@@ -620,8 +644,11 @@ async function openVaultAtPath(path: string) {
     refreshLinkContext();
     const harnessNote = (window as Window & { __SKRIBEUM_E2E_NOTE__?: string })
       .__SKRIBEUM_E2E_NOTE__;
-    if (typeof harnessNote === "string") {
-      await openNote(harnessNote);
+    const addressed = navigation?.state().address ?? null;
+    if (addressed !== null) {
+      await navigation?.start(addressed);
+    } else if (typeof harnessNote === "string") {
+      await navigation?.start({ path: harnessNote });
     }
   } catch (error) {
     if (!contentRequests.isCurrent(request)) {
@@ -656,17 +683,25 @@ async function refreshTree() {
   }
 }
 
-async function openNote(path: string) {
+function isMissingNoteError(error: unknown): boolean {
+  return (
+    error instanceof IpcError &&
+    (error.app.code === "note/not-found" ||
+      error.app.code === "vault/path-not-found")
+  );
+}
+
+async function openNote(path: string): Promise<boolean> {
   const currentVault = vault;
   if (currentVault === null) {
-    return;
+    return false;
   }
   const request = contentRequests.next();
   errorText = null;
   // Persist pending edits of the current note before switching away.
   if ((await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
-    return;
+    return false;
   }
   const debugWindow = window as Window & {
     __SKRIBEUM_DEBUG_NOTE_OPEN_MS__?: number;
@@ -679,7 +714,7 @@ async function openNote(path: string) {
   try {
     const loaded = await readNote(currentVault, path);
     if (vault !== currentVault || !contentRequests.isCurrent(request)) {
-      return;
+      return false;
     }
     const recovered = pendingRecovered.get(path);
     if (recovered !== undefined) {
@@ -688,6 +723,7 @@ async function openNote(path: string) {
       pushBanner({ text: STRINGS.noteRecoveredNotice });
     }
     note = loaded;
+    missingAddress = null;
     contentView = null;
     canvas = null;
     canvasError = null;
@@ -702,12 +738,90 @@ async function openNote(path: string) {
       debugWindow.__SKRIBEUM_DEBUG_NOTE_OPEN_MS__ =
         performance.now() - debugStart;
     }
+    return true;
   } catch (error) {
     if (vault !== currentVault || !contentRequests.isCurrent(request)) {
-      return;
+      return false;
+    }
+    if (isMissingNoteError(error)) {
+      note = null;
+      contentView = null;
+      canvas = null;
+      canvasError = null;
+      selectedPath = null;
+      missingAddress = { path };
+      return false;
     }
     errorText = describeError(STRINGS.noteReadFailed, error);
+    return false;
   }
+}
+
+async function openNoteAddress(address: NoteAddress): Promise<void> {
+  const opened = await openNote(address.path);
+  if (!opened) {
+    if (missingAddress !== null) {
+      missingAddress = address;
+    }
+    return;
+  }
+  if (address.fragment === undefined) {
+    return;
+  }
+  await tick();
+  const view = editor?.getView();
+  if (view === undefined) {
+    return;
+  }
+  const position = noteFragmentPosition(view.state, address.fragment);
+  if (position !== null) {
+    view.dispatch({
+      selection: { anchor: position },
+      scrollIntoView: true,
+      userEvent: "select",
+    });
+  }
+}
+
+function navigateToNote(path: string, fragment?: string): Promise<void> {
+  const address = fragment === undefined ? { path } : { path, fragment };
+  return navigation?.open(address) ?? openNoteAddress(address);
+}
+
+function wikilinkNavigationOptions(): FollowWikilinkOptions {
+  const view = editor?.getView();
+  const context =
+    view === undefined
+      ? (linkContext ?? EMPTY_WIKILINK_CONTEXT)
+      : currentWikilinkContext(view.state);
+  return {
+    context: { ...context, currentPath: selectedPath },
+    currentPath: selectedPath,
+    navigate: (address) =>
+      navigation?.open(address) ?? openNoteAddress(address),
+    unresolved: (reason) => {
+      pushBanner({ text: reason });
+    },
+  };
+}
+
+function followLinkUnderCursor(
+  activeView = editor?.getView() ?? null,
+): boolean {
+  const view = activeView;
+  if (view === null) {
+    return false;
+  }
+  return followWikilinkUnderCursor(view, wikilinkNavigationOptions());
+}
+
+async function refreshMissingNote() {
+  const address = missingAddress;
+  if (address === null) {
+    return;
+  }
+  await refreshTree();
+  await openNoteAddress(address);
 }
 
 function decodeFile(bytes: Uint8Array): string {
@@ -777,7 +891,7 @@ function openPath(path: string) {
   if (path.toLowerCase().endsWith(".canvas")) {
     void openCanvas(path);
   } else {
-    void openNote(path);
+    void navigateToNote(path);
   }
 }
 
@@ -812,7 +926,7 @@ async function reviewPath(path: string, bannerId: number) {
     }
     return;
   }
-  await openNote(path);
+  await navigateToNote(path);
 }
 
 function onConflict() {
@@ -849,12 +963,23 @@ function pollEndToEndVault() {
 }
 
 onMount(() => {
+  navigation = createNoteNavigator({
+    mode: navigationSurface,
+    browserWindow: window,
+    load: openNoteAddress,
+    changed: (state) => {
+      navigationState = state;
+    },
+  });
+  navigationState = navigation.state();
   const debugWindow = window as Window & {
     __SKRIBEUM_DEBUG_OPEN_NOTE__?: (path: string) => Promise<void>;
     __SKRIBEUM_DEBUG_PERF__?: boolean;
   };
   if (debugWindow.__SKRIBEUM_DEBUG_PERF__ === true) {
-    debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__ = openNote;
+    debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__ = async (path) => {
+      await openNote(path);
+    };
   }
   const unlisteners = [
     events.vaultCollisionsDetected.listen((event) => {
@@ -977,6 +1102,8 @@ onMount(() => {
   }
   const pollTimer = pollEndToEndVault();
   return () => {
+    navigation?.dispose();
+    navigation = null;
     delete debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__;
     clearInterval(pollTimer);
     cancelOutlineRefresh?.();
@@ -1004,6 +1131,24 @@ onMount(() => {
     >
       {STRINGS.openVault}
     </button>
+    <div class="flex items-center gap-1" aria-label={STRINGS.navigationHistoryLabel}>
+      <button
+        type="button"
+        class="rounded border border-gray-300 px-2 py-0.5 text-sm outline-offset-1 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={!navigationState.canGoBack}
+        onclick={() => registry.run("navigation.back", commandContext())}
+      >
+        {STRINGS.navigationBack}
+      </button>
+      <button
+        type="button"
+        class="rounded border border-gray-300 px-2 py-0.5 text-sm outline-offset-1 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={!navigationState.canGoForward}
+        onclick={() => registry.run("navigation.forward", commandContext())}
+      >
+        {STRINGS.navigationForward}
+      </button>
+    </div>
     {#if note?.readOnly || contentView === VIEW_CANVAS}
       <span class="skr-warning rounded px-2 py-0.5 text-xs">{STRINGS.readOnlyBadge}</span>
     {/if}
@@ -1046,6 +1191,28 @@ onMount(() => {
         <div class="skr-error m-4 rounded border p-3 text-sm" role="alert" data-testid="canvas-error">
           {canvasError}
         </div>
+      {:else if missingAddress !== null}
+        <div
+          class="skr-error m-4 max-w-2xl rounded border p-4 text-sm"
+          role="alert"
+          data-testid="note-not-found"
+        >
+          <h2 class="m-0 text-base font-semibold">{STRINGS.noteNotFoundTitle}</h2>
+          <p class="my-2">{STRINGS.noteNotFoundPrefix}</p>
+          <p class="my-2 font-mono">{missingAddress.path}</p>
+          {#if navigationSurface === "browser"}
+            <p class="mb-0">{STRINGS.noteNotFoundBrowser}</p>
+          {:else}
+            <p>{STRINGS.noteNotFoundDesktop}</p>
+            <button
+              type="button"
+              class="rounded border border-current px-2 py-1 outline-offset-2 focus-visible:outline-2 focus-visible:outline-blue-500"
+              onclick={refreshMissingNote}
+            >
+              {STRINGS.noteNotFoundRefresh}
+            </button>
+          {/if}
+        </div>
       {:else if note !== null}
         <Editor
           bind:this={editor}
@@ -1061,6 +1228,7 @@ onMount(() => {
           {onConflict}
           {onWriteError}
           onDocChanged={onEditorDocChanged}
+          {wikilinkNavigationOptions}
         />
       {:else}
         <!-- The scaffold fixture stays as the empty-state view. -->
@@ -1072,6 +1240,7 @@ onMount(() => {
           {commandContext}
           settings={settingsState.document}
           onDocChanged={onEditorDocChanged}
+          {wikilinkNavigationOptions}
         />
         {#if vault === null}
           <p class="sr-only">{STRINGS.emptyStateHint}</p>

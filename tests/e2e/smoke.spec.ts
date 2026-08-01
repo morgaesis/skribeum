@@ -12,6 +12,7 @@ import {
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
   MOTION_PREVIEW_NOTE_NAME,
+  NAVIGATION_SOURCE_NOTE_NAME,
   RENDERING_NOTE_NAME,
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
@@ -696,6 +697,30 @@ describe("skribeum shell", () => {
     await waitForDisk(CRLF_NOTE_NAME, "first\r\nsecond!\r\nthird\r\n");
   });
 
+  it("follows_a_wikilink_and_navigates_back", async () => {
+    await openNoteFromTree(NAVIGATION_SOURCE_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Navigation source"),
+      { timeout: 15000 },
+    );
+
+    const link = $(".cm-skr-wikilink-target");
+    await link.waitForExist({ timeout: 15000 });
+    await link.click();
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Wikilink destination content"),
+      { timeout: 15000 },
+    );
+
+    const back = $("button=Back");
+    await back.waitForEnabled({ timeout: 15000 });
+    await back.click();
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Navigation source"),
+      { timeout: 15000 },
+    );
+  });
+
   it("keyboard_reaches_every_surface_in_order_without_traps", async () => {
     // Focus order is DOM order: no element carries a positive tabindex, so
     // the traversal order is header action, banners when present, tree,
@@ -737,11 +762,8 @@ describe("skribeum shell", () => {
 
     // The tree exposes exactly one roving tabindex stop and arrow keys
     // move it; Enter opens the focused note.
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]')
-        ?.focus();
-    });
+    const firstTreeItem = $('[role="treeitem"]');
+    await firstTreeItem.click();
     expect(await activeElementDescriptor()).toContain("treeitem");
     const beforeArrow = await activeElementDescriptor();
     await browser.keys(Key.ArrowDown);

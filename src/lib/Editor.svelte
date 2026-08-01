@@ -18,7 +18,10 @@ import {
   dispatchWikilinkContext,
   sourceRevealMode,
 } from "./editor/decorations/engine";
-import type { WikilinkResolutionContext } from "./editor/decorations/wikilinks";
+import {
+  type WikilinkResolutionContext,
+  wikilinkPointerNavigation,
+} from "./editor/decorations/wikilinks";
 import {
   applyTypeOverrides,
   type Frontmatter,
@@ -29,6 +32,7 @@ import { showInvisibleCharacters } from "./editor/invisibles";
 import { NoteSession } from "./editor/noteSession";
 import { noteRenderingExtensions } from "./editor/syntaxPolicy";
 import { findExtension } from "./features/findPanel";
+import type { FollowWikilinkOptions } from "./features/navigation";
 import { selectionToolbar } from "./features/selectionToolbar";
 import {
   DEFAULT_SETTINGS,
@@ -63,6 +67,7 @@ let {
   onConflict,
   onWriteError,
   onDocChanged,
+  wikilinkNavigationOptions,
 }: {
   /** Fallback document when no note is open (the scaffold fixture). */
   doc?: string;
@@ -85,6 +90,8 @@ let {
   onWriteError?: (message: string) => void;
   /** Notified after any document-changing transaction (outline refresh). */
   onDocChanged?: () => void;
+  /** Supplies the shared navigator capabilities for pointer activation. */
+  wikilinkNavigationOptions?: () => FollowWikilinkOptions;
 } = $props();
 
 let host: HTMLDivElement;
@@ -187,6 +194,9 @@ function registryExtensions(): Extension[] {
       },
       notePaths: () => [],
       recentNotePaths: () => [],
+      navigateBack: () => false,
+      navigateForward: () => false,
+      followLink: () => false,
     }));
   if (activeRegistry === null) {
     return [editorKeymap(new CommandRegistry(), provider)];
@@ -207,6 +217,9 @@ function stateFor(content: string, locked: boolean): EditorState {
       renderingCompartment.of(
         noteRenderingExtensions(content, undefined, normalizedTaskStatuses),
       ),
+      ...(wikilinkNavigationOptions === undefined
+        ? []
+        : [wikilinkPointerNavigation(wikilinkNavigationOptions)]),
       editorAppearance,
       settingsCompartment.of(settingsExtensions(settings)),
       bulkTextInput(),

@@ -54,9 +54,11 @@ import {
 } from "./table";
 import {
   EMPTY_WIKILINK_CONTEXT,
+  followWikilinkTarget,
   resolveMarkdownLinkTarget,
   resolveWikilinkTarget,
   type WikilinkResolutionContext,
+  wikilinkNavigationOptionsFacet,
 } from "./wikilinks";
 
 /** Syntax colors shared by editable notes and nested read-only notes. */
@@ -876,6 +878,7 @@ class EmbedWidget extends WidgetType {
     const host = document.createElement("span");
     host.className = "cm-skr-embed cm-skr-reveal-motion cm-skr-reveal-rendered";
     host.setAttribute("role", "group");
+    host.dataset.target = this.target;
     const [pathTarget = "", fragment = ""] = this.target.split("#", 2);
     const resolution = resolveWikilinkTarget(this.target, this.context);
     const resolvedPath =
@@ -889,8 +892,63 @@ class EmbedWidget extends WidgetType {
 
     const header = document.createElement("span");
     header.className = "cm-skr-embed-header";
+    header.setAttribute("role", "link");
+    header.tabIndex = 0;
     header.textContent =
       fragment.length > 0 ? `${sourceName} · ${fragment}` : sourceName;
+    let pointerHandled = false;
+    const activate = () => {
+      const provider = view.state.facet(wikilinkNavigationOptionsFacet);
+      return provider === null
+        ? false
+        : followWikilinkTarget(this.target, provider());
+    };
+    header.addEventListener("mousedown", (event) => {
+      pointerHandled = false;
+      if (
+        event.button !== 0 ||
+        event.altKey ||
+        event.shiftKey ||
+        view.state.facet(wikilinkNavigationOptionsFacet) === null
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      pointerHandled = activate();
+    });
+    header.addEventListener("click", (event) => {
+      if (
+        event.button !== 0 ||
+        event.altKey ||
+        event.shiftKey ||
+        view.state.facet(wikilinkNavigationOptionsFacet) === null
+      ) {
+        pointerHandled = false;
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (!pointerHandled) {
+        activate();
+      }
+      pointerHandled = false;
+    });
+    header.addEventListener("keydown", (event) => {
+      if (
+        event.key !== "Enter" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        view.state.facet(wikilinkNavigationOptionsFacet) === null
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      activate();
+    });
     host.append(header);
     const body = document.createElement("span");
     body.className = "cm-skr-embed-body";
@@ -2445,7 +2503,10 @@ const engineTheme = EditorView.baseTheme({
     textUnderlineOffset: "0.15em",
   },
   ".cm-skr-link-label": { color: "var(--skr-link)" },
-  ".cm-skr-wikilink": { color: "var(--skr-link)" },
+  ".cm-skr-wikilink": {
+    color: "var(--skr-link)",
+    cursor: "pointer",
+  },
   ".cm-skr-wikilink-target, .cm-skr-wikilink-alias": {
     textDecoration: "underline",
   },

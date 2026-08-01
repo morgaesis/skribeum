@@ -123,6 +123,38 @@ structural change composed with the formatting pass that re-pads other
 cells, so the byte-containment property is asserted over exactly what
 each operation declares and GFM alignment survives every edit.
 
+## Note navigation and addresses
+
+Note addresses use the vault-relative Markdown path already shared by the
+vault index and Obsidian links. The browser demo serializes an address as
+`?note=<percent-encoded-vault-path>#<percent-encoded-fragment>`, for example
+`?note=Examples%2FWork%2Fmeeting-notes.md#Open%20questions`. The query form
+keeps permalinks valid when the static demo is hosted below a URL prefix. The
+optional fragment is an Obsidian heading or `^block-id` suffix without the
+leading `#`. Desktop navigation stores the same `{ path, fragment }` address
+objects in an in-app stack, so link resolution, back and forward behavior, and
+fragment selection do not depend on the host surface.
+
+Paths are NFC-normalized, slash-separated, vault-root-relative values. A path
+is the durable address because vault handles are session-local and notes do
+not carry stable identifiers. Renaming a note therefore changes its address.
+Existing links continue to follow Obsidian path and shortest-name resolution;
+an old permalink whose path no longer exists opens the not-found surface
+instead of guessing at a renamed target. The desktop surface instructs the
+user to create the Markdown file at that path and provides a refresh action.
+The browser demo explains that it does not create the file automatically.
+
+The navigation feature (`src/lib/features/navigation.ts`) owns address
+encoding, Obsidian-aware resolution, browser and desktop history adapters,
+fragment lookup, and the registered `navigation.back`, `navigation.forward`,
+and `navigation.follow-link` commands. A plain click follows a rendered
+wikilink or the header of a rendered note embed. A click on revealed wikilink
+source remains an editing gesture. Control-click and Command-click follow
+without moving the cursor. Enter follows the link under the editor cursor or a
+focused embed header and otherwise falls through to CodeMirror's ordinary
+Enter behavior. Unresolved links announce the resolution failure and open
+their deterministic missing-note address when one can be formed.
+
 ## Live preview
 
 The editor renders source-text decoration: the buffer holds the exact

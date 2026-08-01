@@ -265,8 +265,10 @@ fn write_preserves_unknown_fields_inside_status_entries() {
             .as_bytes(),
     );
 
-    let mut settings = Settings::default();
-    settings.task_statuses = vec![first];
+    let settings = Settings {
+        task_statuses: vec![first],
+        ..Settings::default()
+    };
     store.write(&fs, &settings).expect("write succeeds");
     let stored: Value =
         serde_json::from_slice(&fs.read(&path).expect("file readable")).expect("valid JSON");

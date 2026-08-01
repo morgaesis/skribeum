@@ -259,14 +259,12 @@ async function prepareTagCompletionTarget(): Promise<void> {
   );
   await openNoteFromTree(TAG_COMPLETION_TARGET_NOTE_NAME);
   await browser.waitUntil(
-    async () => {
-      const text = await editorText();
-      return (
-        text.includes(TAG_COMPLETION_MIDDLE_LINE) &&
-        text.includes(TAG_COMPLETION_FINAL_LINE)
-      );
+    async () =>
+      (await editorDocumentText()) === TAG_COMPLETION_TARGET_NOTE_CONTENT,
+    {
+      timeout: 15000,
+      timeoutMsg: "tag completion target did not reach its exact source state",
     },
-    { timeout: 15000, timeoutMsg: "tag completion target did not open" },
   );
 }
 

@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Settings use one searchable scrolling pane with header jump navigation,
+  compact palette cards, and live previews of each selected palette's text,
+  link, code, rule, accent, and task treatments.
+
 ### Fixed
 
 - Restore defaults reapplies and persists the complete default settings

@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
 import {
+  DEFAULT_SETTINGS,
+  type SettingsDocument,
+} from "../../src/lib/features/settingsStore";
+import {
   CANVAS_FILE_CONTENT,
   CANVAS_FILE_NAME,
   CRLF_NOTE_NAME,
@@ -587,6 +591,37 @@ async function activeElementDescriptor(): Promise<string> {
   });
 }
 
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, nestedValue: unknown) => {
+    if (
+      nestedValue === null ||
+      typeof nestedValue !== "object" ||
+      Array.isArray(nestedValue)
+    ) {
+      return nestedValue;
+    }
+    return Object.fromEntries(
+      Object.entries(nestedValue).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    );
+  });
+}
+
+async function dispatchFocusedKey(key: string): Promise<boolean> {
+  return browser.execute((nextKey: string) => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) return false;
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: nextKey,
+    });
+    active.dispatchEvent(event);
+    return event.defaultPrevented;
+  }, key);
+}
+
 async function expectNoAxeViolations(surface: string) {
   const violations = await browser.executeAsync<
     Array<{ id: string; impact: string | null; targets: string[] }>,
@@ -730,7 +765,7 @@ describe("skribeum shell", () => {
         await actionsSheet.$("button=Open settings").click();
         const settings = $('[data-testid="settings-view"]');
         await settings.waitForDisplayed({ timeout: 10000 });
-        await settings.$("button=Close").click();
+        await settings.$('button[aria-label="Close"]').click();
         await settings.waitForExist({ reverse: true, timeout: 10000 });
         await browser.waitUntil(
           () =>
@@ -1033,7 +1068,7 @@ describe("skribeum shell", () => {
         surface: "settings",
         escapes: await horizontalViewportEscapes(),
       });
-      await settings.$("button=Close").click();
+      await settings.$('button[aria-label="Close"]').click();
       await settings.waitForExist({ reverse: true, timeout: 10000 });
 
       await mobileActions.$("button=Search").click();
@@ -2400,21 +2435,14 @@ describe("skribeum core editing surfaces", () => {
     });
   }
 
-  type PersistedAppearance = {
-    theme: string;
-    light_palette: string;
-    dark_palette: string;
-    prose_font: string;
-  };
-
-  /** Reads the persisted appearance choices through IPC. */
-  async function persistedAppearance(): Promise<PersistedAppearance | string> {
-    return browser.executeAsync<PersistedAppearance | string, []>((done) => {
+  /** Reads the complete persisted settings document through IPC. */
+  async function persistedSettings(): Promise<SettingsDocument | string> {
+    return browser.executeAsync<SettingsDocument | string, []>((done) => {
       const tauri = (
         window as unknown as {
           __TAURI__?: {
             core: {
-              invoke: (name: string) => Promise<PersistedAppearance>;
+              invoke: (name: string) => Promise<SettingsDocument>;
             };
           };
         }
@@ -2428,6 +2456,33 @@ describe("skribeum core editing surfaces", () => {
         .then((doc) => done(doc))
         .catch((error: unknown) => done(String(error)));
     });
+  }
+
+  /** Persists a complete settings document through IPC. */
+  async function persistSettings(document: SettingsDocument): Promise<void> {
+    const result = await browser.executeAsync<string, [SettingsDocument]>(
+      (nextDocument, done) => {
+        const tauri = (
+          window as unknown as {
+            __TAURI__?: {
+              core: {
+                invoke: (name: string, args: unknown) => Promise<unknown>;
+              };
+            };
+          }
+        ).__TAURI__;
+        if (tauri === undefined) {
+          done("no-global-tauri");
+          return;
+        }
+        tauri.core
+          .invoke("settings_write", { doc: nextDocument })
+          .then(() => done("ok"))
+          .catch((error: unknown) => done(String(error)));
+      },
+      document,
+    );
+    expect(result).toBe("ok");
   }
 
   /** Sets the settings font size through the open dialog's input. */
@@ -2474,6 +2529,320 @@ describe("skribeum core editing surfaces", () => {
       await checkbox.click();
     }
   }
+
+  it("settings_surface_has_one_hierarchy_responsive_swatches_and_keyboard_access", async () => {
+    await closeAnyOverlay();
+    await $('[role="tree"]').waitForExist({ timeout: 15000 });
+    const editor = $(".cm-content");
+    await editor.click();
+    await browser.keys([modifierKey, ","]);
+    const dialog = $('[data-testid="settings-view"]');
+    await dialog.waitForDisplayed({ timeout: 10000 });
+
+    const sectionCounts = await browser.execute(() => {
+      const names = [
+        "Appearance",
+        "Editor",
+        "Files",
+        "Search",
+        "Updates",
+        "About",
+      ];
+      const settings = document.querySelector<HTMLElement>(
+        '[data-testid="settings-view"]',
+      );
+      const visibleText = [
+        ...(settings?.querySelectorAll<HTMLElement>("*") ?? []),
+      ].filter((element) => {
+        const style = getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          box.width > 0 &&
+          box.height > 0
+        );
+      });
+      return Object.fromEntries(
+        names.map((name) => [
+          name,
+          visibleText.filter(
+            (element) =>
+              element.children.length === 0 &&
+              element.textContent?.trim() === name,
+          ).length,
+        ]),
+      );
+    });
+    expect(sectionCounts).toEqual({
+      About: 1,
+      Appearance: 1,
+      Editor: 1,
+      Files: 1,
+      Search: 1,
+      Updates: 1,
+    });
+
+    const search = $('[data-testid="settings-search"]');
+    await search.setValue("security scope");
+    expect(await $('[data-settings-section="about"]').isDisplayed()).toBe(true);
+    expect(await $('[data-settings-section="appearance"]').isExisting()).toBe(
+      false,
+    );
+    await search.clearValue();
+    await $('[data-settings-section="appearance"]').waitForDisplayed({
+      timeout: 5000,
+    });
+
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>('[data-testid="settings-jump"]')
+        ?.focus();
+    });
+    expect(await dispatchFocusedKey("Enter")).toBe(true);
+    const jumpMenu = $('[data-testid="settings-jump-menu"]');
+    await jumpMenu.waitForDisplayed({ timeout: 5000 });
+    const menuTrap = await browser.execute(() => {
+      const menu = document.querySelector<HTMLElement>(
+        '[data-testid="settings-jump-menu"]',
+      );
+      const controls = [
+        ...(menu?.querySelectorAll<HTMLButtonElement>("button") ?? []),
+      ];
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (first === undefined || last === undefined) return false;
+      last.focus();
+      const event = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Tab",
+      });
+      last.dispatchEvent(event);
+      return event.defaultPrevented && document.activeElement === first;
+    });
+    expect(menuTrap).toBe(true);
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>(
+          '[data-testid="settings-jump-menu"] [role="menuitem"]',
+        )
+        ?.focus();
+    });
+    expect(await dispatchFocusedKey("ArrowDown")).toBe(true);
+    expect(await dispatchFocusedKey("Enter")).toBe(true);
+    await jumpMenu.waitForExist({ reverse: true, timeout: 5000 });
+    expect(
+      await browser.execute(() => {
+        const pane = document.querySelector<HTMLElement>(".settings-content");
+        const editorSection = document.querySelector<HTMLElement>(
+          '[data-settings-section="editor"]',
+        );
+        if (pane === null || editorSection === null) return false;
+        return (
+          pane.scrollTop > 0 &&
+          Math.abs(
+            editorSection.getBoundingClientRect().top -
+              pane.getBoundingClientRect().top,
+          ) < 1
+        );
+      }),
+    ).toBe(true);
+
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLButtonElement>('[data-testid="settings-jump"]')
+        ?.click();
+    });
+    const reopenedJumpMenu = $('[data-testid="settings-jump-menu"]');
+    await reopenedJumpMenu.waitForDisplayed({ timeout: 5000 });
+    await browser.keys(Key.Escape);
+    await reopenedJumpMenu.waitForExist({ reverse: true, timeout: 5000 });
+    expect(await activeElementDescriptor()).toContain("jump-button");
+
+    await setViewportSize(390, 844);
+    const cardGeometry = await browser.execute(() => {
+      const cards = [
+        ...document.querySelectorAll<HTMLElement>(
+          '[aria-label="Light palette"] .palette-card',
+        ),
+      ].map((card) => card.getBoundingClientRect());
+      const firstTop = cards[0]?.top;
+      return {
+        count: cards.length,
+        firstRow: cards.filter(
+          ({ top }) => firstTop !== undefined && Math.abs(top - firstTop) < 1,
+        ).length,
+      };
+    });
+    expect(cardGeometry).toEqual({ count: 3, firstRow: 2 });
+    expect(await horizontalViewportEscapes()).toEqual([]);
+
+    const previewColors = async () =>
+      browser.execute(() => {
+        const preview = document.querySelector<HTMLElement>(
+          '[data-testid="settings-light-palette-preview"]',
+        );
+        const heading = preview?.querySelector<HTMLElement>(
+          ".palette-live-heading",
+        );
+        const body = preview?.querySelector<HTMLElement>(".palette-live-body");
+        const link = preview?.querySelector<HTMLElement>("a");
+        const code = preview?.querySelector<HTMLElement>("code");
+        const unchecked = preview?.querySelector<HTMLElement>(
+          ".palette-live-task:not(.palette-live-task-complete) .palette-live-box",
+        );
+        const checked = preview?.querySelector<HTMLElement>(
+          ".palette-live-task-complete .palette-live-box",
+        );
+        if (
+          preview === null ||
+          heading === null ||
+          body === null ||
+          link === null ||
+          code === null ||
+          unchecked === null ||
+          checked === null
+        ) {
+          throw new Error("light palette preview is incomplete");
+        }
+        return {
+          accent: getComputedStyle(checked).backgroundColor,
+          body: getComputedStyle(body).color,
+          code: getComputedStyle(code).backgroundColor,
+          heading: getComputedStyle(heading).color,
+          link: getComputedStyle(link).color,
+          rule: getComputedStyle(unchecked).borderColor,
+          surface: getComputedStyle(preview).backgroundColor,
+        };
+      });
+
+    const manuscript = $('[data-testid="settings-light-palette-manuscript"]');
+    await manuscript.scrollIntoView();
+    await selectSettingsChoice(
+      '[data-testid="settings-light-palette-manuscript"]',
+      "Manuscript palette",
+    );
+    expect(
+      await browser.execute(() => {
+        const preview = document.querySelector<HTMLElement>(
+          '[data-testid="settings-light-palette-preview"]',
+        );
+        return {
+          body: preview
+            ?.querySelector<HTMLElement>(".palette-live-body")
+            ?.textContent?.replace(/\s+/gu, " ")
+            .trim(),
+          heading: preview
+            ?.querySelector<HTMLElement>(".palette-live-heading")
+            ?.textContent?.trim(),
+          tasks: [
+            ...(preview?.querySelectorAll<HTMLElement>(".palette-live-task") ??
+              []),
+          ].map(({ textContent }) => textContent?.replace(/\s+/gu, " ").trim()),
+        };
+      }),
+    ).toEqual({
+      body: "Notes read well in every light. skr",
+      heading: "Manuscript",
+      tasks: ["Draft the outline", "✓ Ship the fix"],
+    });
+    const manuscriptColors = await previewColors();
+    await browser.keys(Key.ArrowRight);
+    const studio = $('[data-testid="settings-light-palette-studio"]');
+    await browser.waitUntil(
+      async () => (await studio.getAttribute("aria-checked")) === "true",
+      { timeout: 5000, timeoutMsg: "palette arrow key did not select Studio" },
+    );
+    const studioColors = await previewColors();
+    expect(
+      Object.keys(manuscriptColors).filter(
+        (key) =>
+          manuscriptColors[key as keyof typeof manuscriptColors] !==
+          studioColors[key as keyof typeof studioColors],
+      ).length,
+    ).toBe(7);
+
+    const taskSummary = $(".task-status-editor summary");
+    await taskSummary.scrollIntoView();
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>(".task-status-editor summary")
+        ?.focus();
+    });
+    // The embedded driver does not run native default actions for synthesized
+    // keys. Activating the focused native summary exercises the same browser
+    // toggle while the focus assertion covers keyboard reachability.
+    await taskSummary.click();
+    const keyboardReachability = await browser.execute(() => {
+      const dialogElement = document.querySelector<HTMLElement>(
+        '[data-testid="settings-view"]',
+      );
+      if (dialogElement === null) return { count: 0, unreachable: ["dialog"] };
+      const controls = [
+        ...dialogElement.querySelectorAll<HTMLElement>(
+          "a[href], button:not(:disabled), input:not(:disabled), summary",
+        ),
+      ].filter((control) => {
+        const style = getComputedStyle(control);
+        const box = control.getBoundingClientRect();
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          box.width > 0 &&
+          box.height > 0
+        );
+      });
+      const unreachable = controls.flatMap((control) => {
+        control.focus();
+        const nativeControl = ["A", "BUTTON", "INPUT", "SUMMARY"].includes(
+          control.tagName,
+        );
+        return document.activeElement === control && nativeControl
+          ? []
+          : [
+              `${control.tagName.toLowerCase()}${
+                control.getAttribute("data-testid") ?? ""
+              }`,
+            ];
+      });
+      return { count: controls.length, unreachable };
+    });
+    expect(keyboardReachability.count).toBeGreaterThan(40);
+    expect(keyboardReachability.unreachable).toEqual([]);
+
+    const dialogTrap = await browser.execute(() => {
+      const dialogElement = document.querySelector<HTMLElement>(
+        '[data-testid="settings-view"]',
+      );
+      const focusable = [
+        ...(dialogElement?.querySelectorAll<HTMLElement>(
+          "a[href], button:not(:disabled), input:not(:disabled), summary",
+        ) ?? []),
+      ].filter((control) => control.getClientRects().length > 0);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (first === undefined || last === undefined) return false;
+      last.focus();
+      const event = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Tab",
+      });
+      last.dispatchEvent(event);
+      return event.defaultPrevented && document.activeElement === first;
+    });
+    expect(dialogTrap).toBe(true);
+
+    await selectSettingsChoice(
+      '[data-testid="settings-light-palette-manuscript"]',
+      "Manuscript palette",
+    );
+    await restoreDesktopViewport();
+    await browser.keys(Key.Escape);
+    await dialog.waitForExist({ reverse: true, timeout: 5000 });
+    expect(await activeElementDescriptor()).toContain("cm-content");
+  });
 
   it("settings_round_trip_applies_restart_free_and_persists", async () => {
     // The settings file is the real per-user document; pick a target
@@ -2713,55 +3082,80 @@ describe("skribeum core editing surfaces", () => {
   });
 
   it("packaged_settings_restore_default_appearance_and_persist", async () => {
+    const preservedSchemaVersion = 73;
+    const nonDefaultSettings: SettingsDocument = {
+      ...DEFAULT_SETTINGS,
+      schema_version: preservedSchemaVersion,
+      animations: false,
+      attachment_folder_mode: "folder",
+      attachment_folder_path: "media",
+      autosave_delay_ms: 900,
+      code_font: "classic",
+      dark_palette: "graphite",
+      default_note_folder: "notes",
+      editor_font_size: 20,
+      editor_line_height: 190,
+      editor_line_width: 84,
+      honor_obsidian_config: false,
+      indent_style: "tabs",
+      indent_width: 4,
+      light_palette: "studio",
+      link_previews: false,
+      prose_font: "sans",
+      reveal_markdown_syntax: false,
+      search_case_sensitive: true,
+      search_note_bodies: false,
+      search_result_limit: 75,
+      show_invisible_characters: true,
+      show_line_numbers: true,
+      spell_check: false,
+      task_statuses: DEFAULT_SETTINGS.task_statuses.map((status, index) => ({
+        ...status,
+        name: `Alternative status ${index + 1}`,
+      })),
+      theme: "dark",
+      update_channel: "beta",
+      wrap_long_lines: false,
+    };
+    await persistSettings(nonDefaultSettings);
+    await browser.refresh();
+    await $('[role="tree"]').waitForExist({ timeout: 15000 });
+
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    await selectTheme("dark");
-    await selectSettingsChoice(
-      '[data-testid="settings-dark-palette-graphite"]',
-      "Graphite palette",
-    );
-    await selectSettingsChoice(
-      '[data-choice="prose_font-sans"]',
-      "System sans prose font",
-    );
-    await browser.waitUntil(
-      async () => {
-        const persisted = await persistedAppearance();
-        return (
-          typeof persisted !== "string" &&
-          persisted.theme === "dark" &&
-          persisted.dark_palette === "graphite" &&
-          persisted.prose_font === "sans"
-        );
-      },
-      { timeout: 10000, timeoutMsg: "appearance choices did not persist" },
-    );
+    expect(await persistedSettings()).toEqual(nonDefaultSettings);
 
     await dialog.$("button=Restore defaults").click();
+    const expectedDefaults = {
+      ...DEFAULT_SETTINGS,
+      schema_version: preservedSchemaVersion,
+    };
     await browser.waitUntil(
       async () => {
         const appearance = await browser.execute(() => ({
+          animations: document.documentElement.dataset.animations,
+          codeFont: document.documentElement.dataset.codeFont,
           theme: document.documentElement.dataset.theme,
           lightPalette: document.documentElement.dataset.lightPalette,
           darkPalette: document.documentElement.dataset.darkPalette,
           proseFont: document.documentElement.dataset.proseFont,
         }));
-        const persisted = await persistedAppearance();
+        const persisted = await persistedSettings();
         return (
+          appearance.animations === "true" &&
+          appearance.codeFont === "modern" &&
           appearance.theme === "system" &&
           appearance.lightPalette === "manuscript" &&
           appearance.darkPalette === "lamplight" &&
           appearance.proseFont === "serif" &&
           typeof persisted !== "string" &&
-          persisted.theme === "system" &&
-          persisted.light_palette === "manuscript" &&
-          persisted.dark_palette === "lamplight" &&
-          persisted.prose_font === "serif"
+          stableJson(persisted) === stableJson(expectedDefaults)
         );
       },
       { timeout: 10000, timeoutMsg: "packaged settings did not restore" },
     );
+    expect(await persistedSettings()).toEqual(expectedDefaults);
     await browser.keys(Key.Escape);
     await dialog.waitForExist({ reverse: true, timeout: 5000 });
   });

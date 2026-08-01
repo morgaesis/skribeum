@@ -20,6 +20,8 @@ export type CommandContext = {
   view: EditorView | null;
   /** Opens a note by vault-relative path. */
   openNote(path: string): Promise<void>;
+  /** Creates and opens a note in the configured default folder. */
+  createNote?(): Promise<void>;
   /** Opens the view registered under `id`. */
   openView(id: string): void;
   /** Toggles the view registered under `id`. */

@@ -11,6 +11,8 @@ import { createAppRegistry } from "../../src/lib/features";
 import { setTaskStatusAtCursor } from "../../src/lib/features/taskCommands";
 import type { CommandContext } from "../../src/lib/registry";
 import {
+  defaultTaskStatuses,
+  normalizeTaskStatuses,
   type TaskStatus,
   taskStatusCommandId,
 } from "../../src/lib/taskStatuses";
@@ -65,6 +67,35 @@ afterEach(() => {
 });
 
 describe("task status commands and byte fidelity", () => {
+  it("resolves backend default names through the message catalogue", () => {
+    const backendDefaults = defaultTaskStatuses().map((status) => ({
+      ...status,
+      name: "",
+    }));
+    expect(
+      normalizeTaskStatuses(backendDefaults).map(({ name }) => name),
+    ).toEqual(defaultTaskStatuses().map(({ name }) => name));
+  });
+
+  it("preserves a custom name that resembles an old default identifier", () => {
+    const statuses = CUSTOM_STATUSES.map((status) =>
+      status.symbol === "x" ? { ...status, name: "default:x" } : status,
+    );
+    expect(
+      normalizeTaskStatuses(statuses).find(({ symbol }) => symbol === "x")
+        ?.name,
+    ).toBe("default:x");
+  });
+
+  it("rejects undefined theme color tokens", () => {
+    const statuses = CUSTOM_STATUSES.map((status) =>
+      status.symbol === "x"
+        ? { ...status, color_token: "--skr-not-defined" }
+        : status,
+    );
+    expect(normalizeTaskStatuses(statuses)).toEqual(defaultTaskStatuses());
+  });
+
   it("registers one named palette command per configured status", () => {
     const registry = createAppRegistry(CUSTOM_STATUSES);
     const commands = registry

@@ -1,9 +1,6 @@
 //! Application settings: `settings.json` in the OS app-config directory,
-//! never in any vault, per the architecture contract. The document carries
-//! a `schema_version` and typed known keys; unknown keys are preserved
-//! byte-for-byte-equivalent on every write, so a newer build's settings
-//! survive a round trip through an older one. All file access goes through
-//! the [`FileSystem`] trait and the crash-safe durable write sequence.
+//! never in any vault. Typed known keys are validated while unknown keys
+//! survive writes unchanged so newer settings remain forward compatible.
 
 use std::{
     collections::HashSet,
@@ -14,13 +11,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::fs::{FileSystem, FsError};
+use crate::path::VaultPath;
+use crate::vault::is_indexed_path;
 use crate::write::write_durable;
 
 /// File name of the settings document inside the OS app-config directory.
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
 
 /// Schema version written by this build.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 /// Semantic category used by task status rendering and accessibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,7 +45,7 @@ pub enum TaskStatusCategory {
 pub struct TaskStatus {
     /// The single source character between brackets.
     pub symbol: String,
-    /// Human-readable status name.
+    /// Custom status name, or empty when the frontend resolves a default name.
     pub name: String,
     /// Semantic status category.
     pub category: TaskStatusCategory,
@@ -58,311 +57,57 @@ pub struct TaskStatus {
     pub next_status: String,
 }
 
-const DEFAULT_TASK_STATUS_ROWS: &[(&str, &str, TaskStatusCategory, &str, &str, &str)] = &[
-    (
-        " ",
-        "Unchecked",
-        TaskStatusCategory::Todo,
-        "○",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "x",
-        "Regular",
-        TaskStatusCategory::Done,
-        "✓",
-        "--skr-success",
-        " ",
-    ),
-    (
-        "X",
-        "Checked",
-        TaskStatusCategory::Done,
-        "✔",
-        "--skr-success",
-        " ",
-    ),
-    (
-        "-",
-        "Dropped",
-        TaskStatusCategory::Cancelled,
-        "✕",
-        "--skr-danger",
-        " ",
-    ),
-    (
-        ">",
-        "Forward",
-        TaskStatusCategory::Todo,
-        "→",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "<",
-        "Migrated",
-        TaskStatusCategory::Todo,
-        "←",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "D",
-        "Date",
-        TaskStatusCategory::Todo,
-        "◷",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "?",
-        "Question",
-        TaskStatusCategory::Todo,
-        "?",
-        "--skr-accent",
-        "/",
-    ),
+const DEFAULT_TASK_STATUS_ROWS: &[(&str, TaskStatusCategory, &str, &str, &str)] = &[
+    (" ", TaskStatusCategory::Todo, "○", "--skr-accent", "/"),
+    ("x", TaskStatusCategory::Done, "✓", "--skr-success", " "),
+    ("X", TaskStatusCategory::Done, "✔", "--skr-success", " "),
+    ("-", TaskStatusCategory::Cancelled, "✕", "--skr-danger", " "),
+    (">", TaskStatusCategory::Todo, "→", "--skr-accent", "/"),
+    ("<", TaskStatusCategory::Todo, "←", "--skr-accent", "/"),
+    ("D", TaskStatusCategory::Todo, "◷", "--skr-accent", "/"),
+    ("?", TaskStatusCategory::Todo, "?", "--skr-accent", "/"),
     (
         "/",
-        "Half Done",
         TaskStatusCategory::InProgress,
         "◐",
         "--skr-warning",
         "x",
     ),
-    (
-        "+",
-        "Add",
-        TaskStatusCategory::Todo,
-        "+",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "R",
-        "Research",
-        TaskStatusCategory::Todo,
-        "⌕",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "!",
-        "Important",
-        TaskStatusCategory::Todo,
-        "!",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "i",
-        "Idea",
-        TaskStatusCategory::Todo,
-        "◇",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "B",
-        "Brainstorm",
-        TaskStatusCategory::Todo,
-        "◎",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "P",
-        "Pro",
-        TaskStatusCategory::Todo,
-        "+",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "C",
-        "Con",
-        TaskStatusCategory::Todo,
-        "−",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "Q",
-        "Quote",
-        TaskStatusCategory::Todo,
-        "❝",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "N",
-        "Note",
-        TaskStatusCategory::Todo,
-        "▤",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "b",
-        "Bookmark",
-        TaskStatusCategory::Todo,
-        "◆",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "I",
-        "Information",
-        TaskStatusCategory::Todo,
-        "ⓘ",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "p",
-        "Paraphrase",
-        TaskStatusCategory::Todo,
-        "¶",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "L",
-        "Location",
-        TaskStatusCategory::Todo,
-        "⌖",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "E",
-        "Example",
-        TaskStatusCategory::Todo,
-        "◇",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "A",
-        "Answer",
-        TaskStatusCategory::Todo,
-        "↳",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "r",
-        "Reward",
-        TaskStatusCategory::Todo,
-        "★",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "c",
-        "Choice",
-        TaskStatusCategory::Todo,
-        "◆",
-        "--skr-accent",
-        "/",
-    ),
+    ("+", TaskStatusCategory::Todo, "+", "--skr-accent", "/"),
+    ("R", TaskStatusCategory::Todo, "⌕", "--skr-accent", "/"),
+    ("!", TaskStatusCategory::Todo, "!", "--skr-accent", "/"),
+    ("i", TaskStatusCategory::Todo, "◇", "--skr-accent", "/"),
+    ("B", TaskStatusCategory::Todo, "◎", "--skr-accent", "/"),
+    ("P", TaskStatusCategory::Todo, "+", "--skr-accent", "/"),
+    ("C", TaskStatusCategory::Todo, "−", "--skr-accent", "/"),
+    ("Q", TaskStatusCategory::Todo, "❝", "--skr-accent", "/"),
+    ("N", TaskStatusCategory::Todo, "▤", "--skr-accent", "/"),
+    ("b", TaskStatusCategory::Todo, "◆", "--skr-accent", "/"),
+    ("I", TaskStatusCategory::Todo, "ⓘ", "--skr-accent", "/"),
+    ("p", TaskStatusCategory::Todo, "¶", "--skr-accent", "/"),
+    ("L", TaskStatusCategory::Todo, "⌖", "--skr-accent", "/"),
+    ("E", TaskStatusCategory::Todo, "◇", "--skr-accent", "/"),
+    ("A", TaskStatusCategory::Todo, "↳", "--skr-accent", "/"),
+    ("r", TaskStatusCategory::Todo, "★", "--skr-accent", "/"),
+    ("c", TaskStatusCategory::Todo, "◆", "--skr-accent", "/"),
     (
         "d",
-        "Doing",
         TaskStatusCategory::InProgress,
         "◒",
         "--skr-warning",
         "x",
     ),
-    (
-        "T",
-        "Time",
-        TaskStatusCategory::Todo,
-        "◷",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "@",
-        "Character",
-        TaskStatusCategory::Todo,
-        "@",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "t",
-        "Talk",
-        TaskStatusCategory::Todo,
-        "◖",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "O",
-        "Outline",
-        TaskStatusCategory::Todo,
-        "☰",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "~",
-        "Conflict",
-        TaskStatusCategory::Todo,
-        "≈",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "W",
-        "World",
-        TaskStatusCategory::Todo,
-        "◉",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "f",
-        "Clue",
-        TaskStatusCategory::Todo,
-        "?",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "F",
-        "Foreshadow",
-        TaskStatusCategory::Todo,
-        "⋙",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "H",
-        "Favorite",
-        TaskStatusCategory::Todo,
-        "♥",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "&",
-        "Symbolism",
-        TaskStatusCategory::Todo,
-        "§",
-        "--skr-accent",
-        "/",
-    ),
-    (
-        "s",
-        "Secret",
-        TaskStatusCategory::Todo,
-        "◆",
-        "--skr-accent",
-        "/",
-    ),
+    ("T", TaskStatusCategory::Todo, "◷", "--skr-accent", "/"),
+    ("@", TaskStatusCategory::Todo, "@", "--skr-accent", "/"),
+    ("t", TaskStatusCategory::Todo, "◖", "--skr-accent", "/"),
+    ("O", TaskStatusCategory::Todo, "☰", "--skr-accent", "/"),
+    ("~", TaskStatusCategory::Todo, "≈", "--skr-accent", "/"),
+    ("W", TaskStatusCategory::Todo, "◉", "--skr-accent", "/"),
+    ("f", TaskStatusCategory::Todo, "?", "--skr-accent", "/"),
+    ("F", TaskStatusCategory::Todo, "⋙", "--skr-accent", "/"),
+    ("H", TaskStatusCategory::Todo, "♥", "--skr-accent", "/"),
+    ("&", TaskStatusCategory::Todo, "§", "--skr-accent", "/"),
+    ("s", TaskStatusCategory::Todo, "◆", "--skr-accent", "/"),
 ];
 
 /// Default task status configuration.
@@ -371,9 +116,9 @@ pub fn default_task_statuses() -> Vec<TaskStatus> {
     DEFAULT_TASK_STATUS_ROWS
         .iter()
         .map(
-            |(symbol, name, category, glyph, color_token, next_status)| TaskStatus {
+            |(symbol, category, glyph, color_token, next_status)| TaskStatus {
                 symbol: (*symbol).to_owned(),
-                name: (*name).to_owned(),
+                name: String::new(),
                 category: *category,
                 glyph: (*glyph).to_owned(),
                 color_token: (*color_token).to_owned(),
@@ -386,8 +131,7 @@ pub fn default_task_statuses() -> Vec<TaskStatus> {
 /// Settings failures.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SettingsError {
-    /// The settings file exists but is not a JSON object; nothing is
-    /// guessed and nothing is overwritten.
+    /// The settings file exists but is not a JSON object.
     #[error("settings file is not a JSON object")]
     Corrupt,
     /// A value is outside its accepted range or set.
@@ -398,27 +142,44 @@ pub enum SettingsError {
     Fs(#[from] FsError),
 }
 
-/// The typed settings document. Kept deliberately minimal and growable:
-/// every key here is consumed by a shipped surface, and unknown keys in the
-/// file pass through writes untouched.
+/// The typed settings document. Unknown keys in the file pass through writes
+/// untouched, including retired keys from earlier schemas.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "flat fields mirror the forward-compatible settings document"
+)]
 pub struct Settings {
-    /// Schema version of the document.
     pub schema_version: u32,
-    /// Color theme: `system`, `light` or `dark`.
     pub theme: String,
     /// Palette used in light mode.
     pub light_palette: String,
     /// Palette used in dark mode.
     pub dark_palette: String,
-    /// Editor font size in CSS pixels.
+    pub prose_font: String,
+    pub code_font: String,
     pub editor_font_size: u32,
-    /// Editor reading measure in characters.
-    pub editor_reading_measure: u32,
-    /// Maximum number of results a search query returns.
+    pub editor_line_height: u32,
+    pub editor_line_width: u32,
+    pub show_line_numbers: bool,
+    pub animations: bool,
+    pub autosave_delay_ms: u32,
+    pub spell_check: bool,
+    pub indent_style: String,
+    pub indent_width: u32,
+    pub wrap_long_lines: bool,
+    pub show_invisible_characters: bool,
+    pub reveal_markdown_syntax: bool,
+    pub default_note_folder: String,
+    pub attachment_folder_mode: String,
+    pub attachment_folder_path: String,
+    pub honor_obsidian_config: bool,
     pub search_result_limit: u32,
     /// Whether note links show rendered previews.
     pub link_previews: bool,
+    pub search_note_bodies: bool,
+    pub search_case_sensitive: bool,
+    pub update_channel: String,
     /// Ordered task marker vocabulary and click-transition graph.
     pub task_statuses: Vec<TaskStatus>,
 }
@@ -430,57 +191,99 @@ impl Default for Settings {
             theme: "system".to_owned(),
             light_palette: "manuscript".to_owned(),
             dark_palette: "lamplight".to_owned(),
+            prose_font: "serif".to_owned(),
+            code_font: "modern".to_owned(),
             editor_font_size: 16,
-            editor_reading_measure: 72,
+            editor_line_height: 170,
+            editor_line_width: 72,
+            show_line_numbers: false,
+            animations: true,
+            autosave_delay_ms: 400,
+            spell_check: true,
+            indent_style: "spaces".to_owned(),
+            indent_width: 2,
+            wrap_long_lines: true,
+            show_invisible_characters: false,
+            reveal_markdown_syntax: true,
+            default_note_folder: String::new(),
+            attachment_folder_mode: "vault".to_owned(),
+            attachment_folder_path: "attachments".to_owned(),
+            honor_obsidian_config: true,
             search_result_limit: 50,
             link_previews: true,
+            search_note_bodies: true,
+            search_case_sensitive: false,
+            update_channel: "stable".to_owned(),
             task_statuses: default_task_statuses(),
         }
     }
 }
 
-/// Accepted theme values.
 const THEMES: &[&str] = &["system", "light", "dark"];
 /// Accepted light palette values.
 const LIGHT_PALETTES: &[&str] = &["manuscript", "studio", "gazette"];
 /// Accepted dark palette values.
 const DARK_PALETTES: &[&str] = &["lamplight", "graphite", "signal"];
-/// Accepted editor font size range in CSS pixels.
+const PROSE_FONTS: &[&str] = &["serif", "sans"];
+const CODE_FONTS: &[&str] = &["modern", "classic"];
 const FONT_SIZE_RANGE: (u32, u32) = (8, 40);
-/// Accepted editor reading measure range in characters.
-const READING_MEASURE_RANGE: (u32, u32) = (45, 120);
-/// Accepted search result limit range.
+const LINE_HEIGHT_RANGE: (u32, u32) = (120, 220);
+const LINE_WIDTH_RANGE: (u32, u32) = (45, 120);
+const AUTOSAVE_DELAY_RANGE: (u32, u32) = (100, 10_000);
+const INDENT_STYLES: &[&str] = &["spaces", "tabs"];
+const INDENT_WIDTH_RANGE: (u32, u32) = (1, 8);
+const ATTACHMENT_FOLDER_MODES: &[&str] = &["vault", "note", "folder"];
 const RESULT_LIMIT_RANGE: (u32, u32) = (1, 1000);
+const UPDATE_CHANNELS: &[&str] = &["stable", "beta"];
 
 impl Settings {
-    /// Validates every typed value.
+    /// Validates every typed value before a write touches the file.
     ///
     /// # Errors
     ///
-    /// Returns [`SettingsError::InvalidValue`] naming the offending key.
+    /// Returns [`SettingsError::InvalidValue`] when any field falls outside
+    /// its accepted range, choice set, path rules, or task-status graph.
     pub fn validate(&self) -> Result<(), SettingsError> {
-        if !THEMES.contains(&self.theme.as_str()) {
-            return Err(SettingsError::InvalidValue("theme"));
+        validate_choice("theme", &self.theme, THEMES)?;
+        validate_choice("light_palette", &self.light_palette, LIGHT_PALETTES)?;
+        validate_choice("dark_palette", &self.dark_palette, DARK_PALETTES)?;
+        validate_choice("prose_font", &self.prose_font, PROSE_FONTS)?;
+        validate_choice("code_font", &self.code_font, CODE_FONTS)?;
+        validate_range("editor_font_size", self.editor_font_size, FONT_SIZE_RANGE)?;
+        validate_range(
+            "editor_line_height",
+            self.editor_line_height,
+            LINE_HEIGHT_RANGE,
+        )?;
+        validate_range(
+            "editor_line_width",
+            self.editor_line_width,
+            LINE_WIDTH_RANGE,
+        )?;
+        validate_range(
+            "autosave_delay_ms",
+            self.autosave_delay_ms,
+            AUTOSAVE_DELAY_RANGE,
+        )?;
+        validate_choice("indent_style", &self.indent_style, INDENT_STYLES)?;
+        validate_range("indent_width", self.indent_width, INDENT_WIDTH_RANGE)?;
+        if !is_safe_vault_folder(&self.default_note_folder, true) {
+            return Err(SettingsError::InvalidValue("default_note_folder"));
         }
-        if !LIGHT_PALETTES.contains(&self.light_palette.as_str()) {
-            return Err(SettingsError::InvalidValue("light_palette"));
+        validate_choice(
+            "attachment_folder_mode",
+            &self.attachment_folder_mode,
+            ATTACHMENT_FOLDER_MODES,
+        )?;
+        if !is_safe_vault_folder(&self.attachment_folder_path, false) {
+            return Err(SettingsError::InvalidValue("attachment_folder_path"));
         }
-        if !DARK_PALETTES.contains(&self.dark_palette.as_str()) {
-            return Err(SettingsError::InvalidValue("dark_palette"));
-        }
-        if self.editor_font_size < FONT_SIZE_RANGE.0 || self.editor_font_size > FONT_SIZE_RANGE.1 {
-            return Err(SettingsError::InvalidValue("editor_font_size"));
-        }
-        if self.editor_reading_measure < READING_MEASURE_RANGE.0
-            || self.editor_reading_measure > READING_MEASURE_RANGE.1
-        {
-            return Err(SettingsError::InvalidValue("editor_reading_measure"));
-        }
-        if self.search_result_limit < RESULT_LIMIT_RANGE.0
-            || self.search_result_limit > RESULT_LIMIT_RANGE.1
-        {
-            return Err(SettingsError::InvalidValue("search_result_limit"));
-        }
+        validate_range(
+            "search_result_limit",
+            self.search_result_limit,
+            RESULT_LIMIT_RANGE,
+        )?;
+        validate_choice("update_channel", &self.update_channel, UPDATE_CHANNELS)?;
         if !valid_task_statuses(&self.task_statuses) {
             return Err(SettingsError::InvalidValue("task_statuses"));
         }
@@ -488,8 +291,23 @@ impl Settings {
     }
 }
 
-/// The settings store at a fixed file path (conventionally
-/// [`SETTINGS_FILE_NAME`] inside the OS app-config directory).
+fn validate_choice(key: &'static str, value: &str, choices: &[&str]) -> Result<(), SettingsError> {
+    if choices.contains(&value) {
+        Ok(())
+    } else {
+        Err(SettingsError::InvalidValue(key))
+    }
+}
+
+fn validate_range(key: &'static str, value: u32, range: (u32, u32)) -> Result<(), SettingsError> {
+    if (range.0..=range.1).contains(&value) {
+        Ok(())
+    } else {
+        Err(SettingsError::InvalidValue(key))
+    }
+}
+
+/// The settings store at a fixed file path.
 #[derive(Debug, Clone)]
 pub struct SettingsStore {
     path: PathBuf,
@@ -508,18 +326,14 @@ impl SettingsStore {
         &self.path
     }
 
-    /// Reads the settings document. A missing file yields the defaults; a
-    /// present file must be a JSON object. Known keys with the wrong type
-    /// and out-of-range values fall back to their defaults rather than
-    /// failing the read: a bad value must never lock the user out of the
-    /// settings surface, and the invalid value is preserved on disk until
-    /// a write replaces it.
+    /// Reads the settings document. Each malformed known key falls back to
+    /// its default while the on-disk value remains available for preservation
+    /// until a subsequent successful write.
     ///
     /// # Errors
     ///
-    /// Returns [`SettingsError::Corrupt`] when the file exists but does not
-    /// parse as a JSON object, and propagates filesystem failures other
-    /// than not-found.
+    /// Returns an error when the file cannot be read or its root is not a JSON
+    /// object. Malformed individual settings do not produce an error.
     pub fn read(&self, fs: &dyn FileSystem) -> Result<Settings, SettingsError> {
         let object = match self.read_object(fs) {
             Ok(object) => object,
@@ -527,61 +341,91 @@ impl SettingsStore {
             Err(error) => return Err(error),
         };
         let defaults = Settings::default();
-        let settings = Settings {
+        Ok(Settings {
             schema_version: read_u32(&object, "schema_version").unwrap_or(defaults.schema_version),
-            theme: object
-                .get("theme")
-                .and_then(Value::as_str)
-                .filter(|theme| THEMES.contains(theme))
-                .unwrap_or(&defaults.theme)
-                .to_owned(),
-            light_palette: object
-                .get("light_palette")
-                .and_then(Value::as_str)
-                .filter(|palette| LIGHT_PALETTES.contains(palette))
-                .unwrap_or(&defaults.light_palette)
-                .to_owned(),
-            dark_palette: object
-                .get("dark_palette")
-                .and_then(Value::as_str)
-                .filter(|palette| DARK_PALETTES.contains(palette))
-                .unwrap_or(&defaults.dark_palette)
-                .to_owned(),
-            editor_font_size: read_u32(&object, "editor_font_size")
-                .filter(|size| (FONT_SIZE_RANGE.0..=FONT_SIZE_RANGE.1).contains(size))
+            theme: read_choice(&object, "theme", THEMES, &defaults.theme),
+            light_palette: read_choice(
+                &object,
+                "light_palette",
+                LIGHT_PALETTES,
+                &defaults.light_palette,
+            ),
+            dark_palette: read_choice(
+                &object,
+                "dark_palette",
+                DARK_PALETTES,
+                &defaults.dark_palette,
+            ),
+            prose_font: read_choice(&object, "prose_font", PROSE_FONTS, &defaults.prose_font),
+            code_font: read_choice(&object, "code_font", CODE_FONTS, &defaults.code_font),
+            editor_font_size: read_in_range(&object, "editor_font_size", FONT_SIZE_RANGE)
                 .unwrap_or(defaults.editor_font_size),
-            editor_reading_measure: read_u32(&object, "editor_reading_measure")
-                .filter(|measure| {
-                    (READING_MEASURE_RANGE.0..=READING_MEASURE_RANGE.1).contains(measure)
-                })
-                .unwrap_or(defaults.editor_reading_measure),
-            search_result_limit: read_u32(&object, "search_result_limit")
-                .filter(|limit| (RESULT_LIMIT_RANGE.0..=RESULT_LIMIT_RANGE.1).contains(limit))
+            editor_line_height: read_in_range(&object, "editor_line_height", LINE_HEIGHT_RANGE)
+                .unwrap_or(defaults.editor_line_height),
+            editor_line_width: read_in_range(&object, "editor_line_width", LINE_WIDTH_RANGE)
+                .or_else(|| read_in_range(&object, "editor_reading_measure", LINE_WIDTH_RANGE))
+                .unwrap_or(defaults.editor_line_width),
+            show_line_numbers: read_bool(&object, "show_line_numbers")
+                .unwrap_or(defaults.show_line_numbers),
+            animations: read_bool(&object, "animations").unwrap_or(defaults.animations),
+            autosave_delay_ms: read_in_range(&object, "autosave_delay_ms", AUTOSAVE_DELAY_RANGE)
+                .unwrap_or(defaults.autosave_delay_ms),
+            spell_check: read_bool(&object, "spell_check").unwrap_or(defaults.spell_check),
+            indent_style: read_choice(
+                &object,
+                "indent_style",
+                INDENT_STYLES,
+                &defaults.indent_style,
+            ),
+            indent_width: read_in_range(&object, "indent_width", INDENT_WIDTH_RANGE)
+                .unwrap_or(defaults.indent_width),
+            wrap_long_lines: read_bool(&object, "wrap_long_lines")
+                .unwrap_or(defaults.wrap_long_lines),
+            show_invisible_characters: read_bool(&object, "show_invisible_characters")
+                .unwrap_or(defaults.show_invisible_characters),
+            reveal_markdown_syntax: read_bool(&object, "reveal_markdown_syntax")
+                .unwrap_or(defaults.reveal_markdown_syntax),
+            default_note_folder: read_folder(&object, "default_note_folder", true)
+                .unwrap_or_else(|| defaults.default_note_folder.clone()),
+            attachment_folder_mode: read_choice(
+                &object,
+                "attachment_folder_mode",
+                ATTACHMENT_FOLDER_MODES,
+                &defaults.attachment_folder_mode,
+            ),
+            attachment_folder_path: read_folder(&object, "attachment_folder_path", false)
+                .unwrap_or_else(|| defaults.attachment_folder_path.clone()),
+            honor_obsidian_config: read_bool(&object, "honor_obsidian_config")
+                .unwrap_or(defaults.honor_obsidian_config),
+            search_result_limit: read_in_range(&object, "search_result_limit", RESULT_LIMIT_RANGE)
                 .unwrap_or(defaults.search_result_limit),
-            link_previews: object
-                .get("link_previews")
-                .and_then(Value::as_bool)
-                .unwrap_or(defaults.link_previews),
+            link_previews: read_bool(&object, "link_previews").unwrap_or(defaults.link_previews),
+            search_note_bodies: read_bool(&object, "search_note_bodies")
+                .unwrap_or(defaults.search_note_bodies),
+            search_case_sensitive: read_bool(&object, "search_case_sensitive")
+                .unwrap_or(defaults.search_case_sensitive),
+            update_channel: read_choice(
+                &object,
+                "update_channel",
+                UPDATE_CHANNELS,
+                &defaults.update_channel,
+            ),
             task_statuses: object
                 .get("task_statuses")
                 .cloned()
                 .and_then(|value| serde_json::from_value::<Vec<TaskStatus>>(value).ok())
                 .filter(|statuses| valid_task_statuses(statuses))
                 .unwrap_or(defaults.task_statuses),
-        };
-        Ok(settings)
+        })
     }
 
-    /// Writes the settings document, validating it first and preserving
-    /// every unknown key already in the file. The write is whole-document
-    /// and durable (temp file, fsync, rename).
+    /// Writes the settings document, validating it first and preserving every
+    /// unknown key already in the file. The write is whole-document and durable.
     ///
     /// # Errors
     ///
-    /// Returns [`SettingsError::InvalidValue`] for an out-of-range value,
-    /// [`SettingsError::Corrupt`] when the existing file cannot be parsed
-    /// (overwriting it would silently drop the unknown keys it may hold),
-    /// and propagates filesystem failures.
+    /// Returns an error when validation, serialization, directory creation, or
+    /// the durable filesystem write fails.
     pub fn write(&self, fs: &dyn FileSystem, settings: &Settings) -> Result<(), SettingsError> {
         settings.validate()?;
         let mut object = match self.read_object(fs) {
@@ -589,35 +433,70 @@ impl SettingsStore {
             Err(SettingsError::Fs(FsError::NotFound)) => Map::new(),
             Err(error) => return Err(error),
         };
-        object.insert(
-            "schema_version".to_owned(),
-            Value::from(settings.schema_version),
-        );
-        object.insert("theme".to_owned(), Value::from(settings.theme.clone()));
-        object.insert(
-            "light_palette".to_owned(),
-            Value::from(settings.light_palette.clone()),
-        );
-        object.insert(
-            "dark_palette".to_owned(),
-            Value::from(settings.dark_palette.clone()),
-        );
-        object.insert(
-            "editor_font_size".to_owned(),
-            Value::from(settings.editor_font_size),
-        );
-        object.insert(
-            "editor_reading_measure".to_owned(),
-            Value::from(settings.editor_reading_measure),
-        );
-        object.insert(
-            "search_result_limit".to_owned(),
-            Value::from(settings.search_result_limit),
-        );
-        object.insert(
-            "link_previews".to_owned(),
-            Value::from(settings.link_previews),
-        );
+        for (key, value) in [
+            ("schema_version", Value::from(settings.schema_version)),
+            ("theme", Value::from(settings.theme.clone())),
+            ("light_palette", Value::from(settings.light_palette.clone())),
+            ("dark_palette", Value::from(settings.dark_palette.clone())),
+            ("prose_font", Value::from(settings.prose_font.clone())),
+            ("code_font", Value::from(settings.code_font.clone())),
+            ("editor_font_size", Value::from(settings.editor_font_size)),
+            (
+                "editor_line_height",
+                Value::from(settings.editor_line_height),
+            ),
+            ("editor_line_width", Value::from(settings.editor_line_width)),
+            ("show_line_numbers", Value::from(settings.show_line_numbers)),
+            ("animations", Value::from(settings.animations)),
+            ("autosave_delay_ms", Value::from(settings.autosave_delay_ms)),
+            ("spell_check", Value::from(settings.spell_check)),
+            ("indent_style", Value::from(settings.indent_style.clone())),
+            ("indent_width", Value::from(settings.indent_width)),
+            ("wrap_long_lines", Value::from(settings.wrap_long_lines)),
+            (
+                "show_invisible_characters",
+                Value::from(settings.show_invisible_characters),
+            ),
+            (
+                "reveal_markdown_syntax",
+                Value::from(settings.reveal_markdown_syntax),
+            ),
+            (
+                "default_note_folder",
+                Value::from(settings.default_note_folder.clone()),
+            ),
+            (
+                "attachment_folder_mode",
+                Value::from(settings.attachment_folder_mode.clone()),
+            ),
+            (
+                "attachment_folder_path",
+                Value::from(settings.attachment_folder_path.clone()),
+            ),
+            (
+                "honor_obsidian_config",
+                Value::from(settings.honor_obsidian_config),
+            ),
+            (
+                "search_result_limit",
+                Value::from(settings.search_result_limit),
+            ),
+            ("link_previews", Value::from(settings.link_previews)),
+            (
+                "search_note_bodies",
+                Value::from(settings.search_note_bodies),
+            ),
+            (
+                "search_case_sensitive",
+                Value::from(settings.search_case_sensitive),
+            ),
+            (
+                "update_channel",
+                Value::from(settings.update_channel.clone()),
+            ),
+        ] {
+            object.insert(key.to_owned(), value);
+        }
         let task_statuses =
             merged_task_statuses(object.get("task_statuses"), &settings.task_statuses)?;
         object.insert("task_statuses".to_owned(), task_statuses);
@@ -642,7 +521,6 @@ impl SettingsStore {
     }
 }
 
-/// Reads an unsigned 32-bit integer key from a JSON object.
 fn read_u32(object: &Map<String, Value>, key: &str) -> Option<u32> {
     object
         .get(key)
@@ -650,9 +528,56 @@ fn read_u32(object: &Map<String, Value>, key: &str) -> Option<u32> {
         .and_then(|value| u32::try_from(value).ok())
 }
 
+fn read_in_range(object: &Map<String, Value>, key: &str, range: (u32, u32)) -> Option<u32> {
+    read_u32(object, key).filter(|value| (range.0..=range.1).contains(value))
+}
+
+fn read_bool(object: &Map<String, Value>, key: &str) -> Option<bool> {
+    object.get(key).and_then(Value::as_bool)
+}
+
+fn read_choice(object: &Map<String, Value>, key: &str, choices: &[&str], default: &str) -> String {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| choices.contains(value))
+        .unwrap_or(default)
+        .to_owned()
+}
+
+fn read_folder(object: &Map<String, Value>, key: &str, allow_empty: bool) -> Option<String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| is_safe_vault_folder(value, allow_empty))
+        .map(ToOwned::to_owned)
+}
+
+fn is_safe_vault_folder(value: &str, allow_empty: bool) -> bool {
+    if value.is_empty() {
+        return allow_empty;
+    }
+    VaultPath::new(value).is_ok_and(|path| is_indexed_path(&path))
+}
+
 const MAX_TASK_STATUS_COUNT: usize = 128;
 const MAX_TASK_STATUS_NAME_LENGTH: usize = 80;
 const MAX_TASK_STATUS_GLYPH_LENGTH: usize = 8;
+const TASK_COLOR_TOKENS: &[&str] = &[
+    "--skr-accent",
+    "--skr-text-muted",
+    "--skr-warning",
+    "--skr-success",
+    "--skr-danger",
+    "--skr-callout-blue",
+    "--skr-callout-cyan",
+    "--skr-callout-green",
+    "--skr-callout-yellow",
+    "--skr-callout-orange",
+    "--skr-callout-red",
+    "--skr-callout-purple",
+    "--skr-callout-gray",
+];
 
 fn single_source_character(value: &str) -> bool {
     let mut characters = value.chars();
@@ -666,15 +591,7 @@ fn single_source_character(value: &str) -> bool {
 }
 
 fn valid_color_token(value: &str) -> bool {
-    let Some(suffix) = value.strip_prefix("--skr-") else {
-        return false;
-    };
-    !suffix.is_empty()
-        && !suffix.starts_with('-')
-        && !suffix.ends_with('-')
-        && suffix
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    TASK_COLOR_TOKENS.contains(&value)
 }
 
 fn valid_task_statuses(statuses: &[TaskStatus]) -> bool {
@@ -690,7 +607,11 @@ fn valid_task_statuses(statuses: &[TaskStatus]) -> bool {
     }
     statuses.iter().all(|status| {
         single_source_character(&status.symbol)
-            && !status.name.trim().is_empty()
+            && (!status.name.trim().is_empty()
+                || (status.name.is_empty()
+                    && DEFAULT_TASK_STATUS_ROWS
+                        .iter()
+                        .any(|(symbol, ..)| *symbol == status.symbol)))
             && status.name.chars().count() <= MAX_TASK_STATUS_NAME_LENGTH
             && {
                 let glyph_length = status.glyph.chars().count();

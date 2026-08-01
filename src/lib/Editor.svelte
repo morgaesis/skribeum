@@ -1,6 +1,6 @@
 <script lang="ts">
 import { history } from "@codemirror/commands";
-import { syntaxTree } from "@codemirror/language";
+import { indentUnit, syntaxTree } from "@codemirror/language";
 import {
   Annotation,
   type ChangeSet,
@@ -9,12 +9,15 @@ import {
   type Extension,
   Transaction,
 } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { onMount } from "svelte";
 import { bulkTextInput } from "./editor/bulkInput";
 import type { ByteChange } from "./editor/byteChangeSet";
 import { assertDecorationsInert } from "./editor/decorationGuard";
-import { dispatchWikilinkContext } from "./editor/decorations/engine";
+import {
+  dispatchWikilinkContext,
+  sourceRevealMode,
+} from "./editor/decorations/engine";
 import type { WikilinkResolutionContext } from "./editor/decorations/wikilinks";
 import {
   applyTypeOverrides,
@@ -22,10 +25,15 @@ import {
   type FrontmatterValueType,
   parseFrontmatter,
 } from "./editor/frontmatter";
+import { showInvisibleCharacters } from "./editor/invisibles";
 import { NoteSession } from "./editor/noteSession";
 import { noteRenderingExtensions } from "./editor/syntaxPolicy";
 import { findExtension } from "./features/findPanel";
 import { selectionToolbar } from "./features/selectionToolbar";
+import {
+  DEFAULT_SETTINGS,
+  type SettingsDocument,
+} from "./features/settingsStore";
 import { slashMenu } from "./features/slashMenu";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
@@ -38,6 +46,9 @@ import {
   type TaskStatus,
 } from "./taskStatuses";
 
+// registry-exempt keydown: indentation is editor input behavior controlled
+// by the current indentation settings, not an application command.
+
 let {
   doc = "",
   note = null,
@@ -48,6 +59,7 @@ let {
   taskStatuses = DEFAULT_TASK_STATUSES,
   registry = null,
   commandContext = null,
+  settings = DEFAULT_SETTINGS,
   onConflict,
   onWriteError,
   onDocChanged,
@@ -67,13 +79,13 @@ let {
   registry?: CommandRegistry | null;
   /** Capability provider for commands fired inside the editor. */
   commandContext?: (() => CommandContext) | null;
+  /** Live editor preferences from the persisted settings document. */
+  settings?: SettingsDocument;
   onConflict?: () => void;
   onWriteError?: (message: string) => void;
   /** Notified after any document-changing transaction (outline refresh). */
   onDocChanged?: () => void;
 } = $props();
-
-const IDLE_SAVE_DELAY_MILLISECONDS = 400;
 
 let host: HTMLDivElement;
 let view: EditorView | undefined;
@@ -86,6 +98,7 @@ let saveChain: Promise<boolean> = Promise.resolve(true);
 
 const historyCompartment = new Compartment();
 const renderingCompartment = new Compartment();
+const settingsCompartment = new Compartment();
 
 const editorAppearance = EditorView.theme({
   ".cm-content": {
@@ -165,6 +178,7 @@ function registryExtensions(): Extension[] {
     ((): CommandContext => ({
       view: view ?? null,
       openNote: () => Promise.resolve(),
+      createNote: () => Promise.resolve(),
       openView: () => {},
       toggleView: () => {},
       closeSurfaces: () => {},
@@ -194,7 +208,7 @@ function stateFor(content: string, locked: boolean): EditorState {
         noteRenderingExtensions(content, undefined, normalizedTaskStatuses),
       ),
       editorAppearance,
-      EditorView.lineWrapping,
+      settingsCompartment.of(settingsExtensions(settings)),
       bulkTextInput(),
       historyCompartment.of(history()),
       ...registryExtensions(),
@@ -205,10 +219,6 @@ function stateFor(content: string, locked: boolean): EditorState {
       // it also makes the scrollable region's focusability visible to
       // accessibility checkers whose focusable-descendant selectors do not
       // recognize contenteditable.
-      EditorView.contentAttributes.of({
-        "aria-label": STRINGS.editorLabel,
-        tabindex: "0",
-      }),
       EditorView.domEventHandlers({
         blur: () => {
           requestSave();
@@ -219,11 +229,31 @@ function stateFor(content: string, locked: boolean): EditorState {
   });
 }
 
+function settingsExtensions(document: SettingsDocument): Extension[] {
+  return [
+    ...(document.show_line_numbers ? [lineNumbers()] : []),
+    ...(document.wrap_long_lines ? [EditorView.lineWrapping] : []),
+    EditorState.tabSize.of(document.indent_width),
+    indentUnit.of(
+      document.indent_style === "tabs"
+        ? "\t"
+        : " ".repeat(document.indent_width),
+    ),
+    sourceRevealMode(document.reveal_markdown_syntax),
+    ...(document.show_invisible_characters ? [showInvisibleCharacters()] : []),
+    EditorView.contentAttributes.of({
+      "aria-label": STRINGS.editorLabel,
+      spellcheck: document.spell_check ? "true" : "false",
+      tabindex: "0",
+    }),
+  ];
+}
+
 function scheduleIdleSave() {
   clearTimeout(idleSaveTimer);
   idleSaveTimer = setTimeout(() => {
     requestSave();
-  }, IDLE_SAVE_DELAY_MILLISECONDS);
+  }, settings.autosave_delay_ms);
 }
 
 function dispatchTransactions(
@@ -552,6 +582,17 @@ $effect(() => {
   void propertyTypes;
   refreshFrontmatter();
 });
+
+$effect(() => {
+  const nextSettings = settings;
+  if (view !== undefined) {
+    view.dispatch({
+      effects: settingsCompartment.reconfigure(
+        settingsExtensions(nextSettings),
+      ),
+    });
+  }
+});
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -594,7 +635,7 @@ $effect(() => {
     padding-block: clamp(2rem, 5vh, 4rem);
     padding-inline: var(--skr-gutter);
     font-family: var(--skr-font-prose);
-    line-height: 1.7;
+    line-height: var(--skr-editor-line-height, 1.7);
   }
   .editor :global(.cm-line) {
     padding-inline: 0;

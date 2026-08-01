@@ -259,6 +259,22 @@ fn real_write_goes_through_a_symlink() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn note_creation_rejects_a_symlinked_parent_outside_the_vault() {
+    let root = scratch("create-note-vault");
+    let outside = scratch("create-note-outside");
+    std::os::unix::fs::symlink(&outside, root.join("escape")).expect("symlink creates");
+    let mut vault = Vault::open(&RealFs, &root).expect("vault opens");
+    let path = skribeum_vault::VaultPath::new("escape/note.md").expect("path parses");
+
+    assert!(vault.create_note(&RealFs, &path).is_err());
+    assert_eq!(
+        RealFs.metadata(&outside.join("note.md")),
+        Err(FsError::NotFound)
+    );
+}
+
 // Not run on Windows: delete-pending semantics keep the watched root's
 // name alive while the subscription dies without any event, so no portable
 // in-watcher death signal exists there. Windows recovery flows through the

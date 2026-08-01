@@ -1,6 +1,7 @@
 <script lang="ts">
 import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
 import { onMount, tick } from "svelte";
+import tauriConfig from "../src-tauri/tauri.conf.json";
 import Banners, { type BannerItem } from "./lib/Banners.svelte";
 import Editor from "./lib/Editor.svelte";
 import {
@@ -38,6 +39,11 @@ import {
   VIEW_VAULT_SEARCH,
 } from "./lib/features/surfaces";
 import { registerTaskStatusCommands } from "./lib/features/taskCommands";
+import {
+  checkForUpdate,
+  hasDesktopRuntime,
+  type UpdateState,
+} from "./lib/features/updates";
 import { M0_FIXTURE } from "./lib/fixture";
 import {
   type BannerReason,
@@ -49,11 +55,13 @@ import {
 import {
   type SearchResult,
   searchQuery,
+  settingsPath,
   vaultTreeRefresh,
 } from "./lib/ipc/services";
 import {
   IpcError,
   type LoadedNote,
+  noteCreate,
   openVault,
   readNote,
   readVaultConfigFile,
@@ -73,9 +81,11 @@ import {
 import SettingsView from "./lib/SettingsView.svelte";
 import { STRINGS } from "./lib/strings";
 import {
-  applyTheme,
+  applyAppearance,
+  isCodeFontName,
   isDarkPaletteName,
   isLightPaletteName,
+  isProseFontName,
   isThemeName,
 } from "./lib/themes/theme";
 
@@ -96,6 +106,7 @@ let editor = $state<ReturnType<typeof Editor> | undefined>();
 let obsidianConfig = $state<ObsidianAppConfig>(DEFAULT_OBSIDIAN_APP_CONFIG);
 let linkContext = $state<WikilinkResolutionContext | null>(null);
 let propertyTypes = $state<Record<string, FrontmatterValueType> | null>(null);
+let obsidianReadGeneration = 0;
 let contentView = $state<string | null>(null);
 let canvas = $state<CanvasDocument | null>(null);
 let canvasPreviews = $state<Record<string, string>>({});
@@ -131,41 +142,84 @@ let recents = $state<string[]>([]);
 let settingsState = $state<SettingsState>({
   document: DEFAULT_SETTINGS,
   error: null,
+  errorSetting: null,
   loaded: false,
 });
+let updateState = $state<UpdateState>({ kind: "idle" });
+let settingsFilePath = $state<string | null>(null);
+let updateCheckGeneration = 0;
 
-function applyEditorFontSize(pixels: number) {
-  document.documentElement.style.setProperty(
+function applySettings(documentSettings: SettingsState["document"]) {
+  const root = document.documentElement;
+  root.style.setProperty(
     "--skr-editor-font-size",
-    `${pixels}px`,
+    `${documentSettings.editor_font_size}px`,
   );
-}
-
-function applyEditorReadingMeasure(characters: number) {
-  document.documentElement.style.setProperty(
+  root.style.setProperty(
     "--skr-editor-measure",
-    String(characters),
+    String(documentSettings.editor_line_width),
+  );
+  root.style.setProperty(
+    "--skr-editor-line-height",
+    String(documentSettings.editor_line_height / 100),
+  );
+  applyAppearance(
+    {
+      theme: isThemeName(documentSettings.theme)
+        ? documentSettings.theme
+        : "system",
+      light_palette: isLightPaletteName(documentSettings.light_palette)
+        ? documentSettings.light_palette
+        : "manuscript",
+      dark_palette: isDarkPaletteName(documentSettings.dark_palette)
+        ? documentSettings.dark_palette
+        : "lamplight",
+      prose_font: isProseFontName(documentSettings.prose_font)
+        ? documentSettings.prose_font
+        : "serif",
+      code_font: isCodeFontName(documentSettings.code_font)
+        ? documentSettings.code_font
+        : "modern",
+      animations: documentSettings.animations,
+    },
+    root,
   );
 }
 
 // Settings apply optimistically (the font size restart-free via the CSS
 // variable); a failed write reverts and the settings view surfaces it.
 const settingsStore = new SettingsStore((state) => {
+  const previous = settingsState.document;
   registerTaskStatusCommands(registry, state.document.task_statuses);
   settingsState = state;
-  applyEditorFontSize(state.document.editor_font_size);
-  applyEditorReadingMeasure(state.document.editor_reading_measure);
-  applyTheme(
-    isThemeName(state.document.theme) ? state.document.theme : "system",
-    isLightPaletteName(state.document.light_palette)
-      ? state.document.light_palette
-      : "manuscript",
-    isDarkPaletteName(state.document.dark_palette)
-      ? state.document.dark_palette
-      : "lamplight",
-  );
-  refreshLinkContext();
+  if (previous.update_channel !== state.document.update_channel) {
+    updateCheckGeneration += 1;
+    updateState = { kind: "idle" };
+  }
+  applySettings(state.document);
+  if (
+    vault !== null &&
+    previous.honor_obsidian_config !== state.document.honor_obsidian_config
+  ) {
+    void readObsidianConfig(vault);
+  } else {
+    refreshLinkContext();
+  }
 });
+
+function checkSelectedUpdateChannel() {
+  const channel =
+    settingsState.document.update_channel === "beta" ? "beta" : "stable";
+  const generation = ++updateCheckGeneration;
+  void checkForUpdate(channel, (state) => {
+    if (
+      generation === updateCheckGeneration &&
+      settingsState.document.update_channel === channel
+    ) {
+      updateState = state;
+    }
+  });
+}
 
 function notePathsOf(entries: TreeEntry[]): string[] {
   return entries
@@ -221,8 +275,35 @@ async function refreshTreeIndex() {
   }
 }
 
-function closeOverlay() {
-  activeOverlay = null;
+async function createNewNote() {
+  const activeVault = vault;
+  if (activeVault === null) {
+    return;
+  }
+  const folder = settingsState.document.default_note_folder;
+  const existing = new Set(
+    notePathsOf(tree).map((path) => path.toLocaleLowerCase()),
+  );
+  let number = 1;
+  let path = "";
+  do {
+    const suffix = number === 1 ? "" : ` ${number}`;
+    const fileName = `${STRINGS.untitledNoteName}${suffix}.md`;
+    path = folder.length === 0 ? fileName : `${folder}/${fileName}`;
+    number += 1;
+  } while (existing.has(path.toLocaleLowerCase()));
+
+  try {
+    await noteCreate(activeVault, path);
+    tree = await vaultTreeRefresh(activeVault);
+    refreshLinkContext();
+    await openNote(path);
+  } catch (error) {
+    errorText = describeError(STRINGS.noteCreateFailed, error);
+  }
+}
+
+function focusContent() {
   if (contentView === VIEW_CANVAS) {
     canvasViewer?.focus();
   } else {
@@ -230,10 +311,16 @@ function closeOverlay() {
   }
 }
 
+function closeOverlay() {
+  activeOverlay = null;
+  focusContent();
+}
+
 function commandContext(): CommandContext {
   return {
     view: editor?.getView() ?? null,
     openNote: (path) => openNote(path),
+    createNote: createNewNote,
     openView: (id) => {
       if (id === VIEW_OUTLINE) {
         outlineOpen = true;
@@ -304,6 +391,8 @@ async function runVaultSearch(query: string) {
       vault,
       query,
       settingsState.document.search_result_limit,
+      settingsState.document.search_note_bodies,
+      settingsState.document.search_case_sensitive,
     );
   } catch (error) {
     searchResults = [];
@@ -313,12 +402,20 @@ async function runVaultSearch(query: string) {
 
 function onOverlayPick(id: string) {
   const overlay = activeOverlay;
-  closeOverlay();
   if (overlay === VIEW_COMMAND_PALETTE) {
+    // Keep the editor's selection stable until editor-scoped commands have
+    // consumed it. Restoring focus first can reconcile a browser selection
+    // change before the command reads the CodeMirror state.
+    activeOverlay = null;
     registry.run(id, commandContext());
+    if (activeOverlay === null) {
+      focusContent();
+    }
   } else if (overlay === VIEW_QUICK_SWITCHER) {
+    closeOverlay();
     void openNote(id);
   } else if (overlay === VIEW_VAULT_SEARCH) {
+    closeOverlay();
     void openSearchResult(id);
   }
 }
@@ -398,7 +495,7 @@ function refreshLinkContext() {
     paths: tree
       .filter((entry) => entry.kind !== "directory")
       .map((entry) => entry.path),
-    config: obsidianConfig,
+    config: effectiveObsidianConfig(),
     currentPath,
     embedAncestry: currentPath === null ? [] : [currentPath],
     embedDepth: 0,
@@ -425,15 +522,39 @@ function refreshLinkContext() {
   };
 }
 
+function effectiveObsidianConfig(): ObsidianAppConfig {
+  const documentSettings = settingsState.document;
+  const base = documentSettings.honor_obsidian_config
+    ? obsidianConfig
+    : DEFAULT_OBSIDIAN_APP_CONFIG;
+  if (base.attachmentFolderPath !== null) {
+    return base;
+  }
+  const attachmentFolderPath = (() => {
+    switch (documentSettings.attachment_folder_mode) {
+      case "note":
+        return "./";
+      case "folder":
+        return documentSettings.attachment_folder_path;
+      default:
+        return "/";
+    }
+  })();
+  return { ...base, attachmentFolderPath };
+}
+
 /**
  * Reads the optional `.obsidian` configuration (link knobs, declared
  * property types) read-only through the `vault_config_read` command.
  * Absent files leave the defaults; nothing is ever written.
  */
-async function readObsidianConfig(handle: VaultHandle) {
+async function loadObsidianConfig(handle: VaultHandle) {
+  if (!settingsState.document.honor_obsidian_config) {
+    return { config: DEFAULT_OBSIDIAN_APP_CONFIG, types: null };
+  }
   const [appJson, typesJson] = await Promise.all([
-    readVaultConfigFile(handle, "app.json"),
-    readVaultConfigFile(handle, "types.json"),
+    readOptionalVaultConfigFile(handle, "app.json"),
+    readOptionalVaultConfigFile(handle, "types.json"),
   ]);
   return {
     config:
@@ -442,6 +563,32 @@ async function readObsidianConfig(handle: VaultHandle) {
         : parseObsidianAppConfig(appJson),
     types: typesJson === null ? null : parseObsidianTypes(typesJson),
   };
+}
+
+async function readObsidianConfig(handle: VaultHandle) {
+  const generation = ++obsidianReadGeneration;
+  const next = await loadObsidianConfig(handle);
+  if (
+    generation !== obsidianReadGeneration ||
+    vault?.id !== handle.id ||
+    !settingsState.document.honor_obsidian_config
+  ) {
+    return;
+  }
+  obsidianConfig = next.config;
+  propertyTypes = next.types;
+  refreshLinkContext();
+}
+
+async function readOptionalVaultConfigFile(
+  handle: VaultHandle,
+  name: "app.json" | "types.json",
+): Promise<string | null> {
+  try {
+    return await readVaultConfigFile(handle, name);
+  } catch {
+    return null;
+  }
 }
 
 async function openVaultAtPath(path: string) {
@@ -455,7 +602,7 @@ async function openVaultAtPath(path: string) {
     const handle = await openVault(path);
     const [nextTree, config] = await Promise.all([
       vaultTree(handle),
-      readObsidianConfig(handle),
+      loadObsidianConfig(handle),
       watchSubscribe(handle),
     ]);
     if (!contentRequests.isCurrent(request)) {
@@ -819,6 +966,15 @@ onMount(() => {
     }),
   ];
   void settingsStore.load();
+  if (hasDesktopRuntime()) {
+    void settingsPath()
+      .then((path) => {
+        settingsFilePath = path;
+      })
+      .catch(() => {
+        settingsFilePath = null;
+      });
+  }
   const pollTimer = pollEndToEndVault();
   return () => {
     delete debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__;
@@ -901,6 +1057,7 @@ onMount(() => {
           taskStatuses={settingsState.document.task_statuses}
           {registry}
           {commandContext}
+          settings={settingsState.document}
           {onConflict}
           {onWriteError}
           onDocChanged={onEditorDocChanged}
@@ -913,6 +1070,7 @@ onMount(() => {
           taskStatuses={settingsState.document.task_statuses}
           {registry}
           {commandContext}
+          settings={settingsState.document}
           onDocChanged={onEditorDocChanged}
         />
         {#if vault === null}
@@ -959,6 +1117,13 @@ onMount(() => {
   <SettingsView
     settings={settingsState}
     onUpdate={(patch) => void settingsStore.update(patch)}
+    onPreview={(patch) =>
+      applySettings({ ...settingsState.document, ...patch })}
     onClose={closeOverlay}
+    desktopAvailable={hasDesktopRuntime()}
+    currentVersion={tauriConfig.version}
+    {settingsFilePath}
+    {updateState}
+    onCheckUpdate={checkSelectedUpdateChannel}
   />
 {/if}

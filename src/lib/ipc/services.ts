@@ -8,6 +8,7 @@ import {
   type SearchHit,
   type SettingsDoc,
   type TreeEntry,
+  type UpdateCheckDoc,
   type VaultHandle,
 } from "./bindings";
 import { unwrap } from "./vault";
@@ -23,8 +24,18 @@ export async function searchQuery(
   handle: VaultHandle,
   query: string,
   limit: number,
+  searchNoteBodies = true,
+  caseSensitive = false,
 ): Promise<SearchResult[]> {
-  return unwrap(await commands.searchQuery(handle, query, limit));
+  return unwrap(
+    await commands.searchQuery(
+      handle,
+      query,
+      limit,
+      searchNoteBodies,
+      caseSensitive,
+    ),
+  );
 }
 
 /** Reads the settings document from the app config directory. */
@@ -32,9 +43,19 @@ export async function settingsRead(): Promise<SettingsDocument> {
   return unwrap(await commands.settingsRead());
 }
 
+/** Returns the resolved desktop settings document path. */
+export async function settingsPath(): Promise<string> {
+  return unwrap(await commands.settingsPath());
+}
+
 /** Persists the settings document. */
 export async function settingsWrite(doc: SettingsDocument): Promise<void> {
   unwrap(await commands.settingsWrite(doc));
+}
+
+/** Checks the selected signed update manifest. */
+export async function updateCheck(channel: string): Promise<UpdateCheckDoc> {
+  return unwrap(await commands.updateCheck(channel));
 }
 
 /** Re-indexes and returns the vault tree. */

@@ -70,6 +70,7 @@ describe("canvas viewer interactions and note rendering", () => {
 
     await vi.waitFor(() => {
       expect(document.querySelector(".cm-skr-strong")).not.toBeNull();
+      expect(document.querySelector(".cm-skr-code-block")).not.toBeNull();
     });
     const card = document.querySelector<HTMLElement>('[data-node-id="note"]');
     expect(card).not.toBeNull();

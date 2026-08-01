@@ -8,7 +8,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Editor blocks share one reading measure and left edge, including padded
+- Editor blocks share one text column width and left edge, including padded
   callouts and code blocks.
 - Headings no longer inherit hyperlink decoration or forced bold styling from
   CodeMirror, and syntax colors remain readable in both color modes.
@@ -27,14 +27,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Persisted editor reading measure with a 72-character default and
-  restart-free application from the settings view.
-- Configurable multi-state task checkboxes with the SlRvb-compatible default
-  vocabulary, a settings editor for adding, removing, reordering and remapping
-  statuses, per-status glyphs and theme tokens, short click transitions, an
-  accessible pointer and keyboard status listbox, and registry commands for
-  setting any configured status under the cursor. Status edits replace only
-  the source character inside the task marker.
+- A searchable, sectioned settings surface for appearance, editing, files and
+  vaults, search, updates and application information. Every control includes a
+  plain-language description, and desktop-only controls remain visible but
+  unavailable in the browser demo.
+- Direct system, light and dark controls plus paired Manuscript and Lamplight,
+  Studio and Graphite, and Gazette and Signal palettes. Each palette uses shared
+  theme variables and passes automated WCAG AA contrast checks in both modes.
+- Persisted prose and code font stacks, font size, line spacing, text column
+  width, motion, autosave, spell checking, indentation, wrapping, line numbers,
+  visible whitespace, Markdown source reveal, note and attachment folders,
+  Obsidian compatibility, search scope and case matching, and update channel.
+- Configurable multi-state task checkboxes with an ordered status editor,
+  per-status glyphs and theme tokens, click transitions, keyboard selection and
+  commands for applying any configured status without rewriting task text.
+- `Create new note` command (`mod+n`) with no-overwrite naming in the configured
+  default folder.
 - Browser-only editor demo with a seeded sample vault, in-memory edits that
   reset on reload, and a static GitHub Pages build.
 - Browser demo folder access through the File System Access API, with recursive
@@ -97,18 +105,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   commands, GFM alignment preserved; every operation declares its byte
   ranges, including the formatting pass over re-padded cells, and the
   containment property is asserted over generated tables.
-- Settings view (`mod+,`) over the persisted settings document: theme
-  (stored for the theming layer), editor font size (applied restart-free
-  through a CSS variable) and search result limit, with optimistic
-  updates reverted and surfaced on write failure.
 - Live preview: a data-driven decoration engine over the Lezer syntax
   tree renders headings, emphasis, links, wikilinks, embeds, lists,
   tasks, inline and fenced code, blockquotes, callouts, tags and block
   identifiers as source-text decoration with per-construct cursor-reveal
   (documented in `docs/decoration-rules.md`), windowed to the viewport,
-  disabled on over-long lines, with decoration lifecycle updates asserted
-  inert against the buffer over the whole corpus; decoration sets serialize
-  to committed golden
+  disabled on over-long lines, and asserted inert against the buffer over
+  the whole corpus; decoration sets serialize to committed golden
   snapshots so rendering changes are reviewed diffs.
 - Obsidian syntax extensions for the editor's markdown parser: wikilinks
   with aliases, embeds, tags, block identifiers, callout marks and the
@@ -182,7 +185,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - The editor uses a system serif prose stack, monospace only for code,
-  centred reading measure, a six-level heading hierarchy and smoothly
+  centred text column width, a six-level heading hierarchy and smoothly
   revealed heading markers.
 - Frontmatter uses a collapsed properties panel as its primary presentation,
   with the unchanged raw source available from an explicit panel control.

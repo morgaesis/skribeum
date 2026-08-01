@@ -57,6 +57,18 @@ impl FileSystem for RealFs {
         std::fs::write(path, bytes).map_err(|e| map_io(&e))
     }
 
+    fn create_new_file(&self, path: &Path) -> Result<bool, FsError> {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(map_io(&error)),
+        }
+    }
+
     fn append_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
         let mut file = std::fs::OpenOptions::new()
             .create(true)

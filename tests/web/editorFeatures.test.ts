@@ -13,6 +13,7 @@ import {
   BULK_TEXT_INPUT_LENGTH,
   bulkTextInput,
 } from "../../src/lib/editor/bulkInput";
+import { showInvisibleCharacters } from "../../src/lib/editor/invisibles";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
 import { createAppRegistry } from "../../src/lib/features";
 import { findExtension } from "../../src/lib/features/findPanel";
@@ -77,6 +78,26 @@ function typeText(view: EditorView, text: string): void {
     });
   }
 }
+
+describe("visible whitespace", () => {
+  function lineEndCount(doc: string): number {
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [showInvisibleCharacters()],
+      }),
+      parent: document.body,
+    });
+    activeView = view;
+    return view.dom.querySelectorAll(".cm-skr-invisible-line-end").length;
+  }
+
+  it("shows only line endings that exist in the document", () => {
+    expect(lineEndCount("one\ntwo")).toBe(1);
+    activeView?.destroy();
+    expect(lineEndCount("one\ntwo\n")).toBe(2);
+  });
+});
 
 function runEditorCommand(id: string): boolean {
   return registry.run(id, context());

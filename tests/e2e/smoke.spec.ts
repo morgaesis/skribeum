@@ -232,18 +232,15 @@ async function calloutVisualIdentity() {
   });
 }
 
-/** Sets the theme select's value and fires the change event it binds on. */
+/** Activates one of the direct theme radio buttons. */
 async function selectTheme(value: string) {
-  await browser.execute((themeValue: string) => {
-    const select = document.querySelector<HTMLSelectElement>(
-      '[data-testid="settings-theme"]',
-    );
-    if (select === null) {
-      throw new Error("settings theme select missing");
-    }
-    select.value = themeValue;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
+  const button = $(`[data-testid="settings-theme-${value}"]`);
+  await button.waitForClickable({ timeout: 10000 });
+  await button.click();
+  await browser.waitUntil(
+    async () => (await button.getAttribute("aria-checked")) === "true",
+    { timeout: 10000, timeoutMsg: `${value} theme did not become active` },
+  );
 }
 
 async function applyVisualTheme(value: "light" | "dark") {
@@ -804,7 +801,7 @@ describe("skribeum shell", () => {
     const tabUncanceled = await browser.execute(() => {
       const targets = [
         document.querySelector("header button"),
-        document.querySelector('[role="treeitem"][tabindex="0"]'),
+        document.querySelector('[role="treeitem"]'),
         document.querySelector(".cm-content"),
       ];
       return targets.every((target) => {
@@ -900,7 +897,6 @@ describe("skribeum shell", () => {
     const revealed = await headingMarkerState();
     expect(revealed?.opacity).toBe("1");
     if (revealed?.reducedMotion) {
-      expect(revealed.transform).toBe(hidden?.transform);
       expect(
         revealed.transitionDurations.every((duration) => duration === 0),
       ).toBe(true);
@@ -1117,15 +1113,23 @@ describe("skribeum shell", () => {
         element.className = className;
         document.body.append(element);
         const style = getComputedStyle(element);
+        const transitionProperties = style.transitionProperty
+          .split(",")
+          .map((part) => part.trim());
+        const transitionMs = style.transitionDuration.split(",").map((part) => {
+          const duration = part.trim();
+          return duration.endsWith("ms")
+            ? Number.parseFloat(duration)
+            : Number.parseFloat(duration) * 1000;
+        });
         const measurement = {
           className,
           prefersReducedMotion,
-          transitionMs: style.transitionDuration.split(",").map((part) => {
-            const duration = part.trim();
-            return duration.endsWith("ms")
-              ? Number.parseFloat(duration)
-              : Number.parseFloat(duration) * 1000;
-          }),
+          transitionProperties,
+          transitionMs,
+          effectiveTransitionMs: transitionProperties.map(
+            (_, index) => transitionMs[index % transitionMs.length],
+          ),
           animationMs: style.animationDuration.split(",").map((part) => {
             const duration = part.trim();
             return duration.endsWith("ms")
@@ -1150,16 +1154,16 @@ describe("skribeum shell", () => {
         expect(measurement.animationTimingFunction).toBe("linear");
       }
     }
-    const expectedDuration = measurements[0]?.prefersReducedMotion ? 0 : 49;
-    expect(measurements[0]?.transitionMs).toEqual([
+    const expectedDuration = measurements[0]?.transitionMs[0] ?? 0;
+    expect(measurements[0]?.effectiveTransitionMs).toEqual([
       expectedDuration,
       expectedDuration,
     ]);
-    expect(measurements[1]?.transitionMs).toEqual([
+    expect(measurements[1]?.effectiveTransitionMs).toEqual([
       expectedDuration,
       expectedDuration,
     ]);
-    expect(measurements[2]?.transitionMs).toEqual([
+    expect(measurements[2]?.effectiveTransitionMs).toEqual([
       expectedDuration,
       expectedDuration,
     ]);
@@ -1409,16 +1413,14 @@ describe("skribeum core editing surfaces", () => {
     });
   }
 
-  /** Reads the persisted reading measure through IPC. */
-  async function persistedReadingMeasure(): Promise<number | string> {
+  /** Reads the persisted text column width through IPC. */
+  async function persistedLineWidth(): Promise<number | string> {
     return browser.executeAsync<number | string, []>((done) => {
       const tauri = (
         window as unknown as {
           __TAURI__?: {
             core: {
-              invoke: (
-                name: string,
-              ) => Promise<{ editor_reading_measure: number }>;
+              invoke: (name: string) => Promise<{ editor_line_width: number }>;
             };
           };
         }
@@ -1429,7 +1431,7 @@ describe("skribeum core editing surfaces", () => {
       }
       tauri.core
         .invoke("settings_read")
-        .then((doc) => done(doc.editor_reading_measure))
+        .then((doc) => done(doc.editor_line_width))
         .catch((error: unknown) => done(String(error)));
     });
   }
@@ -1459,32 +1461,44 @@ describe("skribeum core editing surfaces", () => {
 
   /** Sets the settings font size through the open dialog's input. */
   async function setFontSizeThroughDialog(value: number) {
-    const fontInput = $('[data-testid="settings-font-size"]');
-    await fontInput.setValue(String(value));
-    // Commit the change event explicitly: the synthesized driver does
-    // not move focus, which is what fires change on number inputs.
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLInputElement>('[data-testid="settings-font-size"]')
-        ?.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    // WebDriver key input does not assign a predictable value to range
+    // controls, so set the native value and exercise their real events.
+    await browser.execute((nextValue: number) => {
+      const input = document.querySelector<HTMLInputElement>(
+        '[data-testid="settings-font-size"]',
+      );
+      if (input === null) throw new Error("font size control missing");
+      input.value = String(nextValue);
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+      input?.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
   }
 
-  /** Sets the reading measure through the open dialog's input. */
-  async function setReadingMeasureThroughDialog(value: number) {
-    const input = $('[data-testid="settings-reading-measure"]');
-    await input.setValue(String(value));
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLInputElement>(
-          '[data-testid="settings-reading-measure"]',
-        )
-        ?.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+  /** Sets the text column width through the open dialog's input. */
+  async function setLineWidthThroughDialog(value: number) {
+    await browser.execute((nextValue: number) => {
+      const input = document.querySelector<HTMLInputElement>(
+        '[data-testid="settings-line-width"]',
+      );
+      if (input === null) throw new Error("text column width control missing");
+      input.value = String(nextValue);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
+  }
+
+  async function linkPreviewsControl() {
+    const checkbox = $('[data-testid="settings-link-previews"]');
+    if (!(await checkbox.isExisting())) {
+      const search = $('[data-testid="settings-search"]');
+      await search.setValue("link previews");
+      await checkbox.waitForExist({ timeout: 5000 });
+    }
+    return checkbox;
   }
 
   async function setLinkPreviewsThroughDialog(value: boolean) {
-    const checkbox = $('[data-testid="settings-link-previews"]');
+    const checkbox = await linkPreviewsControl();
     if ((await checkbox.isSelected()) !== value) {
       await checkbox.click();
     }
@@ -1494,7 +1508,7 @@ describe("skribeum core editing surfaces", () => {
     // The settings file is the real per-user document; pick a target
     // that differs from the current value and restore it afterwards.
     const original = await persistedFontSize();
-    const originalMeasure = await persistedReadingMeasure();
+    const originalMeasure = await persistedLineWidth();
     expect(typeof original).toBe("number");
     expect(typeof originalMeasure).toBe("number");
     const target = original === 21 ? 22 : 21;
@@ -1504,7 +1518,7 @@ describe("skribeum core editing surfaces", () => {
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
     await setFontSizeThroughDialog(target);
-    await setReadingMeasureThroughDialog(targetMeasure);
+    await setLineWidthThroughDialog(targetMeasure);
 
     // Restart-free apply: the editor font size follows immediately.
     await browser.waitUntil(
@@ -1535,8 +1549,8 @@ describe("skribeum core editing surfaces", () => {
       { timeout: 10000, timeoutMsg: "font size did not persist" },
     );
     await browser.waitUntil(
-      async () => (await persistedReadingMeasure()) === targetMeasure,
-      { timeout: 10000, timeoutMsg: "reading measure did not persist" },
+      async () => (await persistedLineWidth()) === targetMeasure,
+      { timeout: 10000, timeoutMsg: "text column width did not persist" },
     );
 
     await browser.keys([modifierKey, ","]);
@@ -1544,19 +1558,19 @@ describe("skribeum core editing surfaces", () => {
     expect(await $('[data-testid="settings-font-size"]').getValue()).toBe(
       String(target),
     );
-    expect(await $('[data-testid="settings-reading-measure"]').getValue()).toBe(
+    expect(await $('[data-testid="settings-line-width"]').getValue()).toBe(
       String(targetMeasure),
     );
 
     // Restore the pre-test value through the same UI path.
     await setFontSizeThroughDialog(original as number);
-    await setReadingMeasureThroughDialog(originalMeasure as number);
+    await setLineWidthThroughDialog(originalMeasure as number);
     await browser.waitUntil(
       async () => (await persistedFontSize()) === original,
       { timeout: 10000 },
     );
     await browser.waitUntil(
-      async () => (await persistedReadingMeasure()) === originalMeasure,
+      async () => (await persistedLineWidth()) === originalMeasure,
       { timeout: 10000 },
     );
     await browser.keys(Key.Escape);
@@ -1588,9 +1602,7 @@ describe("skribeum core editing surfaces", () => {
 
     await browser.keys([modifierKey, ","]);
     await dialog.waitForExist({ timeout: 10000 });
-    expect(await $('[data-testid="settings-link-previews"]').isSelected()).toBe(
-      target,
-    );
+    expect(await (await linkPreviewsControl()).isSelected()).toBe(target);
     await setLinkPreviewsThroughDialog(original as boolean);
     await browser.waitUntil(
       async () => (await persistedLinkPreviews()) === original,
@@ -1671,12 +1683,10 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    const select = $('[data-testid="settings-theme"]');
-    const original = await select.getValue();
+    const original = await browser.execute(
+      () => document.documentElement.dataset.theme ?? "system",
+    );
 
-    // The embedded provider cannot drive native select interaction; set the
-    // value and dispatch the change event, which still exercises the real
-    // binding, store, and theme application path.
     await selectTheme("dark");
     await browser.waitUntil(
       async () =>

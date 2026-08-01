@@ -7,7 +7,11 @@ import type { SyntaxNode } from "@lezer/common";
 import { taskStatusConfiguration } from "../editor/decorations/engine";
 import type { Command, CommandRegistry } from "../registry";
 import { STRINGS } from "../strings";
-import { type TaskStatus, taskStatusCommandId } from "../taskStatuses";
+import {
+  normalizeTaskStatuses,
+  type TaskStatus,
+  taskStatusCommandId,
+} from "../taskStatuses";
 
 const taskCommandIds = new WeakMap<CommandRegistry, string[]>();
 
@@ -64,7 +68,7 @@ export function registerTaskStatusCommands(
     registry.unregister(id);
   }
   const ids: string[] = [];
-  for (const status of statuses) {
+  for (const status of normalizeTaskStatuses(statuses)) {
     const id = taskStatusCommandId(status.symbol);
     const command: Command = {
       id,

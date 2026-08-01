@@ -57,3 +57,15 @@ fn non_utf8_config_reads_as_none() {
         None
     );
 }
+
+#[test]
+fn config_symlink_outside_the_vault_reads_as_none() {
+    let (fs, vault) = vault_with_config(None);
+    fs.external_write(Path::new("outside.json"), b"{\"secret\":true}");
+    fs.external_symlink(Path::new("v/.obsidian/app.json"), Path::new("outside.json"));
+
+    assert_eq!(
+        vault.read_obsidian_config(&fs, "app.json").expect("ok"),
+        None
+    );
+}

@@ -219,12 +219,23 @@ select {
   }
 
   html body button,
-  html body .cm-editor .cm-skr-reveal-marker {
+  html body .cm-skr-reveal-marker,
+  html body .cm-skr-reveal-motion {
     transition-duration: 0ms;
+    animation-duration: 0ms;
   }
 
   .cm-editor .cm-cursorLayer {
     /* biome-ignore lint/complexity/noImportantStyles: CodeMirror writes cursor timing inline. */
     animation-duration: 0ms !important;
   }
+}
+
+:root[data-animations="false"] *,
+:root[data-animations="false"] *::before,
+:root[data-animations="false"] *::after {
+  scroll-behavior: auto;
+  transition-duration: 0ms;
+  animation-duration: 0ms;
+  animation-iteration-count: 1;
 }

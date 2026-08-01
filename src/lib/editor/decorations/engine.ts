@@ -124,6 +124,11 @@ const sourceRevealEnabled = Facet.define<boolean, boolean>({
 /** Keeps cursor-sensitive source markers hidden on non-editable surfaces. */
 export const readOnlyDecorationMode = sourceRevealEnabled.of(false);
 
+/** Controls whether cursor-sensitive Markdown source markers reveal. */
+export function sourceRevealMode(enabled: boolean): Extension {
+  return sourceRevealEnabled.of(enabled);
+}
+
 /** Ordered task statuses used by parsing, rendering and task commands. */
 export const taskStatusConfiguration = Facet.define<
   readonly TaskStatus[],
@@ -1910,6 +1915,8 @@ const blockEngineField = StateField.define<BlockEngineState>({
       syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ||
       transaction.state.facet(decorationTable) !==
         transaction.startState.facet(decorationTable) ||
+      transaction.state.facet(sourceRevealEnabled) !==
+        transaction.startState.facet(sourceRevealEnabled) ||
       transaction.state.facet(taskStatusConfiguration) !==
         transaction.startState.facet(taskStatusConfiguration) ||
       transaction.state.field(wikilinkContext, false) !==
@@ -1934,6 +1941,8 @@ function needsRebuild(update: ViewUpdate): boolean {
     syntaxTree(update.state) !== syntaxTree(update.startState) ||
     update.state.facet(decorationTable) !==
       update.startState.facet(decorationTable) ||
+    update.state.facet(sourceRevealEnabled) !==
+      update.startState.facet(sourceRevealEnabled) ||
     update.state.facet(taskStatusConfiguration) !==
       update.startState.facet(taskStatusConfiguration) ||
     update.state.field(wikilinkContext, false) !==

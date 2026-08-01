@@ -1,8 +1,12 @@
 import { flushSync, mount, unmount } from "svelte";
 import { describe, expect, it, vi } from "vitest";
-import type { SettingsState } from "../../src/lib/features/settingsStore";
+import {
+  DEFAULT_SETTINGS,
+  type SettingsState,
+} from "../../src/lib/features/settingsStore";
 import type { SettingsDocument } from "../../src/lib/ipc/services";
 import SettingsView from "../../src/lib/SettingsView.svelte";
+import { STRINGS } from "../../src/lib/strings";
 import type { TaskStatus } from "../../src/lib/taskStatuses";
 
 const TASK_STATUSES: TaskStatus[] = [
@@ -36,15 +40,9 @@ function settingsState(): SettingsState {
   return {
     loaded: true,
     error: null,
+    errorSetting: null,
     document: {
-      schema_version: 1,
-      theme: "system",
-      light_palette: "manuscript",
-      dark_palette: "lamplight",
-      editor_font_size: 16,
-      editor_reading_measure: 72,
-      search_result_limit: 50,
-      link_previews: true,
+      ...DEFAULT_SETTINGS,
       task_statuses: TASK_STATUSES.map((status) => ({ ...status })),
     },
   };
@@ -74,6 +72,13 @@ function button(label: string): HTMLButtonElement {
   return candidate;
 }
 
+function openSection(label: string) {
+  [...document.querySelectorAll<HTMLButtonElement>(".settings-nav button")]
+    .find(({ textContent }) => textContent === label)
+    ?.click();
+  flushSync();
+}
+
 describe("task status settings", () => {
   it("updates palette and link preview preferences", () => {
     const { component, updates } = renderSettings();
@@ -87,6 +92,7 @@ describe("task status settings", () => {
         '[data-testid="settings-dark-palette-signal"]',
       )
       ?.click();
+    openSection("Editor");
     document
       .querySelector<HTMLInputElement>('[data-testid="settings-link-previews"]')
       ?.click();
@@ -99,6 +105,7 @@ describe("task status settings", () => {
 
   it("remaps a symbol and every transition that targets it", async () => {
     const { component, updates } = renderSettings();
+    openSection("Editor");
     expect(
       document.querySelectorAll('[data-testid="task-status-row"]'),
     ).toHaveLength(3);
@@ -107,6 +114,7 @@ describe("task status settings", () => {
     );
     expect(symbol).not.toBeNull();
     if (symbol === null) return;
+    symbol.focus();
     symbol.value = "u";
     symbol.dispatchEvent(new Event("change", { bubbles: true }));
     flushSync();
@@ -116,11 +124,13 @@ describe("task status settings", () => {
     expect(statuses?.find((status) => status.symbol === "x")?.next_status).toBe(
       "u",
     );
+    expect(document.activeElement).toBe(symbol);
     await unmount(component);
   });
 
   it("reorders, removes, and adds statuses without breaking transitions", async () => {
     let rendered = renderSettings();
+    openSection("Editor");
     button("Move status down: Ready").click();
     flushSync();
     expect(
@@ -129,6 +139,7 @@ describe("task status settings", () => {
     await unmount(rendered.component);
 
     rendered = renderSettings();
+    openSection("Editor");
     button("Remove status: Paused").click();
     flushSync();
     const remaining = rendered.updates.at(-1)?.task_statuses;
@@ -137,6 +148,7 @@ describe("task status settings", () => {
     await unmount(rendered.component);
 
     rendered = renderSettings();
+    openSection("Editor");
     document
       .querySelector<HTMLButtonElement>('[data-testid="task-status-add"]')
       ?.click();
@@ -149,5 +161,194 @@ describe("task status settings", () => {
       next_status: " ",
     });
     await unmount(rendered.component);
+  });
+
+  it("restores an invalid status edit and explains the error", async () => {
+    const { component, updates } = renderSettings();
+    openSection("Editor");
+    const symbols = document.querySelectorAll<HTMLInputElement>(
+      '[data-testid="task-status-symbol"]',
+    );
+    const first = symbols[0];
+    if (first === undefined) throw new Error("task symbol input is missing");
+    first.value = "~";
+    first.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+    expect(first.value).toBe(" ");
+    expect(updates).toEqual([]);
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "unique symbol",
+    );
+    await unmount(component);
+  });
+
+  it("offers only provided theme colour tokens", async () => {
+    const { component, updates } = renderSettings();
+    openSection("Editor");
+    const color = document.querySelector<HTMLButtonElement>(
+      '[data-testid="task-status-color"]',
+    );
+    if (color === null) throw new Error("task colour control is missing");
+    color.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="listbox"]')).not.toBeNull();
+    });
+    const options = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '[role="listbox"] [role="option"]',
+      ),
+    ];
+    expect(
+      options.some(({ textContent }) => textContent === "--skr-not-defined"),
+    ).toBe(false);
+    options
+      .find(({ textContent }) => textContent === "--skr-callout-purple")
+      ?.click();
+    expect(updates.at(-1)?.task_statuses?.[0]?.color_token).toBe(
+      "--skr-callout-purple",
+    );
+    await unmount(component);
+  });
+
+  it("uses keyboard-operable listboxes for task enums", async () => {
+    const { component, updates } = renderSettings();
+    openSection("Editor");
+    expect(document.querySelector(".task-status-table select")).toBeNull();
+    const category = document.querySelector<HTMLButtonElement>(
+      '[data-testid="task-status-category"]',
+    );
+    if (category === null) throw new Error("task category control is missing");
+    category.focus();
+    category.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    await vi.waitFor(() => {
+      expect(document.activeElement?.getAttribute("role")).toBe("option");
+    });
+    const listbox = document.querySelector<HTMLElement>('[role="listbox"]');
+    expect(listbox).not.toBeNull();
+    const onHold = [
+      ...(listbox?.querySelectorAll<HTMLButtonElement>("button") ?? []),
+    ].find(({ textContent }) => textContent === "On hold");
+    onHold?.click();
+    expect(updates.at(-1)?.task_statuses?.[0]?.category).toBe("ON_HOLD");
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(category);
+    });
+    await unmount(component);
+  });
+});
+
+describe("settings surface", () => {
+  it("changes the direct theme control with arrow keys", async () => {
+    const { component, updates } = renderSettings();
+    const system = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-theme-system"]',
+    );
+    const light = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-theme-light"]',
+    );
+    system?.focus();
+    system?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    flushSync();
+    expect(updates.at(-1)).toEqual({ theme: "light" });
+    expect(document.activeElement).toBe(light);
+    await unmount(component);
+  });
+
+  it("filters settings by name and description", async () => {
+    const { component } = renderSettings();
+    const search = document.querySelector<HTMLInputElement>(
+      '[data-testid="settings-search"]',
+    );
+    if (search === null) throw new Error("settings search is missing");
+    search.value = "text column width";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    expect(document.body.textContent).toContain("Text column width");
+    expect(document.body.textContent).not.toContain("Autosave delay");
+    await unmount(component);
+  });
+
+  it("previews a slider live and restores it when closing", async () => {
+    const onPreview = vi.fn();
+    const onClose = vi.fn();
+    const component = mount(SettingsView, {
+      target: document.body,
+      props: {
+        settings: settingsState(),
+        onUpdate: vi.fn(),
+        onPreview,
+        onClose,
+      },
+    });
+    flushSync();
+    const input = document.querySelector<HTMLInputElement>(
+      '[data-testid="settings-font-size"]',
+    );
+    if (input === null) throw new Error("font size input is missing");
+    input.value = "20";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    expect(input.closest(".slider-control")?.textContent).toContain("20 px");
+    document
+      .querySelector<HTMLButtonElement>(".settings-header .icon-button")
+      ?.click();
+    expect(onPreview).toHaveBeenLastCalledWith({
+      editor_font_size: 16,
+      editor_line_height: 170,
+      editor_line_width: 72,
+    });
+    expect(onClose).toHaveBeenCalledOnce();
+    await unmount(component);
+  });
+
+  it("marks desktop-only controls unavailable in the browser", async () => {
+    const component = mount(SettingsView, {
+      target: document.body,
+      props: {
+        settings: settingsState(),
+        onUpdate: vi.fn(),
+        onClose: vi.fn(),
+        desktopAvailable: false,
+      },
+    });
+    flushSync();
+    const navigation = [
+      ...document.querySelectorAll<HTMLButtonElement>(".settings-nav button"),
+    ];
+    navigation
+      .find(({ textContent }) => textContent === "Files and vault")
+      ?.click();
+    flushSync();
+    expect(
+      document
+        .querySelector<HTMLElement>(
+          '[data-testid="settings-desktop-unavailable"]',
+        )
+        ?.textContent?.trim(),
+    ).toBe(STRINGS.settingsDesktopOnly);
+    expect(
+      document.querySelector<HTMLInputElement>(
+        '[data-testid="settings-default-note-folder"]',
+      )?.disabled,
+    ).toBe(true);
+    navigation.find(({ textContent }) => textContent === "Updates")?.click();
+    flushSync();
+    expect(
+      document
+        .querySelector<HTMLElement>(
+          '[data-testid="settings-desktop-unavailable"]',
+        )
+        ?.textContent?.trim(),
+    ).toBe(STRINGS.settingsDesktopOnly);
+    expect(
+      document.querySelector<HTMLButtonElement>(
+        '[data-testid="settings-check-updates"]',
+      )?.disabled,
+    ).toBe(true);
+    await unmount(component);
   });
 });

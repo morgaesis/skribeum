@@ -10,6 +10,17 @@ async function overlayInput() {
   return input;
 }
 
+async function readClipboardText() {
+  const windowHandle = await browser.getWindowHandle();
+  await browser.switchToWindow(windowHandle);
+  await browser.execute(() => window.focus());
+  await browser.waitUntil(() => browser.execute(() => document.hasFocus()), {
+    timeout: 5000,
+    timeoutMsg: "browser document did not regain focus for clipboard read",
+  });
+  return browser.execute(() => navigator.clipboard.readText());
+}
+
 async function selectEditorText(text: string) {
   await browser.execute((needle: string) => {
     const root = document.querySelector(".cm-content");
@@ -241,9 +252,7 @@ describe("work package 1 browser behavior", () => {
     const copyCommand = $('[data-command-id="link.copy-note"]');
     await copyCommand.waitForExist({ timeout: 10000 });
     await copyCommand.click();
-    expect(await browser.execute(() => navigator.clipboard.readText())).toBe(
-      expectedLink,
-    );
+    expect(await readClipboardText()).toBe(expectedLink);
 
     await browser.keys([modifierKey, Key.Shift, "o"]);
     const outline = $('[role="tree"][aria-label="Outline"]');
@@ -261,9 +270,7 @@ describe("work package 1 browser behavior", () => {
     const headingLink = new URL(expectedLink);
     headingLink.hash = encodeURIComponent("1. Look around");
     await browser.waitUntil(
-      async () =>
-        (await browser.execute(() => navigator.clipboard.readText())) ===
-        headingLink.href,
+      async () => (await readClipboardText()) === headingLink.href,
       { timeout: 5000, timeoutMsg: "outline heading link was not copied" },
     );
 

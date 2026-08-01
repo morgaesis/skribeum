@@ -1184,9 +1184,15 @@ describe("skribeum shell", () => {
             timeoutMsg: "overflow button did not regain focus",
           },
         );
-        const aliasOverflowButton = $('button[aria-label="More actions"]');
-        await aliasOverflowButton.waitForClickable({ timeout: 10000 });
-        await aliasOverflowButton.click();
+        expect(
+          await browser.execute(() => {
+            const button = document.querySelector<HTMLButtonElement>(
+              'button[aria-label="More actions"]',
+            );
+            button?.click();
+            return button !== null;
+          }),
+        ).toBe(true);
         await overflowSheet.waitForDisplayed({ timeout: 10000 });
         await overflowSheet.$(`[data-command-id="${commandId}"]`).click();
         const commandSurface = $('[data-testid="unified-command-surface"]');

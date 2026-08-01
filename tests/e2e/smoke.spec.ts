@@ -326,12 +326,16 @@ async function tagCompletionOptionTexts(): Promise<string[]> {
 type TagCompletionHarness = {
   prepare(): Promise<void>;
   expectResult(expected: string): Promise<void>;
+  expectDismissedResult(expected: string): Promise<void>;
 };
 
 const packagedTagCompletionHarness: TagCompletionHarness = {
   prepare: prepareTagCompletionTarget,
   async expectResult(expected) {
     expect(await editorDocumentText()).toBe(expected);
+    await saveAndExpectTagCompletionTarget(expected);
+  },
+  async expectDismissedResult(expected) {
     await saveAndExpectTagCompletionTarget(expected);
   },
 };
@@ -401,7 +405,7 @@ async function verifyTagCompletionEscape(harness: TagCompletionHarness) {
       { timeout: 3000 },
     );
     expect(await editorDocumentText()).not.toContain("#ced");
-    await harness.expectResult(tagCompletionResult(position, ""));
+    await harness.expectDismissedResult(tagCompletionResult(position, ""));
   }
 }
 
@@ -474,6 +478,9 @@ async function selectDemoTagCompletionFixture(): Promise<void> {
 const demoTagCompletionHarness: TagCompletionHarness = {
   prepare: prepareDemoTagCompletionTarget,
   async expectResult(expected) {
+    expect(await demoTagCompletionTargetText()).toBe(expected);
+  },
+  async expectDismissedResult(expected) {
     expect(await demoTagCompletionTargetText()).toBe(expected);
   },
 };

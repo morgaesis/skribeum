@@ -371,13 +371,13 @@ export type TreeEntryKind =
 "file";
 
 /**  Result of checking the selected release channel. */
-export type UpdateCheckDoc =
+export type UpdateCheckDoc = 
 /**  The installed version matches the selected channel manifest. */
-{ kind: "current" } |
+{ kind: "current" } | 
 /**  A signed update is available from the selected channel manifest. */
-{ kind: "available";
+{ kind: "available"; 
 /**  Version announced by the manifest. */
-version: string;
+version: string; 
 /**  Release notes from the manifest, when supplied. */
 notes: string };
 
@@ -485,3 +485,4 @@ function makeEvent<T>(name: string, serialize?: (payload: T) => unknown, deseria
 
     return Object.assign(fn, base);
 }
+

@@ -646,7 +646,6 @@ $effect(() => {
   .editor
     > :global(.cm-editor)
     > :global(.cm-scroller)
-    > :global(.cm-sizer)
     > :global(.cm-content) {
     box-sizing: border-box;
     width: 100%;
@@ -680,7 +679,6 @@ $effect(() => {
     .editor
       > :global(.cm-editor)
       > :global(.cm-scroller)
-      > :global(.cm-sizer)
       > :global(.cm-content) {
       padding-block: 1.5rem;
     }

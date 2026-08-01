@@ -11,10 +11,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Narrow viewports keep a readable editor measure while the file tree and
   outline open as focus-managed overlay sheets, and frontmatter starts in its
   collapsed properties view.
+- Narrow settings navigation stays within the viewport without clipped
+  controls or horizontally displaced content.
 - Touch controls meet the 44px platform target, avoid hover-only command
   access, and restore keyboard focus after modal dismissal.
-- Editor blocks share one text column width and left edge, including padded
-  callouts and code blocks.
+- Editor reading-column styles match CodeMirror 6's rendered structure, so
+  prose typography, a bounded text measure, responsive gutters, callout bleed,
+  and narrow block padding apply consistently.
 - Headings no longer inherit hyperlink decoration or forced bold styling from
   CodeMirror, and syntax colors remain readable in both color modes.
 - Editor typography uses platform-resolvable system faces, supported weights,

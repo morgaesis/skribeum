@@ -358,11 +358,14 @@ async function refreshTreeIndex(refreshTags = false) {
     if (vault?.id !== activeVault.id) {
       return;
     }
-    tree = refreshedTree;
-    refreshLinkContext();
     if (refreshTags) {
       await refreshTagCatalog(activeVault);
+      if (vault?.id !== activeVault.id) {
+        return;
+      }
     }
+    tree = refreshedTree;
+    refreshLinkContext();
   } catch {
     // The watcher-maintained tree remains authoritative when the
     // refresh command is unavailable.

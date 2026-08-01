@@ -23,23 +23,31 @@ async function readClipboardText() {
       __skribeumClipboardReadback?: ClipboardReadback;
     };
     stateWindow.__skribeumClipboardReadback = state;
-    document.addEventListener(
+    const activation = document.createElement("button");
+    activation.dataset.testid = "clipboard-readback-activation";
+    activation.style.position = "fixed";
+    activation.style.inset = "0 auto auto 0";
+    activation.style.width = "24px";
+    activation.style.height = "24px";
+    activation.style.opacity = "0.01";
+    activation.style.zIndex = "2147483647";
+    activation.addEventListener(
       "click",
-      async (event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation();
+      async () => {
         try {
           state.text = await navigator.clipboard.readText();
         } catch (error) {
           state.error = error instanceof Error ? error.message : String(error);
         } finally {
           state.done = true;
+          activation.remove();
         }
       },
-      { capture: true, once: true },
+      { once: true },
     );
+    document.body.append(activation);
   });
-  await $(".demo-shell").click();
+  await $('[data-testid="clipboard-readback-activation"]').click();
   await browser.waitUntil(
     () =>
       browser.execute(

@@ -73,6 +73,13 @@ export const decorationTable = Facet.define<
   combine: (values) => (values.length === 0 ? DECORATION_TABLE : values.flat()),
 });
 
+const sourceRevealEnabled = Facet.define<boolean, boolean>({
+  combine: (values) => values.at(-1) ?? true,
+});
+
+/** Keeps cursor-sensitive source markers hidden on non-editable surfaces. */
+export const readOnlyDecorationMode = sourceRevealEnabled.of(false);
+
 /** Replaces the wikilink resolution context (vault tree and app.json knobs). */
 export const setWikilinkContext =
   StateEffect.define<WikilinkResolutionContext>();
@@ -452,6 +459,7 @@ function nestedMarkdownView(
         }),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         decorationEngine(context),
+        readOnlyDecorationMode,
         EditorView.lineWrapping,
         EditorState.readOnly.of(true),
         EditorView.editable.of(false),
@@ -1295,10 +1303,12 @@ function buildViewDecorations(view: EditorView): DecorationSet {
     doc: state.doc,
     tree: syntaxTree(state),
     table: splitTable(state.facet(decorationTable)).inline,
-    selection: state.selection.ranges.map((range) => ({
-      from: range.from,
-      to: range.to,
-    })),
+    selection: state.facet(sourceRevealEnabled)
+      ? state.selection.ranges.map((range) => ({
+          from: range.from,
+          to: range.to,
+        }))
+      : [],
     ranges,
     wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
   });
@@ -1309,10 +1319,12 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
     doc: state.doc,
     tree: syntaxTree(state),
     table: splitTable(state.facet(decorationTable)).block,
-    selection: state.selection.ranges.map((range) => ({
-      from: range.from,
-      to: range.to,
-    })),
+    selection: state.facet(sourceRevealEnabled)
+      ? state.selection.ranges.map((range) => ({
+          from: range.from,
+          to: range.to,
+        }))
+      : [],
     wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
   });
 }

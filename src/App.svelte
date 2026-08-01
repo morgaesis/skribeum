@@ -797,7 +797,12 @@ onMount(() => {
     {/if}
     <section class="min-w-0 flex-1">
       {#if contentView === VIEW_CANVAS && canvas !== null}
-        <CanvasView bind:this={canvasViewer} {canvas} previews={canvasPreviews} />
+        <CanvasView
+          bind:this={canvasViewer}
+          {canvas}
+          previews={canvasPreviews}
+          {linkContext}
+        />
       {:else if contentView === VIEW_CANVAS && canvasError !== null}
         <div class="skr-error m-4 rounded border p-3 text-sm" role="alert" data-testid="canvas-error">
           {canvasError}

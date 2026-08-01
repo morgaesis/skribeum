@@ -1479,8 +1479,18 @@ describe("skribeum core editing surfaces", () => {
     }, value);
   }
 
-  async function setLinkPreviewsThroughDialog(value: boolean) {
+  async function linkPreviewsControl() {
     const checkbox = $('[data-testid="settings-link-previews"]');
+    if (!(await checkbox.isExisting())) {
+      const search = $('[data-testid="settings-search"]');
+      await search.setValue("link previews");
+      await checkbox.waitForExist({ timeout: 5000 });
+    }
+    return checkbox;
+  }
+
+  async function setLinkPreviewsThroughDialog(value: boolean) {
+    const checkbox = await linkPreviewsControl();
     if ((await checkbox.isSelected()) !== value) {
       await checkbox.click();
     }
@@ -1584,9 +1594,7 @@ describe("skribeum core editing surfaces", () => {
 
     await browser.keys([modifierKey, ","]);
     await dialog.waitForExist({ timeout: 10000 });
-    expect(await $('[data-testid="settings-link-previews"]').isSelected()).toBe(
-      target,
-    );
+    expect(await (await linkPreviewsControl()).isSelected()).toBe(target);
     await setLinkPreviewsThroughDialog(original as boolean);
     await browser.waitUntil(
       async () => (await persistedLinkPreviews()) === original,

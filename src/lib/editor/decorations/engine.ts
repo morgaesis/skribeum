@@ -1184,6 +1184,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 rule.dynamic === "rich-callout"
                   ? {
                       ...dynamic,
+                      ...(firstRichLine ? { role: "note" } : {}),
                       "data-callout-line":
                         firstRichLine && lastRichLine
                           ? "only"

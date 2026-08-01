@@ -1,6 +1,6 @@
 0..0 line class="cm-skr-heading cm-skr-heading-1"
 0..2 hide node=HeaderMark
-12..12 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="first" data-foldable="false"
+12..12 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="first" data-foldable="false" role="note"
 12..12 line class="cm-skr-blockquote cm-skr-callout" data-callout="note"
 12..13 hide node=QuoteMark
 12..13 mark class="cm-skr-quote-mark"
@@ -12,7 +12,7 @@
 22..22 line class="cm-skr-blockquote cm-skr-callout" data-callout="note"
 22..23 hide node=QuoteMark
 22..23 mark class="cm-skr-quote-mark"
-71..71 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="first" data-foldable="false"
+71..71 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="first" data-foldable="false" role="note"
 71..71 line class="cm-skr-blockquote cm-skr-callout" data-callout="note"
 71..72 hide node=QuoteMark
 71..72 mark class="cm-skr-quote-mark"
@@ -24,7 +24,7 @@
 109..109 line class="cm-skr-blockquote cm-skr-callout" data-callout="note"
 109..110 hide node=QuoteMark
 109..110 mark class="cm-skr-quote-mark"
-146..146 line class="cm-skr-rich-callout cm-skr-callout" data-accent="orange" data-callout="warning" data-callout-canonical="warning" data-callout-line="first" data-foldable="false"
+146..146 line class="cm-skr-rich-callout cm-skr-callout" data-accent="orange" data-callout="warning" data-callout-canonical="warning" data-callout-line="first" data-foldable="false" role="note"
 146..146 line class="cm-skr-blockquote cm-skr-callout" data-callout="warning"
 146..147 hide node=QuoteMark
 146..147 mark class="cm-skr-quote-mark"
@@ -36,7 +36,7 @@
 159..159 line class="cm-skr-blockquote cm-skr-callout" data-callout="warning"
 159..160 hide node=QuoteMark
 159..160 mark class="cm-skr-quote-mark"
-212..212 line class="cm-skr-rich-callout cm-skr-callout" data-accent="cyan" data-callout="tip" data-callout-canonical="tip" data-callout-line="first" data-foldable="false"
+212..212 line class="cm-skr-rich-callout cm-skr-callout" data-accent="cyan" data-callout="tip" data-callout-canonical="tip" data-callout-line="first" data-foldable="false" role="note"
 212..212 line class="cm-skr-blockquote cm-skr-callout" data-callout="tip"
 212..213 hide node=QuoteMark
 212..213 mark class="cm-skr-quote-mark"
@@ -48,7 +48,7 @@
 241..241 line class="cm-skr-blockquote cm-skr-callout" data-callout="tip"
 241..242 hide node=QuoteMark
 241..242 mark class="cm-skr-quote-mark"
-296..296 line class="cm-skr-rich-callout cm-skr-callout" data-accent="yellow" data-callout="faq" data-callout-canonical="question" data-callout-line="first" data-foldable="true"
+296..296 line class="cm-skr-rich-callout cm-skr-callout" data-accent="yellow" data-callout="faq" data-callout-canonical="question" data-callout-line="first" data-foldable="true" role="note"
 296..296 line class="cm-skr-blockquote cm-skr-callout" data-callout="faq"
 296..297 hide node=QuoteMark
 296..297 mark class="cm-skr-quote-mark"
@@ -60,7 +60,7 @@
 328..328 line class="cm-skr-blockquote cm-skr-callout" data-callout="faq"
 328..329 hide node=QuoteMark
 328..329 mark class="cm-skr-quote-mark"
-384..384 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="info" data-callout-canonical="info" data-callout-line="first" data-foldable="true"
+384..384 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="info" data-callout-canonical="info" data-callout-line="first" data-foldable="true" role="note"
 384..384 line class="cm-skr-blockquote cm-skr-callout" data-callout="info"
 384..385 hide node=QuoteMark
 384..385 mark class="cm-skr-quote-mark"
@@ -72,7 +72,7 @@
 423..423 line class="cm-skr-blockquote cm-skr-callout" data-callout="info"
 423..424 hide node=QuoteMark
 423..424 mark class="cm-skr-quote-mark"
-472..472 line class="cm-skr-rich-callout cm-skr-callout" data-accent="gray" data-callout="quote" data-callout-canonical="quote" data-callout-line="first" data-foldable="false"
+472..472 line class="cm-skr-rich-callout cm-skr-callout" data-accent="gray" data-callout="quote" data-callout-canonical="quote" data-callout-line="first" data-foldable="false" role="note"
 472..472 line class="cm-skr-blockquote cm-skr-callout" data-callout="quote"
 472..473 hide node=QuoteMark
 472..473 mark class="cm-skr-quote-mark"
@@ -88,7 +88,7 @@
 507..507 line class="cm-skr-blockquote cm-skr-callout" data-callout="quote"
 507..508 hide node=QuoteMark
 507..508 mark class="cm-skr-quote-mark"
-537..537 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="first" data-foldable="false"
+537..537 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="first" data-foldable="false" role="note"
 537..537 line class="cm-skr-blockquote cm-skr-callout" data-callout="note"
 537..538 hide node=QuoteMark
 537..538 mark class="cm-skr-quote-mark"
@@ -102,7 +102,7 @@
 547..548 mark class="cm-skr-quote-mark"
 582..582 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="last" data-foldable="false"
 582..582 line class="cm-skr-blockquote cm-skr-callout" data-callout="note"
-614..614 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="todo" data-callout-canonical="todo" data-callout-line="first" data-foldable="false"
+614..614 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="todo" data-callout-canonical="todo" data-callout-line="first" data-foldable="false" role="note"
 614..614 line class="cm-skr-blockquote cm-skr-callout" data-callout="todo"
 614..615 hide node=QuoteMark
 614..615 mark class="cm-skr-quote-mark"
@@ -120,7 +120,7 @@
 684..685 hide node=QuoteMark
 684..685 mark class="cm-skr-quote-mark"
 686..687 mark class="cm-skr-list-mark"
-720..720 line class="cm-skr-rich-callout cm-skr-callout" data-accent="cyan" data-callout="abstract" data-callout-canonical="abstract" data-callout-line="first" data-foldable="false"
+720..720 line class="cm-skr-rich-callout cm-skr-callout" data-accent="cyan" data-callout="abstract" data-callout-canonical="abstract" data-callout-line="first" data-foldable="false" role="note"
 720..720 line class="cm-skr-blockquote cm-skr-callout" data-callout="abstract"
 720..721 hide node=QuoteMark
 720..721 mark class="cm-skr-quote-mark"
@@ -134,7 +134,7 @@
 734..735 mark class="cm-skr-quote-mark"
 756..756 line class="cm-skr-rich-callout cm-skr-callout" data-accent="cyan" data-callout="abstract" data-callout-canonical="abstract" data-callout-line="middle" data-foldable="false"
 756..756 line class="cm-skr-blockquote cm-skr-callout" data-callout="abstract"
-756..756 line class="cm-skr-rich-callout cm-skr-callout" data-accent="purple" data-callout="example" data-callout-canonical="example" data-callout-line="first" data-foldable="false"
+756..756 line class="cm-skr-rich-callout cm-skr-callout" data-accent="purple" data-callout="example" data-callout-canonical="example" data-callout-line="first" data-foldable="false" role="note"
 756..756 line class="cm-skr-blockquote cm-skr-callout" data-callout="example"
 756..757 hide node=QuoteMark
 756..757 mark class="cm-skr-quote-mark"
@@ -152,7 +152,7 @@
 771..772 mark class="cm-skr-quote-mark"
 773..774 hide node=QuoteMark
 773..774 mark class="cm-skr-quote-mark"
-803..803 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="unknown-custom-type" data-callout-canonical="note" data-callout-line="first" data-foldable="false"
+803..803 line class="cm-skr-rich-callout cm-skr-callout" data-accent="blue" data-callout="unknown-custom-type" data-callout-canonical="note" data-callout-line="first" data-foldable="false" role="note"
 803..803 line class="cm-skr-blockquote cm-skr-callout" data-callout="unknown-custom-type"
 803..804 hide node=QuoteMark
 803..804 mark class="cm-skr-quote-mark"

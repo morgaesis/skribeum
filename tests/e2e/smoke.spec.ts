@@ -386,7 +386,7 @@ async function selectEditorText(text: string) {
       const selection = window.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
-      root.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+      document.dispatchEvent(new Event("selectionchange"));
       return;
     }
     throw new Error(`text not found: ${needle}`);
@@ -416,7 +416,7 @@ async function placeCursorInsideEditorText(text: string) {
       const selection = window.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
-      root.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+      document.dispatchEvent(new Event("selectionchange"));
       return;
     }
     throw new Error(`text not found: ${needle}`);
@@ -1228,11 +1228,16 @@ describe("skribeum shell", () => {
       async () => (await editorText()).includes("Navigation source"),
       { timeout: 15000 },
     );
+    await $(".cm-skr-wikilink-target").waitForExist({ timeout: 15000 });
 
     await browser.execute(() =>
       document.querySelector<HTMLElement>(".cm-content")?.focus(),
     );
     await placeCursorInsideEditorText("zzz-navigation-target");
+    await browser.waitUntil(
+      async () => (await activeElementDescriptor()).includes("cm-content"),
+      { timeout: 5000 },
+    );
     await browser.keys([modifierKey, Key.Enter]);
     await browser.waitUntil(
       async () => (await editorText()).includes("Wikilink destination content"),

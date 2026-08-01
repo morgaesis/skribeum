@@ -303,13 +303,17 @@ async function createNewNote() {
   }
 }
 
-function closeOverlay() {
-  activeOverlay = null;
+function focusContent() {
   if (contentView === VIEW_CANVAS) {
     canvasViewer?.focus();
   } else {
     editor?.getView()?.focus();
   }
+}
+
+function closeOverlay() {
+  activeOverlay = null;
+  focusContent();
 }
 
 function commandContext(): CommandContext {
@@ -398,12 +402,20 @@ async function runVaultSearch(query: string) {
 
 function onOverlayPick(id: string) {
   const overlay = activeOverlay;
-  closeOverlay();
   if (overlay === VIEW_COMMAND_PALETTE) {
+    // Keep the editor's selection stable until editor-scoped commands have
+    // consumed it. Restoring focus first can reconcile a browser selection
+    // change before the command reads the CodeMirror state.
+    activeOverlay = null;
     registry.run(id, commandContext());
+    if (activeOverlay === null) {
+      focusContent();
+    }
   } else if (overlay === VIEW_QUICK_SWITCHER) {
+    closeOverlay();
     void openNote(id);
   } else if (overlay === VIEW_VAULT_SEARCH) {
+    closeOverlay();
     void openSearchResult(id);
   }
 }

@@ -4,9 +4,9 @@ import type { Extension, Text } from "@codemirror/state";
 import {
   decorationEngine,
   LONG_LINE_DECORATION_LIMIT,
+  tokenHighlightStyle,
 } from "./decorations/engine";
 import type { WikilinkResolutionContext } from "./decorations/wikilinks";
-import { noteHighlightStyle } from "./highlighting";
 import { codeLanguage } from "./markdown/codeLanguages";
 import { obsidianMarkdownExtensions } from "./markdown/obsidian";
 
@@ -63,7 +63,7 @@ export function noteRenderingExtensions(
       codeLanguages: codeLanguage,
       extensions: obsidianMarkdownExtensions,
     }),
-    syntaxHighlighting(noteHighlightStyle, { fallback: true }),
+    syntaxHighlighting(tokenHighlightStyle, { fallback: true }),
     decorationEngine(context),
   ];
 }

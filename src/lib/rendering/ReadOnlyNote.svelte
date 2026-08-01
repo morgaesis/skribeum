@@ -78,10 +78,12 @@ $effect(() => {
   .read-only-note :global(.cm-content) {
     padding: 0;
     font-family: var(--skr-font-prose);
-    line-height: 1.72;
+    line-height: 1.7;
   }
   .read-only-note :global(.cm-line.cm-skr-code-block) {
     font-family: var(--skr-font-mono);
-    line-height: 1.55;
+    font-size: 0.875em;
+    font-weight: 400;
+    line-height: 1.6;
   }
 </style>

@@ -93,11 +93,11 @@ function onKeydown(event: KeyboardEvent) {
 </script>
 
 <div class="flex h-full flex-col overflow-hidden text-sm">
-  <h2 class="m-0 border-b border-gray-200 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-gray-600">
+  <h2 class="skr-panel-heading m-0 border-b px-2 py-1 text-xs font-semibold uppercase tracking-wide">
     {STRINGS.outlineLabel}
   </h2>
   {#if rows.length === 0}
-    <p class="m-0 px-2 py-1 text-xs text-gray-500">{STRINGS.outlineEmpty}</p>
+    <p class="skr-muted m-0 px-2 py-1 text-xs">{STRINGS.outlineEmpty}</p>
   {:else}
     <ul
       class="m-0 list-none overflow-y-auto p-1"
@@ -116,7 +116,7 @@ function onKeydown(event: KeyboardEvent) {
           aria-selected={index === focusIndex}
           aria-expanded={row.hasChildren ? !collapsed.has(row.entry.from) : undefined}
           tabindex={index === focusIndex ? 0 : -1}
-          class="cursor-pointer truncate rounded px-2 py-0.5 outline-offset-1 focus-visible:outline-2 focus-visible:outline-blue-500"
+          class="cursor-pointer truncate rounded px-2 py-0.5"
           style={`padding-left: ${0.5 + (row.depth - 1) * 0.75}rem`}
           onclick={() => {
             focusRow(index);

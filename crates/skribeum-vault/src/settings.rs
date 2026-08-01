@@ -55,8 +55,8 @@ impl Default for Settings {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
             theme: "system".to_owned(),
-            editor_font_size: 17,
-            editor_reading_measure: 76,
+            editor_font_size: 16,
+            editor_reading_measure: 72,
             search_result_limit: 50,
         }
     }
@@ -65,7 +65,7 @@ impl Default for Settings {
 /// Accepted theme values.
 const THEMES: &[&str] = &["system", "light", "dark"];
 /// Accepted editor font size range in CSS pixels.
-const FONT_SIZE_RANGE: (u32, u32) = (6, 128);
+const FONT_SIZE_RANGE: (u32, u32) = (8, 40);
 /// Accepted editor reading measure range in characters.
 const READING_MEASURE_RANGE: (u32, u32) = (45, 120);
 /// Accepted search result limit range.

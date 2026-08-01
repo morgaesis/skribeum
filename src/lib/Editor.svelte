@@ -542,28 +542,39 @@ $effect(() => {
   .editor :global(.cm-editor) {
     height: 100%;
     /* The settings view drives the variable; the fallback is the default. */
-    font-size: var(--skr-editor-font-size, 0.95rem);
+    font-size: var(--skr-editor-font-size, 1rem);
   }
   .editor :global(.cm-editor.cm-focused) {
     outline: 2px solid var(--skr-focus);
     outline-offset: -2px;
   }
-  .editor :global(.cm-content) {
-    padding-block: clamp(2rem, 5vh, 4rem);
-    font-family: var(--skr-font-prose);
-    line-height: 1.72;
-  }
-  .editor :global(.cm-line) {
+  .editor
+    > :global(.cm-editor)
+    > :global(.cm-scroller)
+    > :global(.cm-sizer)
+    > :global(.cm-content) {
     box-sizing: border-box;
     width: 100%;
-    max-width: calc(var(--skr-editor-measure, 76ch) + 6rem);
+    max-width: calc(
+      var(--skr-editor-measure, 72) * 1ch + 2 * var(--skr-gutter)
+    );
     margin-inline: auto;
-    padding-inline: clamp(1.5rem, 5vw, 3rem);
+    padding-block: clamp(2rem, 5vh, 4rem);
+    padding-inline: var(--skr-gutter);
+    font-family: var(--skr-font-prose);
+    line-height: 1.7;
+  }
+  .editor :global(.cm-line) {
+    padding-inline: 0;
+  }
+  .editor :global(.cm-line.cm-skr-rich-callout) {
+    padding-inline: 1rem;
   }
   .editor :global(.cm-line.cm-skr-code-block) {
-    max-width: calc(var(--skr-editor-measure, 76ch) + 24ch + 6rem);
     font-family: var(--skr-font-mono);
-    line-height: 1.55;
+    font-size: 0.875em;
+    font-weight: 400;
+    line-height: 1.6;
   }
   .editor:not(.skr-show-raw-frontmatter)
     :global(.cm-line.cm-skr-frontmatter) {

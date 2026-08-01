@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Editor blocks share one reading measure and left edge, including padded
+  callouts and code blocks.
+- Headings no longer inherit hyperlink decoration or forced bold styling from
+  CodeMirror, and syntax colors remain readable in both color modes.
+- Editor typography uses platform-resolvable system faces, supported weights,
+  and motion that stays within the 50ms interaction ceiling.
 - Canvas pans clear and suppress text selection, overflowing cards consume
   wheel input before the camera, and note cards use the editor's read-only
   Markdown decoration pipeline.
@@ -18,12 +24,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Callouts retain parent-editor source positions under their rendered lines,
   so pointer placement reveals the complete editable block and one cursor
   controls nested and adjacent reveal regions.
-- Syntax highlighting follows the active theme on editable and read-only note
-  surfaces, including Markdown previews in the canvas viewer.
 
 ### Added
 
-- Persisted editor reading measure with a 76-character default and
+- Persisted editor reading measure with a 72-character default and
   restart-free application from the settings view.
 - Browser-only editor demo with a seeded sample vault, in-memory edits that
   reset on reload, and a static GitHub Pages build.

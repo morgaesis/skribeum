@@ -7,7 +7,11 @@
 // engine causes.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxHighlighting, syntaxTree } from "@codemirror/language";
+import {
+  HighlightStyle,
+  syntaxHighlighting,
+  syntaxTree,
+} from "@codemirror/language";
 import {
   EditorState,
   type Extension,
@@ -26,12 +30,12 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
+import { tags } from "@lezer/highlight";
 import { renderMath } from "../../rendering/math";
 import { renderMermaid } from "../../rendering/mermaid";
 import { STRINGS } from "../../strings";
 import { bulkTextInputAnnotation } from "../bulkInput";
 import { decorationOrigin } from "../decorationGuard";
-import { noteHighlightStyle } from "../highlighting";
 import { codeLanguage } from "../markdown/codeLanguages";
 import {
   obsidianMarkdownExtensions,
@@ -48,6 +52,42 @@ import {
   resolveWikilinkTarget,
   type WikilinkResolutionContext,
 } from "./wikilinks";
+
+/** Syntax colors shared by editable notes and nested read-only notes. */
+export const tokenHighlightStyle = HighlightStyle.define([
+  {
+    tag: [tags.keyword, tags.modifier],
+    color: "var(--skr-syntax-keyword)",
+  },
+  {
+    tag: [tags.string, tags.regexp],
+    color: "var(--skr-syntax-string)",
+  },
+  {
+    tag: [tags.number, tags.bool, tags.atom],
+    color: "var(--skr-syntax-number)",
+  },
+  {
+    tag: [tags.comment, tags.meta],
+    color: "var(--skr-syntax-comment)",
+  },
+  {
+    tag: [tags.function(tags.variableName), tags.definition(tags.variableName)],
+    color: "var(--skr-syntax-function)",
+  },
+  {
+    tag: [tags.typeName, tags.className, tags.namespace],
+    color: "var(--skr-syntax-type)",
+  },
+  {
+    tag: [tags.propertyName, tags.attributeName, tags.tagName],
+    color: "var(--skr-syntax-property)",
+  },
+  {
+    tag: [tags.operator, tags.punctuation, tags.bracket],
+    color: "var(--skr-syntax-operator)",
+  },
+]);
 
 /**
  * Long-line safeguard: no decoration is computed for content on a line
@@ -454,7 +494,7 @@ function nestedMarkdownView(
           extensions: obsidianMarkdownExtensions,
           codeLanguages: codeLanguage,
         }),
-        syntaxHighlighting(noteHighlightStyle, { fallback: true }),
+        syntaxHighlighting(tokenHighlightStyle, { fallback: true }),
         decorationEngine(context),
         readOnlyDecorationMode,
         EditorView.lineWrapping,
@@ -1553,9 +1593,25 @@ const calloutPointerMapping = EditorView.domEventHandlers({
     if (event.button !== 0 || !(event.target instanceof Element)) {
       return false;
     }
-    const lineElement = event.target.closest<HTMLElement>(
+    const directLine = event.target.closest<HTMLElement>(
       ".cm-line.cm-skr-rich-callout",
     );
+    const lineElement =
+      directLine ??
+      [
+        ...view.contentDOM.querySelectorAll<HTMLElement>(
+          ".cm-line.cm-skr-rich-callout",
+        ),
+      ].find((line) => {
+        const rect = line.getBoundingClientRect();
+        return (
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom
+        );
+      }) ??
+      null;
     if (lineElement === null || !view.dom.contains(lineElement)) {
       return false;
     }
@@ -1579,55 +1635,62 @@ const calloutPointerMapping = EditorView.domEventHandlers({
 const engineTheme = EditorView.baseTheme({
   ".cm-skr-heading": {
     fontFamily: "var(--skr-font-prose)",
-    lineHeight: "1.22",
     textWrap: "balance",
   },
   ".cm-skr-heading-1": {
-    color: "var(--skr-heading-1)",
-    fontSize: "2.05em",
-    fontWeight: "720",
-    letterSpacing: "-0.028em",
-    paddingTop: "0.6em",
-    paddingBottom: "0.32em",
+    color: "var(--skr-heading)",
+    fontSize: "1.75em",
+    fontWeight: "700",
+    lineHeight: "1.25",
+    letterSpacing: "-0.015em",
+    paddingTop: "1.5rem",
+    paddingBottom: "0.5rem",
     borderBottom: "1px solid var(--skr-border)",
   },
   ".cm-skr-heading-2": {
-    color: "var(--skr-heading-2)",
-    fontSize: "1.7em",
-    fontWeight: "690",
-    letterSpacing: "-0.02em",
-    paddingTop: "0.68em",
-    paddingBottom: "0.2em",
+    color: "var(--skr-heading)",
+    fontSize: "1.5em",
+    fontWeight: "700",
+    lineHeight: "1.3",
+    letterSpacing: "-0.01em",
+    paddingTop: "1.25rem",
+    paddingBottom: "0.375rem",
   },
   ".cm-skr-heading-3": {
-    color: "var(--skr-heading-3)",
-    fontSize: "1.4em",
-    fontWeight: "660",
-    letterSpacing: "-0.012em",
-    paddingTop: "0.62em",
-    paddingBottom: "0.14em",
+    color: "var(--skr-heading)",
+    fontSize: "1.25em",
+    fontWeight: "700",
+    lineHeight: "1.35",
+    letterSpacing: "-0.005em",
+    paddingTop: "1rem",
+    paddingBottom: "0.25rem",
   },
   ".cm-skr-heading-4": {
-    color: "var(--skr-heading-4)",
-    fontSize: "1.18em",
-    fontWeight: "630",
-    letterSpacing: "0.005em",
-    paddingTop: "0.54em",
+    color: "var(--skr-heading)",
+    fontSize: "1.125em",
+    fontWeight: "700",
+    lineHeight: "1.4",
+    letterSpacing: "0",
+    paddingTop: "1rem",
+    paddingBottom: "0.125rem",
   },
   ".cm-skr-heading-5": {
-    color: "var(--skr-heading-5)",
-    fontSize: "1.02em",
-    fontWeight: "600",
-    letterSpacing: "0.055em",
-    paddingTop: "0.48em",
-    textTransform: "uppercase",
+    color: "var(--skr-heading-subtle)",
+    fontSize: "1em",
+    fontWeight: "700",
+    lineHeight: "1.5",
+    letterSpacing: "0",
+    paddingTop: "1rem",
+    paddingBottom: "0.125rem",
   },
   ".cm-skr-heading-6": {
-    color: "var(--skr-heading-6)",
-    fontSize: "0.92em",
-    fontWeight: "570",
-    letterSpacing: "0.075em",
-    paddingTop: "0.42em",
+    color: "var(--skr-heading-subtle)",
+    fontSize: "0.875em",
+    fontWeight: "700",
+    lineHeight: "1.5",
+    letterSpacing: "0.06em",
+    paddingTop: "1rem",
+    paddingBottom: "0.125rem",
     textTransform: "uppercase",
   },
   ".cm-skr-setext-underline": { color: "var(--skr-text-muted)" },
@@ -1639,7 +1702,7 @@ const engineTheme = EditorView.baseTheme({
     opacity: "0",
     verticalAlign: "bottom",
     whiteSpace: "pre",
-    transition: "max-width 120ms ease-out, opacity 90ms ease-out",
+    transition: "opacity 50ms linear",
   },
   ".cm-skr-reveal-marker-active": {
     maxWidth: "7ch",
@@ -1647,10 +1710,14 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-emphasis": { fontStyle: "italic" },
   ".cm-skr-strong": { fontWeight: "700" },
-  ".cm-skr-strikethrough": { textDecoration: "line-through" },
+  ".cm-skr-strikethrough": {
+    color: "var(--skr-text-muted)",
+    textDecoration: "line-through",
+  },
   ".cm-skr-link, .cm-skr-url": {
     color: "var(--skr-link)",
     textDecoration: "underline",
+    textUnderlineOffset: "0.15em",
   },
   ".cm-skr-link-label": { color: "var(--skr-link)" },
   ".cm-skr-wikilink": { color: "var(--skr-link)" },
@@ -1679,8 +1746,9 @@ const engineTheme = EditorView.baseTheme({
     display: "block",
     padding: "0.35rem 0.6rem",
     color: "var(--skr-text-muted)",
-    fontSize: "0.8em",
-    fontWeight: "700",
+    fontFamily: "var(--skr-font-interface)",
+    fontSize: "0.8125em",
+    fontWeight: "400",
   },
   ".cm-skr-embed-body": { display: "block" },
   ".cm-skr-embed-body > .cm-editor": { backgroundColor: "transparent" },
@@ -1692,10 +1760,10 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-list-mark": { color: "var(--skr-accent)" },
   ".cm-skr-task-checkbox": {
     display: "inline-block",
-    width: "0.9em",
-    height: "0.9em",
+    width: "1em",
+    height: "1em",
     verticalAlign: "text-bottom",
-    border: "1.5px solid var(--skr-text-muted)",
+    border: "1.5px solid var(--skr-border-strong)",
     borderRadius: "3px",
     margin: "0 0.15em",
   },
@@ -1709,6 +1777,8 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-inline-code": {
     fontFamily: "var(--skr-font-mono)",
+    fontSize: "0.9em",
+    fontWeight: "400",
     backgroundColor: "var(--skr-code-surface)",
     borderRadius: "3px",
     padding: "0 2px",
@@ -1717,45 +1787,68 @@ const engineTheme = EditorView.baseTheme({
     boxSizing: "border-box",
     display: "grid",
     width: "100%",
-    overflow: "hidden",
+    overflowX: "auto",
     borderLeft: "1px solid var(--skr-border)",
     borderRight: "1px solid var(--skr-border)",
     backgroundColor: "var(--skr-surface)",
   },
   ".cm-skr-table-first": {
     borderTop: "1px solid var(--skr-border)",
-    borderTopLeftRadius: "0.35rem",
-    borderTopRightRadius: "0.35rem",
+    borderTopLeftRadius: "0.375rem",
+    borderTopRightRadius: "0.375rem",
   },
   ".cm-skr-table-last": {
     borderBottom: "1px solid var(--skr-border)",
-    borderBottomLeftRadius: "0.35rem",
-    borderBottomRightRadius: "0.35rem",
+    borderBottomLeftRadius: "0.375rem",
+    borderBottomRightRadius: "0.375rem",
   },
   ".cm-skr-table-header": {
-    borderBottom: "2px solid var(--skr-border)",
+    borderBottom: "1px solid var(--skr-border)",
     backgroundColor: "var(--skr-surface-subtle)",
+    fontFamily: "var(--skr-font-interface)",
+    fontSize: "0.875em",
+    fontWeight: "600",
   },
   ".cm-skr-table-cell": {
     boxSizing: "border-box",
     minWidth: "0",
-    padding: "0.35rem 0.55rem",
+    padding: "0.375rem 0.625rem",
     overflowWrap: "anywhere",
     borderRight: "1px solid var(--skr-border)",
   },
   ".cm-skr-table-cell:last-child": { borderRight: "0" },
   ".cm-skr-table-separator": { display: "none" },
   ".cm-skr-code-block": {
+    boxSizing: "border-box",
     position: "relative",
+    overflowX: "auto",
     backgroundColor: "var(--skr-code-surface)",
+    boxShadow:
+      "-1rem 0 0 var(--skr-code-surface), 1rem 0 0 var(--skr-code-surface)",
   },
-  ".cm-skr-code-fence": { opacity: "0.28" },
-  ".cm-skr-code-info": { opacity: "0.38", fontStyle: "italic" },
+  ".cm-line:not(.cm-skr-code-block) + .cm-skr-code-block, .cm-skr-code-block:first-child":
+    {
+      paddingTop: "0.75rem",
+      overflow: "visible",
+      borderTopLeftRadius: "0.375rem",
+      borderTopRightRadius: "0.375rem",
+    },
+  ".cm-skr-code-block:has(+ .cm-line:not(.cm-skr-code-block)), .cm-skr-code-block:last-child":
+    {
+      paddingBottom: "0.75rem",
+      borderBottomLeftRadius: "0.375rem",
+      borderBottomRightRadius: "0.375rem",
+    },
+  ".cm-skr-code-fence, .cm-skr-code-info": {
+    color: "var(--skr-text-muted)",
+    opacity: "1",
+  },
+  ".cm-skr-code-info": { fontStyle: "italic" },
   ".cm-skr-code-copy": {
     position: "absolute",
     zIndex: "2",
-    top: "0.2rem",
-    right: "0.35rem",
+    top: "0.5rem",
+    right: "-0.5rem",
     minWidth: "4.5rem",
     padding: "0.2rem 0.45rem",
     color: "var(--skr-text)",
@@ -1772,8 +1865,9 @@ const engineTheme = EditorView.baseTheme({
       pointerEvents: "auto",
     },
   ".cm-skr-blockquote": {
-    borderLeft: "3px solid var(--skr-border)",
-    paddingLeft: "0.5em",
+    color: "var(--skr-text-muted)",
+    borderLeft: "3px solid var(--skr-border-strong)",
+    paddingLeft: "1rem",
   },
   ".cm-skr-quote-mark": { color: "var(--skr-text-muted)" },
   ".cm-skr-callout-mark": { fontWeight: "700", color: "var(--skr-accent)" },
@@ -1787,20 +1881,21 @@ const engineTheme = EditorView.baseTheme({
   ".cm-line.cm-skr-rich-callout": {
     "--skr-callout-color": "var(--skr-callout-blue)",
     boxSizing: "border-box",
-    paddingLeft: "0.7rem",
-    paddingRight: "0.7rem",
+    width: "calc(100% + 2rem + 3px)",
+    marginLeft: "calc(-1rem - 3px)",
+    marginRight: "-1rem",
+    paddingInline: "1rem",
+    overflow: "hidden",
     color: "var(--skr-text)",
     backgroundColor:
-      "color-mix(in srgb, var(--skr-callout-color) 10%, var(--skr-surface))",
-    borderLeft: "4px solid var(--skr-callout-color)",
-    borderRight:
-      "1px solid color-mix(in srgb, var(--skr-callout-color) 45%, var(--skr-border))",
+      "color-mix(in srgb, var(--skr-callout-color) var(--skr-callout-tint), var(--skr-surface))",
+    borderLeft: "3px solid var(--skr-callout-color)",
   },
   '.cm-skr-rich-callout[data-accent="cyan"]': {
     "--skr-callout-color": "var(--skr-callout-cyan)",
   },
   '.cm-skr-rich-callout[data-accent="green"]': {
-    "--skr-callout-color": "var(--skr-success)",
+    "--skr-callout-color": "var(--skr-callout-green)",
   },
   '.cm-skr-rich-callout[data-accent="yellow"]': {
     "--skr-callout-color": "var(--skr-callout-yellow)",
@@ -1809,40 +1904,35 @@ const engineTheme = EditorView.baseTheme({
     "--skr-callout-color": "var(--skr-callout-orange)",
   },
   '.cm-skr-rich-callout[data-accent="red"]': {
-    "--skr-callout-color": "var(--skr-danger)",
+    "--skr-callout-color": "var(--skr-callout-red)",
   },
   '.cm-skr-rich-callout[data-accent="purple"]': {
     "--skr-callout-color": "var(--skr-callout-purple)",
   },
   '.cm-skr-rich-callout[data-accent="gray"]': {
-    "--skr-callout-color": "var(--skr-text-muted)",
+    "--skr-callout-color": "var(--skr-callout-gray)",
   },
   '.cm-skr-rich-callout[data-callout-line="first"], .cm-skr-rich-callout[data-callout-line="only"]':
     {
-      paddingTop: "0.5rem",
+      paddingTop: "0.75rem",
       color: "var(--skr-callout-color)",
       fontWeight: "700",
-      borderTop:
-        "1px solid color-mix(in srgb, var(--skr-callout-color) 45%, var(--skr-border))",
-      borderTopLeftRadius: "0.45rem",
-      borderTopRightRadius: "0.45rem",
+      borderTopRightRadius: "0.375rem",
     },
   '.cm-skr-rich-callout[data-callout-line="last"], .cm-skr-rich-callout[data-callout-line="only"]':
     {
-      paddingBottom: "0.65rem",
-      borderBottom:
-        "1px solid color-mix(in srgb, var(--skr-callout-color) 45%, var(--skr-border))",
-      borderBottomLeftRadius: "0.45rem",
-      borderBottomRightRadius: "0.45rem",
+      paddingBottom: "0.75rem",
+      borderBottomRightRadius: "0.375rem",
     },
   ".cm-skr-callout-icon-host, .cm-skr-callout-icon": {
     display: "inline-flex",
+    flex: "0 0 auto",
     color: "var(--skr-callout-color)",
   },
   ".cm-skr-callout-icon-host": { marginRight: "0.4rem" },
   ".cm-skr-tag": {
     color: "var(--skr-accent)",
-    backgroundColor: "var(--skr-accent-soft)",
+    backgroundColor: "var(--skr-accent-subtle)",
     borderRadius: "8px",
     padding: "0 4px",
   },
@@ -1850,7 +1940,8 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-frontmatter": {
     color: "var(--skr-text-muted)",
     fontFamily: "var(--skr-font-mono)",
-    fontSize: "0.88em",
+    fontSize: "0.8125em",
+    lineHeight: "1.5",
   },
   ".cm-skr-math-inline": { display: "inline-block", maxWidth: "100%" },
   ".cm-skr-math-block, .cm-skr-mermaid": {

@@ -51,7 +51,7 @@ export const config: WebdriverIO.Config = {
   // tauri-driver process is needed on any platform.
   services: [["@wdio/tauri-service", { appBinaryPath }]],
   capabilities,
-  logLevel: "info",
+  logLevel: "warn",
   waitforTimeout: 10000,
   connectionRetryTimeout: 120000,
   connectionRetryCount: 2,

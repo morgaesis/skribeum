@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
-import axe from "axe-core";
 import { Key } from "webdriverio";
 import {
   CANVAS_FILE_CONTENT,
@@ -34,6 +34,13 @@ import {
 
 const specDirectory = path.dirname(fileURLToPath(import.meta.url));
 const screenshotDirectory = path.join(specDirectory, "screenshots");
+const moduleRequire = createRequire(import.meta.url);
+// The minified distribution performs the same audit while keeping the
+// WebDriver script payload small enough for slower Linux runners.
+const axeSource = readFileSync(
+  moduleRequire.resolve("axe-core/axe.min.js"),
+  "utf8",
+);
 
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
 
@@ -449,43 +456,21 @@ async function activeElementDescriptor(): Promise<string> {
 }
 
 async function expectNoAxeViolations(surface: string) {
-  await browser.execute(axe.source);
   const violations = await browser.executeAsync<
     Array<{ id: string; impact: string | null; targets: string[] }>,
     []
-  >((done) => {
-    const runner = (
-      window as unknown as {
-        axe?: {
-          run: () => Promise<{
-            violations: Array<{
-              id: string;
-              impact: string | null;
-              nodes: Array<{ target: string[] }>;
-            }>;
-          }>;
-        };
-      }
-    ).axe;
-    if (runner === undefined) {
-      done([{ id: "axe-unavailable", impact: "critical", targets: [] }]);
-      return;
-    }
-    runner
-      .run()
-      .then((result) =>
-        done(
-          result.violations.map((violation) => ({
-            id: violation.id,
-            impact: violation.impact,
-            targets: violation.nodes.flatMap((node) => node.target),
-          })),
-        ),
-      )
-      .catch((error: unknown) =>
-        done([{ id: String(error), impact: "critical", targets: [] }]),
-      );
-  });
+  >(`${axeSource}
+const done = arguments[arguments.length - 1];
+window.axe.run()
+  .then((result) => done(result.violations.map((violation) => ({
+    id: violation.id,
+    impact: violation.impact,
+    targets: violation.nodes.flatMap((node) => node.target),
+  }))))
+  .catch((error) => done([
+    { id: String(error), impact: "critical", targets: [] },
+  ]));
+`);
   if (violations.length > 0) {
     throw new Error(`${surface}: ${JSON.stringify(violations)}`);
   }

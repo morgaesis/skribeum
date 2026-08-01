@@ -13,10 +13,14 @@ import {
   LIVE_PREVIEW_NOTE_NAME,
   MOTION_PREVIEW_NOTE_NAME,
   NAVIGATION_SOURCE_NOTE_NAME,
+  RENDERING_NOTE_CONTENT,
   RENDERING_NOTE_NAME,
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
+  TABLE_GEOMETRY_NOTE_CONTENT,
+  TAG_COMPLETION_TARGET_NOTE_CONTENT,
+  TAG_COMPLETION_TARGET_NOTE_NAME,
   TAG_DELETE_NOTE_NAME,
   TAG_DELETE_PROBE_NOTE_NAME,
   TAG_REFRESH_NOTE_NAME,
@@ -178,6 +182,99 @@ async function horizontalViewportEscapes(): Promise<HorizontalEscape[]> {
       },
     );
   });
+}
+
+type TableGeometry = {
+  rows: Array<{
+    columns: string;
+    cellLefts: number[];
+    left: number;
+    right: number;
+    clientWidth: number;
+    scrollWidth: number;
+    overflowX: string;
+  }>;
+};
+
+async function renderedTableGeometry(): Promise<TableGeometry[]> {
+  return browser.execute(() => {
+    const tables: TableGeometry[] = [];
+    for (const row of document.querySelectorAll<HTMLElement>(
+      ".cm-skr-table-row",
+    )) {
+      if (row.classList.contains("cm-skr-table-first")) {
+        tables.push({ rows: [] });
+      }
+      const table = tables.at(-1);
+      if (table === undefined) {
+        throw new Error("table row appears before a table start");
+      }
+      const box = row.getBoundingClientRect();
+      table.rows.push({
+        columns: getComputedStyle(row).gridTemplateColumns,
+        cellLefts: [
+          ...row.querySelectorAll<HTMLElement>(".cm-skr-table-cell"),
+        ].map((cell) => cell.getBoundingClientRect().left),
+        left: box.left,
+        right: box.right,
+        clientWidth: row.clientWidth,
+        scrollWidth: row.scrollWidth,
+        overflowX: getComputedStyle(row).overflowX,
+      });
+    }
+    return tables;
+  });
+}
+
+async function prepareTableGeometryNote(): Promise<void> {
+  await openNoteFromTree(VISUAL_NOTE_NAME);
+  await browser.waitUntil(
+    async () => (await editorText()).includes("A room for reading"),
+    { timeout: 15000, timeoutMsg: "visual note did not open" },
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),
+    TABLE_GEOMETRY_NOTE_CONTENT,
+  );
+  await waitForDisk(RENDERING_NOTE_NAME, TABLE_GEOMETRY_NOTE_CONTENT);
+}
+
+async function prepareTagCompletionTarget(): Promise<void> {
+  await openNoteFromTree(VISUAL_NOTE_NAME);
+  await browser.waitUntil(
+    async () => (await editorText()).includes("A room for reading"),
+    { timeout: 15000, timeoutMsg: "visual note did not open" },
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TAG_COMPLETION_TARGET_NOTE_NAME),
+    TAG_COMPLETION_TARGET_NOTE_CONTENT,
+  );
+  await waitForDisk(
+    TAG_COMPLETION_TARGET_NOTE_NAME,
+    TAG_COMPLETION_TARGET_NOTE_CONTENT,
+  );
+  await openNoteFromTree(TAG_COMPLETION_TARGET_NOTE_NAME);
+  await browser.waitUntil(
+    async () =>
+      (await editorText()).includes(TAG_COMPLETION_TARGET_NOTE_CONTENT),
+    { timeout: 15000, timeoutMsg: "tag completion target did not open" },
+  );
+}
+
+async function typeTagCompletionQuery(query = "ced"): Promise<void> {
+  await placeCursorAtLineEnd(TAG_COMPLETION_TARGET_NOTE_CONTENT);
+  await browser.keys(Key.Enter);
+  await $(".cm-content").addValue("#");
+  await $(".cm-content").addValue(query);
+  await browser.waitUntil(
+    async () => (await $$(".cm-skr-tag-menu [role=option]")).length > 0,
+    { timeout: 10000, timeoutMsg: "tag completion menu did not open" },
+  );
+}
+
+async function saveAndExpectTagCompletionTarget(expected: string) {
+  await browser.keys([modifierKey, "s"]);
+  await waitForDisk(TAG_COMPLETION_TARGET_NOTE_NAME, expected);
 }
 
 async function editorText(): Promise<string> {
@@ -787,6 +884,78 @@ describe("skribeum shell", () => {
     }
   });
 
+  it("shares_rendered_column_geometry_within_each_table", async () => {
+    await prepareTableGeometryNote();
+    await openNoteFromTree(RENDERING_NOTE_NAME);
+    await browser.waitUntil(
+      async () =>
+        (await editorText()).includes(
+          "A second table keeps its own source-derived proportions.",
+        ) && (await $$(".cm-skr-table-row")).length === 8,
+      { timeout: 15000, timeoutMsg: "table geometry fixture did not render" },
+    );
+
+    const measurements: TableGeometry[][] = [];
+    const originalFonts = await browser.execute(() => {
+      const root = document.documentElement.style;
+      const prose = root.getPropertyValue("--skr-font-prose");
+      const interfaceFont = root.getPropertyValue("--skr-font-interface");
+      root.setProperty("--skr-font-prose", "serif");
+      root.setProperty("--skr-font-interface", "monospace");
+      return { prose, interfaceFont };
+    });
+    try {
+      for (const [width, height] of [
+        [1280, 800],
+        [390, 844],
+      ] as const) {
+        await setViewportSize(width, height);
+        const tables = await renderedTableGeometry();
+        measurements.push(tables);
+      }
+    } finally {
+      await browser.execute(({ prose, interfaceFont }) => {
+        const root = document.documentElement.style;
+        if (prose === "") {
+          root.removeProperty("--skr-font-prose");
+        } else {
+          root.setProperty("--skr-font-prose", prose);
+        }
+        if (interfaceFont === "") {
+          root.removeProperty("--skr-font-interface");
+        } else {
+          root.setProperty("--skr-font-interface", interfaceFont);
+        }
+      }, originalFonts);
+      await restoreDesktopViewport();
+    }
+
+    for (const tables of measurements) {
+      expect(tables).toHaveLength(2);
+      expect(tables.map((table) => table.rows.length)).toEqual([4, 4]);
+
+      for (const table of tables) {
+        const header = table.rows[0];
+        expect(header).toBeDefined();
+        expect(new Set(header?.columns.split(" ")).size).toBeGreaterThan(1);
+        for (const row of table.rows) {
+          expect(row.columns).toBe(header?.columns);
+          expect(row.cellLefts).toHaveLength(header?.cellLefts.length ?? 0);
+          for (const [index, left] of row.cellLefts.entries()) {
+            expect(
+              Math.abs(left - (header?.cellLefts[index] ?? left)),
+            ).toBeLessThanOrEqual(1);
+          }
+        }
+        for (const row of table.rows) {
+          expect(row.overflowX).not.toBe("auto");
+          expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
+        }
+      }
+      expect(tables[0]?.rows[0]?.columns).not.toBe(tables[1]?.rows[0]?.columns);
+    }
+  });
+
   it("keeps_major_narrow_surfaces_inside_the_viewport", async () => {
     const surfaces: Array<{
       surface: string;
@@ -794,6 +963,7 @@ describe("skribeum shell", () => {
     }> = [];
 
     try {
+      await prepareTableGeometryNote();
       await setViewportSize(390, 844);
       const mobileActions = $('[aria-label="Primary actions"]');
       await mobileActions.waitForDisplayed({ timeout: 10000 });
@@ -801,11 +971,18 @@ describe("skribeum shell", () => {
       await mobileActions.$("button=Files").click();
       let sheet = $('[data-testid="overlay-sheet"]');
       await sheet.waitForDisplayed({ timeout: 10000 });
-      await sheet.$(`li=${VISUAL_NOTE_NAME}`).click();
+      await sheet.$(`li=${RENDERING_NOTE_NAME}`).click();
       await sheet.waitForExist({ reverse: true, timeout: 10000 });
-      await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+      await $(".cm-skr-table-row").waitForExist({ timeout: 15000 });
+      await browser.waitUntil(
+        async () =>
+          (await editorText()).includes(
+            "A second table keeps its own source-derived proportions.",
+          ),
+        { timeout: 15000, timeoutMsg: "table-heavy note did not open" },
+      );
       surfaces.push({
-        surface: "note",
+        surface: "table-heavy note",
         escapes: await horizontalViewportEscapes(),
       });
 
@@ -848,10 +1025,20 @@ describe("skribeum shell", () => {
       await sheet.waitForExist({ reverse: true, timeout: 10000 });
     } finally {
       await restoreDesktopViewport();
+      await openNoteFromTree(VISUAL_NOTE_NAME);
+      await browser.waitUntil(
+        async () => (await editorText()).includes("A room for reading"),
+        { timeout: 15000, timeoutMsg: "visual note did not reopen" },
+      );
+      writeFileSync(
+        path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),
+        RENDERING_NOTE_CONTENT,
+      );
+      await waitForDisk(RENDERING_NOTE_NAME, RENDERING_NOTE_CONTENT);
     }
 
     expect(surfaces.map(({ surface }) => surface)).toEqual([
-      "note",
+      "table-heavy note",
       "actions sheet",
       "settings",
       "vault search",
@@ -1273,6 +1460,81 @@ describe("skribeum shell", () => {
     );
     expect(await $("[role=option]").getText()).toContain("shared");
     await browser.keys(Key.Escape);
+  });
+
+  it("accepts_tag_completion_with_enter_and_control_enter", async () => {
+    for (const chord of [[Key.Enter], [Key.Ctrl, Key.Enter]]) {
+      await prepareTagCompletionTarget();
+      await typeTagCompletionQuery();
+      expect(
+        await $$(".cm-skr-tag-menu [role=option]").map((item) =>
+          item.getText(),
+        ),
+      ).toEqual(["#project/cedar-room", "#context/outdoors"]);
+
+      await browser.keys(chord);
+      await $(".cm-skr-tag-menu").waitForExist({
+        reverse: true,
+        timeout: 3000,
+      });
+      await browser.waitUntil(
+        async () => (await editorText()).includes("#project/cedar-room"),
+        { timeout: 3000 },
+      );
+      expect(await editorText()).not.toContain("#ced");
+      await saveAndExpectTagCompletionTarget(
+        `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n#project/cedar-room`,
+      );
+    }
+  });
+
+  it("inserts_the_arrow_selected_tag_and_ranks_it_as_recent", async () => {
+    await prepareTagCompletionTarget();
+    await typeTagCompletionQuery();
+    await browser.keys(Key.ArrowDown);
+    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
+      "#context/outdoors",
+    );
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("#context/outdoors"),
+      { timeout: 3000 },
+    );
+    expect(await editorText()).not.toContain("#ced");
+    await saveAndExpectTagCompletionTarget(
+      `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n#context/outdoors`,
+    );
+
+    await placeCursorAtLineEnd("#context/outdoors");
+    await browser.keys(Key.Enter);
+    await $(".cm-content").addValue("#");
+    await browser.waitUntil(
+      async () => (await $$(".cm-skr-tag-menu [role=option]")).length > 0,
+      { timeout: 10000, timeoutMsg: "recent tag menu did not open" },
+    );
+    const recentlyOrdered = await $$(".cm-skr-tag-menu [role=option]").map(
+      (item) => item.getText(),
+    );
+    expect(recentlyOrdered[0]).toBe("#context/outdoors");
+    expect(recentlyOrdered).toContain("#project/cedar-room");
+    expect(recentlyOrdered.indexOf("#context/outdoors")).toBeLessThan(
+      recentlyOrdered.indexOf("#project/cedar-room"),
+    );
+    await browser.keys(Key.Escape);
+  });
+
+  it("dismisses_tag_completion_without_leaving_query_text", async () => {
+    await prepareTagCompletionTarget();
+    await typeTagCompletionQuery();
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(
+      async () => !(await $(".cm-skr-tag-menu").isExisting()),
+      { timeout: 3000 },
+    );
+    expect(await editorText()).not.toContain("#ced");
+    await saveAndExpectTagCompletionTarget(
+      `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n`,
+    );
   });
 
   it("refreshes_tag_completion_after_saving_a_new_tag", async () => {

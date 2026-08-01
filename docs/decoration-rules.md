@@ -98,6 +98,21 @@ cannot move surrounding text. Under `prefers-reduced-motion: reduce`, the
 duration and distance tokens resolve to zero and every transition or animation
 becomes instant.
 
+## Table geometry and overflow
+
+CodeMirror represents each Markdown table row as a separate block replacement.
+The decoration engine derives one column template from every source row in the
+enclosing `Table` node and gives that same template to each rendered row. The
+template uses bounded fractional weights based on the longest source cell in
+each column, so header typography and row content cannot produce independent
+track boundaries.
+
+Tables remain inside the editor's reading column at every viewport width. Cell
+content wraps within the shared tracks when the source-derived proportions need
+more room, rather than making individual rows horizontally scrollable. This
+keeps every cell aligned with its header and keeps the table available through
+one reading surface on both narrow and wide viewports.
+
 The Context column restricts a row: `parent=` requires one of the listed
 direct parents, `notParent=` excludes them, `ancestor=` requires an
 enclosing node, `withSibling=`/`withoutSibling=` condition on a sibling

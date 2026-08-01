@@ -508,6 +508,16 @@ type TableLayout = {
   last: boolean;
 };
 
+type TableGeometry = {
+  rows: Array<{
+    from: number;
+    to: number;
+    cells: string[];
+  }>;
+  columns: string;
+  alignments: ("left" | "center" | "right")[];
+};
+
 function directChildren(node: SyntaxNode, name: string): SyntaxNode[] {
   const children: SyntaxNode[] = [];
   for (let child = node.firstChild; child !== null; child = child.nextSibling) {
@@ -532,42 +542,67 @@ function delimiterAlignments(text: string, count: number) {
   });
 }
 
-function tableLayout(node: SyntaxNode, doc: Text): TableLayout {
+function tableLayout(
+  node: SyntaxNode,
+  doc: Text,
+  geometries: Map<string, TableGeometry>,
+): TableLayout {
   const table = node.parent;
-  const rows: SyntaxNode[] = [];
-  let delimiter = "";
-  if (table !== null) {
-    for (
-      let child = table.firstChild;
-      child !== null;
-      child = child.nextSibling
-    ) {
-      if (child.name === "TableHeader" || child.name === "TableRow") {
-        rows.push(child);
-      } else if (child.name === "TableDelimiter") {
-        delimiter = doc.sliceString(child.from, child.to);
+  const key = `${table?.from ?? node.from}:${table?.to ?? node.to}`;
+  let geometry = geometries.get(key);
+  if (geometry === undefined) {
+    const rows: SyntaxNode[] = [];
+    let delimiter = "";
+    if (table !== null) {
+      for (
+        let child = table.firstChild;
+        child !== null;
+        child = child.nextSibling
+      ) {
+        if (child.name === "TableHeader" || child.name === "TableRow") {
+          rows.push(child);
+        } else if (child.name === "TableDelimiter") {
+          delimiter = doc.sliceString(child.from, child.to);
+        }
       }
     }
+    const geometryRows = rows.map((row) => ({
+      from: row.from,
+      to: row.to,
+      cells: directChildren(row, "TableCell").map((cell) =>
+        doc.sliceString(cell.from, cell.to).trim(),
+      ),
+    }));
+    const columnCount = Math.max(
+      1,
+      ...geometryRows.map((row) => row.cells.length),
+    );
+    const widths = Array.from({ length: columnCount }, (_, index) =>
+      Math.max(
+        8,
+        Math.min(
+          32,
+          Math.max(...geometryRows.map((row) => row.cells[index]?.length ?? 0)),
+        ),
+      ),
+    );
+    geometry = {
+      rows: geometryRows,
+      columns: widths.map((width) => `minmax(0, ${width}fr)`).join(" "),
+      alignments: delimiterAlignments(delimiter, columnCount),
+    };
+    geometries.set(key, geometry);
   }
-  const rowCells = rows.map((row) =>
-    directChildren(row, "TableCell").map((cell) =>
-      doc.sliceString(cell.from, cell.to).trim(),
-    ),
-  );
-  const columnCount = Math.max(1, ...rowCells.map((cells) => cells.length));
-  const widths = Array.from({ length: columnCount }, (_, index) =>
-    Math.max(3, ...rowCells.map((cells) => cells[index]?.length ?? 0)),
-  );
-  const rowIndex = rows.findIndex(
+  const rowIndex = geometry.rows.findIndex(
     (row) => row.from === node.from && row.to === node.to,
   );
   return {
-    cells: rowCells[rowIndex] ?? [],
-    columns: widths.map((width) => `minmax(${width}ch, 1fr)`).join(" "),
-    alignments: delimiterAlignments(delimiter, columnCount),
+    cells: geometry.rows[rowIndex]?.cells ?? [],
+    columns: geometry.columns,
+    alignments: geometry.alignments,
     header: node.name === "TableHeader",
     first: rowIndex === 0,
-    last: rowIndex === rows.length - 1,
+    last: rowIndex === geometry.rows.length - 1,
   };
 }
 
@@ -1488,6 +1523,7 @@ function widgetFor(
   doc: Text,
   wikilinks: WikilinkResolutionContext,
   taskStatuses: readonly TaskStatus[],
+  tableGeometries: Map<string, TableGeometry>,
 ): { widget: WidgetType; block: boolean; attributes: Record<string, string> } {
   switch (widget) {
     case "task-checkbox": {
@@ -1530,7 +1566,7 @@ function widgetFor(
         },
       };
     case "table-row": {
-      const layout = tableLayout(node, doc);
+      const layout = tableLayout(node, doc, tableGeometries);
       return {
         widget: new TableRowWidget(layout),
         block: true,
@@ -1602,6 +1638,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
   const built: BuiltDecoration[] = [];
   const seenLines = new Set<string>();
   const seenMotionRanges = new Set<string>();
+  const tableGeometries = new Map<string, TableGeometry>();
 
   const activeRevealOwns = (node: SyntaxNode): boolean =>
     activeReveal !== null &&
@@ -1812,6 +1849,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               doc,
               wikilinks,
               taskStatuses,
+              tableGeometries,
             );
             const skr = `widget ${presentation.widget}${serializeAttributes(builtWidget.attributes)}`;
             if (presentation.place === "before") {
@@ -2702,7 +2740,6 @@ const engineTheme = EditorView.baseTheme({
     boxSizing: "border-box",
     display: "grid",
     width: "100%",
-    overflowX: "auto",
     borderLeft: "1px solid var(--skr-border)",
     borderRight: "1px solid var(--skr-border)",
     backgroundColor: "var(--skr-surface)",

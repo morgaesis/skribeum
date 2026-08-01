@@ -53,6 +53,13 @@ export const TAG_DELETE_NOTE_CONTENT = "Unopened note with #delete-only.\n";
 export const TAG_DELETE_PROBE_NOTE_NAME = "zz-tag-delete-probe.md";
 export const TAG_DELETE_PROBE_NOTE_CONTENT = "Tag deletion probe.\n";
 
+export const TAG_COMPLETION_CATALOG_NOTE_NAME = "zz-tag-completion-catalog.md";
+export const TAG_COMPLETION_CATALOG_NOTE_CONTENT =
+  "#project/cedar-room #project/cedar-room #context/outdoors\n";
+
+export const TAG_COMPLETION_TARGET_NOTE_NAME = "zz-tag-completion-target.md";
+export const TAG_COMPLETION_TARGET_NOTE_CONTENT = "Tag completion target.";
+
 export const VISUAL_NOTE_NAME = "zzz-reading-room.md";
 export const VISUAL_NOTE_CONTENT = [
   "---",
@@ -85,6 +92,25 @@ export const VISUAL_NOTE_CONTENT = [
   "| --- | --- |",
   "| Prose | Sustained reading |",
   "| Code | Exact notation |",
+  "",
+].join("\n");
+
+export const TABLE_GEOMETRY_NOTE_CONTENT = [
+  "# Table geometry",
+  "",
+  "| Option | Seats | Daylight | Quiet zone | Notes |",
+  "| --- | ---: | :---: | :---: | --- |",
+  "| Cedar Room | 18 | Yes | Yes | Best fit for focused sessions |",
+  "| Workshop Bay | 30 | Limited | No | Good access for large equipment |",
+  "| Courtyard | 24 | Yes | Partial | Needs a rain plan |",
+  "",
+  "A second table keeps its own source-derived proportions.",
+  "",
+  "| Trial | Change | Result | Next step |",
+  "| --- | --- | --- | --- |",
+  "| A | Shorter welcome script | People began sooner | Keep |",
+  "| B | Signs at seated eye level | Routes were easier to find | Test larger type |",
+  "| C | Shared tool table | Created a queue | Split into two stations |",
   "",
 ].join("\n");
 
@@ -177,6 +203,14 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, TAG_DELETE_PROBE_NOTE_NAME),
     TAG_DELETE_PROBE_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TAG_COMPLETION_CATALOG_NOTE_NAME),
+    TAG_COMPLETION_CATALOG_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TAG_COMPLETION_TARGET_NOTE_NAME),
+    TAG_COMPLETION_TARGET_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, VISUAL_NOTE_NAME),

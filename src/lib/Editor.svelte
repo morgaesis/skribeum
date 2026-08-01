@@ -1,11 +1,6 @@
 <script lang="ts">
 import { history } from "@codemirror/commands";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import {
-  defaultHighlightStyle,
-  syntaxHighlighting,
-  syntaxTree,
-} from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import {
   Annotation,
   type ChangeSet,
@@ -19,10 +14,7 @@ import { onMount } from "svelte";
 import { bulkTextInput } from "./editor/bulkInput";
 import type { ByteChange } from "./editor/byteChangeSet";
 import { assertDecorationsInert } from "./editor/decorationGuard";
-import {
-  decorationEngine,
-  dispatchWikilinkContext,
-} from "./editor/decorations/engine";
+import { dispatchWikilinkContext } from "./editor/decorations/engine";
 import type { WikilinkResolutionContext } from "./editor/decorations/wikilinks";
 import {
   applyTypeOverrides,
@@ -30,9 +22,8 @@ import {
   type FrontmatterValueType,
   parseFrontmatter,
 } from "./editor/frontmatter";
-import { codeLanguage } from "./editor/markdown/codeLanguages";
-import { obsidianMarkdownExtensions } from "./editor/markdown/obsidian";
 import { NoteSession } from "./editor/noteSession";
+import { noteRenderingExtensions } from "./editor/syntaxPolicy";
 import { findExtension } from "./features/findPanel";
 import { selectionToolbar } from "./features/selectionToolbar";
 import { slashMenu } from "./features/slashMenu";
@@ -189,13 +180,7 @@ function stateFor(content: string, locked: boolean): EditorState {
   return EditorState.create({
     doc: content,
     extensions: [
-      markdown({
-        base: markdownLanguage,
-        codeLanguages: codeLanguage,
-        extensions: obsidianMarkdownExtensions,
-      }),
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-      decorationEngine(),
+      ...noteRenderingExtensions(content),
       editorAppearance,
       EditorView.lineWrapping,
       bulkTextInput(),

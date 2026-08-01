@@ -1,11 +1,16 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { bracketMatching } from "@codemirror/language";
+import {
+  bracketMatching,
+  defaultHighlightStyle,
+  syntaxHighlighting,
+} from "@codemirror/language";
 import type { Extension, Text } from "@codemirror/state";
-import { mathMarkdownExtension } from "../rendering/math";
 import {
   decorationEngine,
   LONG_LINE_DECORATION_LIMIT,
 } from "./decorations/engine";
+import type { WikilinkResolutionContext } from "./decorations/wikilinks";
+import { codeLanguage } from "./markdown/codeLanguages";
 import { obsidianMarkdownExtensions } from "./markdown/obsidian";
 
 type DocumentText = string | Text;
@@ -40,15 +45,28 @@ export function hasOverlongLine(doc: DocumentText): boolean {
  * omitted together.
  */
 export function editorSyntaxExtensions(doc: DocumentText): Extension[] {
+  const rendering = noteRenderingExtensions(doc);
+  return rendering.length === 0 ? [] : [...rendering, bracketMatching()];
+}
+
+/**
+ * Markdown parsing, highlighting and decorations shared by editable notes
+ * and read-only note surfaces.
+ */
+export function noteRenderingExtensions(
+  doc: DocumentText,
+  context?: WikilinkResolutionContext,
+): Extension[] {
   if (hasOverlongLine(doc)) {
     return [];
   }
   return [
     markdown({
       base: markdownLanguage,
-      extensions: [...obsidianMarkdownExtensions, mathMarkdownExtension],
+      codeLanguages: codeLanguage,
+      extensions: obsidianMarkdownExtensions,
     }),
-    bracketMatching(),
-    decorationEngine(),
+    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    decorationEngine(context),
   ];
 }

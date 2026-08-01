@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Canvas pans clear and suppress text selection, overflowing cards consume
+  wheel input before the camera, and note cards use the editor's read-only
+  Markdown decoration pipeline.
 - Large multi-line editor input lands as one CodeMirror transaction instead
   of triggering native contenteditable paragraph reconstruction.
 - The editor caret and selection formatting toolbar remain visible and

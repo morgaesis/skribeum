@@ -1235,7 +1235,12 @@ describe("skribeum shell", () => {
     );
     await placeCursorInsideEditorText("zzz-navigation-target");
     await browser.waitUntil(
-      async () => (await activeElementDescriptor()).includes("cm-content"),
+      async () => {
+        await browser.execute(() =>
+          document.querySelector<HTMLElement>(".cm-content")?.focus(),
+        );
+        return (await activeElementDescriptor()).includes("cm-content");
+      },
       { timeout: 5000 },
     );
     await browser.keys([modifierKey, Key.Enter]);

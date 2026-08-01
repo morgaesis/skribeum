@@ -166,29 +166,32 @@ describe("rendered decoration DOM", () => {
     expect(view.contentDOM.textContent).toContain("```rust");
   });
 
-  it("renders a themed callout with an icon, title, and collapsible rich body", () => {
+  it("renders a source-backed themed callout and reveals its whole source", () => {
     const source =
       "> [!faq]- Need help\n> **Rendered answer**\n> - first\n\noutside";
     const view = mountedView(source);
-    const callout = view.dom.querySelector<HTMLElement>(
-      '[role="note"][data-callout="faq"]',
+    const titleLine = view.dom.querySelector<HTMLElement>(
+      '.cm-line.cm-skr-rich-callout[data-callout="faq"][data-callout-line="first"]',
     );
-    expect(callout).not.toBeNull();
-    expect(callout?.getAttribute("data-callout-canonical")).toBe("question");
-    expect(callout?.getAttribute("data-accent")).toBe("yellow");
-    expect(callout?.querySelector("svg.cm-skr-callout-icon")).not.toBeNull();
-    const button = callout?.querySelector<HTMLButtonElement>(
-      'button[aria-expanded="false"]',
-    );
-    expect(button?.textContent).toContain("Need help");
-    const body = callout?.querySelector<HTMLElement>(".cm-skr-callout-body");
-    expect(body?.hidden).toBe(true);
-    button?.click();
-    expect(button?.getAttribute("aria-expanded")).toBe("true");
-    expect(body?.hidden).toBe(false);
-    expect(body?.querySelector(".cm-skr-strong")?.textContent).toContain(
+    expect(titleLine).not.toBeNull();
+    expect(titleLine?.getAttribute("data-callout-canonical")).toBe("question");
+    expect(titleLine?.getAttribute("data-accent")).toBe("yellow");
+    expect(titleLine?.querySelector("svg.cm-skr-callout-icon")).not.toBeNull();
+    expect(titleLine?.textContent).toContain("[!faq]- Need help");
+    expect(view.dom.querySelector(".cm-skr-strong")?.textContent).toContain(
       "Rendered answer",
     );
-    expect(body?.textContent).toContain("first");
+
+    view.dispatch({ selection: { anchor: source.indexOf("Rendered answer") } });
+    expect(view.dom.querySelector(".cm-skr-rich-callout")).toBeNull();
+    expect(view.dom.querySelector(".cm-skr-callout-icon-host")).toBeNull();
+    expect(view.dom.querySelector(".cm-skr-strong")).toBeNull();
+    expect(view.contentDOM.textContent).toContain(
+      "> [!faq]- Need help> **Rendered answer**> - first",
+    );
+
+    view.dispatch({ selection: { anchor: source.indexOf("outside") } });
+    expect(view.dom.querySelector(".cm-skr-rich-callout")).not.toBeNull();
+    expect(view.dom.querySelector(".cm-skr-strong")).not.toBeNull();
   });
 });

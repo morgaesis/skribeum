@@ -11,6 +11,7 @@ import {
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_NAME,
   RENDERING_NOTE_NAME,
+  REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
   VISUAL_NOTE_CONTENT,
   VISUAL_NOTE_NAME,
@@ -95,6 +96,117 @@ async function placeCursorAtLineEnd(text: string) {
   }, text);
   // Let CodeMirror's DOM observer sync the selection change.
   await browser.pause(200);
+}
+
+type RevealClickPoint = "top" | "title" | "body" | "bottom";
+
+async function clickRevealPoint(point: RevealClickPoint) {
+  const coordinates = await browser.execute(
+    (requestedPoint: RevealClickPoint) => {
+      const calloutLines = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".cm-line.cm-skr-rich-callout",
+        ),
+      ];
+      let x: number;
+      let y: number;
+      const first = calloutLines[0];
+      const last = calloutLines.at(-1);
+      if (first === undefined || last === undefined) {
+        throw new Error("rendered callout lines missing");
+      }
+      if (requestedPoint === "top") {
+        const rect = first.getBoundingClientRect();
+        x = rect.left + 8;
+        y = rect.top + 2;
+      } else if (requestedPoint === "bottom") {
+        const rect = last.getBoundingClientRect();
+        x = rect.left + rect.width / 2;
+        y = rect.bottom - 2;
+      } else {
+        const text =
+          requestedPoint === "title" ? "Linked callout" : "First body line";
+        const line = [
+          ...document.querySelectorAll<HTMLElement>(".cm-line"),
+        ].find((candidate) => candidate.textContent?.includes(text));
+        if (line === undefined) {
+          throw new Error(`callout line missing: ${text}`);
+        }
+        const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+        let rect: DOMRect | null = null;
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          const value = node.textContent ?? "";
+          const index = value.indexOf(text);
+          if (index >= 0) {
+            const range = document.createRange();
+            range.setStart(node, index);
+            range.setEnd(node, index + text.length);
+            rect = range.getBoundingClientRect();
+            break;
+          }
+        }
+        if (rect === null) {
+          throw new Error(`callout text missing: ${text}`);
+        }
+        x = rect.left + rect.width / 2;
+        y = rect.top + rect.height / 2;
+      }
+
+      if (document.elementFromPoint(x, y) === null) {
+        throw new Error(`no click target for ${requestedPoint}`);
+      }
+      return { x: Math.round(x), y: Math.round(y) };
+    },
+    point,
+  );
+  await browser.performActions([
+    {
+      type: "pointer",
+      id: "callout-reveal-pointer",
+      parameters: { pointerType: "mouse" },
+      actions: [
+        {
+          type: "pointerMove",
+          duration: 0,
+          origin: "viewport",
+          x: coordinates.x,
+          y: coordinates.y,
+        },
+        { type: "pointerDown", button: 0 },
+        { type: "pointerUp", button: 0 },
+      ],
+    },
+  ]);
+  await browser.releaseActions();
+  await browser.pause(200);
+}
+
+async function editorCursor() {
+  return browser.execute(() => {
+    const selection = window.getSelection();
+    const anchor = selection?.anchorNode;
+    const line =
+      anchor instanceof Element
+        ? anchor.closest<HTMLElement>(".cm-line")
+        : anchor?.parentElement?.closest<HTMLElement>(".cm-line");
+    if (
+      selection === null ||
+      anchor === undefined ||
+      anchor === null ||
+      line === null
+    ) {
+      return { line: "", offset: -1 };
+    }
+    const range = document.createRange();
+    range.selectNodeContents(line);
+    const maximumOffset =
+      anchor.nodeType === Node.TEXT_NODE
+        ? (anchor.textContent?.length ?? 0)
+        : anchor.childNodes.length;
+    range.setEnd(anchor, Math.min(selection.anchorOffset, maximumOffset));
+    return { line: line.textContent ?? "", offset: range.toString().length };
+  });
 }
 
 /** Sets the theme select's value and fires the change event it binds on. */
@@ -640,6 +752,90 @@ describe("skribeum shell", () => {
         timeoutMsg: "heading marker did not hide after the cursor left",
       },
     );
+  });
+
+  it("maps_callout_clicks_to_one_source_reveal_region", async () => {
+    await browser.keys([modifierKey, "o"]);
+    const quickSwitcher = $('[role="combobox"]');
+    await quickSwitcher.waitForExist({ timeout: 10000 });
+    await quickSwitcher.addValue(REVEAL_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await $$('[role="option"]').length) === 1,
+      { timeout: 10000 },
+    );
+    await browser.keys(Key.Enter);
+    await $(".cm-line.cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+
+    const cases: Array<{
+      point: RevealClickPoint;
+      line: string;
+      minimumOffset: number;
+      maximumOffset: number;
+    }> = [
+      {
+        point: "top",
+        line: "> [!note] Linked callout",
+        minimumOffset: 0,
+        maximumOffset: 2,
+      },
+      {
+        point: "title",
+        line: "> [!note] Linked callout",
+        minimumOffset: 0,
+        maximumOffset: 24,
+      },
+      {
+        point: "body",
+        line: "> First body line.",
+        minimumOffset: 0,
+        maximumOffset: 18,
+      },
+      {
+        point: "bottom",
+        line: "> Read [inside link](inside-target).",
+        minimumOffset: 0,
+        maximumOffset: 37,
+      },
+    ];
+
+    for (const testCase of cases) {
+      await placeCursorAtLineEnd("cursor parking");
+      await $(".cm-line.cm-skr-rich-callout").waitForExist({ timeout: 10000 });
+      await clickRevealPoint(testCase.point);
+      await browser.waitUntil(
+        async () => !(await $(".cm-line.cm-skr-rich-callout").isExisting()),
+        {
+          timeout: 10000,
+          timeoutMsg: `${testCase.point} click did not reveal callout source`,
+        },
+      );
+      const cursor = await editorCursor();
+      expect(cursor.line).toBe(testCase.line);
+      expect(cursor.offset).toBeGreaterThanOrEqual(testCase.minimumOffset);
+      expect(cursor.offset).toBeLessThanOrEqual(testCase.maximumOffset);
+      const text = await editorText();
+      expect(text).toContain("inside-target");
+      expect(text).not.toContain("outside-target");
+    }
+
+    await placeCursorAtLineEnd("cursor parking");
+    await $(".cm-line.cm-skr-rich-callout").waitForExist({ timeout: 10000 });
+    await placeCursorAtLineEnd("Outside link");
+    await browser.waitUntil(
+      async () => (await editorText()).includes("outside-target"),
+      {
+        timeout: 10000,
+        timeoutMsg: "outside link did not reveal",
+      },
+    );
+    expect(await $(".cm-line.cm-skr-rich-callout").isExisting()).toBe(true);
+    const text = await editorText();
+    expect(text).toContain("outside-target");
+    expect(text).not.toContain("inside-target");
+    const cursor = await editorCursor();
+    expect(cursor.line).toBe("[Outside link](outside-target)");
+    expect(cursor.offset).toBeGreaterThanOrEqual(0);
+    expect(cursor.offset).toBeLessThanOrEqual(30);
   });
 
   it("surfaces_and_dismisses_the_note_removed_banner_by_keyboard", async () => {

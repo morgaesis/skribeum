@@ -8,23 +8,61 @@ construct by name. The table below mirrors that file row for row;
 `tests/web/decorationRules.test.ts` asserts the two stay identical and
 carries a behavioral reveal test for every row.
 
+The main cursor selects one active reveal region before any row is rendered.
+Composite regions take precedence over nested regions, then the smallest
+matching region wins. Every table row is evaluated against that one region,
+so moving the cursor selects a new region and restores decorations in the
+previous one.
+
 Reveal policies:
 
 - **cursor-inside**: hidden or replaced text returns as plain source, and
-  receded source styling clears, while any selection endpoint touches the
-  enclosing construct.
-- **cursor-line**: the hidden text returns while any selection endpoint
-  touches a document line the enclosing construct covers.
+  receded source styling clears, while the main cursor touches the selected
+  construct.
+- **cursor-line**: the hidden text returns while the main cursor touches a
+  document line the selected construct covers.
 - **never**: the decoration applies regardless of the cursor. Rows that
-  only style (marks, line classes) reveal nothing and are `never` by
-  construction.
+  only style usually reveal nothing and use `never`.
+
+`revealScope=node` makes the syntax node itself the candidate region instead
+of the row's usual enclosing construct. `revealDescendants` makes that region
+composite: selecting it reveals every nested decoration as part of the same
+plain-source region. Hidden and replaced ranges are atomic while decorated,
+so keyboard motion skips invisible syntax rather than entering a position the
+DOM cannot display.
+
+## Source-backed block interaction
+
+A replacement decoration removes its document range from CodeMirror's text
+DOM and substitutes a `contenteditable=false` widget. Pointer hit testing can
+therefore resolve only to a boundary before or after the replacement, not to
+any source position inside it. A callout replacement compounds that loss by
+rendering its body in a second read-only `EditorView`: the nested view owns a
+separate selection and decoration engine, while ignored widget events never
+move the parent selection. A link in that nested view can remain revealed at
+the same time as a link selected in the parent view because neither engine
+knows the other's active region.
+
+Callouts use line decorations over the parent editor's source and an inserted,
+non-replacing icon. Every visible title and body character therefore retains
+its document position. The callout row is a composite reveal region, so a
+cursor anywhere in the callout reveals the complete block as one unit and
+suppresses independent reveals for nested links or other constructs.
+
+The alternatives have these tradeoffs:
+
+| Alternative | Cursor mapping | Reveal state | Result |
+| --- | --- | --- | --- |
+| Block replacement with an edit affordance | The affordance can choose a boundary or approximate a transformed body position, but the rendered DOM has no exact source positions. | A nested editor still requires cross-view selection coordination. | Rejected because direct clicks remain indirect or approximate. |
+| Source-backed line decorations with atomic hidden ranges | Browser hit testing maps directly to parent-editor source, while atomic syntax remains keyboard-safe when hidden. | One parent selection chooses one composite or nested region. | Used for callouts because it preserves direct editing and a single reveal authority. |
+| Per-block editing mode | Source positions exist only after an explicit mode transition. | Each block needs additional persistent interaction state and exit behavior. | Rejected because it adds a second editing state and makes ordinary cursor movement insufficient. |
 
 The Context column restricts a row: `parent=` requires one of the listed
 direct parents, `notParent=` excludes them, `ancestor=` requires an
 enclosing node, `withSibling=`/`withoutSibling=` condition on a sibling
 node under the same parent, and `codeInfo=` matches the first fenced-code
-info token case-insensitively. `-` means the row applies to every node of
-that name.
+info token case-insensitively. Reveal scope flags use the names described
+above. `-` means the row applies to every node of that name.
 
 | Node | Context | Presentation | Reveal |
 | --- | --- | --- | --- |
@@ -72,10 +110,11 @@ that name.
 | `CodeInfo` | `-` | `mark cm-skr-code-info` | cursor-inside |
 | `FencedCode` | `-` | `widget code-copy` | never |
 | `FencedCode` | `codeInfo=mermaid` | `widget mermaid-diagram` | cursor-inside |
-| `Blockquote` | `-` | `widget callout` | cursor-inside |
+| `Blockquote` | `revealScope=node revealDescendants` | `line cm-skr-rich-callout` | cursor-inside |
 | `Blockquote` | `-` | `line cm-skr-blockquote` | never |
 | `QuoteMark` | `-` | `mark cm-skr-quote-mark` | never |
 | `CalloutMark` | `ancestor=Blockquote` | `mark cm-skr-callout-mark` | never |
+| `CalloutMark` | `ancestor=Blockquote` | `widget callout-icon` | never |
 | `CalloutType` | `ancestor=Blockquote` | `mark cm-skr-callout-type` | never |
 | `HashTag` | `-` | `mark cm-skr-tag` | never |
 | `BlockId` | `-` | `mark cm-skr-block-id` | never |
@@ -85,14 +124,15 @@ Context-dependent attributes come from five documented engine builtins a
 row opts into: `wikilink-resolution` stamps `data-resolved` from the vault
 tree (unresolved links style distinctly), `callout-type` stamps
 `data-callout` and the `cm-skr-callout` line class when a blockquote is
-headed by a callout mark, while `rich-callout` limits the replacement widget
-to those blockquotes. `code-language` stamps `data-language` from the fence
-info string. `mermaid-block` restricts the diagram widget to a Mermaid fence
-and stamps its language attribute.
+headed by a callout mark, while `rich-callout` limits source-backed themed
+lines to those blockquotes and stamps canonical type, accent, foldability and
+line-position attributes. `code-language` stamps `data-language` from the
+fence info string. `mermaid-block` restricts the diagram widget to a Mermaid
+fence and stamps its language attribute.
 
 No decoration is computed on a document line longer than 10,000 characters.
-Marks and inline widgets are windowed to visible ranges. Table rows, rich
-callouts, math blocks and Mermaid replacements are held in a full-document
+Marks, line decorations and inline widgets are windowed to visible ranges.
+Table rows, math blocks and Mermaid replacements are held in a full-document
 decoration field because CodeMirror requires vertical-layout decorations to
 come from editor state. Expensive rendering starts only when CodeMirror mounts
 the widget.

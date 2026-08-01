@@ -9,7 +9,7 @@
 /** When a hidden or replaced range re-appears as plain source text. */
 export type RevealPolicy = "cursor-inside" | "cursor-line" | "never";
 
-/** Inline widgets the engine knows how to build. */
+/** Widgets the engine knows how to build. */
 export type WidgetName =
   | "task-checkbox"
   | "math-inline"
@@ -19,7 +19,7 @@ export type WidgetName =
   | "table-separator"
   | "embed"
   | "code-copy"
-  | "callout";
+  | "callout-icon";
 
 export type Presentation =
   /** A styled span over the node's text. */
@@ -77,6 +77,10 @@ export type DecorationRule = {
   codeInfo?: string;
   presentation: Presentation;
   reveal: RevealPolicy;
+  /** Override the construct range selected by a cursor reveal. */
+  revealScope?: "node" | "parent";
+  /** Reveal this construct as plain source, including nested constructs. */
+  revealDescendants?: boolean;
   dynamic?: DynamicAttribute;
 };
 
@@ -332,8 +336,10 @@ const codeRows: DecorationRule[] = [
 const quoteRows: DecorationRule[] = [
   {
     node: "Blockquote",
-    presentation: { present: "widget", widget: "callout" },
+    presentation: { present: "line", class: "cm-skr-rich-callout" },
     reveal: "cursor-inside",
+    revealScope: "node",
+    revealDescendants: true,
     dynamic: "rich-callout",
   },
   {
@@ -351,6 +357,17 @@ const quoteRows: DecorationRule[] = [
     node: "CalloutMark",
     ancestor: "Blockquote",
     presentation: { present: "mark", class: "cm-skr-callout-mark" },
+    reveal: "never",
+    dynamic: "callout-type",
+  },
+  {
+    node: "CalloutMark",
+    ancestor: "Blockquote",
+    presentation: {
+      present: "widget",
+      widget: "callout-icon",
+      place: "before",
+    },
     reveal: "never",
     dynamic: "callout-type",
   },

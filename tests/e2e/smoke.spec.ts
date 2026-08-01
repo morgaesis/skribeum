@@ -387,6 +387,36 @@ async function selectEditorText(text: string) {
   await browser.pause(250);
 }
 
+async function placeCursorInsideEditorText(text: string) {
+  await browser.execute((needle: string) => {
+    const root = document.querySelector(".cm-content");
+    if (root === null) {
+      throw new Error("editor content missing");
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (
+      let node = walker.nextNode();
+      node !== null;
+      node = walker.nextNode()
+    ) {
+      const start = node.textContent?.indexOf(needle) ?? -1;
+      if (start < 0) {
+        continue;
+      }
+      const range = document.createRange();
+      range.setStart(node, start + Math.floor(needle.length / 2));
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      root.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+      return;
+    }
+    throw new Error(`text not found: ${needle}`);
+  }, text);
+  await browser.pause(250);
+}
+
 async function clearEditorSelection() {
   await browser.execute(() => {
     const root = document.querySelector(".cm-content");
@@ -1217,7 +1247,7 @@ describe("skribeum shell", () => {
     await browser.execute(() =>
       document.querySelector<HTMLElement>(".cm-content")?.focus(),
     );
-    await selectEditorText("zzz-navigation-target");
+    await placeCursorInsideEditorText("zzz-navigation-target");
     await browser.keys([modifierKey, Key.Enter]);
     await browser.waitUntil(
       async () => (await editorText()).includes("Wikilink destination content"),

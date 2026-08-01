@@ -458,7 +458,11 @@ def generated_body(
                 path = "generated" if attempt == 0 else "generated after critique"
                 return f"{candidate.rstrip()}\n", path
             critique = json.dumps(judge, ensure_ascii=False, sort_keys=True)
-    raise ReleaseNotesError("two candidate validations failed")
+    # The final critique names what failed; without it a stochastic rejection
+    # is undiagnosable from the workflow log.
+    raise ReleaseNotesError(
+        f"two candidate validations failed; last critique: {critique[:600]}"
+    )
 
 
 def report_path(path: str, detail: str = "") -> None:

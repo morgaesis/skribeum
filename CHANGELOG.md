@@ -51,6 +51,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fenced-code syntax highlighting, exact-source copy controls, cursor-aware
   fence receding, and the full Obsidian callout taxonomy with icons, themed
   accents and source-backed body rendering.
+- Shared live-preview motion tokens with sub-50ms heading-marker, link, embed
+  and callout source transitions, stable surrounding layout, and instant
+  reduced-motion behavior.
 
 - Standalone `skribeum-import` CLI converting Notion Markdown and CSV export
   archives into Obsidian-compatible vaults, with readable collision-safe

@@ -11,6 +11,7 @@ import {
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
+  MOTION_PREVIEW_NOTE_NAME,
   RENDERING_NOTE_NAME,
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
@@ -844,11 +845,15 @@ describe("skribeum shell", () => {
         const style = getComputedStyle(marker);
         return {
           active: marker.classList.contains("cm-skr-reveal-marker-active"),
-          maxWidth: Number.parseFloat(style.maxWidth),
           opacity: style.opacity,
+          transform: style.transform,
           transitionDurations: style.transitionDuration
             .split(",")
-            .map((duration) => Number.parseFloat(duration) * 1000),
+            .map((duration) =>
+              duration.trim().endsWith("ms")
+                ? Number.parseFloat(duration)
+                : Number.parseFloat(duration) * 1000,
+            ),
         };
       });
 
@@ -865,11 +870,21 @@ describe("skribeum shell", () => {
       },
     );
     const hidden = await headingMarkerState();
-    expect(hidden?.maxWidth).toBe(0);
     expect(hidden?.opacity).toBe("0");
-    expect(
-      hidden?.transitionDurations.every((duration) => duration < 200),
-    ).toBe(true);
+    expect(hidden?.transform).not.toBe("none");
+    expect(hidden?.transitionDurations.every((duration) => duration < 50)).toBe(
+      true,
+    );
+    const followingPositionBefore = await browser.execute(() => {
+      const following = [
+        ...document.querySelectorAll<HTMLElement>(".cm-line"),
+      ].find((line) => line.textContent === "body text here");
+      if (following === undefined) {
+        throw new Error("following line missing");
+      }
+      const rect = following.getBoundingClientRect();
+      return { left: rect.left, top: rect.top };
+    });
 
     // Entering the heading line with the cursor reveals the source
     // marker (cursor-line reveal per docs/decoration-rules.md).
@@ -882,8 +897,19 @@ describe("skribeum shell", () => {
       },
     );
     const revealed = await headingMarkerState();
-    expect(revealed?.maxWidth ?? 0).toBeGreaterThan(0);
     expect(revealed?.opacity).toBe("1");
+    expect(revealed?.transform).not.toBe(hidden?.transform);
+    const followingPositionAfter = await browser.execute(() => {
+      const following = [
+        ...document.querySelectorAll<HTMLElement>(".cm-line"),
+      ].find((line) => line.textContent === "body text here");
+      if (following === undefined) {
+        throw new Error("following line missing");
+      }
+      const rect = following.getBoundingClientRect();
+      return { left: rect.left, top: rect.top };
+    });
+    expect(followingPositionAfter).toEqual(followingPositionBefore);
 
     // Leaving the line hides the marker again.
     await placeCursorAtLineEnd("body text here");
@@ -1059,6 +1085,122 @@ describe("skribeum shell", () => {
       { timeout: 10000 },
     );
     rmSync(path.join(SCRATCH_VAULT_PATH, REVEAL_NOTE_NAME));
+  });
+
+  it("keeps_every_live_preview_transition_below_the_motion_ceiling", async () => {
+    await openNoteFromTree(MOTION_PREVIEW_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("after motion constructs"),
+      { timeout: 15000 },
+    );
+
+    const measurements = await browser.execute(() => {
+      const selectors = [
+        ".cm-skr-reveal-marker",
+        ".cm-skr-link.cm-skr-reveal-motion",
+        ".cm-skr-embed.cm-skr-reveal-motion",
+        ".cm-skr-rich-callout.cm-skr-reveal-motion",
+      ];
+      return selectors.map((selector) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (element === null) {
+          throw new Error(`animated class missing: ${selector}`);
+        }
+        const style = getComputedStyle(element);
+        return {
+          selector,
+          transitionMs: style.transitionDuration.split(",").map((part) => {
+            const duration = part.trim();
+            return duration.endsWith("ms")
+              ? Number.parseFloat(duration)
+              : Number.parseFloat(duration) * 1000;
+          }),
+          animationMs: style.animationDuration.split(",").map((part) => {
+            const duration = part.trim();
+            return duration.endsWith("ms")
+              ? Number.parseFloat(duration)
+              : Number.parseFloat(duration) * 1000;
+          }),
+          animationTimingFunction: style.animationTimingFunction,
+          transitionTimingFunction: style.transitionTimingFunction,
+        };
+      });
+    });
+
+    for (const measurement of measurements) {
+      expect(Math.max(...measurement.transitionMs)).toBeLessThan(50);
+      for (const easing of measurement.transitionTimingFunction.split(",")) {
+        expect(easing.trim()).toBe("linear");
+      }
+      if (measurement.selector !== ".cm-skr-reveal-marker") {
+        expect(Math.max(...measurement.animationMs)).toBeLessThan(50);
+        expect(measurement.animationTimingFunction).toBe("linear");
+      }
+    }
+    expect(measurements[0]?.transitionMs).toEqual([49, 49]);
+    expect(measurements[1]?.transitionMs).toEqual([49, 49]);
+    expect(measurements[2]?.transitionMs).toEqual([49, 49]);
+    expect(measurements[3]?.transitionMs).toEqual([49, 49]);
+  });
+
+  it("makes_live_preview_motion_instant_under_reduced_motion", async () => {
+    await openNoteFromTree(MOTION_PREVIEW_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("after motion constructs"),
+      { timeout: 15000 },
+    );
+
+    const measurements = await browser.execute(() => {
+      const reducedStyle = document.createElement("style");
+      const mediaRules: string[] = [];
+      for (const sheet of document.styleSheets) {
+        for (const rule of sheet.cssRules) {
+          if (
+            rule instanceof CSSMediaRule &&
+            rule.conditionText.includes("prefers-reduced-motion")
+          ) {
+            mediaRules.push(
+              ...Array.from(rule.cssRules, (nestedRule) => nestedRule.cssText),
+            );
+          }
+        }
+      }
+      if (mediaRules.length === 0) {
+        throw new Error("prefers-reduced-motion rule missing");
+      }
+      reducedStyle.textContent = mediaRules.join("\n");
+      document.head.append(reducedStyle);
+
+      const selectors = [
+        ".cm-skr-reveal-marker",
+        ".cm-skr-link.cm-skr-reveal-motion",
+        ".cm-skr-embed.cm-skr-reveal-motion",
+        ".cm-skr-rich-callout.cm-skr-reveal-motion",
+      ];
+      const result = selectors.map((selector) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (element === null) {
+          throw new Error(`animated class missing: ${selector}`);
+        }
+        const style = getComputedStyle(element);
+        return {
+          selector,
+          transitionDuration: style.transitionDuration,
+          animationDuration: style.animationDuration,
+        };
+      });
+      reducedStyle.remove();
+      return result;
+    });
+
+    for (const measurement of measurements) {
+      for (const duration of measurement.transitionDuration.split(",")) {
+        expect(Number.parseFloat(duration)).toBe(0);
+      }
+      for (const duration of measurement.animationDuration.split(",")) {
+        expect(Number.parseFloat(duration)).toBe(0);
+      }
+    }
   });
 
   it("surfaces_and_dismisses_the_note_removed_banner_by_keyboard", async () => {

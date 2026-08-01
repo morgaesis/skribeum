@@ -88,6 +88,12 @@ export function registerSurfaces(registry: CommandRegistry): void {
     },
   });
   registry.register({
+    id: "note.create",
+    title: STRINGS.commandCreateNote,
+    keybindings: ["Mod-n"],
+    run: (context) => context.createNote?.(),
+  });
+  registry.register({
     id: "note.save",
     title: STRINGS.commandSaveNote,
     keybindings: ["Mod-s"],

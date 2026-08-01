@@ -3,6 +3,7 @@
 // imported lazily: a build without it (the demo) reports that updates are
 // unavailable rather than failing.
 
+import { updateCheck } from "../ipc/services";
 import { STRINGS } from "../strings";
 
 export type UpdateState =
@@ -31,7 +32,7 @@ type UpdateHandle = {
  * missing there is the runtime it talks to. Detect that, so the browser
  * demo reports honestly instead of surfacing an inter-process error.
  */
-function hasDesktopRuntime(): boolean {
+export function hasDesktopRuntime(): boolean {
   return (
     typeof window !== "undefined" &&
     "__TAURI_INTERNALS__" in (window as unknown as Record<string, unknown>)
@@ -59,24 +60,24 @@ async function loadPlugin(): Promise<{
  * update check must not be able to break the editor.
  */
 export async function checkForUpdate(
+  channel: "stable" | "beta",
   onState: (state: UpdateState) => void,
 ): Promise<void> {
   onState({ kind: "checking" });
-  const plugin = await loadPlugin();
-  if (plugin === null) {
+  if (!hasDesktopRuntime()) {
     onState({ kind: "unavailable", reason: STRINGS.updateUnavailable });
     return;
   }
   try {
-    const update = await plugin.check();
-    if (update === null) {
+    const result = await updateCheck(channel);
+    if (result.kind === "current") {
       onState({ kind: "current" });
       return;
     }
     onState({
       kind: "available",
-      version: update.version,
-      notes: update.body ?? "",
+      version: result.version,
+      notes: result.notes,
     });
   } catch (error) {
     onState({ kind: "failed", message: String(error) });

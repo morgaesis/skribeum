@@ -8,7 +8,10 @@ import {
   settingsRead,
   settingsWrite,
 } from "../ipc/services";
-import { defaultTaskStatuses, normalizeTaskStatuses } from "../taskStatuses";
+import {
+  defaultTaskStatusDocuments,
+  validateTaskStatusDocuments,
+} from "../taskStatuses";
 import {
   isDarkPaletteName,
   isLightPaletteName,
@@ -18,15 +21,34 @@ import {
 export type { SettingsDocument };
 
 export const DEFAULT_SETTINGS: SettingsDocument = {
-  schema_version: 1,
+  schema_version: 2,
   theme: "system",
   light_palette: "manuscript",
   dark_palette: "lamplight",
+  prose_font: "serif",
+  code_font: "modern",
   editor_font_size: 16,
-  editor_reading_measure: 72,
+  editor_line_height: 170,
+  editor_line_width: 72,
+  show_line_numbers: false,
+  animations: true,
+  autosave_delay_ms: 400,
+  spell_check: true,
+  indent_style: "spaces",
+  indent_width: 2,
+  wrap_long_lines: true,
+  show_invisible_characters: false,
+  reveal_markdown_syntax: true,
+  default_note_folder: "",
+  attachment_folder_mode: "vault",
+  attachment_folder_path: "attachments",
+  honor_obsidian_config: true,
   search_result_limit: 50,
   link_previews: true,
-  task_statuses: defaultTaskStatuses(),
+  search_note_bodies: true,
+  search_case_sensitive: false,
+  update_channel: "stable",
+  task_statuses: defaultTaskStatusDocuments(),
 };
 
 function normalizedDocument(document: SettingsDocument): SettingsDocument {
@@ -45,7 +67,7 @@ function normalizedDocument(document: SettingsDocument): SettingsDocument {
       typeof document.link_previews === "boolean"
         ? document.link_previews
         : DEFAULT_SETTINGS.link_previews,
-    task_statuses: normalizeTaskStatuses(document.task_statuses),
+    task_statuses: validateTaskStatusDocuments(document.task_statuses),
   };
 }
 
@@ -53,6 +75,8 @@ export type SettingsState = {
   document: SettingsDocument;
   /** Human-readable failure of the last read or write, or null. */
   error: string | null;
+  /** Setting whose write failed, or `document` for whole-file failures. */
+  errorSetting: keyof SettingsDocument | "document" | null;
   /** Whether a read has succeeded since startup. */
   loaded: boolean;
 };
@@ -63,9 +87,14 @@ type SettingsIo = {
 };
 
 export class SettingsStore {
+  private loadPromise: Promise<void> | null = null;
+  private persistedDocument: SettingsDocument = DEFAULT_SETTINGS;
+  private writeQueue: Promise<void> = Promise.resolve();
+  private revision = 0;
   private state: SettingsState = {
     document: DEFAULT_SETTINGS,
     error: null,
+    errorSetting: null,
     loaded: false,
   };
 
@@ -92,13 +121,27 @@ export class SettingsStore {
    * application runs on defaults.
    */
   async load(): Promise<void> {
+    if (this.loadPromise !== null) {
+      return this.loadPromise;
+    }
+    const pending = this.loadOnce();
+    this.loadPromise = pending;
+    await pending;
+    if (!this.state.loaded && this.loadPromise === pending) {
+      this.loadPromise = null;
+    }
+  }
+
+  private async loadOnce(): Promise<void> {
     try {
       const document = normalizedDocument(await this.io.read());
-      this.publish({ document, error: null, loaded: true });
+      this.persistedDocument = document;
+      this.publish({ document, error: null, errorSetting: null, loaded: true });
     } catch (error) {
       this.publish({
         document: this.state.document,
         error: String(error),
+        errorSetting: "document",
         loaded: false,
       });
     }
@@ -110,18 +153,40 @@ export class SettingsStore {
    * for the view.
    */
   async update(patch: Partial<SettingsDocument>): Promise<boolean> {
+    if (!this.state.loaded) {
+      await this.load();
+      if (!this.state.loaded) {
+        return false;
+      }
+    }
     const previous = this.state.document;
     const next = normalizedDocument({ ...previous, ...patch });
-    this.publish({ document: next, error: null, loaded: this.state.loaded });
+    const patchKeys = Object.keys(patch) as (keyof SettingsDocument)[];
+    const errorSetting =
+      patchKeys.length === 1 ? (patchKeys[0] ?? "document") : "document";
+    const revision = ++this.revision;
+    this.publish({
+      document: next,
+      error: null,
+      errorSetting: null,
+      loaded: this.state.loaded,
+    });
+
+    const write = this.writeQueue.then(() => this.io.write(next));
+    this.writeQueue = write.catch(() => {});
     try {
-      await this.io.write(next);
+      await write;
+      this.persistedDocument = next;
       return true;
     } catch (error) {
-      this.publish({
-        document: previous,
-        error: String(error),
-        loaded: this.state.loaded,
-      });
+      if (revision === this.revision) {
+        this.publish({
+          document: this.persistedDocument,
+          error: String(error),
+          errorSetting,
+          loaded: this.state.loaded,
+        });
+      }
       return false;
     }
   }

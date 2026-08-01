@@ -56,6 +56,36 @@
   --skr-motion-duration: 49ms;
   --skr-motion-easing: linear;
   --skr-motion-distance: 0.25rem;
+  --skr-preview-manuscript-surface: #fffdf8;
+  --skr-preview-manuscript-text: #2a2418;
+  --skr-preview-manuscript-accent: #8c3a2b;
+  --skr-preview-lamplight-surface: #1d1815;
+  --skr-preview-lamplight-text: #ece4d5;
+  --skr-preview-lamplight-accent: #e2a15c;
+  --skr-preview-studio-surface: #ffffff;
+  --skr-preview-studio-text: #182230;
+  --skr-preview-studio-accent: #1d4fd8;
+  --skr-preview-graphite-surface: #141b26;
+  --skr-preview-graphite-text: #e6ecf5;
+  --skr-preview-graphite-accent: #7fb0ff;
+  --skr-preview-gazette-surface: #ffffff;
+  --skr-preview-gazette-text: #131316;
+  --skr-preview-gazette-accent: #5f24c4;
+  --skr-preview-signal-surface: #101017;
+  --skr-preview-signal-text: #ededf4;
+  --skr-preview-signal-accent: #b79cff;
+}
+
+:root[data-prose-font="sans"] {
+  --skr-font-prose:
+    system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, "Noto Sans",
+    "Liberation Sans", Cantarell, Ubuntu, "Helvetica Neue", Arial, sans-serif;
+}
+
+:root[data-code-font="classic"] {
+  --skr-font-mono:
+    "Courier New", "Nimbus Mono PS", "Liberation Mono", "DejaVu Sans Mono",
+    monospace;
 }
 
 .skr-palette-swatch[data-palette="manuscript"] {

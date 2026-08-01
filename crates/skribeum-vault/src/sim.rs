@@ -617,6 +617,26 @@ impl FileSystem for SimFs {
         }
     }
 
+    fn create_new_file(&self, path: &Path) -> Result<bool, FsError> {
+        let mut state = self.lock();
+        if state.read_only {
+            return Err(FsError::ReadOnly);
+        }
+        state.app_write_count += 1;
+        let resolved = state.resolve(path);
+        if state.live.contains_key(&resolved) {
+            return Ok(false);
+        }
+        state.app_op("create_new_file")?;
+        let id = state.allocate_inode(Vec::new(), false);
+        state.live.insert(resolved.clone(), EntryRef::File(id));
+        state.queue_event(WatchEvent::Created(resolved.clone()));
+        state
+            .trace
+            .push(format!("app-create-new {}", resolved.display()));
+        Ok(true)
+    }
+
     fn append_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
         let mut state = self.lock();
         if state.read_only {
@@ -737,9 +757,15 @@ impl FileSystem for SimFs {
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, FsError> {
-        // The simulator's namespace has no symlinked ancestors; an existing
-        // path is already canonical.
-        self.metadata(path).map(|_| path.to_owned())
+        // The simulator's namespace has no symlinked ancestors, but the final
+        // component can be a symlink and canonicalization resolves it.
+        let state = self.lock();
+        let resolved = state.resolve(path);
+        state
+            .live
+            .contains_key(&resolved)
+            .then_some(resolved)
+            .ok_or(FsError::NotFound)
     }
 
     fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError> {

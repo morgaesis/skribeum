@@ -1,4 +1,5 @@
 import { applyByteChangeSet } from "../../../src/lib/editor/byteChangeSet";
+import { STRINGS } from "../../../src/lib/strings";
 import { DEMO_FILES } from "../vault/seed";
 import type {
   AppError,
@@ -99,6 +100,16 @@ const vaults = new Map<number, DemoVault>();
 const folderSelections = new Map<string, DemoVault>();
 let status: DemoVaultStatus = { source: "seeded" };
 const statusListeners = new Set<(next: DemoVaultStatus) => void>();
+
+/** Restores the seeded in-memory vault for isolated browser tests. */
+export function resetDemoVault(): void {
+  nextVaultId = 0;
+  nextFolderSelectionId = 0;
+  activeVault = null;
+  vaults.clear();
+  folderSelections.clear();
+  publishStatus({ source: "seeded" });
+}
 
 export class IpcError extends Error {
   readonly app: AppError;
@@ -376,6 +387,21 @@ export async function watchSubscribe(handle: VaultHandle): Promise<void> {
   vaultFor(handle);
 }
 
+export async function noteCreate(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<void> {
+  const vault = vaultFor(handle);
+  assertRelativePath(relPath);
+  if (!relPath.toLowerCase().endsWith(".md")) {
+    return fail("note/not-markdown", STRINGS.demoNoteNotMarkdown, relPath);
+  }
+  if (vault.files.has(relPath)) {
+    return fail("note/already-exists", STRINGS.demoNoteAlreadyExists, relPath);
+  }
+  vault.files.set(relPath, new Uint8Array());
+}
+
 export async function noteWrite(
   handle: VaultHandle,
   relPath: string,
@@ -527,11 +553,7 @@ export async function readNote(
 ): Promise<LoadedNote> {
   const vault = vaultFor(handle);
   if (!relPath.toLowerCase().endsWith(".md")) {
-    return fail(
-      "note/not-markdown",
-      "The requested demo file is not a note.",
-      relPath,
-    );
+    return fail("note/not-markdown", STRINGS.demoNoteNotMarkdown, relPath);
   }
   const bytes = cachedFileBytes(vault, relPath).slice();
   const hasBom =

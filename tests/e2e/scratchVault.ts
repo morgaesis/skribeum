@@ -58,7 +58,7 @@ export const VISUAL_NOTE_CONTENT = [
   "- Aligned blocks keep the reading rhythm steady.",
   "",
   "> [!tip] Reading note",
-  "> Callout text follows the same comfortable reading measure as the surrounding prose, even when the sentence is long enough to wrap onto several visual lines inside its padded frame.",
+  "> Callout text follows the same comfortable column width as the surrounding prose, even when the sentence is long enough to wrap onto several visual lines inside its padded frame.",
   "",
   "### Practical details",
   "",

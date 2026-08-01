@@ -3,7 +3,7 @@
 // presentation question the decoration engine asks synchronously per
 // visible wikilink: does this target name a note in the vault tree the
 // webview already holds? Configuration knobs are read from
-// `.obsidian/app.json` and honored, never overridden (decision 27).
+// `.obsidian/app.json` or the application's explicit vault preferences.
 
 /** The `.obsidian/app.json` knobs the link layer honors. */
 export type ObsidianAppConfig = {
@@ -110,6 +110,27 @@ function resolutionIndex(paths: readonly string[]): ResolutionIndex {
   return index;
 }
 
+function attachmentCandidate(
+  target: string,
+  context: WikilinkResolutionContext,
+): string | null {
+  const configured = context.config.attachmentFolderPath;
+  if (configured === null || target.includes("/")) {
+    return null;
+  }
+  if (configured === "/") {
+    return target;
+  }
+  if (configured === "./") {
+    const current = context.currentPath ?? "";
+    const separator = current.lastIndexOf("/");
+    return separator === -1
+      ? target
+      : `${current.slice(0, separator)}/${target}`;
+  }
+  return `${configured.replace(/\/$/u, "")}/${target}`;
+}
+
 export type WikilinkResolution =
   /** The target names the current note (`[[#Heading]]`, `[[#^block]]`). */
   | { kind: "self" }
@@ -136,6 +157,14 @@ export function resolveWikilinkTarget(
   }
   const index = resolutionIndex(context.paths);
   const key = normalizeKey(pathPart);
+  const attachment = attachmentCandidate(pathPart, context);
+  if (attachment !== null) {
+    const attachmentKey = normalizeKey(attachment);
+    const configuredMatch = index.byPath.get(attachmentKey);
+    if (configuredMatch !== undefined) {
+      return { kind: "note", path: configuredMatch };
+    }
+  }
   const exact = index.byPath.get(key) ?? index.byPath.get(`${key}.md`);
   if (exact !== undefined) {
     return { kind: "note", path: exact };

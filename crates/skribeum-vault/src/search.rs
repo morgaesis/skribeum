@@ -20,7 +20,7 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 use skribeum_core::{ExtractionKind, extract};
 
@@ -31,7 +31,7 @@ use crate::vault::{EntryKind, Vault};
 
 /// Version of the on-disk index schema. A file carrying any other version
 /// is dropped and rebuilt rather than migrated: the index is derived state.
-pub const SEARCH_SCHEMA_VERSION: u32 = 1;
+pub const SEARCH_SCHEMA_VERSION: u32 = 3;
 
 /// Search failures. The index is derived state, so every failure is
 /// recoverable by a rebuild; messages never contain note content.
@@ -71,7 +71,6 @@ pub struct SearchHit {
 const SNIPPET_MAX_BYTES: usize = 180;
 /// Bytes of context kept before the first match in a snippet.
 const SNIPPET_LEAD_BYTES: usize = 40;
-
 /// BM25 column weights: title, headings, body.
 const BM25_WEIGHTS: (f64, f64, f64) = (8.0, 3.0, 1.0);
 
@@ -156,8 +155,11 @@ impl SearchIndex {
                 other => Err(other),
             })?;
         if version.as_deref() != Some(&SEARCH_SCHEMA_VERSION.to_string()) {
-            self.conn
-                .execute_batch("DROP TABLE IF EXISTS note_index;")?;
+            self.conn.execute_batch(
+                "DROP TABLE IF EXISTS note_index;
+                 DROP TABLE IF EXISTS note_case_index;
+                 DROP TABLE IF EXISTS note_case_paths;",
+            )?;
             self.conn.execute(
                 "INSERT OR REPLACE INTO index_meta(key, value) VALUES('schema_version', ?1)",
                 [SEARCH_SCHEMA_VERSION.to_string()],
@@ -170,12 +172,28 @@ impl SearchIndex {
                 headings,
                 body,
                 tokenize = 'unicode61 remove_diacritics 2'
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS note_case_index USING fts5(
+                title_terms,
+                heading_terms,
+                body_terms,
+                tokenize = 'ascii',
+                content = '',
+                contentless_delete = 1
+            );
+            CREATE TABLE IF NOT EXISTS note_case_paths(
+                rowid INTEGER PRIMARY KEY,
+                path TEXT UNIQUE NOT NULL
             );",
         )?;
         // Verify the FTS table is actually usable; a corrupt database can
         // survive DDL and fail only on first use.
         self.conn
             .query_row("SELECT count(*) FROM note_index", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+        self.conn
+            .query_row("SELECT count(*) FROM note_case_index", [], |row| {
                 row.get::<_, i64>(0)
             })?;
         Ok(())
@@ -201,6 +219,7 @@ impl SearchIndex {
         bytes: &[u8],
     ) -> Result<(), SearchError> {
         tx.execute("DELETE FROM note_index WHERE path = ?1", [path])?;
+        Self::delete_case_note(tx, path)?;
         let Ok(text) = core::str::from_utf8(bytes) else {
             return Ok(());
         };
@@ -213,10 +232,39 @@ impl SearchIndex {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        let title = note_title(path);
         tx.execute(
             "INSERT INTO note_index(path, title, headings, body) VALUES(?1, ?2, ?3, ?4)",
-            [path, &note_title(path), &headings, body],
+            [path, &title, &headings, body],
         )?;
+        tx.execute("INSERT INTO note_case_paths(path) VALUES(?1)", [path])?;
+        let rowid = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO note_case_index(
+                rowid, title_terms, heading_terms, body_terms
+             ) VALUES(?1, ?2, ?3, ?4)",
+            params![
+                rowid,
+                case_terms(&title),
+                case_terms(&headings),
+                case_terms(body),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn delete_case_note(tx: &Transaction<'_>, path: &str) -> Result<(), SearchError> {
+        let rowid = tx
+            .query_row(
+                "SELECT rowid FROM note_case_paths WHERE path = ?1",
+                [path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(rowid) = rowid {
+            tx.execute("DELETE FROM note_case_index WHERE rowid = ?1", [rowid])?;
+            tx.execute("DELETE FROM note_case_paths WHERE rowid = ?1", [rowid])?;
+        }
         Ok(())
     }
 
@@ -226,8 +274,10 @@ impl SearchIndex {
     ///
     /// Returns [`SearchError::Storage`] when the index cannot be updated.
     pub fn remove_note(&self, path: &str) -> Result<(), SearchError> {
-        self.conn
-            .execute("DELETE FROM note_index WHERE path = ?1", [path])?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM note_index WHERE path = ?1", [path])?;
+        Self::delete_case_note(&tx, path)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -244,6 +294,8 @@ impl SearchIndex {
     pub fn rebuild(&self, fs: &dyn FileSystem, vault: &Vault) -> Result<usize, SearchError> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM note_index", [])?;
+        tx.execute("DELETE FROM note_case_index", [])?;
+        tx.execute("DELETE FROM note_case_paths", [])?;
         let mut indexed = 0usize;
         for entry in vault.tree() {
             if entry.kind != EntryKind::Note {
@@ -295,37 +347,67 @@ impl SearchIndex {
     ///
     /// Returns [`SearchError::Storage`] when the query cannot run.
     pub fn query(&self, query: &str, limit: u32) -> Result<Vec<SearchHit>, SearchError> {
-        let terms: Vec<String> = query
-            .split_whitespace()
-            .map(|term| term.replace('"', "\"\""))
-            .collect();
-        if terms.is_empty() || limit == 0 {
+        self.query_with_options(query, limit, true, false)
+    }
+
+    /// Runs a ranked query with title-only and case-sensitive filtering.
+    /// Case-preserving encoded terms use a separate FTS5 index so exact-case
+    /// matching remains complete and bounded by the requested result limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SearchError::Storage`] when the query cannot run.
+    pub fn query_with_options(
+        &self,
+        query: &str,
+        limit: u32,
+        search_note_bodies: bool,
+        case_sensitive: bool,
+    ) -> Result<Vec<SearchHit>, SearchError> {
+        let source_terms: Vec<String> = query.split_whitespace().map(str::to_owned).collect();
+        if source_terms.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        let match_expression = terms
-            .iter()
-            .map(|term| format!("\"{term}\""))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let match_expression = if case_sensitive {
+            case_match_expression(&source_terms, search_note_bodies)
+        } else {
+            regular_match_expression(&source_terms, search_note_bodies)
+        };
+        if match_expression.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let (title_weight, heading_weight, body_weight) = BM25_WEIGHTS;
         // bm25() takes one weight per column in declaration order, the
         // UNINDEXED path column included; its weight is inert and passed as
         // zero.
-        let mut statement = self.conn.prepare(
-            "SELECT path, title, body, bm25(note_index, 0.0, ?2, ?3, ?4) AS rank
+        let sql = if case_sensitive {
+            "SELECT normal.path, normal.title, normal.body,
+                    bm25(note_case_index, ?2, ?3, ?4) AS rank
+             FROM note_case_index
+             JOIN note_case_paths AS paths
+               ON paths.rowid = note_case_index.rowid
+             JOIN note_index AS normal
+               ON normal.path = paths.path
+             WHERE note_case_index MATCH ?1
+             ORDER BY rank
+             LIMIT ?5"
+        } else {
+            "SELECT path, title, body,
+                    bm25(note_index, 0.0, ?2, ?3, ?4) AS rank
              FROM note_index
              WHERE note_index MATCH ?1
              ORDER BY rank
-             LIMIT ?5",
-        )?;
+             LIMIT ?5"
+        };
+        let mut statement = self.conn.prepare(sql)?;
         let rows = statement.query_map(
-            rusqlite::params![
+            params![
                 match_expression,
                 title_weight,
                 heading_weight,
                 body_weight,
-                i64::from(limit)
+                limit
             ],
             |row| {
                 Ok((
@@ -337,11 +419,19 @@ impl SearchIndex {
             },
         )?;
 
-        let lowered_terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        let lowered_terms: Vec<String> = source_terms
+            .iter()
+            .map(|term| term.to_lowercase())
+            .collect();
         let mut hits = Vec::new();
         for row in rows {
             let (path, title, body, rank) = row?;
-            let (snippet, match_ranges) = build_snippet(&body, &lowered_terms);
+            let searchable = if search_note_bodies { &body } else { &title };
+            let (snippet, match_ranges) = if case_sensitive {
+                build_case_sensitive_snippet(searchable, &source_terms)
+            } else {
+                build_snippet(searchable, &lowered_terms)
+            };
             hits.push(SearchHit {
                 path,
                 title,
@@ -354,6 +444,55 @@ impl SearchIndex {
         }
         Ok(hits)
     }
+}
+
+fn regular_match_expression(source_terms: &[String], search_note_bodies: bool) -> String {
+    source_terms
+        .iter()
+        .map(|term| term.replace('"', "\"\""))
+        .map(|term| {
+            if search_note_bodies {
+                format!("\"{term}\"")
+            } else {
+                format!("title : \"{term}\"")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn case_match_expression(source_terms: &[String], search_note_bodies: bool) -> String {
+    source_terms
+        .iter()
+        .map(|term| case_terms(term))
+        .filter(|term| !term.is_empty())
+        .map(|term| {
+            if search_note_bodies {
+                format!("\"{term}\"")
+            } else {
+                format!("title_terms : \"{term}\"")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Encodes case-preserving Unicode word tokens as lowercase hexadecimal.
+/// FTS5 may then normalize the encoding without erasing the source case.
+fn case_terms(text: &str) -> String {
+    text.split(|character: char| !character.is_alphanumeric() && character != '_')
+        .filter(|term| !term.is_empty())
+        .map(|term| {
+            let mut encoded = String::with_capacity(1 + term.len() * 2);
+            encoded.push('x');
+            for byte in term.as_bytes() {
+                use std::fmt::Write;
+                let _ = write!(encoded, "{byte:02x}");
+            }
+            encoded
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The index database file name for a vault root: a hash, so no vault path
@@ -501,6 +640,39 @@ fn build_snippet(body: &str, terms_lower: &[String]) -> (String, Vec<[u32; 2]>) 
     (snippet, ranges)
 }
 
+fn build_case_sensitive_snippet(body: &str, terms: &[String]) -> (String, Vec<[u32; 2]>) {
+    let first = terms
+        .iter()
+        .filter_map(|term| body.find(term))
+        .min()
+        .unwrap_or(0);
+    let window_start = snap_to_char_boundary(body, first.saturating_sub(SNIPPET_LEAD_BYTES));
+    let window_end = snap_to_char_boundary(body, window_start + SNIPPET_MAX_BYTES);
+    let snippet = body[window_start..window_end].to_owned();
+    let mut ranges = terms
+        .iter()
+        .flat_map(|term| {
+            snippet
+                .match_indices(term)
+                .map(|(start, matched)| (start, start + matched.len()))
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable();
+    let mut previous_end = 0;
+    let mut converted = Vec::new();
+    for (start, end) in ranges {
+        if start < previous_end {
+            continue;
+        }
+        let (Ok(start), Ok(end)) = (u32::try_from(start), u32::try_from(end)) else {
+            continue;
+        };
+        previous_end = end as usize;
+        converted.push([start, end]);
+    }
+    (snippet, converted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,5 +713,85 @@ mod tests {
         assert_eq!(match_length_at("Straße", 0, "straße"), Some(7));
         assert_eq!(match_length_at("HELLO", 0, "hello"), Some(5));
         assert_eq!(match_length_at("world", 0, "word"), None);
+    }
+
+    #[test]
+    fn query_options_control_scope_and_case() {
+        let index = SearchIndex::in_memory().expect("index opens");
+        index
+            .index_note("Folder/Upper.md", b"Body Needle")
+            .expect("note indexes");
+
+        assert!(
+            index
+                .query_with_options("Needle", 10, false, false)
+                .expect("title-only query runs")
+                .is_empty()
+        );
+        assert_eq!(
+            index
+                .query_with_options("Needle", 10, true, true)
+                .expect("case-sensitive query runs")
+                .len(),
+            1
+        );
+        assert!(
+            index
+                .query_with_options("needle", 10, true, true)
+                .expect("case-sensitive miss runs")
+                .is_empty()
+        );
+        assert_eq!(
+            index
+                .query_with_options("upper", 10, false, false)
+                .expect("title query runs")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn case_sensitive_query_remains_complete_after_many_wrong_case_matches() {
+        let index = SearchIndex::in_memory().expect("index opens");
+        for number in 0..300 {
+            index
+                .index_note(&format!("wrong-{number}.md"), b"needle")
+                .expect("note indexes");
+        }
+        index
+            .index_note("right.md", b"Needle")
+            .expect("matching note indexes");
+
+        let hits = index
+            .query_with_options("Needle", 1, true, true)
+            .expect("query runs");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "right.md");
+    }
+
+    #[test]
+    fn oversized_notes_remain_available_to_case_sensitive_search() {
+        let index = SearchIndex::in_memory().expect("index opens");
+        let mut body = vec![b'a'; 8 * 1024 * 1024 + 1];
+        body[..7].copy_from_slice(b"Needle ");
+        body[7..].fill(b' ');
+        index
+            .index_note("large.md", &body)
+            .expect("note indexes normally");
+
+        assert_eq!(
+            index
+                .query_with_options("needle", 1, true, false)
+                .expect("regular query runs")
+                .len(),
+            1
+        );
+        assert_eq!(
+            index
+                .query_with_options("Needle", 1, true, true)
+                .expect("case-sensitive query runs")
+                .len(),
+            1
+        );
     }
 }

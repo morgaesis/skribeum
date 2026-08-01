@@ -120,6 +120,36 @@ describe("wikilink target resolution", () => {
     });
   });
 
+  it("prefers the configured attachment folder for duplicate names", () => {
+    const configured: WikilinkResolutionContext = {
+      paths: ["copy/image.png", "notes/assets/image.png"],
+      currentPath: "notes/daily.md",
+      config: {
+        ...DEFAULT_OBSIDIAN_APP_CONFIG,
+        attachmentFolderPath: "notes/assets",
+      },
+    };
+    expect(resolveWikilinkTarget("image.png", configured)).toEqual({
+      kind: "note",
+      path: "notes/assets/image.png",
+    });
+  });
+
+  it("resolves note-relative attachment folders", () => {
+    const configured: WikilinkResolutionContext = {
+      paths: ["image.png", "notes/image.png"],
+      currentPath: "notes/daily.md",
+      config: {
+        ...DEFAULT_OBSIDIAN_APP_CONFIG,
+        attachmentFolderPath: "./",
+      },
+    };
+    expect(resolveWikilinkTarget("image.png", configured)).toEqual({
+      kind: "note",
+      path: "notes/image.png",
+    });
+  });
+
   it("reports unknown targets unresolved", () => {
     expect(resolveWikilinkTarget("no-such-note", context)).toEqual({
       kind: "unresolved",

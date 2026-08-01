@@ -10,10 +10,12 @@ import {
   type BrowserFileHandle,
   demoVaultStatus,
   IpcError,
+  noteCreate,
   noteWrite,
   openVault,
   readNote,
   readVaultFile,
+  resetDemoVault,
   selectLocalDirectory,
   useLocalDirectory,
   vaultTree,
@@ -111,6 +113,7 @@ describe("browser demo IPC", () => {
   beforeEach(() => {
     localStorage.clear();
     Reflect.deleteProperty(window, "showDirectoryPicker");
+    resetDemoVault();
   });
 
   it("opens the seeded vault and indexes its nested content", async () => {
@@ -142,6 +145,33 @@ describe("browser demo IPC", () => {
     expect(note.meta.projection_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.parse(new TextDecoder().decode(canvas))).toHaveProperty(
       "nodes",
+    );
+  });
+
+  it("creates a new note without overwriting an existing path", async () => {
+    const handle = await openVault("demo");
+    await expect(
+      noteCreate(handle, "Drafts/Untitled.md"),
+    ).resolves.toBeUndefined();
+    const created = await readNote(handle, "Drafts/Untitled.md");
+    expect(created).toMatchObject({ text: "", readOnly: false });
+    await noteWrite(
+      handle,
+      "Drafts/Untitled.md",
+      [
+        {
+          start: 0,
+          end: 0,
+          bytes: Array.from(new TextEncoder().encode("Newly searchable note")),
+        },
+      ],
+      created.meta.projection_hash,
+    );
+    await expect(searchQuery(handle, "searchable", 50)).resolves.toContainEqual(
+      expect.objectContaining({ path: "Drafts/Untitled.md" }),
+    );
+    await expect(noteCreate(handle, "Drafts/Untitled.md")).rejects.toThrow(
+      "already exists",
     );
   });
 
@@ -338,26 +368,64 @@ describe("browser demo IPC", () => {
 
   it("persists settings through local storage", async () => {
     await expect(settingsRead()).resolves.toEqual({
-      schema_version: 1,
+      schema_version: 2,
       theme: "system",
       light_palette: "manuscript",
       dark_palette: "lamplight",
+      prose_font: "serif",
+      code_font: "modern",
       editor_font_size: 16,
-      editor_reading_measure: 72,
+      editor_line_height: 170,
+      editor_line_width: 72,
+      show_line_numbers: false,
+      animations: true,
+      autosave_delay_ms: 400,
+      spell_check: true,
+      indent_style: "spaces",
+      indent_width: 2,
+      wrap_long_lines: true,
+      show_invisible_characters: false,
+      reveal_markdown_syntax: true,
+      default_note_folder: "",
+      attachment_folder_mode: "vault",
+      attachment_folder_path: "attachments",
+      honor_obsidian_config: true,
       search_result_limit: 50,
       link_previews: true,
+      search_note_bodies: true,
+      search_case_sensitive: false,
+      update_channel: "stable",
       task_statuses: defaultTaskStatuses(),
     });
 
     const settings = {
-      schema_version: 1,
+      schema_version: 2,
       theme: "dark",
       light_palette: "studio",
       dark_palette: "graphite",
+      prose_font: "sans",
+      code_font: "classic",
       editor_font_size: 18,
-      editor_reading_measure: 84,
+      editor_line_height: 180,
+      editor_line_width: 84,
+      show_line_numbers: true,
+      animations: false,
+      autosave_delay_ms: 750,
+      spell_check: false,
+      indent_style: "tabs",
+      indent_width: 4,
+      wrap_long_lines: false,
+      show_invisible_characters: true,
+      reveal_markdown_syntax: false,
+      default_note_folder: "notes/drafts",
+      attachment_folder_mode: "folder",
+      attachment_folder_path: "media/attachments",
+      honor_obsidian_config: false,
       search_result_limit: 24,
       link_previews: false,
+      search_note_bodies: false,
+      search_case_sensitive: true,
+      update_channel: "beta",
       task_statuses: defaultTaskStatuses(),
     };
     await settingsWrite(settings);
@@ -371,50 +439,152 @@ describe("browser demo IPC", () => {
     localStorage.setItem(
       "skribeum.demo.settings",
       JSON.stringify({
-        schema_version: 1,
+        schema_version: "two",
         theme: "neon",
+        light_palette: "blue",
+        dark_palette: "blue",
+        prose_font: "cursive",
+        code_font: "script",
         editor_font_size: Number.POSITIVE_INFINITY,
-        editor_reading_measure: 121,
+        editor_line_height: 119,
+        editor_line_width: 44,
+        show_line_numbers: "yes",
+        animations: 1,
+        autosave_delay_ms: 99,
+        spell_check: "yes",
+        indent_style: "mixed",
+        indent_width: 0,
+        wrap_long_lines: "no",
+        show_invisible_characters: null,
+        reveal_markdown_syntax: 0,
+        default_note_folder: "C:/notes",
+        attachment_folder_mode: "nearby",
+        attachment_folder_path: "/attachments",
+        honor_obsidian_config: "yes",
         search_result_limit: 0,
+        link_previews: "yes",
+        search_note_bodies: "yes",
+        search_case_sensitive: 1,
+        update_channel: "nightly",
       }),
     );
 
     await expect(settingsRead()).resolves.toEqual({
-      schema_version: 1,
+      schema_version: 2,
       theme: "system",
       light_palette: "manuscript",
       dark_palette: "lamplight",
+      prose_font: "serif",
+      code_font: "modern",
       editor_font_size: 16,
-      editor_reading_measure: 72,
+      editor_line_height: 170,
+      editor_line_width: 72,
+      show_line_numbers: false,
+      animations: true,
+      autosave_delay_ms: 400,
+      spell_check: true,
+      indent_style: "spaces",
+      indent_width: 2,
+      wrap_long_lines: true,
+      show_invisible_characters: false,
+      reveal_markdown_syntax: true,
+      default_note_folder: "",
+      attachment_folder_mode: "vault",
+      attachment_folder_path: "attachments",
+      honor_obsidian_config: true,
       search_result_limit: 50,
       link_previews: true,
+      search_note_bodies: true,
+      search_case_sensitive: false,
+      update_channel: "stable",
       task_statuses: defaultTaskStatuses(),
     });
-    await expect(
-      settingsWrite({
-        schema_version: 1,
-        theme: "system",
-        light_palette: "manuscript",
-        dark_palette: "lamplight",
-        editor_font_size: 17,
-        editor_reading_measure: 76,
-        search_result_limit: 1001,
-        link_previews: true,
-        task_statuses: defaultTaskStatuses(),
+    const valid = await settingsRead();
+    const invalidWrites: Array<[keyof typeof valid, unknown]> = [
+      ["schema_version", "two"],
+      ["theme", "neon"],
+      ["light_palette", "blue"],
+      ["dark_palette", "blue"],
+      ["prose_font", "cursive"],
+      ["code_font", "script"],
+      ["editor_font_size", 5],
+      ["editor_line_height", 119],
+      ["editor_line_width", 44],
+      ["show_line_numbers", "yes"],
+      ["animations", 1],
+      ["autosave_delay_ms", 99],
+      ["spell_check", "yes"],
+      ["indent_style", "mixed"],
+      ["indent_width", 0],
+      ["wrap_long_lines", "no"],
+      ["show_invisible_characters", null],
+      ["reveal_markdown_syntax", 0],
+      ["default_note_folder", "C:/notes"],
+      ["default_note_folder", "notes:archive"],
+      ["default_note_folder", ".obsidian"],
+      ["attachment_folder_mode", "nearby"],
+      ["attachment_folder_path", "/attachments"],
+      ["attachment_folder_path", ".skribeum/assets"],
+      ["honor_obsidian_config", "yes"],
+      ["search_result_limit", 0],
+      ["link_previews", "yes"],
+      ["search_note_bodies", "yes"],
+      ["search_case_sensitive", 1],
+      ["update_channel", "nightly"],
+      [
+        "task_statuses",
+        [
+          {
+            symbol: "?",
+            name: "Question",
+            category: "TODO",
+            glyph: "?",
+            color_token: "--skr-accent",
+            next_status: "missing",
+          },
+        ],
+      ],
+    ];
+    for (const [key, value] of invalidWrites) {
+      await expect(
+        settingsWrite({ ...valid, [key]: value } as typeof valid),
+      ).rejects.toThrow(String(key));
+    }
+  });
+
+  it("uses the legacy width key when line width is absent", async () => {
+    localStorage.setItem(
+      "skribeum.demo.settings",
+      JSON.stringify({ editor_reading_measure: 88 }),
+    );
+    await expect(settingsRead()).resolves.toMatchObject({
+      editor_line_width: 88,
+    });
+  });
+
+  it("defaults folder values that note creation cannot use", async () => {
+    localStorage.setItem(
+      "skribeum.demo.settings",
+      JSON.stringify({
+        default_note_folder: "notes:archive",
+        attachment_folder_path: ".obsidian/assets",
       }),
-    ).rejects.toThrow("search_result_limit");
-    await expect(
-      settingsWrite({
-        schema_version: 1,
-        theme: "system",
-        light_palette: "manuscript",
-        dark_palette: "lamplight",
-        editor_font_size: 17,
-        editor_reading_measure: 44,
-        search_result_limit: 50,
-        link_previews: true,
-        task_statuses: defaultTaskStatuses(),
-      }),
-    ).rejects.toThrow("editor_reading_measure");
+    );
+    await expect(settingsRead()).resolves.toMatchObject({
+      default_note_folder: "",
+      attachment_folder_path: "attachments",
+    });
+  });
+
+  it("preserves unknown settings keys on write", async () => {
+    localStorage.setItem(
+      "skribeum.demo.settings",
+      JSON.stringify({ future_feature: { enabled: true } }),
+    );
+    const settings = await settingsRead();
+    await settingsWrite({ ...settings, theme: "dark" });
+    expect(
+      JSON.parse(localStorage.getItem("skribeum.demo.settings") ?? "{}"),
+    ).toMatchObject({ future_feature: { enabled: true }, theme: "dark" });
   });
 });

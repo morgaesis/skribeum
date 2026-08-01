@@ -103,11 +103,13 @@ proptest! {
         let leading_traversal = format!("../{raw}");
         let trailing_traversal = format!("{raw}/..");
         let backslashed = format!("{raw}\\x");
+        let drive_prefixed = format!("C:/{raw}");
         prop_assert!(VaultPath::new(&absolute).is_err());
         prop_assert!(VaultPath::new(&trailing).is_err());
         prop_assert!(VaultPath::new(&doubled).is_err());
         prop_assert!(VaultPath::new(&leading_traversal).is_err());
         prop_assert!(VaultPath::new(&trailing_traversal).is_err());
         prop_assert!(VaultPath::new(&backslashed).is_err());
+        prop_assert!(VaultPath::new(&drive_prefixed).is_err());
     }
 }

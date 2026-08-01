@@ -1,3 +1,4 @@
+import { STRINGS } from "../../../src/lib/strings";
 import {
   defaultTaskStatuses,
   normalizeTaskStatuses,
@@ -15,28 +16,62 @@ export type SettingsDocument = SettingsDoc;
 
 const SETTINGS_KEY = "skribeum.demo.settings";
 const DEFAULT_SETTINGS: SettingsDocument = {
-  schema_version: 1,
+  schema_version: 2,
   theme: "system",
   light_palette: "manuscript",
   dark_palette: "lamplight",
+  prose_font: "serif",
+  code_font: "modern",
   editor_font_size: 16,
-  editor_reading_measure: 72,
+  editor_line_height: 170,
+  editor_line_width: 72,
+  show_line_numbers: false,
+  animations: true,
+  autosave_delay_ms: 400,
+  spell_check: true,
+  indent_style: "spaces",
+  indent_width: 2,
+  wrap_long_lines: true,
+  show_invisible_characters: false,
+  reveal_markdown_syntax: true,
+  default_note_folder: "",
+  attachment_folder_mode: "vault",
+  attachment_folder_path: "attachments",
+  honor_obsidian_config: true,
   search_result_limit: 50,
   link_previews: true,
+  search_note_bodies: true,
+  search_case_sensitive: false,
+  update_channel: "stable",
   task_statuses: defaultTaskStatuses(),
 };
 const THEMES = new Set(["system", "light", "dark"]);
 const LIGHT_PALETTES = new Set(["manuscript", "studio", "gazette"]);
 const DARK_PALETTES = new Set(["lamplight", "graphite", "signal"]);
+const PROSE_FONTS = new Set(["serif", "sans"]);
+const CODE_FONTS = new Set(["modern", "classic"]);
 const FONT_SIZE_RANGE = [8, 40] as const;
-const READING_MEASURE_RANGE = [45, 120] as const;
+const LINE_HEIGHT_RANGE = [120, 220] as const;
+const LINE_WIDTH_RANGE = [45, 120] as const;
+const AUTOSAVE_DELAY_RANGE = [100, 10_000] as const;
+const INDENT_STYLES = new Set(["spaces", "tabs"]);
+const INDENT_WIDTH_RANGE = [1, 8] as const;
+const ATTACHMENT_FOLDER_MODES = new Set(["vault", "note", "folder"]);
 const RESULT_LIMIT_RANGE = [1, 1000] as const;
+const UPDATE_CHANNELS = new Set(["stable", "beta"]);
+const EXCLUDED_VAULT_DIRECTORIES = new Set([
+  ".git",
+  ".obsidian",
+  ".skribeum",
+  ".stfolder",
+  ".stversions",
+  ".tmp.drivedownload",
+]);
 const encoder = new TextEncoder();
 
-function queryTerms(query: string): string[] {
-  return [
-    ...new Set(query.toLocaleLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? []),
-  ];
+function queryTerms(query: string, caseSensitive: boolean): string[] {
+  const source = caseSensitive ? query : query.toLocaleLowerCase();
+  return [...new Set(source.match(/[\p{L}\p{N}_-]+/gu) ?? [])];
 }
 
 function byteOffset(text: string, characterOffset: number): number {
@@ -72,8 +107,10 @@ export async function searchQuery(
   handle: VaultHandle,
   query: string,
   limit: number,
+  searchNoteBodies = true,
+  caseSensitive = false,
 ): Promise<SearchResult[]> {
-  const terms = queryTerms(query);
+  const terms = queryTerms(query, caseSensitive);
   if (terms.length === 0 || limit <= 0) {
     return [];
   }
@@ -85,10 +122,12 @@ export async function searchQuery(
     }
     const path = entry.path;
     const text = (await readNote(handle, path)).text;
-    const folded = text.toLocaleLowerCase();
+    const title = path.split("/").at(-1)?.replace(/\.md$/i, "") ?? path;
+    const source = searchNoteBodies ? `${title}\n${text}` : title;
+    const searchable = caseSensitive ? source : source.toLocaleLowerCase();
     const matches = terms
       .map((term) => {
-        const start = folded.indexOf(term);
+        const start = searchable.indexOf(term);
         return start < 0 ? null : { start, end: start + term.length };
       })
       .filter(
@@ -101,8 +140,8 @@ export async function searchQuery(
     const firstPosition = matches[0]?.start ?? Number.MAX_SAFE_INTEGER;
     results.push({
       path,
-      title: path.split("/").at(-1)?.replace(/\.md$/i, "") ?? path,
-      ...snippetFor(text, matches),
+      title,
+      ...snippetFor(source, matches),
       score: 1 / (1 + firstPosition),
       firstPosition,
     });
@@ -118,6 +157,12 @@ export async function searchQuery(
     .map(({ firstPosition: _firstPosition, ...result }) => result);
 }
 
+export async function updateCheck(
+  _channel: string,
+): Promise<{ kind: "current" }> {
+  return { kind: "current" };
+}
+
 function integerInRange(
   value: unknown,
   [minimum, maximum]: readonly [number, number],
@@ -130,41 +175,148 @@ function integerInRange(
   );
 }
 
+function choice(
+  value: unknown,
+  choices: ReadonlySet<string>,
+  fallback: string,
+): string {
+  return typeof value === "string" && choices.has(value) ? value : fallback;
+}
+
+function folder(value: unknown, allowEmpty: boolean, fallback: string): string {
+  if (typeof value !== "string" || !isSafeVaultFolder(value, allowEmpty)) {
+    return fallback;
+  }
+  return value;
+}
+
+function isSafeVaultFolder(value: string, allowEmpty: boolean): boolean {
+  if (value === "") {
+    return allowEmpty;
+  }
+  const segments = value.split("/");
+  return (
+    !value.startsWith("/") &&
+    !value.includes(":") &&
+    !value.includes("\\") &&
+    !value.includes("\0") &&
+    segments.every(
+      (segment) =>
+        segment !== "" &&
+        segment !== "." &&
+        segment !== ".." &&
+        !EXCLUDED_VAULT_DIRECTORIES.has(segment),
+    )
+  );
+}
+
 function normalizeSettings(value: unknown): SettingsDocument {
   const candidate =
     typeof value === "object" && value !== null
-      ? (value as Partial<SettingsDocument>)
+      ? (value as Record<string, unknown>)
       : {};
   return {
     schema_version: integerInRange(candidate.schema_version, [0, 0xffffffff])
       ? candidate.schema_version
       : DEFAULT_SETTINGS.schema_version,
-    theme:
-      typeof candidate.theme === "string" && THEMES.has(candidate.theme)
-        ? candidate.theme
-        : DEFAULT_SETTINGS.theme,
-    light_palette:
-      typeof candidate.light_palette === "string" &&
-      LIGHT_PALETTES.has(candidate.light_palette)
-        ? candidate.light_palette
-        : DEFAULT_SETTINGS.light_palette,
-    dark_palette:
-      typeof candidate.dark_palette === "string" &&
-      DARK_PALETTES.has(candidate.dark_palette)
-        ? candidate.dark_palette
-        : DEFAULT_SETTINGS.dark_palette,
+    theme: choice(candidate.theme, THEMES, DEFAULT_SETTINGS.theme),
+    light_palette: choice(
+      candidate.light_palette,
+      LIGHT_PALETTES,
+      DEFAULT_SETTINGS.light_palette,
+    ),
+    dark_palette: choice(
+      candidate.dark_palette,
+      DARK_PALETTES,
+      DEFAULT_SETTINGS.dark_palette,
+    ),
+    prose_font: choice(
+      candidate.prose_font,
+      PROSE_FONTS,
+      DEFAULT_SETTINGS.prose_font,
+    ),
+    code_font: choice(
+      candidate.code_font,
+      CODE_FONTS,
+      DEFAULT_SETTINGS.code_font,
+    ),
     editor_font_size: integerInRange(
       candidate.editor_font_size,
       FONT_SIZE_RANGE,
     )
       ? candidate.editor_font_size
       : DEFAULT_SETTINGS.editor_font_size,
-    editor_reading_measure: integerInRange(
-      candidate.editor_reading_measure,
-      READING_MEASURE_RANGE,
+    editor_line_height: integerInRange(
+      candidate.editor_line_height,
+      LINE_HEIGHT_RANGE,
     )
-      ? candidate.editor_reading_measure
-      : DEFAULT_SETTINGS.editor_reading_measure,
+      ? candidate.editor_line_height
+      : DEFAULT_SETTINGS.editor_line_height,
+    editor_line_width: integerInRange(
+      candidate.editor_line_width,
+      LINE_WIDTH_RANGE,
+    )
+      ? candidate.editor_line_width
+      : integerInRange(candidate.editor_reading_measure, LINE_WIDTH_RANGE)
+        ? candidate.editor_reading_measure
+        : DEFAULT_SETTINGS.editor_line_width,
+    show_line_numbers:
+      typeof candidate.show_line_numbers === "boolean"
+        ? candidate.show_line_numbers
+        : DEFAULT_SETTINGS.show_line_numbers,
+    animations:
+      typeof candidate.animations === "boolean"
+        ? candidate.animations
+        : DEFAULT_SETTINGS.animations,
+    autosave_delay_ms: integerInRange(
+      candidate.autosave_delay_ms,
+      AUTOSAVE_DELAY_RANGE,
+    )
+      ? candidate.autosave_delay_ms
+      : DEFAULT_SETTINGS.autosave_delay_ms,
+    spell_check:
+      typeof candidate.spell_check === "boolean"
+        ? candidate.spell_check
+        : DEFAULT_SETTINGS.spell_check,
+    indent_style: choice(
+      candidate.indent_style,
+      INDENT_STYLES,
+      DEFAULT_SETTINGS.indent_style,
+    ),
+    indent_width: integerInRange(candidate.indent_width, INDENT_WIDTH_RANGE)
+      ? candidate.indent_width
+      : DEFAULT_SETTINGS.indent_width,
+    wrap_long_lines:
+      typeof candidate.wrap_long_lines === "boolean"
+        ? candidate.wrap_long_lines
+        : DEFAULT_SETTINGS.wrap_long_lines,
+    show_invisible_characters:
+      typeof candidate.show_invisible_characters === "boolean"
+        ? candidate.show_invisible_characters
+        : DEFAULT_SETTINGS.show_invisible_characters,
+    reveal_markdown_syntax:
+      typeof candidate.reveal_markdown_syntax === "boolean"
+        ? candidate.reveal_markdown_syntax
+        : DEFAULT_SETTINGS.reveal_markdown_syntax,
+    default_note_folder: folder(
+      candidate.default_note_folder,
+      true,
+      DEFAULT_SETTINGS.default_note_folder,
+    ),
+    attachment_folder_mode: choice(
+      candidate.attachment_folder_mode,
+      ATTACHMENT_FOLDER_MODES,
+      DEFAULT_SETTINGS.attachment_folder_mode,
+    ),
+    attachment_folder_path: folder(
+      candidate.attachment_folder_path,
+      false,
+      DEFAULT_SETTINGS.attachment_folder_path,
+    ),
+    honor_obsidian_config:
+      typeof candidate.honor_obsidian_config === "boolean"
+        ? candidate.honor_obsidian_config
+        : DEFAULT_SETTINGS.honor_obsidian_config,
     search_result_limit: integerInRange(
       candidate.search_result_limit,
       RESULT_LIMIT_RANGE,
@@ -175,37 +327,102 @@ function normalizeSettings(value: unknown): SettingsDocument {
       typeof candidate.link_previews === "boolean"
         ? candidate.link_previews
         : DEFAULT_SETTINGS.link_previews,
+    search_note_bodies:
+      typeof candidate.search_note_bodies === "boolean"
+        ? candidate.search_note_bodies
+        : DEFAULT_SETTINGS.search_note_bodies,
+    search_case_sensitive:
+      typeof candidate.search_case_sensitive === "boolean"
+        ? candidate.search_case_sensitive
+        : DEFAULT_SETTINGS.search_case_sensitive,
+    update_channel: choice(
+      candidate.update_channel,
+      UPDATE_CHANNELS,
+      DEFAULT_SETTINGS.update_channel,
+    ),
     task_statuses: normalizeTaskStatuses(candidate.task_statuses),
   };
 }
 
 function validateSettings(doc: SettingsDocument): void {
-  if (!THEMES.has(doc.theme)) {
-    throw new Error("settings value out of range: theme");
+  validateRange("schema_version", doc.schema_version, [0, 0xffffffff]);
+  validateChoice("theme", doc.theme, THEMES);
+  validateChoice("light_palette", doc.light_palette, LIGHT_PALETTES);
+  validateChoice("dark_palette", doc.dark_palette, DARK_PALETTES);
+  validateChoice("prose_font", doc.prose_font, PROSE_FONTS);
+  validateChoice("code_font", doc.code_font, CODE_FONTS);
+  validateRange("editor_font_size", doc.editor_font_size, FONT_SIZE_RANGE);
+  validateRange(
+    "editor_line_height",
+    doc.editor_line_height,
+    LINE_HEIGHT_RANGE,
+  );
+  validateRange("editor_line_width", doc.editor_line_width, LINE_WIDTH_RANGE);
+  validateBoolean("show_line_numbers", doc.show_line_numbers);
+  validateBoolean("animations", doc.animations);
+  validateRange(
+    "autosave_delay_ms",
+    doc.autosave_delay_ms,
+    AUTOSAVE_DELAY_RANGE,
+  );
+  validateBoolean("spell_check", doc.spell_check);
+  validateChoice("indent_style", doc.indent_style, INDENT_STYLES);
+  validateRange("indent_width", doc.indent_width, INDENT_WIDTH_RANGE);
+  validateBoolean("wrap_long_lines", doc.wrap_long_lines);
+  validateBoolean("show_invisible_characters", doc.show_invisible_characters);
+  validateBoolean("reveal_markdown_syntax", doc.reveal_markdown_syntax);
+  if (!isSafeVaultFolder(doc.default_note_folder, true)) {
+    throw new Error("settings value out of range: default_note_folder");
   }
-  if (!LIGHT_PALETTES.has(doc.light_palette)) {
-    throw new Error("settings value out of range: light_palette");
+  validateChoice(
+    "attachment_folder_mode",
+    doc.attachment_folder_mode,
+    ATTACHMENT_FOLDER_MODES,
+  );
+  if (!isSafeVaultFolder(doc.attachment_folder_path, false)) {
+    throw new Error("settings value out of range: attachment_folder_path");
   }
-  if (!DARK_PALETTES.has(doc.dark_palette)) {
-    throw new Error("settings value out of range: dark_palette");
-  }
-  if (!integerInRange(doc.editor_font_size, FONT_SIZE_RANGE)) {
-    throw new Error("settings value out of range: editor_font_size");
-  }
-  if (!integerInRange(doc.editor_reading_measure, READING_MEASURE_RANGE)) {
-    throw new Error("settings value out of range: editor_reading_measure");
-  }
-  if (!integerInRange(doc.search_result_limit, RESULT_LIMIT_RANGE)) {
-    throw new Error("settings value out of range: search_result_limit");
-  }
-  if (typeof doc.link_previews !== "boolean") {
-    throw new Error("settings value out of range: link_previews");
-  }
+  validateBoolean("honor_obsidian_config", doc.honor_obsidian_config);
+  validateRange(
+    "search_result_limit",
+    doc.search_result_limit,
+    RESULT_LIMIT_RANGE,
+  );
+  validateBoolean("search_note_bodies", doc.search_note_bodies);
+  validateBoolean("search_case_sensitive", doc.search_case_sensitive);
+  validateChoice("update_channel", doc.update_channel, UPDATE_CHANNELS);
+  validateBoolean("link_previews", doc.link_previews);
   if (
     JSON.stringify(normalizeTaskStatuses(doc.task_statuses)) !==
     JSON.stringify(doc.task_statuses)
   ) {
     throw new Error("settings value out of range: task_statuses");
+  }
+}
+
+function validateBoolean(name: string, value: boolean): void {
+  if (typeof value !== "boolean") {
+    throw new Error(`settings value out of range: ${name}`);
+  }
+}
+
+function validateChoice(
+  name: string,
+  value: string,
+  choices: ReadonlySet<string>,
+): void {
+  if (!choices.has(value)) {
+    throw new Error(`settings value out of range: ${name}`);
+  }
+}
+
+function validateRange(
+  name: string,
+  value: number,
+  range: readonly [number, number],
+): void {
+  if (!integerInRange(value, range)) {
+    throw new Error(`settings value out of range: ${name}`);
   }
 }
 
@@ -222,9 +439,34 @@ export async function settingsRead(): Promise<SettingsDocument> {
   }
 }
 
+export async function settingsPath(): Promise<string> {
+  throw new Error(STRINGS.settingsDesktopUnavailableShort);
+}
+
 export async function settingsWrite(doc: SettingsDocument): Promise<void> {
   validateSettings(doc);
-  globalThis.localStorage?.setItem(SETTINGS_KEY, JSON.stringify(doc));
+  const stored = globalThis.localStorage?.getItem(SETTINGS_KEY);
+  let preserved: Record<string, unknown> = {};
+  if (stored !== null && stored !== undefined) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stored);
+    } catch {
+      throw new Error("settings document is not valid JSON");
+    }
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error("settings document is not a JSON object");
+    }
+    preserved = parsed as Record<string, unknown>;
+  }
+  globalThis.localStorage?.setItem(
+    SETTINGS_KEY,
+    JSON.stringify({ ...preserved, ...doc }),
+  );
 }
 
 export async function vaultTreeRefresh(

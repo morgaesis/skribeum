@@ -841,12 +841,10 @@ function dynamicAttributes(
       };
     }
     case "callout-type": {
-      const blockquote =
-        node.name === "Blockquote"
-          ? node
-          : node.name === "CalloutMark"
-            ? (node.parent?.parent ?? null)
-            : null;
+      let blockquote: SyntaxNode | null = node;
+      while (blockquote !== null && blockquote.name !== "Blockquote") {
+        blockquote = blockquote.parent;
+      }
       if (blockquote === null || blockquote.name !== "Blockquote") {
         return node.name === "Blockquote" ? {} : null;
       }

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
@@ -11,6 +11,7 @@ import {
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_NAME,
   RENDERING_NOTE_NAME,
+  REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
   VISUAL_NOTE_CONTENT,
@@ -755,6 +756,10 @@ describe("skribeum shell", () => {
   });
 
   it("maps_callout_clicks_to_one_source_reveal_region", async () => {
+    writeFileSync(
+      path.join(SCRATCH_VAULT_PATH, REVEAL_NOTE_NAME),
+      REVEAL_NOTE_CONTENT,
+    );
     await browser.keys([modifierKey, "o"]);
     const quickSwitcher = $('[role="combobox"]');
     await quickSwitcher.waitForExist({ timeout: 10000 });
@@ -836,6 +841,13 @@ describe("skribeum shell", () => {
     expect(cursor.line).toBe("[Outside link](outside-target)");
     expect(cursor.offset).toBeGreaterThanOrEqual(0);
     expect(cursor.offset).toBeLessThanOrEqual(30);
+
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("body text here"),
+      { timeout: 10000 },
+    );
+    rmSync(path.join(SCRATCH_VAULT_PATH, REVEAL_NOTE_NAME));
   });
 
   it("surfaces_and_dismisses_the_note_removed_banner_by_keyboard", async () => {

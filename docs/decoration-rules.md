@@ -112,7 +112,9 @@ above. `-` means the row applies to every node of that name.
 | `FencedCode` | `codeInfo=mermaid` | `widget mermaid-diagram` | cursor-inside |
 | `Blockquote` | `revealScope=node revealDescendants` | `line cm-skr-rich-callout` | cursor-inside |
 | `Blockquote` | `-` | `line cm-skr-blockquote` | never |
+| `QuoteMark` | `ancestor=Blockquote` | `hide` | never |
 | `QuoteMark` | `-` | `mark cm-skr-quote-mark` | never |
+| `CalloutMark` | `ancestor=Blockquote` | `hide` | never |
 | `CalloutMark` | `ancestor=Blockquote` | `mark cm-skr-callout-mark` | never |
 | `CalloutMark` | `ancestor=Blockquote` | `widget callout-icon` | never |
 | `CalloutType` | `ancestor=Blockquote` | `mark cm-skr-callout-type` | never |

@@ -177,7 +177,8 @@ describe("rendered decoration DOM", () => {
     expect(titleLine?.getAttribute("data-callout-canonical")).toBe("question");
     expect(titleLine?.getAttribute("data-accent")).toBe("yellow");
     expect(titleLine?.querySelector("svg.cm-skr-callout-icon")).not.toBeNull();
-    expect(titleLine?.textContent).toContain("[!faq]- Need help");
+    expect(titleLine?.textContent).toContain("Need help");
+    expect(titleLine?.textContent).not.toContain("[!faq]");
     expect(view.dom.querySelector(".cm-skr-strong")?.textContent).toContain(
       "Rendered answer",
     );

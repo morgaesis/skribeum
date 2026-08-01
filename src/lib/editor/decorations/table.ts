@@ -350,8 +350,22 @@ const quoteRows: DecorationRule[] = [
   },
   {
     node: "QuoteMark",
+    ancestor: "Blockquote",
+    presentation: { present: "hide" },
+    reveal: "never",
+    dynamic: "callout-type",
+  },
+  {
+    node: "QuoteMark",
     presentation: { present: "mark", class: "cm-skr-quote-mark" },
     reveal: "never",
+  },
+  {
+    node: "CalloutMark",
+    ancestor: "Blockquote",
+    presentation: { present: "hide" },
+    reveal: "never",
+    dynamic: "callout-type",
   },
   {
     node: "CalloutMark",

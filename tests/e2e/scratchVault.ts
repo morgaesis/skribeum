@@ -140,10 +140,6 @@ export function createScratchVault(): void {
     VISUAL_NOTE_CONTENT,
   );
   writeFileSync(
-    path.join(SCRATCH_VAULT_PATH, REVEAL_NOTE_NAME),
-    REVEAL_NOTE_CONTENT,
-  );
-  writeFileSync(
     path.join(SCRATCH_VAULT_PATH, CANVAS_FILE_NAME),
     CANVAS_FILE_CONTENT,
   );

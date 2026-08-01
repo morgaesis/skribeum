@@ -1,5 +1,6 @@
 import { flushSync, mount, unmount } from "svelte";
 import { describe, expect, it, vi } from "vitest";
+import { SETTINGS_DESCRIPTORS } from "../../src/lib/features/settingsCatalog";
 import {
   DEFAULT_SETTINGS,
   type SettingsState,
@@ -48,7 +49,7 @@ function settingsState(): SettingsState {
   };
 }
 
-function renderSettings() {
+function renderSettings(targetSetting: string | null = null) {
   const updates: Partial<SettingsDocument>[] = [];
   const component = mount(SettingsView, {
     target: document.body,
@@ -56,6 +57,7 @@ function renderSettings() {
       settings: settingsState(),
       onUpdate: (patch: Partial<SettingsDocument>) => updates.push(patch),
       onClose: vi.fn(),
+      targetSetting,
     },
   });
   flushSync();
@@ -84,6 +86,55 @@ function openSection(label: string) {
 }
 
 describe("task status settings", () => {
+  it("renders one stable target row for every registered setting action", async () => {
+    const { component } = renderSettings();
+    const rowIds = [
+      ...document.querySelectorAll<HTMLElement>("[data-setting-id]"),
+    ].map((row) => row.dataset.settingId);
+    expect(new Set(rowIds)).toEqual(
+      new Set(SETTINGS_DESCRIPTORS.map((setting) => setting.id)),
+    );
+    expect(rowIds).toHaveLength(SETTINGS_DESCRIPTORS.length);
+    await unmount(component);
+  });
+
+  it("focuses a registered setting target without changing its value", async () => {
+    const initial = settingsState().document.editor_line_width;
+    const { component, updates } = renderSettings("appearance.line-width");
+    await vi.waitFor(() => {
+      expect(
+        document.activeElement?.closest<HTMLElement>("[data-setting-id]")
+          ?.dataset.settingId,
+      ).toBe("appearance.line-width");
+    });
+    expect(updates).toEqual([]);
+    expect(
+      document.querySelector<HTMLInputElement>(
+        '[data-testid="settings-line-width"]',
+      )?.value,
+    ).toBe(String(initial));
+    await unmount(component);
+  });
+
+  it("focuses the target row when its desktop control is unavailable", async () => {
+    const component = mount(SettingsView, {
+      target: document.body,
+      props: {
+        settings: settingsState(),
+        onUpdate: vi.fn(),
+        onClose: vi.fn(),
+        desktopAvailable: false,
+        targetSetting: "files.default-note-folder",
+      },
+    });
+    await vi.waitFor(() => {
+      expect(document.activeElement?.dataset.settingId).toBe(
+        "files.default-note-folder",
+      );
+    });
+    await unmount(component);
+  });
+
   it("reopens the section menu after a jump", async () => {
     const { component } = renderSettings();
     const jump = document.querySelector<HTMLButtonElement>(

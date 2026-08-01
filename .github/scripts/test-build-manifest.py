@@ -59,6 +59,8 @@ def main() -> int:
             [
                 sys.executable,
                 str(BUNDLE_SIGNATURES),
+                "--version",
+                fixture["version"],
                 "--directory",
                 str(legacy),
                 "--version",

@@ -121,7 +121,7 @@ const capabilities: TauriCapabilities[] = [
 
 export const config: WebdriverIO.Config = {
   runner: "local",
-  specs: [path.join(configDirectory, "smoke.spec.ts")],
+  specs: [path.join(configDirectory, "*.spec.ts")],
   maxInstances: 1,
   // The embedded driver provider is the @wdio/tauri-service default: the app
   // itself serves WebDriver via tauri-plugin-wdio-webdriver, so no external

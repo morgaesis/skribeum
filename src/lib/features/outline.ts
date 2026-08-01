@@ -93,3 +93,16 @@ export function flattenOutline(
   }
   return rows;
 }
+
+/** Returns the nearest heading at or before a document position. */
+export function headingAtOrBefore(
+  entries: readonly OutlineEntry[],
+  position: number,
+): OutlineEntry | null {
+  let nearest: OutlineEntry | null = null;
+  for (const row of flattenOutline(entries, new Set())) {
+    if (row.entry.from > position) break;
+    nearest = row.entry;
+  }
+  return nearest;
+}

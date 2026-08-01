@@ -57,6 +57,7 @@ function context(): CommandContext {
     view: activeView ?? null,
     openNote: () => Promise.resolve(),
     openView: () => {},
+    openCommandSurface: () => {},
     toggleView: () => {},
     closeSurfaces: () => {},
     requestSave: () => {},

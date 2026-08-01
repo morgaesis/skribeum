@@ -202,6 +202,7 @@ function registryExtensions(): Extension[] {
       openNote: () => Promise.resolve(),
       createNote: () => Promise.resolve(),
       openView: () => {},
+      openCommandSurface: () => {},
       toggleView: () => {},
       closeSurfaces: () => {},
       requestSave: () => {

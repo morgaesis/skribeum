@@ -10,6 +10,10 @@ import {
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
 import { createAppRegistry } from "../../src/lib/features";
 import {
+  browserLinkForAddress,
+  desktopLinkForAddress,
+} from "../../src/lib/features/copyLinks";
+import {
   createNoteNavigator,
   type FollowWikilinkOptions,
   followWikilinkUnderCursor,
@@ -17,7 +21,7 @@ import {
   noteFragmentPosition,
   urlForNoteAddress,
 } from "../../src/lib/features/navigation";
-import { paletteItems } from "../../src/lib/features/pickers";
+import { commandItems } from "../../src/lib/features/pickers";
 import { type CommandContext, editorKeymap } from "../../src/lib/registry";
 import { STRINGS } from "../../src/lib/strings";
 
@@ -249,6 +253,7 @@ describe("wikilink keyboard navigation", () => {
         view,
         openNote: () => Promise.resolve(),
         openView: () => {},
+        openCommandSurface: () => {},
         toggleView: () => {},
         closeSurfaces: () => {},
         requestSave: () => {},
@@ -297,8 +302,8 @@ describe("wikilink keyboard navigation", () => {
   it("shows the cross-platform follow binding in the palette", () => {
     const registry = createAppRegistry();
     const command = registry.command("navigation.follow-link");
-    const item = paletteItems(registry, "Follow link", false).find(
-      (candidate) => candidate.id === "navigation.follow-link",
+    const item = commandItems(registry, "Follow link", false).find(
+      (candidate) => candidate.value === "navigation.follow-link",
     );
 
     expect(command?.keybindings).toEqual(["Mod-Enter", "Enter"]);
@@ -307,6 +312,33 @@ describe("wikilink keyboard navigation", () => {
 });
 
 describe("note addressing and desktop history", () => {
+  it("generates browser URLs and configured desktop note links", () => {
+    const address = { path: "notes/Target note.md", fragment: "Details" };
+    expect(
+      browserLinkForAddress(address, new URL("https://example.test/skribeum/")),
+    ).toBe(
+      "https://example.test/skribeum/?note=notes%2FTarget+note.md#Details",
+    );
+    const context = {
+      paths: ["source.md", "notes/Target note.md"],
+      currentPath: "source.md",
+      config: {
+        newLinkFormat: "shortest" as const,
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+    };
+    expect(desktopLinkForAddress(address, context)).toBe(
+      "[[Target note#Details]]",
+    );
+    expect(
+      desktopLinkForAddress(address, {
+        ...context,
+        config: { ...context.config, useMarkdownLinks: true },
+      }),
+    ).toBe("[Details](Target%20note#Details)");
+  });
+
   it("round-trips encoded browser paths and fragments", () => {
     const address = {
       path: "notes/Café & tea.md",

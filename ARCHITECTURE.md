@@ -105,18 +105,22 @@ navigation keys, the find panel's Escape) coexist on common keys. A CI
 check sweeps the source tree for key wiring outside the registry
 module: any occurrence must be a documented ARIA-pattern-internal
 widget key (a combobox's arrows, a tree's roving tabindex) held in a
-committed allowlist, and a runtime assertion pins the palette and slash
+committed allowlist, and a runtime assertion pins the command and slash
 listings to exactly the registry's contents.
 
-Registered on this surface: the command palette and quick switcher
-(fuzzy-filtered ARIA comboboxes), ranked vault search (debounced
-`search_query`, snippets highlighted by byte ranges rendered as text
-segments, never injected markup), in-note find and replace over
+Registered on this surface: one prefix-routed command surface with isolated
+file, command and setting, tag, and note-text result builders. Note-text mode
+uses debounced `search_query` calls with snippets highlighted by byte ranges
+rendered as text segments, never injected markup. Each settings action targets
+a stable row identifier that the settings pane aligns and focuses. Note and
+heading link commands share browser URL and desktop configured-link generators.
+Other registered features include in-note find and replace over
 `@codemirror/search` with a custom match-counting panel, the heading
 outline (an ARIA tree over the syntax tree, navigation only), the
 settings view (optimistic updates over `settings_read`/`settings_write`
 with revert on failure), inline formatting toggles behind the selection
-toolbar, content insertions behind the slash menu, and table editing.
+toolbar with registry-derived tooltips, content insertions behind the slash
+menu, and table editing.
 Table operations (row and column insertion, cell navigation growth) are
 pure functions over the table block that return declared spans, the
 structural change composed with the formatting pass that re-pads other

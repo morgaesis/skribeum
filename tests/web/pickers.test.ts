@@ -4,11 +4,16 @@
 // extraction used to open a result at its match.
 
 import { describe, expect, it } from "vitest";
+import { createAppRegistry } from "../../src/lib/features";
 import {
+  appendBareDiscoveryItems,
+  commandItems,
+  fileItems,
   firstMatchText,
-  quickSwitcherItems,
+  parsePickerQuery,
   searchResultItems,
   segmentByCharRanges,
+  tagItems,
 } from "../../src/lib/features/pickers";
 import { byteRangesToCharRanges } from "../../src/lib/ipc/services";
 
@@ -19,43 +24,106 @@ const PATHS = [
   "beta-plan.md",
 ];
 
-describe("quick switcher ranking", () => {
-  it("lists recents first on an empty query, then the rest sorted", () => {
-    const items = quickSwitcherItems(
+describe("unified command surface modes", () => {
+  it("parses ordinary prefixes and returns to file mode without one", () => {
+    expect(parsePickerQuery("notes")).toEqual({ mode: "file", query: "notes" });
+    expect(parsePickerQuery(">copy")).toEqual({
+      mode: "command",
+      query: "copy",
+    });
+    expect(parsePickerQuery("#work")).toEqual({ mode: "tag", query: "work" });
+    expect(parsePickerQuery("?cedar")).toEqual({
+      mode: "text",
+      query: "cedar",
+    });
+  });
+
+  it("groups open notes, recents, and the rest of the vault", () => {
+    const items = fileItems(
       PATHS,
       ["journal/2026-01-01.md", "notes/beta.md"],
+      ["notes/alpha.md"],
       "",
     );
-    expect(items.map((item) => item.id)).toEqual([
+    expect(items.map((item) => item.value)).toEqual([
+      "notes/alpha.md",
       "journal/2026-01-01.md",
       "notes/beta.md",
       "beta-plan.md",
-      "notes/alpha.md",
+    ]);
+    expect(items.map((item) => item.group)).toEqual([
+      "Open notes",
+      "Recent",
+      "Recent",
+      "Vault",
     ]);
   });
 
   it("ignores recents that left the vault", () => {
-    const items = quickSwitcherItems(PATHS, ["gone.md"], "");
-    expect(items.map((item) => item.id)).not.toContain("gone.md");
+    const items = fileItems(PATHS, ["gone.md"], [], "");
+    expect(items.map((item) => item.value)).not.toContain("gone.md");
   });
 
-  it("fuzzy-filters with a recency bonus on ties", () => {
-    const items = quickSwitcherItems(PATHS, ["notes/beta.md"], "beta");
-    expect(items[0]?.id).toBe("notes/beta.md");
-    expect(items.map((item) => item.id)).toContain("beta-plan.md");
-    expect(items.map((item) => item.id)).not.toContain("notes/alpha.md");
+  it("fuzzy-filters within groups and offers note-text search", () => {
+    const items = fileItems(PATHS, ["notes/beta.md"], [], "beta");
+    expect(items[0]?.value).toBe("notes/beta.md");
+    expect(items.map((item) => item.value)).toContain("beta-plan.md");
+    expect(items.map((item) => item.value)).not.toContain("notes/alpha.md");
+    expect(items.at(-1)?.id).toBe("text-search:beta");
   });
 
   it("returns highlight segments that reassemble the path", () => {
-    const items = quickSwitcherItems(PATHS, [], "alpha");
+    const items = fileItems(PATHS, [], [], "alpha");
     const first = items[0];
-    expect(first?.id).toBe("notes/alpha.md");
+    expect(first?.value).toBe("notes/alpha.md");
     expect(first?.titleSegments.map((segment) => segment.text).join("")).toBe(
-      "notes/alpha.md",
+      "alpha",
     );
     expect(first?.titleSegments.some((segment) => segment.highlighted)).toBe(
       true,
     );
+  });
+
+  it("searches setting descriptions without blending other modes", () => {
+    const items = commandItems(createAppRegistry(), "line width", false);
+    expect(items[0]?.value).toBe("setting.appearance.line-width");
+    expect(new Set(items.map((item) => item.kind))).toEqual(
+      new Set(["command"]),
+    );
+    expect(items[0]?.actionKind).toBe("setting");
+  });
+
+  it("builds only tag rows in tag mode", () => {
+    const items = tagItems(
+      [{ tag: "project/work", noteCount: 2, occurrenceCount: 4 }],
+      "work",
+    );
+    expect(items.map((item) => [item.kind, item.value])).toEqual([
+      ["tag", "project/work"],
+    ]);
+  });
+
+  it("appends bounded discovery groups to a non-empty bare query", () => {
+    const items = appendBareDiscoveryItems(
+      fileItems(PATHS, [], [], "line"),
+      commandItems(createAppRegistry(), "line", false),
+      tagItems(
+        [{ tag: "line-work", noteCount: 1, occurrenceCount: 1 }],
+        "line",
+      ),
+      "line",
+    );
+    const commandRows = items.filter(
+      (item) => item.group === "Commands and settings",
+    );
+    const tagRows = items.filter((item) => item.group === "Tags");
+    expect(commandRows).toHaveLength(3);
+    expect(commandRows.every((item) => item.kind === "command")).toBe(true);
+    expect(commandRows.every((item) => item.prefixHint === ">")).toBe(true);
+    expect(tagRows).toHaveLength(1);
+    expect(tagRows[0]).toMatchObject({ kind: "tag", prefixHint: "#" });
+    expect(items.at(-1)?.id).toBe("text-search:line");
+    expect(items.at(-1)?.group).toBeUndefined();
   });
 });
 

@@ -77,7 +77,7 @@ Cursor parking area.
     [NOTES.linkedDaily, "# 2026-07-30\n\nA linked journal entry.\n"],
     [NOTES.research, `# Long paper\n\n${paragraphs}\n\n## Evidence table\n\n| Item | Score | Source |\n| --- | ---: | --- |\n${tableRows}\n`],
     [NOTES.keyboard, "# Command surface\n\n## Navigation\n\nKeyboard-only work begins here.\n\n### Search target\n\nkeyboard-navigation-evidence\n"],
-    [NOTES.zoom, "# Zoom review\n\nDense prose checks wrapping, contrast, clipping, and focus visibility at enlarged scale.\n\n- [ ] Inspect the sidebar\n- [ ] Open the command palette\n"],
+    [NOTES.zoom, "# Zoom review\n\nDense prose checks wrapping, contrast, clipping, and focus visibility at enlarged scale.\n\n- [ ] Inspect the sidebar\n- [ ] Open the command surface\n"],
     [NOTES.interruption, "# Interrupted draft\n\nA sentence that remains unfinished"],
     [NOTES.interruptionTarget, "# Reference during interruption\n\nThe alternate note is safe to open mid-edit.\n"],
     [NOTES.deep, "# Deep migration note\n\nA note nested six levels below the vault root.\n\nfleet-search-token-deep\n"],

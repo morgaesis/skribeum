@@ -29,7 +29,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createAppRegistry } from "../../src/lib/features";
-import { paletteItems } from "../../src/lib/features/pickers";
+import { commandItems } from "../../src/lib/features/pickers";
 import { filteredSlashCommands } from "../../src/lib/features/slashMenu";
 import { parseKeybinding } from "../../src/lib/registry";
 
@@ -48,7 +48,10 @@ const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
   ["App.svelte", "window-level delegation to the registry's global handler"],
   ["lib/FileTree.svelte", "ARIA tree pattern internal navigation"],
   ["lib/OutlinePanel.svelte", "ARIA tree pattern internal navigation"],
-  ["lib/PaletteOverlay.svelte", "ARIA combobox pattern internal navigation"],
+  [
+    "lib/UnifiedCommandSurface.svelte",
+    "ARIA combobox pattern internal navigation",
+  ],
   ["lib/SettingsView.svelte", "ARIA dialog pattern internal dismissal"],
   ["lib/Sheet.svelte", "ARIA modal dialog focus trapping and dismissal"],
   [
@@ -139,9 +142,10 @@ describe("registration coverage (criterion 1)", () => {
 
   it("palette items are exactly the registry's palette commands", () => {
     const registry = createAppRegistry();
-    const listed = paletteItems(registry, "", false).map((item) => item.id);
+    const listed = commandItems(registry, "", false).map((item) => item.value);
     const registered = registry.paletteCommands().map((command) => command.id);
-    expect(listed).toEqual(registered);
+    expect(listed).toHaveLength(registered.length);
+    expect(new Set(listed)).toEqual(new Set(registered));
   });
 
   it("slash menu items are exactly the registry's slash commands", () => {

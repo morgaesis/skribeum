@@ -4,10 +4,12 @@
 
 import { CommandRegistry } from "../registry";
 import { DEFAULT_TASK_STATUSES, type TaskStatus } from "../taskStatuses";
+import { registerCopyLinks } from "./copyLinks";
 import { registerFind } from "./findPanel";
 import { registerFormatting } from "./formattingCommands";
 import { registerInsertions } from "./insertions";
 import { registerNavigation } from "./navigation";
+import { registerSettingActions } from "./settingsCatalog";
 import { registerSlashMenu } from "./slashMenu";
 import { registerSurfaces } from "./surfaces";
 import { registerTableEditing } from "./tableEditing";
@@ -20,6 +22,8 @@ export function createAppRegistry(
 ): CommandRegistry {
   const registry = new CommandRegistry();
   registerSurfaces(registry);
+  registerSettingActions(registry);
+  registerCopyLinks(registry);
   registerFind(registry);
   registerFormatting(registry);
   registerInsertions(registry);

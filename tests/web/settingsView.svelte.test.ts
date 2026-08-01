@@ -305,6 +305,44 @@ describe("settings surface", () => {
     await unmount(component);
   });
 
+  it("clears live preview before restoring the complete defaults", async () => {
+    const onPreview = vi.fn();
+    const updates: Partial<SettingsDocument>[] = [];
+    const component = mount(SettingsView, {
+      target: document.body,
+      props: {
+        settings: settingsState(),
+        onUpdate: (patch: Partial<SettingsDocument>) => updates.push(patch),
+        onPreview,
+        onClose: vi.fn(),
+      },
+    });
+    flushSync();
+    const input = document.querySelector<HTMLInputElement>(
+      '[data-testid="settings-font-size"]',
+    );
+    if (input === null) throw new Error("font size input is missing");
+    input.value = "20";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+
+    const restore = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find(({ textContent }) => textContent?.trim() === "Restore defaults");
+    if (restore === undefined) throw new Error("restore defaults is missing");
+    restore.click();
+    flushSync();
+
+    expect(onPreview).toHaveBeenLastCalledWith({
+      editor_font_size: 16,
+      editor_line_height: 170,
+      editor_line_width: 72,
+    });
+    expect(updates.at(-1)).toEqual(DEFAULT_SETTINGS);
+    expect(input.value).toBe("16");
+    await unmount(component);
+  });
+
   it("marks desktop-only controls unavailable in the browser", async () => {
     const component = mount(SettingsView, {
       target: document.body,

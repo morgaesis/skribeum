@@ -3,6 +3,7 @@ import { STRINGS } from "../../../src/lib/strings";
 import {
   defaultTaskStatuses,
   normalizeTaskStatuses,
+  validateTaskStatusDocuments,
 } from "../../../src/lib/taskStatuses";
 import type {
   SearchHit,
@@ -495,7 +496,7 @@ function validateSettings(doc: SettingsDocument): void {
   validateChoice("update_channel", doc.update_channel, UPDATE_CHANNELS);
   validateBoolean("link_previews", doc.link_previews);
   if (
-    JSON.stringify(normalizeTaskStatuses(doc.task_statuses)) !==
+    JSON.stringify(validateTaskStatusDocuments(doc.task_statuses)) !==
     JSON.stringify(doc.task_statuses)
   ) {
     throw new Error("settings value out of range: task_statuses");

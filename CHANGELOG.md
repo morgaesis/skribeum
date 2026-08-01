@@ -8,6 +8,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Restore defaults reapplies and persists the complete default settings
+  document in the browser demo.
 - Rendered Markdown tables share one source-derived column geometry across
   their header and body rows, and wide cell content wraps inside the reading
   column instead of creating an independent horizontal scroller for each row.

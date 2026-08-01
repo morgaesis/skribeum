@@ -11,6 +11,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {},
 }));
 
+import {
+  settingsRead as browserSettingsRead,
+  settingsWrite as browserSettingsWrite,
+} from "../../demo/lib/ipc/services";
 import { DEFAULT_SETTINGS } from "../../src/lib/features/settingsStore";
 import {
   searchQuery,
@@ -83,6 +87,22 @@ describe("ipc service wrappers", () => {
     invoke.mockResolvedValueOnce(null);
     await settingsWrite(doc);
     expect(invoke).toHaveBeenCalledWith("settings_write", { doc });
+  });
+
+  it("persists the complete default document in the browser", async () => {
+    localStorage.clear();
+    await expect(
+      browserSettingsWrite(DEFAULT_SETTINGS),
+    ).resolves.toBeUndefined();
+    expect(
+      JSON.parse(localStorage.getItem("skribeum.demo.settings") ?? "null"),
+    ).toEqual(DEFAULT_SETTINGS);
+    await expect(browserSettingsRead()).resolves.toMatchObject({
+      theme: "system",
+      light_palette: "manuscript",
+      dark_palette: "lamplight",
+      prose_font: "serif",
+    });
   });
 
   it("reads the resolved settings path", async () => {

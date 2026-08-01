@@ -214,6 +214,7 @@ jobs:
             --dir "$release_directory" \
             --pattern '*'
           python3 .github/scripts/bundle-signatures.py \
+            --version "${GITHUB_REF_NAME#v}" \
             --directory "$RUNNER_TEMP/updater-signatures" \
             --output "$release_directory/updater-signatures.json"
           cd "$release_directory"

@@ -1,24 +1,3 @@
-# Changelog
-
-All notable changes to Skribeum are documented in this file. The format
-follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
-project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
-
-### Added
-
-- Release notes use a human-focused summary generated from the matching
-  changelog section, deterministic structure and grounding checks, a separate
-  fabrication and voice judge, one critique-driven rewrite, and a plain
-  changelog fallback when generation is unavailable or fails validation.
-- The Release workflow supports a manual quality check for an intended tag,
-  with an optional raw changelog section override, prints the validated
-  candidate in the workflow summary, and uploads it without creating or
-  changing a release.
-
-## [0.0.6] - 2026-08-01
-
 ### Changed
 
 - Release pages use the matching version section from this changelog, publish

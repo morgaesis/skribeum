@@ -452,6 +452,38 @@ async function selectTheme(value: string) {
   );
 }
 
+async function selectSettingsChoice(selector: string, label: string) {
+  let button = $(selector);
+  await button.waitForClickable({ timeout: 10000 });
+  await button.click();
+  await browser.waitUntil(
+    async () => {
+      button = $(selector);
+      return (await button.getAttribute("aria-checked")) === "true";
+    },
+    { timeout: 10000, timeoutMsg: `${label} did not become active` },
+  );
+}
+
+async function waitForPersistedDemoSetting(field: string, value: string) {
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        ({ expectedField, expectedValue }) => {
+          const persisted = JSON.parse(
+            localStorage.getItem("skribeum.demo.settings") ?? "{}",
+          );
+          return persisted[expectedField] === expectedValue;
+        },
+        { expectedField: field, expectedValue: value },
+      ),
+    {
+      timeout: 10000,
+      timeoutMsg: `${field} did not persist as ${value}`,
+    },
+  );
+}
+
 async function applyVisualTheme(value: "light" | "dark") {
   await browser.execute((theme: string) => {
     document.documentElement.dataset.theme = theme;
@@ -2368,6 +2400,36 @@ describe("skribeum core editing surfaces", () => {
     });
   }
 
+  type PersistedAppearance = {
+    theme: string;
+    light_palette: string;
+    dark_palette: string;
+    prose_font: string;
+  };
+
+  /** Reads the persisted appearance choices through IPC. */
+  async function persistedAppearance(): Promise<PersistedAppearance | string> {
+    return browser.executeAsync<PersistedAppearance | string, []>((done) => {
+      const tauri = (
+        window as unknown as {
+          __TAURI__?: {
+            core: {
+              invoke: (name: string) => Promise<PersistedAppearance>;
+            };
+          };
+        }
+      ).__TAURI__;
+      if (tauri === undefined) {
+        done("no-global-tauri");
+        return;
+      }
+      tauri.core
+        .invoke("settings_read")
+        .then((doc) => done(doc))
+        .catch((error: unknown) => done(String(error)));
+    });
+  }
+
   /** Sets the settings font size through the open dialog's input. */
   async function setFontSizeThroughDialog(value: number) {
     // WebDriver key input does not assign a predictable value to range
@@ -2650,6 +2712,60 @@ describe("skribeum core editing surfaces", () => {
     );
   });
 
+  it("packaged_settings_restore_default_appearance_and_persist", async () => {
+    await browser.keys([modifierKey, ","]);
+    const dialog = $('[data-testid="settings-view"]');
+    await dialog.waitForExist({ timeout: 10000 });
+    await selectTheme("dark");
+    await selectSettingsChoice(
+      '[data-testid="settings-dark-palette-graphite"]',
+      "Graphite palette",
+    );
+    await selectSettingsChoice(
+      '[data-choice="prose_font-sans"]',
+      "System sans prose font",
+    );
+    await browser.waitUntil(
+      async () => {
+        const persisted = await persistedAppearance();
+        return (
+          typeof persisted !== "string" &&
+          persisted.theme === "dark" &&
+          persisted.dark_palette === "graphite" &&
+          persisted.prose_font === "sans"
+        );
+      },
+      { timeout: 10000, timeoutMsg: "appearance choices did not persist" },
+    );
+
+    await dialog.$("button=Restore defaults").click();
+    await browser.waitUntil(
+      async () => {
+        const appearance = await browser.execute(() => ({
+          theme: document.documentElement.dataset.theme,
+          lightPalette: document.documentElement.dataset.lightPalette,
+          darkPalette: document.documentElement.dataset.darkPalette,
+          proseFont: document.documentElement.dataset.proseFont,
+        }));
+        const persisted = await persistedAppearance();
+        return (
+          appearance.theme === "system" &&
+          appearance.lightPalette === "manuscript" &&
+          appearance.darkPalette === "lamplight" &&
+          appearance.proseFont === "serif" &&
+          typeof persisted !== "string" &&
+          persisted.theme === "system" &&
+          persisted.light_palette === "manuscript" &&
+          persisted.dark_palette === "lamplight" &&
+          persisted.prose_font === "serif"
+        );
+      },
+      { timeout: 10000, timeoutMsg: "packaged settings did not restore" },
+    );
+    await browser.keys(Key.Escape);
+    await dialog.waitForExist({ reverse: true, timeout: 5000 });
+  });
+
   it("renders_math_and_lazy_mermaid_with_inline_errors", async () => {
     await openNoteFromTree(RENDERING_NOTE_NAME);
     await $(".cm-skr-math-inline .katex").waitForExist({ timeout: 15000 });
@@ -2725,5 +2841,73 @@ describe("skribeum core editing surfaces", () => {
     await openNoteFromTree(CANVAS_FILE_NAME);
     await $('[data-testid="canvas-view"]').waitForExist({ timeout: 15000 });
     await expectNoAxeViolations("canvas viewer");
+  });
+
+  it("browser_demo_restores_default_appearance_and_persists", async () => {
+    const demoUrl = process.env.SKRIBEUM_E2E_DEMO_URL;
+    if (demoUrl === undefined) {
+      throw new Error("browser demo test server URL is unavailable");
+    }
+    await browser.url(demoUrl);
+    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await browser.execute(() => {
+      localStorage.removeItem("skribeum.demo.settings");
+    });
+    await browser.refresh();
+    await $(".demo-shell").waitForExist({ timeout: 15000 });
+
+    await browser.keys([modifierKey, ","]);
+    const dialog = $('[data-testid="settings-view"]');
+    await dialog.waitForExist({ timeout: 10000 });
+    await selectTheme("dark");
+    await waitForPersistedDemoSetting("theme", "dark");
+    await selectSettingsChoice(
+      '[data-testid="settings-dark-palette-graphite"]',
+      "Graphite palette",
+    );
+    await waitForPersistedDemoSetting("dark_palette", "graphite");
+    await selectSettingsChoice(
+      '[data-choice="prose_font-sans"]',
+      "System sans prose font",
+    );
+    await waitForPersistedDemoSetting("prose_font", "sans");
+    await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          const persisted = JSON.parse(
+            localStorage.getItem("skribeum.demo.settings") ?? "{}",
+          );
+          return (
+            document.documentElement.dataset.theme === "dark" &&
+            document.documentElement.dataset.darkPalette === "graphite" &&
+            document.documentElement.dataset.proseFont === "sans" &&
+            persisted.theme === "dark" &&
+            persisted.dark_palette === "graphite" &&
+            persisted.prose_font === "sans"
+          );
+        }),
+      { timeout: 10000, timeoutMsg: "browser appearance did not persist" },
+    );
+
+    await dialog.$("button=Restore defaults").click();
+    await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          const persisted = JSON.parse(
+            localStorage.getItem("skribeum.demo.settings") ?? "{}",
+          );
+          return (
+            document.documentElement.dataset.theme === "system" &&
+            document.documentElement.dataset.lightPalette === "manuscript" &&
+            document.documentElement.dataset.darkPalette === "lamplight" &&
+            document.documentElement.dataset.proseFont === "serif" &&
+            persisted.theme === "system" &&
+            persisted.light_palette === "manuscript" &&
+            persisted.dark_palette === "lamplight" &&
+            persisted.prose_font === "serif"
+          );
+        }),
+      { timeout: 10000, timeoutMsg: "browser settings did not restore" },
+    );
   });
 });

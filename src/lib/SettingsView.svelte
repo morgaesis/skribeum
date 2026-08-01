@@ -249,6 +249,7 @@ function update(patch: Partial<SettingsDocument>) {
 }
 
 function restoreDefaults() {
+  restorePreview();
   update({
     ...DEFAULT_SETTINGS,
     schema_version: documentSettings.schema_version,

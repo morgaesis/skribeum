@@ -1,3 +1,5 @@
+import { type ChildProcess, spawn } from "node:child_process";
+import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TauriCapabilities } from "@wdio/tauri-service";
@@ -9,6 +11,74 @@ import {
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(configDirectory, "../..");
+let demoServer: ChildProcess | null = null;
+
+async function availablePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    server.close();
+    throw new Error("browser demo test server did not receive a TCP port");
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error === undefined ? resolve() : reject(error)));
+  });
+  return address.port;
+}
+
+async function startDemoServer(): Promise<void> {
+  const port = await availablePort();
+  const url = `http://127.0.0.1:${port}/skribeum/`;
+  demoServer = spawn(
+    "bun",
+    [
+      "run",
+      "demo:dev",
+      "--",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--strictPort",
+    ],
+    { cwd: repositoryRoot, stdio: "ignore" },
+  );
+  process.env.SKRIBEUM_E2E_DEMO_URL = url;
+  await browserDemoReady(url);
+}
+
+async function browserDemoReady(url: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (demoServer?.exitCode !== null) {
+      throw new Error(
+        `browser demo test server exited with code ${demoServer?.exitCode}`,
+      );
+    }
+    try {
+      const response = await fetch(url);
+      if (response.ok) return;
+    } catch {
+      // The server has not bound its port yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("browser demo test server did not become ready");
+}
+
+async function stopDemoServer(): Promise<void> {
+  const server = demoServer;
+  demoServer = null;
+  if (server === null || server.exitCode !== null) return;
+  server.kill();
+  await Promise.race([
+    new Promise<void>((resolve) => server.once("close", () => resolve())),
+    new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+  ]);
+}
 
 // Both the launcher and the worker evaluate this module before any app
 // session starts, so the scratch vault exists and the seam variable is in
@@ -61,4 +131,6 @@ export const config: WebdriverIO.Config = {
     timeout: 300000,
   },
   reporters: ["spec"],
+  onPrepare: startDemoServer,
+  onComplete: stopDemoServer,
 };

@@ -4,9 +4,13 @@ import { STRINGS } from "./strings";
 
 let {
   frontmatter,
+  rawSourceVisible,
+  onRawSourceVisibleChange,
   onEditValue,
 }: {
   frontmatter: Frontmatter;
+  rawSourceVisible: boolean;
+  onRawSourceVisibleChange: (visible: boolean) => void;
   /**
    * Replaces exactly the character range `[from, to)` of the document with
    * `insert`. The panel never touches any other byte; edits flow through
@@ -14,6 +18,9 @@ let {
    */
   onEditValue: (from: number, to: number, insert: string) => void;
 } = $props();
+
+let expanded = $state(false);
+const panelContentId = "skr-properties-content";
 
 function commitScalar(entry: FrontmatterEntry, value: string) {
   if (value !== entry.raw) {
@@ -48,59 +55,261 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
 }
 </script>
 
-<section
-  class="border-b border-gray-200 bg-gray-50 px-3 py-2 text-xs"
-  aria-label={STRINGS.propertiesPanelLabel}
->
-  <dl class="m-0 grid grid-cols-[minmax(6rem,max-content)_1fr] gap-x-3 gap-y-1">
-    {#each frontmatter.entries as entry, index (index)}
-      <dt class="self-center font-medium text-gray-600">{entry.key}</dt>
-      <dd class="m-0">
-        {#if entry.type === "boolean"}
-          <input
-            type="checkbox"
-            checked={entry.raw === "true"}
-            onchange={(event) => commitBoolean(entry, inputChecked(event))}
-          />
-        {:else if entry.type === "number"}
-          <input
-            type="number"
-            class="w-32 rounded border border-gray-300 px-1 py-0.5"
-            value={entry.raw}
-            step="any"
-            onchange={(event) => commitScalar(entry, inputValue(event))}
-          />
-        {:else if entry.type === "date" && editsAsDateInput(entry)}
-          <input
-            type="date"
-            class="rounded border border-gray-300 px-1 py-0.5"
-            value={entry.raw}
-            onchange={(event) => commitScalar(entry, inputValue(event))}
-          />
-        {:else if entry.type === "list" && entry.items !== undefined}
-          <ul class="m-0 flex list-none flex-wrap gap-1 p-0">
-            {#each entry.items as item, itemIndex (itemIndex)}
-              <li>
-                <input
-                  type="text"
-                  class="rounded border border-gray-300 px-1 py-0.5"
-                  size={Math.max(item.raw.length, 4)}
-                  value={item.raw}
-                  aria-label={`${entry.key} ${STRINGS.propertiesListItemLabel} ${itemIndex + 1}`}
-                  onchange={(event) => commitListItem(item, inputValue(event))}
-                />
-              </li>
-            {/each}
-          </ul>
-        {:else}
-          <input
-            type="text"
-            class="w-full rounded border border-gray-300 px-1 py-0.5"
-            value={entry.raw}
-            onchange={(event) => commitScalar(entry, inputValue(event))}
-          />
-        {/if}
-      </dd>
-    {/each}
-  </dl>
+<section class="skr-properties" aria-label={STRINGS.propertiesPanelLabel}>
+  <div class="skr-properties-header">
+    <button
+      type="button"
+      class="skr-properties-toggle"
+      aria-expanded={expanded}
+      aria-controls={panelContentId}
+      aria-label={expanded
+        ? STRINGS.propertiesCollapse
+        : STRINGS.propertiesExpand}
+      onclick={() => (expanded = !expanded)}
+    >
+      <span class="skr-properties-chevron" aria-hidden="true"></span>
+      <span>{STRINGS.propertiesPanelTitle}</span>
+      <span class="skr-properties-count">{frontmatter.entries.length}</span>
+    </button>
+  </div>
+
+  <div class:expanded class="skr-properties-reveal">
+    <div
+      id={panelContentId}
+      class="skr-properties-content"
+      aria-hidden={!expanded}
+      inert={!expanded}
+    >
+      <div class="skr-properties-actions">
+        <button
+          type="button"
+          class="skr-raw-toggle"
+          aria-pressed={rawSourceVisible}
+          onclick={() => onRawSourceVisibleChange(!rawSourceVisible)}
+        >
+          {rawSourceVisible
+            ? STRINGS.propertiesHideRawSource
+            : STRINGS.propertiesShowRawSource}
+        </button>
+      </div>
+
+      <dl class="skr-properties-list">
+        {#each frontmatter.entries as entry, index (index)}
+          <dt>{entry.key}</dt>
+          <dd>
+            {#if entry.type === "boolean"}
+              <input
+                type="checkbox"
+                checked={entry.raw === "true"}
+                onchange={(event) => commitBoolean(entry, inputChecked(event))}
+              />
+            {:else if entry.type === "number"}
+              <input
+                type="number"
+                class="skr-property-number"
+                value={entry.raw}
+                step="any"
+                onchange={(event) => commitScalar(entry, inputValue(event))}
+              />
+            {:else if entry.type === "date" && editsAsDateInput(entry)}
+              <input
+                type="date"
+                value={entry.raw}
+                onchange={(event) => commitScalar(entry, inputValue(event))}
+              />
+            {:else if entry.type === "list" && entry.items !== undefined}
+              <ul>
+                {#each entry.items as item, itemIndex (itemIndex)}
+                  <li>
+                    <input
+                      type="text"
+                      size={Math.max(item.raw.length, 4)}
+                      value={item.raw}
+                      aria-label={`${entry.key} ${STRINGS.propertiesListItemLabel} ${itemIndex + 1}`}
+                      onchange={(event) => commitListItem(item, inputValue(event))}
+                    />
+                  </li>
+                {/each}
+              </ul>
+            {:else}
+              <input
+                type="text"
+                value={entry.raw}
+                onchange={(event) => commitScalar(entry, inputValue(event))}
+              />
+            {/if}
+          </dd>
+        {/each}
+      </dl>
+    </div>
+  </div>
 </section>
+
+<style>
+  .skr-properties {
+    flex: none;
+    border-bottom: 1px solid var(--skr-border);
+    background: var(--skr-surface-subtle);
+    color: var(--skr-text);
+    font-family: var(--skr-font-interface);
+  }
+
+  .skr-properties-header {
+    display: flex;
+    justify-content: center;
+    min-height: 2.75rem;
+    background: var(--skr-surface);
+  }
+
+  .skr-properties-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    width: min(100%, calc(var(--skr-editor-measure, 76ch) + 6rem));
+    padding: 0.65rem clamp(1.5rem, 5vw, 3rem);
+    border: 0;
+    background: transparent;
+    color: var(--skr-text);
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .skr-properties-toggle:focus-visible,
+  .skr-raw-toggle:focus-visible,
+  input:focus-visible {
+    outline: 2px solid var(--skr-focus);
+    outline-offset: 2px;
+  }
+
+  .skr-properties-chevron {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-right: 1.5px solid var(--skr-text-muted);
+    border-bottom: 1.5px solid var(--skr-text-muted);
+    transform: rotate(-45deg);
+    transition: transform 150ms ease;
+  }
+
+  .skr-properties-toggle[aria-expanded="true"] .skr-properties-chevron {
+    transform: rotate(45deg) translateY(-0.1rem);
+  }
+
+  .skr-properties-count {
+    display: inline-grid;
+    min-width: 1.5rem;
+    min-height: 1.5rem;
+    place-items: center;
+    border: 1px solid var(--skr-border);
+    border-radius: 999px;
+    color: var(--skr-text-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+
+  .skr-properties-reveal {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 160ms ease;
+  }
+
+  .skr-properties-reveal.expanded {
+    grid-template-rows: 1fr;
+  }
+
+  .skr-properties-content {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .skr-properties-actions,
+  .skr-properties-list {
+    width: min(100%, calc(var(--skr-editor-measure, 76ch) + 6rem));
+    box-sizing: border-box;
+    margin-inline: auto;
+    padding-inline: clamp(1.5rem, 5vw, 3rem);
+  }
+
+  .skr-properties-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 0.75rem;
+  }
+
+  .skr-raw-toggle {
+    padding: 0.35rem 0.65rem;
+    border: 1px solid var(--skr-border);
+    border-radius: 0.35rem;
+    background: var(--skr-surface);
+    color: var(--skr-text-muted);
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .skr-raw-toggle[aria-pressed="true"] {
+    border-color: var(--skr-accent);
+    background: var(--skr-accent-soft);
+    color: var(--skr-text);
+  }
+
+  .skr-properties-list {
+    display: grid;
+    grid-template-columns: minmax(7rem, max-content) minmax(10rem, 1fr);
+    gap: 0.55rem 1rem;
+    margin-block: 0;
+    padding-top: 0.75rem;
+    padding-bottom: 1rem;
+    font-size: 0.8rem;
+  }
+
+  dt {
+    align-self: center;
+    color: var(--skr-text-muted);
+    font-weight: 600;
+  }
+
+  dd {
+    min-width: 0;
+    margin: 0;
+  }
+
+  ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  input:not([type="checkbox"]) {
+    box-sizing: border-box;
+    max-width: 100%;
+    min-height: 1.85rem;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--skr-border);
+    border-radius: 0.35rem;
+    background: var(--skr-surface);
+    color: var(--skr-text);
+    font: inherit;
+  }
+
+  dd > input[type="text"] {
+    width: 100%;
+  }
+
+  .skr-property-number {
+    width: 8rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skr-properties-chevron,
+    .skr-properties-reveal {
+      transition: none;
+    }
+  }
+</style>

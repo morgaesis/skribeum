@@ -14,11 +14,13 @@ const SETTINGS_KEY = "skribeum.demo.settings";
 const DEFAULT_SETTINGS: SettingsDocument = {
   schema_version: 1,
   theme: "system",
-  editor_font_size: 15,
+  editor_font_size: 17,
+  editor_reading_measure: 76,
   search_result_limit: 50,
 };
 const THEMES = new Set(["system", "light", "dark"]);
 const FONT_SIZE_RANGE = [6, 128] as const;
+const READING_MEASURE_RANGE = [45, 120] as const;
 const RESULT_LIMIT_RANGE = [1, 1000] as const;
 const encoder = new TextEncoder();
 
@@ -137,6 +139,12 @@ function normalizeSettings(value: unknown): SettingsDocument {
     )
       ? candidate.editor_font_size
       : DEFAULT_SETTINGS.editor_font_size,
+    editor_reading_measure: integerInRange(
+      candidate.editor_reading_measure,
+      READING_MEASURE_RANGE,
+    )
+      ? candidate.editor_reading_measure
+      : DEFAULT_SETTINGS.editor_reading_measure,
     search_result_limit: integerInRange(
       candidate.search_result_limit,
       RESULT_LIMIT_RANGE,
@@ -152,6 +160,9 @@ function validateSettings(doc: SettingsDocument): void {
   }
   if (!integerInRange(doc.editor_font_size, FONT_SIZE_RANGE)) {
     throw new Error("settings value out of range: editor_font_size");
+  }
+  if (!integerInRange(doc.editor_reading_measure, READING_MEASURE_RANGE)) {
+    throw new Error("settings value out of range: editor_reading_measure");
   }
   if (!integerInRange(doc.search_result_limit, RESULT_LIMIT_RANGE)) {
     throw new Error("settings value out of range: search_result_limit");

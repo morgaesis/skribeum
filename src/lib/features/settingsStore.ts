@@ -14,7 +14,8 @@ export type { SettingsDocument };
 export const DEFAULT_SETTINGS: SettingsDocument = {
   schema_version: 1,
   theme: "system",
-  editor_font_size: 15,
+  editor_font_size: 17,
+  editor_reading_measure: 76,
   search_result_limit: 50,
 };
 

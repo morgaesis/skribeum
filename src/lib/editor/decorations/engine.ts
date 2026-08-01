@@ -1179,7 +1179,12 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (doc.lineAt(ref.from).length > LONG_LINE_DECORATION_LIMIT) {
             continue;
           }
-          if (revealed(rule, node)) {
+          const revealedNow = revealed(rule, node);
+          // A revealed rule emits nothing, so the source shows through. The
+          // exception is a cursor-line reveal, which still emits a marker
+          // carrying its active state so the transition has something to
+          // animate between.
+          if (revealedNow && rule.reveal !== "cursor-line") {
             continue;
           }
           if (presentation.present === "hide") {
@@ -1191,6 +1196,23 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               } else if (doc.sliceString(hideFrom - 1, hideFrom) === " ") {
                 hideFrom -= 1;
               }
+            }
+            if (rule.reveal === "cursor-line") {
+              const className = revealedNow
+                ? "cm-skr-reveal-marker cm-skr-reveal-marker-active"
+                : "cm-skr-reveal-marker";
+              built.push({
+                from: hideFrom,
+                to: hideTo,
+                decoration: Decoration.mark({
+                  class: className,
+                  skr: `${revealedNow ? "reveal" : "hide"} node=${rule.node}`,
+                }),
+              });
+              continue;
+            }
+            if (revealedNow) {
+              continue;
             }
             built.push({
               from: hideFrom,
@@ -1432,14 +1454,74 @@ const enginePlugin = ViewPlugin.fromClass(
 );
 
 const engineTheme = EditorView.baseTheme({
-  ".cm-skr-heading": { fontWeight: "700" },
-  ".cm-skr-heading-1": { fontSize: "1.6em" },
-  ".cm-skr-heading-2": { fontSize: "1.4em" },
-  ".cm-skr-heading-3": { fontSize: "1.25em" },
-  ".cm-skr-heading-4": { fontSize: "1.1em" },
-  ".cm-skr-heading-5": { fontSize: "1em" },
-  ".cm-skr-heading-6": { fontSize: "1em", opacity: "0.85" },
-  ".cm-skr-setext-underline": { opacity: "0.5" },
+  ".cm-skr-heading": {
+    fontFamily: "var(--skr-font-prose)",
+    lineHeight: "1.22",
+    textWrap: "balance",
+  },
+  ".cm-skr-heading-1": {
+    color: "var(--skr-heading-1)",
+    fontSize: "2.05em",
+    fontWeight: "720",
+    letterSpacing: "-0.028em",
+    paddingTop: "0.6em",
+    paddingBottom: "0.32em",
+    borderBottom: "1px solid var(--skr-border)",
+  },
+  ".cm-skr-heading-2": {
+    color: "var(--skr-heading-2)",
+    fontSize: "1.7em",
+    fontWeight: "690",
+    letterSpacing: "-0.02em",
+    paddingTop: "0.68em",
+    paddingBottom: "0.2em",
+  },
+  ".cm-skr-heading-3": {
+    color: "var(--skr-heading-3)",
+    fontSize: "1.4em",
+    fontWeight: "660",
+    letterSpacing: "-0.012em",
+    paddingTop: "0.62em",
+    paddingBottom: "0.14em",
+  },
+  ".cm-skr-heading-4": {
+    color: "var(--skr-heading-4)",
+    fontSize: "1.18em",
+    fontWeight: "630",
+    letterSpacing: "0.005em",
+    paddingTop: "0.54em",
+  },
+  ".cm-skr-heading-5": {
+    color: "var(--skr-heading-5)",
+    fontSize: "1.02em",
+    fontWeight: "600",
+    letterSpacing: "0.055em",
+    paddingTop: "0.48em",
+    textTransform: "uppercase",
+  },
+  ".cm-skr-heading-6": {
+    color: "var(--skr-heading-6)",
+    fontSize: "0.92em",
+    fontWeight: "570",
+    letterSpacing: "0.075em",
+    paddingTop: "0.42em",
+    textTransform: "uppercase",
+  },
+  ".cm-skr-setext-underline": { color: "var(--skr-text-muted)" },
+  ".cm-skr-reveal-marker": {
+    display: "inline-block",
+    maxWidth: "0",
+    overflow: "hidden",
+    color: "var(--skr-text-muted)",
+    opacity: "0",
+    verticalAlign: "bottom",
+    whiteSpace: "pre",
+    transition: "max-width 120ms ease-out, opacity 90ms ease-out",
+  },
+  ".cm-skr-reveal-marker-active": {
+    maxWidth: "7ch",
+    opacity: "1",
+  },
   ".cm-skr-emphasis": { fontStyle: "italic" },
   ".cm-skr-strong": { fontWeight: "700" },
   ".cm-skr-strikethrough": { textDecoration: "line-through" },
@@ -1503,7 +1585,7 @@ const engineTheme = EditorView.baseTheme({
     borderColor: "var(--skr-text-muted)",
   },
   ".cm-skr-inline-code": {
-    fontFamily: "inherit",
+    fontFamily: "var(--skr-font-mono)",
     backgroundColor: "var(--skr-code-surface)",
     borderRadius: "3px",
     padding: "0 2px",
@@ -1664,8 +1746,12 @@ const engineTheme = EditorView.baseTheme({
     borderRadius: "8px",
     padding: "0 4px",
   },
-  ".cm-skr-block-id": { opacity: "0.5" },
-  ".cm-skr-frontmatter": { opacity: "0.6" },
+  ".cm-skr-block-id": { color: "var(--skr-text-muted)" },
+  ".cm-skr-frontmatter": {
+    color: "var(--skr-text-muted)",
+    fontFamily: "var(--skr-font-mono)",
+    fontSize: "0.88em",
+  },
   ".cm-skr-math-inline": { display: "inline-block", maxWidth: "100%" },
   ".cm-skr-math-block, .cm-skr-mermaid": {
     boxSizing: "border-box",
@@ -1682,7 +1768,7 @@ const engineTheme = EditorView.baseTheme({
     color: "var(--skr-danger)",
     backgroundColor: "var(--skr-danger-surface)",
     borderColor: "var(--skr-danger)",
-    fontFamily: "monospace",
+    fontFamily: "var(--skr-font-mono)",
     whiteSpace: "pre-wrap",
   },
 });

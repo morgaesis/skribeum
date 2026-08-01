@@ -19,8 +19,11 @@ function stateOf(doc: string): EditorState {
   // Force the parse to completion: syntaxTree(state) alone returns only the
   // creation-time work slice, which shrinks under load and would make these
   // assertions timing-dependent.
-  ensureSyntaxTree(state, state.doc.length, 5000);
-  return state;
+  const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+  if (tree === null) {
+    throw new Error("markdown syntax tree did not complete");
+  }
+  return state.update({}).state;
 }
 
 const DOCUMENT = [

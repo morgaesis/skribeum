@@ -127,11 +127,19 @@ function applyEditorFontSize(pixels: number) {
   );
 }
 
+function applyEditorReadingMeasure(characters: number) {
+  document.documentElement.style.setProperty(
+    "--skr-editor-measure",
+    `${characters}ch`,
+  );
+}
+
 // Settings apply optimistically (the font size restart-free via the CSS
 // variable); a failed write reverts and the settings view surfaces it.
 const settingsStore = new SettingsStore((state) => {
   settingsState = state;
   applyEditorFontSize(state.document.editor_font_size);
+  applyEditorReadingMeasure(state.document.editor_reading_measure);
   applyTheme(
     isThemeName(state.document.theme) ? state.document.theme : "system",
   );

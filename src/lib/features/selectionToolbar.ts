@@ -93,27 +93,37 @@ const toolbarField = showTooltip.compute(["selection", "doc"], (state) => {
   };
 });
 
-const toolbarTheme = View.baseTheme({
-  ".cm-skr-selection-toolbar": {
+const toolbarTheme = View.theme({
+  ".cm-tooltip.cm-skr-selection-toolbar, .cm-skr-selection-toolbar": {
     display: "flex",
-    gap: "2px",
-    padding: "2px",
-    color: "var(--skr-text)",
-    backgroundColor: "var(--skr-surface-raised)",
-    border: "1px solid var(--skr-border)",
-    borderRadius: "6px",
-    boxShadow: "var(--skr-shadow)",
+    gap: "3px",
+    padding: "4px",
+    color: "var(--skr-toolbar-text)",
+    backgroundColor: "var(--skr-toolbar-surface)",
+    border: "1px solid var(--skr-toolbar-border)",
+    borderRadius: "9px",
+    boxShadow: "var(--skr-toolbar-shadow)",
+    fontFamily: "var(--skr-font-interface)",
   },
   ".cm-skr-toolbar-button": {
     border: "none",
     background: "transparent",
-    borderRadius: "4px",
-    padding: "1px 6px",
+    color: "var(--skr-toolbar-text)",
+    borderRadius: "6px",
+    minWidth: "30px",
+    minHeight: "30px",
+    padding: "3px 7px",
     cursor: "pointer",
     fontWeight: "600",
+    lineHeight: "1",
   },
   ".cm-skr-toolbar-button:hover": {
-    backgroundColor: "var(--skr-surface-subtle)",
+    color: "var(--skr-toolbar-hover-text)",
+    backgroundColor: "var(--skr-toolbar-hover-surface)",
+  },
+  ".cm-skr-toolbar-button:focus-visible": {
+    outline: "2px solid var(--skr-toolbar-focus)",
+    outlineOffset: "-2px",
   },
 });
 

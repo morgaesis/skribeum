@@ -14,6 +14,7 @@ const PERSISTED: SettingsDocument = {
   schema_version: 1,
   theme: "dark",
   editor_font_size: 18,
+  editor_reading_measure: 84,
   search_result_limit: 25,
 };
 
@@ -50,6 +51,7 @@ describe("settings store", () => {
       loaded: true,
     });
     expect(applied.at(-1)?.document.editor_font_size).toBe(18);
+    expect(applied.at(-1)?.document.editor_reading_measure).toBe(84);
   });
 
   it("keeps defaults and records the error on a failed read", async () => {
@@ -58,6 +60,7 @@ describe("settings store", () => {
     });
     await store.load();
     expect(store.snapshot.document).toEqual(DEFAULT_SETTINGS);
+    expect(DEFAULT_SETTINGS.editor_font_size).toBe(17);
     expect(store.snapshot.loaded).toBe(false);
     expect(store.snapshot.error).toContain("no settings backend");
   });
@@ -71,10 +74,10 @@ describe("settings store", () => {
         }),
     });
     await store.load();
-    const pending = store.update({ editor_font_size: 21 });
+    const pending = store.update({ editor_reading_measure: 90 });
     // Applied immediately, before the backend acknowledged.
-    expect(store.snapshot.document.editor_font_size).toBe(21);
-    expect(applied.at(-1)?.document.editor_font_size).toBe(21);
+    expect(store.snapshot.document.editor_reading_measure).toBe(90);
+    expect(applied.at(-1)?.document.editor_reading_measure).toBe(90);
     resolveWrite();
     expect(await pending).toBe(true);
   });
@@ -82,8 +85,8 @@ describe("settings store", () => {
   it("persists the merged document", async () => {
     const { store, written } = harness();
     await store.load();
-    await store.update({ search_result_limit: 99 });
-    expect(written).toEqual([{ ...PERSISTED, search_result_limit: 99 }]);
+    await store.update({ editor_reading_measure: 72 });
+    expect(written).toEqual([{ ...PERSISTED, editor_reading_measure: 72 }]);
   });
 
   it("persists the theme value", async () => {
@@ -106,5 +109,6 @@ describe("settings store", () => {
     expect(store.snapshot.error).toContain("disk full");
     // The revert re-applied the previous value (font size restored).
     expect(applied.at(-1)?.document.editor_font_size).toBe(18);
+    expect(applied.at(-1)?.document.editor_reading_measure).toBe(84);
   });
 });

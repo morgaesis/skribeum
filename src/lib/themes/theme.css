@@ -6,6 +6,12 @@
   --skr-surface-raised: #ffffff;
   --skr-text: #172033;
   --skr-text-muted: #475569;
+  --skr-heading-1: #16223a;
+  --skr-heading-2: #243858;
+  --skr-heading-3: #334866;
+  --skr-heading-4: #40536c;
+  --skr-heading-5: #4b5d72;
+  --skr-heading-6: #58677b;
   --skr-link: #1d4ed8;
   --skr-accent: #2563eb;
   --skr-accent-soft: #dbeafe;
@@ -23,8 +29,25 @@
   --skr-callout-orange: #b45309;
   --skr-callout-purple: #7e22ce;
   --skr-code-surface: #eef2f7;
+  --skr-caret: #a1123f;
+  --skr-selection-surface: #cdddf3;
+  --skr-selection-text: #172033;
+  --skr-toolbar-surface: #1e293b;
+  --skr-toolbar-text: #f8fafc;
+  --skr-toolbar-hover-surface: #334155;
+  --skr-toolbar-hover-text: #f8fafc;
+  --skr-toolbar-border: #475569;
+  --skr-toolbar-focus: #93c5fd;
+  --skr-toolbar-shadow: 0 10px 30px rgb(15 23 42 / 28%);
   --skr-overlay: rgb(15 23 42 / 35%);
   --skr-shadow: 0 18px 48px rgb(15 23 42 / 18%);
+  --skr-font-interface:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --skr-font-prose:
+    Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+  --skr-font-mono:
+    ui-monospace, "Cascadia Code", "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
 :root[data-theme="dark"] {
@@ -34,6 +57,12 @@
   --skr-surface-raised: #172033;
   --skr-text: #f8fafc;
   --skr-text-muted: #cbd5e1;
+  --skr-heading-1: #f8fafc;
+  --skr-heading-2: #e5ebf4;
+  --skr-heading-3: #d1dbea;
+  --skr-heading-4: #bdcadc;
+  --skr-heading-5: #aabbd0;
+  --skr-heading-6: #98abc4;
   --skr-link: #93c5fd;
   --skr-accent: #60a5fa;
   --skr-accent-soft: #1e3a5f;
@@ -51,6 +80,16 @@
   --skr-callout-orange: #fdba74;
   --skr-callout-purple: #d8b4fe;
   --skr-code-surface: #1e293b;
+  --skr-caret: #facc15;
+  --skr-selection-surface: #334b6b;
+  --skr-selection-text: #f8fafc;
+  --skr-toolbar-surface: #f1f5f9;
+  --skr-toolbar-text: #172033;
+  --skr-toolbar-hover-surface: #dbeafe;
+  --skr-toolbar-hover-text: #172033;
+  --skr-toolbar-border: #94a3b8;
+  --skr-toolbar-focus: #1d4ed8;
+  --skr-toolbar-shadow: 0 12px 34px rgb(0 0 0 / 55%);
   --skr-overlay: rgb(2 6 23 / 62%);
   --skr-shadow: 0 18px 48px rgb(0 0 0 / 45%);
 }
@@ -64,6 +103,12 @@
     --skr-surface-raised: #172033;
     --skr-text: #f8fafc;
     --skr-text-muted: #cbd5e1;
+    --skr-heading-1: #f8fafc;
+    --skr-heading-2: #e5ebf4;
+    --skr-heading-3: #d1dbea;
+    --skr-heading-4: #bdcadc;
+    --skr-heading-5: #aabbd0;
+    --skr-heading-6: #98abc4;
     --skr-link: #93c5fd;
     --skr-accent: #60a5fa;
     --skr-accent-soft: #1e3a5f;
@@ -81,6 +126,16 @@
     --skr-callout-orange: #fdba74;
     --skr-callout-purple: #d8b4fe;
     --skr-code-surface: #1e293b;
+    --skr-caret: #facc15;
+    --skr-selection-surface: #334b6b;
+    --skr-selection-text: #f8fafc;
+    --skr-toolbar-surface: #f1f5f9;
+    --skr-toolbar-text: #172033;
+    --skr-toolbar-hover-surface: #dbeafe;
+    --skr-toolbar-hover-text: #172033;
+    --skr-toolbar-border: #94a3b8;
+    --skr-toolbar-focus: #1d4ed8;
+    --skr-toolbar-shadow: 0 12px 34px rgb(0 0 0 / 55%);
     --skr-overlay: rgb(2 6 23 / 62%);
     --skr-shadow: 0 18px 48px rgb(0 0 0 / 45%);
   }

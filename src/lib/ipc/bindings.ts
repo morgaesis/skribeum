@@ -252,6 +252,8 @@ export type SettingsDoc = {
 	theme: string,
 	/**  Editor font size in CSS pixels. */
 	editor_font_size: number,
+	/**  Editor reading measure in characters. */
+	editor_reading_measure: number,
 	/**  Maximum number of results a search query returns. */
 	search_result_limit: number,
 };

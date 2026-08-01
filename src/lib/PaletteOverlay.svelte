@@ -80,7 +80,7 @@ function onKeydown(event: KeyboardEvent) {
 </script>
 
 <div
-  class="fixed inset-0 z-40 flex items-start justify-center bg-black/20 pt-24"
+  class="skr-overlay fixed inset-0 z-40 flex items-start justify-center pt-24"
   role="presentation"
   onclick={(event) => {
     if (event.target === event.currentTarget) {
@@ -89,7 +89,7 @@ function onKeydown(event: KeyboardEvent) {
   }}
 >
   <div
-    class="w-[36rem] max-w-[90vw] rounded-lg border border-gray-300 bg-white shadow-xl"
+    class="w-[36rem] max-w-[90vw] rounded-lg border"
     role="dialog"
     aria-modal="true"
     aria-label={label}
@@ -98,7 +98,7 @@ function onKeydown(event: KeyboardEvent) {
       bind:this={inputElement}
       bind:value={query}
       type="text"
-      class="w-full rounded-t-lg border-b border-gray-200 px-3 py-2 text-sm outline-none"
+      class="w-full rounded-t-lg border-b px-3 py-2 text-sm outline-none"
       role="combobox"
       aria-expanded="true"
       aria-haspopup="listbox"
@@ -117,9 +117,6 @@ function onKeydown(event: KeyboardEvent) {
       role="listbox"
       aria-label={label}
     >
-      {#if items.length === 0}
-        <li class="px-2 py-1 text-gray-500">{emptyText}</li>
-      {/if}
       {#each items as item, index (item.id)}
         <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard
              operation lives on the combobox input per the ARIA pattern. -->
@@ -128,7 +125,6 @@ function onKeydown(event: KeyboardEvent) {
           role="option"
           aria-selected={index === active}
           class="cursor-pointer rounded px-2 py-1"
-          class:bg-blue-100={index === active}
           onclick={() => onPick(item.id)}
           onmousemove={() => {
             active = index;
@@ -137,22 +133,27 @@ function onKeydown(event: KeyboardEvent) {
           <span class="flex items-center justify-between gap-2">
             <span class="min-w-0 truncate">
               {#each item.titleSegments as segment, segmentIndex (segmentIndex)}
-                {#if segment.highlighted}<mark class="rounded bg-amber-200">{segment.text}</mark>{:else}{segment.text}{/if}
+                {#if segment.highlighted}<mark class="skr-match rounded">{segment.text}</mark>{:else}{segment.text}{/if}
               {/each}
             </span>
             {#if item.keybinding !== undefined}
-              <kbd class="shrink-0 rounded border border-gray-300 px-1 text-xs text-gray-600">{item.keybinding}</kbd>
+              <kbd class="skr-muted shrink-0 rounded border px-1 text-xs">{item.keybinding}</kbd>
             {/if}
           </span>
           {#if item.detailSegments !== undefined}
-            <span class="block truncate text-xs text-gray-600">
+            <span class="skr-muted block truncate text-xs">
               {#each item.detailSegments as segment, segmentIndex (segmentIndex)}
-                {#if segment.highlighted}<mark class="rounded bg-amber-200">{segment.text}</mark>{:else}{segment.text}{/if}
+                {#if segment.highlighted}<mark class="skr-match rounded">{segment.text}</mark>{:else}{segment.text}{/if}
               {/each}
             </span>
           {/if}
         </li>
       {/each}
     </ul>
+    {#if items.length === 0}
+      <div class="skr-muted px-3 pb-2 text-sm" role="status">
+        {emptyText}
+      </div>
+    {/if}
   </div>
 </div>

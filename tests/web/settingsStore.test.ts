@@ -60,7 +60,7 @@ describe("settings store", () => {
     });
     await store.load();
     expect(store.snapshot.document).toEqual(DEFAULT_SETTINGS);
-    expect(DEFAULT_SETTINGS.editor_font_size).toBe(17);
+    expect(DEFAULT_SETTINGS.editor_font_size).toBe(16);
     expect(store.snapshot.loaded).toBe(false);
     expect(store.snapshot.error).toContain("no settings backend");
   });

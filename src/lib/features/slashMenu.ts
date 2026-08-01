@@ -301,7 +301,7 @@ const slashTheme = View.baseTheme({
     cursor: "pointer",
   },
   ".cm-skr-slash-option-active": {
-    backgroundColor: "var(--skr-accent-soft)",
+    backgroundColor: "var(--skr-accent-subtle)",
   },
   ".cm-skr-slash-empty": {
     padding: "2px 8px",

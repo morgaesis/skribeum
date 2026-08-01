@@ -165,14 +165,17 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
     display: flex;
     align-items: center;
     gap: 0.65rem;
-    width: min(100%, calc(var(--skr-editor-measure, 76ch) + 6rem));
-    padding: 0.65rem clamp(1.5rem, 5vw, 3rem);
+    width: min(
+      100%,
+      calc(var(--skr-editor-measure, 72) * 1ch + 2 * var(--skr-gutter))
+    );
+    padding: 0.65rem var(--skr-gutter);
     border: 0;
     background: transparent;
     color: var(--skr-text);
     font: inherit;
     font-size: 0.82rem;
-    font-weight: 650;
+    font-weight: 600;
     letter-spacing: 0.02em;
     text-align: left;
     cursor: pointer;
@@ -191,7 +194,6 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
     border-right: 1.5px solid var(--skr-text-muted);
     border-bottom: 1.5px solid var(--skr-text-muted);
     transform: rotate(-45deg);
-    transition: transform 150ms ease;
   }
 
   .skr-properties-toggle[aria-expanded="true"] .skr-properties-chevron {
@@ -213,7 +215,6 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
   .skr-properties-reveal {
     display: grid;
     grid-template-rows: 0fr;
-    transition: grid-template-rows 160ms ease;
   }
 
   .skr-properties-reveal.expanded {
@@ -227,7 +228,10 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
 
   .skr-properties-actions,
   .skr-properties-list {
-    width: min(100%, calc(var(--skr-editor-measure, 76ch) + 6rem));
+    width: min(
+      100%,
+      calc(var(--skr-editor-measure, 72) * 1ch + 2 * var(--skr-gutter))
+    );
     box-sizing: border-box;
     margin-inline: auto;
     padding-inline: clamp(1.5rem, 5vw, 3rem);
@@ -252,7 +256,7 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
 
   .skr-raw-toggle[aria-pressed="true"] {
     border-color: var(--skr-accent);
-    background: var(--skr-accent-soft);
+    background: var(--skr-accent-subtle);
     color: var(--skr-text);
   }
 

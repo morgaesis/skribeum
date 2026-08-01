@@ -241,9 +241,8 @@ function onKeydown(event: KeyboardEvent) {
       aria-selected={row.kind === "note" || row.path.toLowerCase().endsWith(".canvas") ? row.path === selectedPath : undefined}
       aria-disabled={row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas") ? true : undefined}
       tabindex={index === focusIndex ? 0 : -1}
-      class="absolute right-0 left-0 h-6 cursor-pointer overflow-hidden rounded px-2 py-0.5 whitespace-nowrap outline-offset-1 focus-visible:outline-2 focus-visible:outline-blue-500"
+      class="absolute right-0 left-0 h-6 cursor-pointer overflow-hidden rounded px-2 py-0.5 whitespace-nowrap"
       class:opacity-60={row.hidden || (row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas"))}
-      class:bg-blue-100={row.path === selectedPath}
       style={`top: ${TREE_PADDING + index * ROW_HEIGHT}px; padding-left: ${0.5 + row.depth}rem`}
       onclick={() => {
         void focusRow(index);

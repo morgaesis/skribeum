@@ -14,12 +14,12 @@ const SETTINGS_KEY = "skribeum.demo.settings";
 const DEFAULT_SETTINGS: SettingsDocument = {
   schema_version: 1,
   theme: "system",
-  editor_font_size: 17,
-  editor_reading_measure: 76,
+  editor_font_size: 16,
+  editor_reading_measure: 72,
   search_result_limit: 50,
 };
 const THEMES = new Set(["system", "light", "dark"]);
-const FONT_SIZE_RANGE = [6, 128] as const;
+const FONT_SIZE_RANGE = [8, 40] as const;
 const READING_MEASURE_RANGE = [45, 120] as const;
 const RESULT_LIMIT_RANGE = [1, 1000] as const;
 const encoder = new TextEncoder();

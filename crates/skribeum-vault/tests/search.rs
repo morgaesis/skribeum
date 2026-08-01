@@ -450,6 +450,25 @@ fn tag_catalog_counts_and_tracks_index_updates() {
     );
 }
 
+#[test]
+fn tag_catalog_bounds_indexed_values_and_result_count() {
+    let index = SearchIndex::in_memory().expect("index opens");
+    let mut note = (0..=1000)
+        .map(|number| format!("#tag-{number}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    note.push(' ');
+    note.push('#');
+    note.push_str(&"x".repeat(513));
+    index
+        .index_note("many.md", note.as_bytes())
+        .expect("bounded catalog indexes");
+
+    let catalog = index.tag_frequencies().expect("bounded catalog reads");
+    assert_eq!(catalog.len(), 1000);
+    assert!(catalog.iter().all(|entry| entry.tag.len() <= 512));
+}
+
 fn test_config() -> ReconcilerConfig {
     ReconcilerConfig {
         settle: Duration::from_millis(3),

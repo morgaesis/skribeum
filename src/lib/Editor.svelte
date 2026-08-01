@@ -68,6 +68,7 @@ let {
   onConflict,
   onWriteError,
   onDocChanged,
+  onSaved,
   wikilinkNavigationOptions,
   tagAffordanceOptions,
 }: {
@@ -92,6 +93,8 @@ let {
   onWriteError?: (message: string) => void;
   /** Notified after any document-changing transaction (outline refresh). */
   onDocChanged?: () => void;
+  /** Notified after pending edits are written and indexed. */
+  onSaved?: () => void;
   /** Supplies the shared navigator capabilities for pointer activation. */
   wikilinkNavigationOptions?: () => FollowWikilinkOptions;
   /** Supplies vault tags and the existing search callback. */
@@ -409,6 +412,7 @@ async function performSave(): Promise<boolean> {
     if (result.result === "written") {
       try {
         session.commitSave(result.projection_hash);
+        onSaved?.();
       } catch {
         await rereadAndReconcile();
         return false;

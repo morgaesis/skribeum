@@ -1272,6 +1272,43 @@ describe("skribeum shell", () => {
     await browser.keys(Key.Escape);
   });
 
+  it("refreshes_tag_completion_after_saving_a_new_tag", async () => {
+    await openNoteFromTree(LF_NOTE_NAME);
+    const editor = $(".cm-content");
+    await editor.waitForDisplayed({ timeout: 15000 });
+    await editor.click();
+    await editor.addValue(" #catalog-refresh ");
+    await browser.waitUntil(
+      () => noteOnDisk(LF_NOTE_NAME).includes("#catalog-refresh"),
+      { timeout: 10000 },
+    );
+
+    await editor.addValue("#");
+    await editor.addValue("catalog-r");
+    try {
+      await browser.waitUntil(
+        async () =>
+          (
+            await $$(".cm-skr-tag-menu [role=option]").map((item) =>
+              item.getText(),
+            )
+          ).includes("#catalog-refresh"),
+        { timeout: 10000 },
+      );
+    } catch {
+      const state = await browser.execute(() => ({
+        editor: document.querySelector(".cm-content")?.textContent ?? null,
+        menu: document.querySelector(".cm-skr-tag-menu")?.textContent ?? null,
+      }));
+      throw new Error(
+        `tag completion did not refresh: ${JSON.stringify(state)}`,
+      );
+    }
+    expect(await $(".cm-skr-tag-menu [role=option]").getText()).toBe(
+      "#catalog-refresh",
+    );
+  });
+
   it("keyboard_reaches_every_surface_in_order_without_traps", async () => {
     // Focus order is DOM order: no element carries a positive tabindex, so
     // the traversal order is header action, banners when present, tree,

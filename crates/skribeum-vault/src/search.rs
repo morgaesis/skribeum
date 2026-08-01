@@ -83,6 +83,10 @@ pub struct TagFrequency {
 const SNIPPET_MAX_BYTES: usize = 180;
 /// Bytes of context kept before the first match in a snippet.
 const SNIPPET_LEAD_BYTES: usize = 40;
+/// Maximum stored tag length, aligned with the search query byte limit.
+const MAX_INDEXED_TAG_BYTES: usize = 512;
+/// Maximum number of distinct tags returned to one catalog consumer.
+const MAX_TAG_CATALOG_ENTRIES: u32 = 1000;
 /// BM25 column weights: title, headings, body.
 const BM25_WEIGHTS: (f64, f64, f64) = (8.0, 3.0, 1.0);
 
@@ -224,60 +228,69 @@ impl SearchIndex {
         path: &str,
         bytes: &[u8],
     ) -> Result<(), SearchError> {
-        tx.execute("DELETE FROM note_index WHERE path = ?1", [path])?;
-        tx.execute("DELETE FROM note_tags WHERE path = ?1", [path])?;
+        tx.prepare_cached("DELETE FROM note_index WHERE path = ?1")?
+            .execute([path])?;
+        tx.prepare_cached("DELETE FROM note_tags WHERE path = ?1")?
+            .execute([path])?;
         let Ok(text) = core::str::from_utf8(bytes) else {
             return Ok(());
         };
         let body = text.strip_prefix('\u{FEFF}').unwrap_or(text);
         let body_byte_offset = bytes.len().saturating_sub(body.len());
         let extractions = extract(bytes);
-        let headings = extractions
-            .iter()
-            .filter(|extraction| extraction.kind == ExtractionKind::Heading)
-            .filter_map(|extraction| {
-                core::str::from_utf8(&bytes[extraction.start_byte..extraction.end_byte]).ok()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        tx.execute(
-            "INSERT INTO note_index(path, title, headings, body) VALUES(?1, ?2, ?3, ?4)",
-            [path, &note_title(path), &headings, body],
-        )?;
+        let mut headings = String::new();
         let mut tags = BTreeMap::<String, (String, u32, usize, usize)>::new();
         for (raw, start, end) in frontmatter_tags(body) {
             record_tag(&mut tags, raw, start, end);
         }
-        for extraction in extractions
-            .iter()
-            .filter(|extraction| extraction.kind == ExtractionKind::Tag)
-        {
-            let Some(raw) = bytes
-                .get(extraction.start_byte + 1..extraction.end_byte)
-                .and_then(|slice| core::str::from_utf8(slice).ok())
-            else {
-                continue;
-            };
-            record_tag(
-                &mut tags,
-                raw,
-                extraction.start_byte.saturating_sub(body_byte_offset),
-                extraction.end_byte.saturating_sub(body_byte_offset),
-            );
+        for extraction in &extractions {
+            match extraction.kind {
+                ExtractionKind::Heading => {
+                    let Ok(heading) =
+                        core::str::from_utf8(&bytes[extraction.start_byte..extraction.end_byte])
+                    else {
+                        continue;
+                    };
+                    if !headings.is_empty() {
+                        headings.push('\n');
+                    }
+                    headings.push_str(heading);
+                }
+                ExtractionKind::Tag => {
+                    let Some(raw) = bytes
+                        .get(extraction.start_byte + 1..extraction.end_byte)
+                        .and_then(|slice| core::str::from_utf8(slice).ok())
+                    else {
+                        continue;
+                    };
+                    record_tag(
+                        &mut tags,
+                        raw,
+                        extraction.start_byte.saturating_sub(body_byte_offset),
+                        extraction.end_byte.saturating_sub(body_byte_offset),
+                    );
+                }
+                _ => {}
+            }
         }
+        let title = note_title(path);
+        tx.prepare_cached(
+            "INSERT INTO note_index(path, title, headings, body) VALUES(?1, ?2, ?3, ?4)",
+        )?
+        .execute([path, &title, &headings, body])?;
+        let mut insert_tag = tx.prepare_cached(
+            "INSERT INTO note_tags(path, normalized, display, occurrences, first_start, first_end)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
         for (normalized, (display, occurrences, first_start, first_end)) in tags {
-            tx.execute(
-                "INSERT INTO note_tags(path, normalized, display, occurrences, first_start, first_end)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    path,
-                    normalized,
-                    display,
-                    i64::from(occurrences),
-                    i64::try_from(first_start).unwrap_or(i64::MAX),
-                    i64::try_from(first_end).unwrap_or(i64::MAX)
-                ],
-            )?;
+            insert_tag.execute(params![
+                path,
+                normalized,
+                display,
+                i64::from(occurrences),
+                i64::try_from(first_start).unwrap_or(i64::MAX),
+                i64::try_from(first_end).unwrap_or(i64::MAX)
+            ])?;
         }
         Ok(())
     }
@@ -373,9 +386,10 @@ impl SearchIndex {
             "SELECT MIN(display), COUNT(*), SUM(occurrences)
              FROM note_tags
              GROUP BY normalized
-             ORDER BY SUM(occurrences) DESC, normalized ASC",
+             ORDER BY SUM(occurrences) DESC, normalized ASC
+             LIMIT ?1",
         )?;
-        let rows = statement.query_map([], |row| {
+        let rows = statement.query_map([i64::from(MAX_TAG_CATALOG_ENTRIES)], |row| {
             let note_count = row.get::<_, i64>(1)?;
             let occurrence_count = row.get::<_, i64>(2)?;
             Ok(TagFrequency {
@@ -539,7 +553,7 @@ type IndexedTags = BTreeMap<String, (String, u32, usize, usize)>;
 
 fn record_tag(tags: &mut IndexedTags, raw: &str, start: usize, end: usize) {
     let display = raw.strip_prefix('#').unwrap_or(raw);
-    if display.is_empty() {
+    if display.is_empty() || display.len() > MAX_INDEXED_TAG_BYTES {
         return;
     }
     let entry = tags

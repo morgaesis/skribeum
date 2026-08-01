@@ -43,6 +43,7 @@ let tagCatalog: TagCatalogEntry[] = [];
 let recentTags: string[] = [];
 let searchedTags: string[] = [];
 let rememberedTags: string[] = [];
+let followLinkCalls = 0;
 
 const tagOptions = () => ({
   catalog: () => tagCatalog,
@@ -63,7 +64,10 @@ function context(): CommandContext {
     recentNotePaths: () => [],
     navigateBack: () => false,
     navigateForward: () => false,
-    followLink: () => false,
+    followLink: () => {
+      followLinkCalls += 1;
+      return false;
+    },
   };
 }
 
@@ -137,6 +141,7 @@ afterEach(() => {
   recentTags = [];
   searchedTags = [];
   rememberedTags = [];
+  followLinkCalls = 0;
 });
 
 describe("bulk text input", () => {
@@ -338,6 +343,37 @@ describe("tag affordances", () => {
     expect(view.state.doc.toString()).toBe(expected);
     expect(tagCompletionOpen(view.state)).toBe(false);
     expect(rememberedTags).toEqual([tag]);
+    expect(followLinkCalls).toBe(0);
+  });
+
+  it("leaves Enter to normal editing when no completion matches", () => {
+    tagCatalog = [{ tag: "alpha", noteCount: 1, occurrenceCount: 1 }];
+    const view = makeView("", 0);
+    typeText(view, "#missing");
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("#missing\n");
+    expect(tagCompletionOpen(view.state)).toBe(false);
+    expect(followLinkCalls).toBe(1);
+  });
+
+  it("bounds the rendered completion candidates", () => {
+    const catalog = Array.from({ length: 150 }, (_, index) => ({
+      tag: `tag-${index.toString().padStart(3, "0")}`,
+      noteCount: 1,
+      occurrenceCount: 1,
+    }));
+
+    expect(filteredTagCompletions(catalog, [], "")).toHaveLength(100);
   });
 
   it("removes the trigger and query when dismissed with Escape", () => {

@@ -170,6 +170,7 @@ let overlayQuery = $state("");
 let searchResults = $state<SearchResult[]>([]);
 let tagCatalogEntries = $state<TagCatalogEntry[]>([]);
 let recentTags = $state<string[]>([]);
+let tagCatalogGeneration = 0;
 let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 let cancelOutlineRefresh: (() => void) | undefined;
 /** Recently opened note paths, most recent first. */
@@ -557,6 +558,29 @@ function tagAffordanceOptions(): TagAffordanceOptions {
   };
 }
 
+function setTagCatalog(entries: Awaited<ReturnType<typeof tagCatalog>>) {
+  tagCatalogEntries = entries.map((entry) => ({
+    tag: entry.tag,
+    noteCount: entry.note_count,
+    occurrenceCount: entry.occurrence_count,
+  }));
+}
+
+async function refreshTagCatalog(handle = vault) {
+  if (handle === null) {
+    return;
+  }
+  const generation = ++tagCatalogGeneration;
+  try {
+    const entries = await tagCatalog(handle);
+    if (generation === tagCatalogGeneration && vault?.id === handle.id) {
+      setTagCatalog(entries);
+    }
+  } catch {
+    // Keep the last indexed catalog when search is temporarily unavailable.
+  }
+}
+
 function onOverlayPick(id: string) {
   const overlay = activeOverlay;
   if (overlay === VIEW_COMMAND_PALETTE) {
@@ -754,6 +778,7 @@ async function readOptionalVaultConfigFile(
 
 async function openVaultAtPath(path: string) {
   errorText = null;
+  tagCatalogGeneration += 1;
   if ((await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
     return;
@@ -780,11 +805,7 @@ async function openVaultAtPath(path: string) {
     canvasError = null;
     obsidianConfig = config.config;
     propertyTypes = config.types;
-    tagCatalogEntries = nextTags.map((entry) => ({
-      tag: entry.tag,
-      noteCount: entry.note_count,
-      occurrenceCount: entry.occurrence_count,
-    }));
+    setTagCatalog(nextTags);
     recentTags = [];
     refreshLinkContext();
     const harnessNote = (window as Window & { __SKRIBEUM_E2E_NOTE__?: string })
@@ -1165,6 +1186,7 @@ onMount(() => {
       if (vault === null || event.payload.vault !== vault.id) {
         return;
       }
+      void refreshTagCatalog(vault);
       if (event.payload.path !== selectedPath || note === null) {
         return;
       }
@@ -1181,6 +1203,7 @@ onMount(() => {
       if (vault === null || event.payload.vault !== vault.id) {
         return;
       }
+      void refreshTagCatalog(vault);
       void refreshTree();
       if (event.payload.path === selectedPath) {
         editor?.markRemoved();
@@ -1440,6 +1463,7 @@ onMount(() => {
           {onConflict}
           {onWriteError}
           onDocChanged={onEditorDocChanged}
+          onSaved={() => void refreshTagCatalog()}
           {wikilinkNavigationOptions}
           {tagAffordanceOptions}
         />
@@ -1453,6 +1477,7 @@ onMount(() => {
           {commandContext}
           settings={settingsState.document}
           onDocChanged={onEditorDocChanged}
+          onSaved={() => void refreshTagCatalog()}
           {wikilinkNavigationOptions}
           {tagAffordanceOptions}
         />

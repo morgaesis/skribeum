@@ -191,6 +191,10 @@ describe("registration coverage (criterion 1)", () => {
         .filter((command) => command.audience === "widget")
         .map((command) => command.id),
     ).toEqual([
+      "tag.next",
+      "tag.previous",
+      "tag.accept",
+      "tag.close",
       "slash.next",
       "slash.previous",
       "slash.accept",
@@ -198,6 +202,9 @@ describe("registration coverage (criterion 1)", () => {
       "table.cell.next",
       "table.cell.previous",
     ]);
+    expect(
+      registry.pointerCommands("editor-tag").map((command) => command.id),
+    ).toEqual(["tag.search-under-cursor"]);
     expect(
       registry.commands().filter((command) => command.audience === "developer"),
     ).toEqual([]);

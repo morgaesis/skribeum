@@ -58,6 +58,7 @@ export type PointerSurface =
   | "command-palette"
   | "action-menu"
   | "editor-link"
+  | "editor-tag"
   | "find-panel"
   | "selection-toolbar"
   | "slash-menu"

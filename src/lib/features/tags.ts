@@ -61,6 +61,7 @@ const setSelected = StateEffect.define<number>();
 const closeMenu = StateEffect.define<null>();
 const TAG_QUERY = /^[\p{L}\p{N}\p{M}_/-]*$/u;
 const TAG_QUERY_LIMIT = 512;
+const TAG_COMPLETION_LIMIT = 100;
 
 function triggerAt(state: EditorState, position: number): boolean {
   if (position === 0) {
@@ -189,6 +190,7 @@ export function filteredTagCompletions(
       }
       return left.entry.tag.localeCompare(right.entry.tag);
     })
+    .slice(0, TAG_COMPLETION_LIMIT)
     .map((ranked) => ranked.entry);
 }
 
@@ -222,7 +224,7 @@ function acceptItem(view: EditorView): boolean {
   const items = completionItems(view.state, open);
   const item = items[Math.min(open.selected, items.length - 1)];
   if (item === undefined) {
-    return true;
+    return false;
   }
   view.dispatch({
     changes: {
@@ -311,6 +313,7 @@ export function registerTags(registry: CommandRegistry): void {
     id: "tag.search-under-cursor",
     title: STRINGS.commandSearchTag,
     scope: "editor",
+    pointer: ["command-palette", "editor-tag"],
     run: (context) =>
       context.view === null ? false : searchTagUnderCursor(context.view),
   });
@@ -320,6 +323,7 @@ export function registerTags(registry: CommandRegistry): void {
     keybindings: ["ArrowDown"],
     scope: "editor",
     palette: false,
+    audience: "widget",
     run: (context) =>
       context.view === null ? false : moveSelection(context.view, 1),
   });
@@ -329,6 +333,7 @@ export function registerTags(registry: CommandRegistry): void {
     keybindings: ["ArrowUp"],
     scope: "editor",
     palette: false,
+    audience: "widget",
     run: (context) =>
       context.view === null ? false : moveSelection(context.view, -1),
   });
@@ -338,6 +343,7 @@ export function registerTags(registry: CommandRegistry): void {
     keybindings: ["Enter", "Ctrl-Enter"],
     scope: "editor",
     palette: false,
+    audience: "widget",
     run: (context) =>
       context.view === null || !tagCompletionOpen(context.view.state)
         ? false
@@ -349,6 +355,7 @@ export function registerTags(registry: CommandRegistry): void {
     keybindings: ["Escape"],
     scope: "editor",
     palette: false,
+    audience: "widget",
     run: (context) =>
       context.view === null ? false : closeAndRemoveQuery(context.view),
   });

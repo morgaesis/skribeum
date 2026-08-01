@@ -234,58 +234,65 @@ describe("wikilink pointer navigation", () => {
 });
 
 describe("wikilink keyboard navigation", () => {
-  it("follows the cursor link through the registered Enter binding", () => {
-    const registry = createAppRegistry();
-    const navigate = vi.fn();
-    const options = navigationOptions({ navigate });
-    const doc = "Before [[Target note]] after";
-    let view: EditorView;
-    const commandContext = (): CommandContext => ({
-      view,
-      openNote: () => Promise.resolve(),
-      openView: () => {},
-      toggleView: () => {},
-      closeSurfaces: () => {},
-      requestSave: () => {},
-      notePaths: () => options.context.paths,
-      recentNotePaths: () => [],
-      navigateBack: () => false,
-      navigateForward: () => false,
-      followLink: (activeView) =>
-        followWikilinkUnderCursor(activeView ?? view, options),
-    });
-    view = new EditorView({
-      state: EditorState.create({
-        doc,
-        selection: { anchor: doc.indexOf("Target note") + 2 },
-        extensions: [
-          markdown({
-            base: markdownLanguage,
-            extensions: obsidianMarkdownExtensions,
-          }),
-          editorKeymap(registry, commandContext),
-        ],
-      }),
-      parent: document.body,
-    });
-    views.push(view);
-    view.focus();
-    expect(view.hasFocus).toBe(true);
+  it.each([
+    ["Enter", false],
+    ["Control and Enter", true],
+  ])(
+    "follows the cursor link with %s when the tag menu is closed",
+    (_label, control) => {
+      const registry = createAppRegistry();
+      const navigate = vi.fn();
+      const options = navigationOptions({ navigate });
+      const doc = "Before [[Target note]] after";
+      let view: EditorView;
+      const commandContext = (): CommandContext => ({
+        view,
+        openNote: () => Promise.resolve(),
+        openView: () => {},
+        toggleView: () => {},
+        closeSurfaces: () => {},
+        requestSave: () => {},
+        notePaths: () => options.context.paths,
+        recentNotePaths: () => [],
+        navigateBack: () => false,
+        navigateForward: () => false,
+        followLink: (activeView) =>
+          followWikilinkUnderCursor(activeView ?? view, options),
+      });
+      view = new EditorView({
+        state: EditorState.create({
+          doc,
+          selection: { anchor: doc.indexOf("Target note") + 2 },
+          extensions: [
+            markdown({
+              base: markdownLanguage,
+              extensions: obsidianMarkdownExtensions,
+            }),
+            editorKeymap(registry, commandContext),
+          ],
+        }),
+        parent: document.body,
+      });
+      views.push(view);
+      view.focus();
+      expect(view.hasFocus).toBe(true);
 
-    const event = new KeyboardEvent("keydown", {
-      key: "Enter",
-      code: "Enter",
-      keyCode: 13,
-      bubbles: true,
-      cancelable: true,
-    });
-    view.contentDOM.dispatchEvent(event);
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        ctrlKey: control,
+        bubbles: true,
+        cancelable: true,
+      });
+      view.contentDOM.dispatchEvent(event);
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
-    expect(view.state.doc.toString()).toBe(doc);
-    expect(view.hasFocus).toBe(false);
-  });
+      expect(event.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
+      expect(view.state.doc.toString()).toBe(doc);
+      expect(view.hasFocus).toBe(false);
+    },
+  );
 
   it("shows the cross-platform follow binding in the palette", () => {
     const registry = createAppRegistry();

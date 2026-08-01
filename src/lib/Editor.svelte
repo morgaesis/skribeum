@@ -1,7 +1,11 @@
 <script lang="ts">
 import { history } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxTree } from "@codemirror/language";
+import {
+  defaultHighlightStyle,
+  syntaxHighlighting,
+  syntaxTree,
+} from "@codemirror/language";
 import {
   Annotation,
   type ChangeSet,
@@ -26,6 +30,7 @@ import {
   type FrontmatterValueType,
   parseFrontmatter,
 } from "./editor/frontmatter";
+import { codeLanguage } from "./editor/markdown/codeLanguages";
 import { obsidianMarkdownExtensions } from "./editor/markdown/obsidian";
 import { NoteSession } from "./editor/noteSession";
 import { findExtension } from "./features/findPanel";
@@ -82,12 +87,31 @@ let saveChain: Promise<void> = Promise.resolve();
 
 const historyCompartment = new Compartment();
 
+const editorAppearance = EditorView.theme({
+  ".cm-content": {
+    caretColor: "var(--skr-caret)",
+  },
+  ".cm-cursor, .cm-dropCursor": {
+    borderLeft: "2px solid var(--skr-caret)",
+    marginLeft: "-1px",
+  },
+  ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":
+    {
+      backgroundColor: "var(--skr-selection-surface)",
+    },
+  ".cm-content::selection, .cm-content ::selection": {
+    color: "var(--skr-selection-text)",
+    backgroundColor: "var(--skr-selection-surface)",
+  },
+});
+
 /**
  * Frontmatter is panel-edited only within this many leading characters; a
  * block whose closing fence sits beyond it stays plain buffer text.
  */
 const FRONTMATTER_SCAN_LIMIT = 16384;
 let frontmatter = $state<Frontmatter | null>(null);
+let showRawFrontmatter = $state(false);
 
 function refreshFrontmatter() {
   if (view === undefined || session === null) {
@@ -167,9 +191,12 @@ function stateFor(content: string, locked: boolean): EditorState {
     extensions: [
       markdown({
         base: markdownLanguage,
+        codeLanguages: codeLanguage,
         extensions: obsidianMarkdownExtensions,
       }),
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       decorationEngine(),
+      editorAppearance,
       EditorView.lineWrapping,
       bulkTextInput(),
       historyCompartment.of(history()),
@@ -433,6 +460,7 @@ async function rereadAndReconcile(): Promise<void> {
 function initializeForNote(current: LoadedNote | null) {
   clearTimeout(idleSaveTimer);
   removed = false;
+  showRawFrontmatter = false;
   if (current === null) {
     session = null;
     view?.setState(stateFor(doc, false));
@@ -511,9 +539,18 @@ $effect(() => {
 
 <div class="flex h-full min-h-0 flex-col">
   {#if frontmatter !== null && frontmatter.entries.length > 0}
-    <PropertiesPanel {frontmatter} onEditValue={editFrontmatterValue} />
+    <PropertiesPanel
+      {frontmatter}
+      rawSourceVisible={showRawFrontmatter}
+      onRawSourceVisibleChange={(visible) => (showRawFrontmatter = visible)}
+      onEditValue={editFrontmatterValue}
+    />
   {/if}
-  <div class="editor min-h-0 flex-1" bind:this={host}></div>
+  <div
+    class:skr-show-raw-frontmatter={showRawFrontmatter}
+    class="editor min-h-0 flex-1"
+    bind:this={host}
+  ></div>
 </div>
 
 <style>
@@ -523,11 +560,28 @@ $effect(() => {
     font-size: var(--skr-editor-font-size, 0.95rem);
   }
   .editor :global(.cm-editor.cm-focused) {
-    outline: 2px solid #3b82f6;
+    outline: 2px solid var(--skr-focus);
     outline-offset: -2px;
   }
   .editor :global(.cm-content) {
-    font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo,
-      Consolas, monospace;
+    padding-block: clamp(2rem, 5vh, 4rem);
+    font-family: var(--skr-font-prose);
+    line-height: 1.72;
+  }
+  .editor :global(.cm-line) {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: calc(var(--skr-editor-measure, 76ch) + 6rem);
+    margin-inline: auto;
+    padding-inline: clamp(1.5rem, 5vw, 3rem);
+  }
+  .editor :global(.cm-line.cm-skr-code-block) {
+    max-width: calc(var(--skr-editor-measure, 76ch) + 24ch + 6rem);
+    font-family: var(--skr-font-mono);
+    line-height: 1.55;
+  }
+  .editor:not(.skr-show-raw-frontmatter)
+    :global(.cm-line.cm-skr-frontmatter) {
+    display: none;
   }
 </style>

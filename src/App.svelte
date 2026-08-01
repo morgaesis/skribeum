@@ -127,11 +127,19 @@ function applyEditorFontSize(pixels: number) {
   );
 }
 
+function applyEditorReadingMeasure(characters: number) {
+  document.documentElement.style.setProperty(
+    "--skr-editor-measure",
+    `${characters}ch`,
+  );
+}
+
 // Settings apply optimistically (the font size restart-free via the CSS
 // variable); a failed write reverts and the settings view surfaces it.
 const settingsStore = new SettingsStore((state) => {
   settingsState = state;
   applyEditorFontSize(state.document.editor_font_size);
+  applyEditorReadingMeasure(state.document.editor_reading_measure);
   applyTheme(
     isThemeName(state.document.theme) ? state.document.theme : "system",
   );
@@ -361,11 +369,35 @@ function bannerReasonText(reason: BannerReason): string {
 }
 
 function refreshLinkContext() {
+  const activeVault = vault;
+  const currentPath = selectedPath;
   linkContext = {
     paths: tree
       .filter((entry) => entry.kind !== "directory")
       .map((entry) => entry.path),
     config: obsidianConfig,
+    currentPath,
+    embedAncestry: currentPath === null ? [] : [currentPath],
+    embedDepth: 0,
+    ...(activeVault === null
+      ? {}
+      : {
+          loadNote: async (path: string) => {
+            try {
+              const bytes = await readVaultFile(activeVault, path);
+              const content =
+                bytes.length >= 3 &&
+                bytes[0] === 0xef &&
+                bytes[1] === 0xbb &&
+                bytes[2] === 0xbf
+                  ? bytes.subarray(3)
+                  : bytes;
+              return new TextDecoder("utf-8", { fatal: false }).decode(content);
+            } catch {
+              return null;
+            }
+          },
+        }),
   };
 }
 
@@ -458,6 +490,7 @@ async function openNote(path: string) {
     canvas = null;
     canvasError = null;
     selectedPath = path;
+    refreshLinkContext();
     recents = [path, ...recents.filter((entry) => entry !== path)].slice(0, 50);
     await tick();
     if (outlineOpen) {

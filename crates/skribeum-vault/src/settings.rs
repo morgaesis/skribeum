@@ -44,6 +44,8 @@ pub struct Settings {
     pub theme: String,
     /// Editor font size in CSS pixels.
     pub editor_font_size: u32,
+    /// Editor reading measure in characters.
+    pub editor_reading_measure: u32,
     /// Maximum number of results a search query returns.
     pub search_result_limit: u32,
 }
@@ -53,7 +55,8 @@ impl Default for Settings {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
             theme: "system".to_owned(),
-            editor_font_size: 15,
+            editor_font_size: 17,
+            editor_reading_measure: 76,
             search_result_limit: 50,
         }
     }
@@ -63,6 +66,8 @@ impl Default for Settings {
 const THEMES: &[&str] = &["system", "light", "dark"];
 /// Accepted editor font size range in CSS pixels.
 const FONT_SIZE_RANGE: (u32, u32) = (6, 128);
+/// Accepted editor reading measure range in characters.
+const READING_MEASURE_RANGE: (u32, u32) = (45, 120);
 /// Accepted search result limit range.
 const RESULT_LIMIT_RANGE: (u32, u32) = (1, 1000);
 
@@ -78,6 +83,11 @@ impl Settings {
         }
         if self.editor_font_size < FONT_SIZE_RANGE.0 || self.editor_font_size > FONT_SIZE_RANGE.1 {
             return Err(SettingsError::InvalidValue("editor_font_size"));
+        }
+        if self.editor_reading_measure < READING_MEASURE_RANGE.0
+            || self.editor_reading_measure > READING_MEASURE_RANGE.1
+        {
+            return Err(SettingsError::InvalidValue("editor_reading_measure"));
         }
         if self.search_result_limit < RESULT_LIMIT_RANGE.0
             || self.search_result_limit > RESULT_LIMIT_RANGE.1
@@ -138,6 +148,11 @@ impl SettingsStore {
             editor_font_size: read_u32(&object, "editor_font_size")
                 .filter(|size| (FONT_SIZE_RANGE.0..=FONT_SIZE_RANGE.1).contains(size))
                 .unwrap_or(defaults.editor_font_size),
+            editor_reading_measure: read_u32(&object, "editor_reading_measure")
+                .filter(|measure| {
+                    (READING_MEASURE_RANGE.0..=READING_MEASURE_RANGE.1).contains(measure)
+                })
+                .unwrap_or(defaults.editor_reading_measure),
             search_result_limit: read_u32(&object, "search_result_limit")
                 .filter(|limit| (RESULT_LIMIT_RANGE.0..=RESULT_LIMIT_RANGE.1).contains(limit))
                 .unwrap_or(defaults.search_result_limit),
@@ -170,6 +185,10 @@ impl SettingsStore {
         object.insert(
             "editor_font_size".to_owned(),
             Value::from(settings.editor_font_size),
+        );
+        object.insert(
+            "editor_reading_measure".to_owned(),
+            Value::from(settings.editor_reading_measure),
         );
         object.insert(
             "search_result_limit".to_owned(),

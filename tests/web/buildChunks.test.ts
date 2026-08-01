@@ -7,7 +7,7 @@ import { build } from "vite";
 import { describe, expect, it } from "vitest";
 
 describe("rendering build boundaries", () => {
-  it("keeps Mermaid out of initial chunks and bundles KaTeX fonts locally", async () => {
+  it("keeps optional renderers out of initial chunks and bundles KaTeX fonts locally", async () => {
     const root = path.join(
       path.dirname(fileURLToPath(import.meta.url)),
       "..",
@@ -47,6 +47,25 @@ describe("rendering build boundaries", () => {
         ),
       ),
     ).toBe(true);
+
+    const lazyLanguageModules = [
+      /node_modules\/@codemirror\/lang-json\//,
+      /node_modules\/@codemirror\/lang-python\//,
+      /node_modules\/@codemirror\/lang-rust\//,
+      /node_modules\/@codemirror\/lang-yaml\//,
+      /node_modules\/@codemirror\/legacy-modes\/mode\/shell\./,
+    ];
+    const initialModuleIds = moduleIds(initial);
+    for (const languageModule of lazyLanguageModules) {
+      expect(initialModuleIds.filter((id) => languageModule.test(id))).toEqual(
+        [],
+      );
+      expect(
+        chunks.some((chunk) =>
+          Object.keys(chunk.modules).some((id) => languageModule.test(id)),
+        ),
+      ).toBe(true);
+    }
 
     const assets = result.output.filter(
       (item): item is OutputAsset => item.type === "asset",

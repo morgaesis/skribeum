@@ -42,13 +42,14 @@ const SAMPLE_DOCUMENTS = [
   "An autolink <https://example.com/direct> and bare https://example.com/bare text.\n",
   "A [[plain-target]] and an aliased [[target|alias]] link.\n",
   "An embed ![[embedded-note]] inline.\n",
+  "| Name | Score |\n| :--- | ---: |\n| Ada | 10 |\n",
   "- plain item\n- [ ] open task\n- [x] done task\n",
   "Inline math $a^2 + b^2 = c^2$ here.\n\n$$\nE = mc^2\n$$\n",
   "Inline `code span` here.\n\n```rust\nfn main() {}\n```\n",
   "```mermaid\ngraph TD\n  A --> B\n```\n",
   "paragraph\n\n    indented code line\n",
-  "> plain quoted line\n",
   "> [!warning] Callout title\n> callout body\n",
+  "> plain quoted line\n",
   "A #sample-tag inline.\n",
   "A paragraph anchor. ^block-anchor-1\n",
   "---\ntitle: sample\n---\n\nBody after frontmatter.\n",
@@ -143,7 +144,7 @@ function present(
       case "widget":
         if (
           from === node.from &&
-          to === node.to &&
+          to === (presentation.place === "before" ? node.from : node.to) &&
           rest.startsWith(`widget ${presentation.widget}`)
         ) {
           return true;
@@ -200,11 +201,7 @@ describe("cursor-reveal behavior per table row", () => {
     const cursor = located.node.from;
     const at = serializedAt(located.text, cursor);
     const stillThere = present(at, rule, located.doc, located.node);
-    if (
-      rule.reveal === "never" ||
-      (rule.presentation.present !== "hide" &&
-        rule.presentation.present !== "widget")
-    ) {
+    if (rule.reveal === "never" || rule.presentation.present === "line") {
       expect(stillThere, `never-reveal decoration vanished:\n${at}`).toBe(true);
     } else {
       expect(stillThere, `decoration not revealed at cursor:\n${at}`).toBe(
@@ -216,7 +213,7 @@ describe("cursor-reveal behavior per table row", () => {
   it("cursor on the heading line reveals the marker; the line above does not", () => {
     const text = "# Heading\n\nbody\n";
     const revealedOnLine = serializedAt(text, "# Heading".length);
-    expect(revealedOnLine).not.toContain("hide node=HeaderMark");
+    expect(revealedOnLine).toContain("reveal node=HeaderMark");
     const hiddenFromBody = serializedAt(text, text.indexOf("body"));
     expect(hiddenFromBody).toContain("hide node=HeaderMark");
   });

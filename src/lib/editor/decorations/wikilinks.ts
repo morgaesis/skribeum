@@ -56,6 +56,14 @@ export type WikilinkResolutionContext = {
   /** Every note and file path in the open vault, vault-root-relative. */
   paths: readonly string[];
   config: ObsidianAppConfig;
+  /** The note whose editor owns this context. */
+  currentPath?: string | null;
+  /** Read-only note loader used by rendered embeds. */
+  loadNote?: (path: string) => Promise<string | null>;
+  /** Resolved note paths enclosing a nested embed. */
+  embedAncestry?: readonly string[];
+  /** Current rendered-embed nesting depth. */
+  embedDepth?: number;
 };
 
 export const EMPTY_WIKILINK_CONTEXT: WikilinkResolutionContext = {

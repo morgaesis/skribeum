@@ -119,6 +119,29 @@ $effect(() => {
       </label>
 
       <label class="flex items-center justify-between gap-3">
+        <span>{STRINGS.settingsReadingMeasure}</span>
+        <span class="flex items-center gap-2">
+          <input
+            type="number"
+            min="45"
+            max="120"
+            class="skr-settings-input w-24 rounded border px-2 py-1"
+            value={settings.document.editor_reading_measure}
+            data-testid="settings-reading-measure"
+            onchange={(event) => {
+              const value = numberFrom(event);
+              if (value !== null && value >= 45 && value <= 120) {
+                onUpdate({ editor_reading_measure: value });
+              }
+            }}
+          />
+          <span class="skr-settings-unit text-xs">
+            {STRINGS.settingsReadingMeasureUnit}
+          </span>
+        </span>
+      </label>
+
+      <label class="flex items-center justify-between gap-3">
         <span>{STRINGS.settingsSearchLimit}</span>
         <input
           type="number"
@@ -138,3 +161,16 @@ $effect(() => {
     </div>
   </div>
 </div>
+
+<style>
+  .skr-settings-input {
+    border-color: var(--skr-border);
+    background: var(--skr-surface);
+    color: var(--skr-text);
+    caret-color: var(--skr-caret);
+  }
+
+  .skr-settings-unit {
+    color: var(--skr-text-muted);
+  }
+</style>

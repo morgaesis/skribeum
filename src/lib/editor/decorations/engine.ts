@@ -6,9 +6,14 @@
 // `decorationGuard.ts` asserts `docChanged === false` over everything the
 // engine causes.
 
-import { syntaxTree } from "@codemirror/language";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
-  type EditorState,
+  defaultHighlightStyle,
+  syntaxHighlighting,
+  syntaxTree,
+} from "@codemirror/language";
+import {
+  EditorState,
   type Extension,
   Facet,
   StateEffect,
@@ -30,6 +35,12 @@ import { renderMermaid } from "../../rendering/mermaid";
 import { STRINGS } from "../../strings";
 import { bulkTextInputAnnotation } from "../bulkInput";
 import { decorationOrigin } from "../decorationGuard";
+import { codeLanguage } from "../markdown/codeLanguages";
+import {
+  obsidianMarkdownExtensions,
+  skribeumMarkdownParser,
+} from "../markdown/obsidian";
+import { type ParsedCallout, parseCallout } from "./callouts";
 import {
   DECORATION_TABLE,
   type DecorationRule,
@@ -48,6 +59,7 @@ import {
  * the decorator.
  */
 export const LONG_LINE_DECORATION_LIMIT = 10_000;
+export const EMBED_DEPTH_LIMIT = 4;
 
 /**
  * The decoration table as an editor facet. With no provider the committed
@@ -186,11 +198,492 @@ class MermaidWidget extends WidgetType {
   }
 }
 
+type TableLayout = {
+  cells: string[];
+  columns: string;
+  alignments: ("left" | "center" | "right")[];
+  header: boolean;
+  first: boolean;
+  last: boolean;
+};
+
+function directChildren(node: SyntaxNode, name: string): SyntaxNode[] {
+  const children: SyntaxNode[] = [];
+  for (let child = node.firstChild; child !== null; child = child.nextSibling) {
+    if (child.name === name) {
+      children.push(child);
+    }
+  }
+  return children;
+}
+
+function delimiterAlignments(text: string, count: number) {
+  const cells = text
+    .replace(/^\s*\|/u, "")
+    .replace(/\|\s*$/u, "")
+    .split("|")
+    .map((cell) => cell.trim());
+  return Array.from({ length: count }, (_, index) => {
+    const cell = cells[index] ?? "";
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
+    return left && right ? "center" : right ? "right" : "left";
+  });
+}
+
+function tableLayout(node: SyntaxNode, doc: Text): TableLayout {
+  const table = node.parent;
+  const rows: SyntaxNode[] = [];
+  let delimiter = "";
+  if (table !== null) {
+    for (
+      let child = table.firstChild;
+      child !== null;
+      child = child.nextSibling
+    ) {
+      if (child.name === "TableHeader" || child.name === "TableRow") {
+        rows.push(child);
+      } else if (child.name === "TableDelimiter") {
+        delimiter = doc.sliceString(child.from, child.to);
+      }
+    }
+  }
+  const rowCells = rows.map((row) =>
+    directChildren(row, "TableCell").map((cell) =>
+      doc.sliceString(cell.from, cell.to).trim(),
+    ),
+  );
+  const columnCount = Math.max(1, ...rowCells.map((cells) => cells.length));
+  const widths = Array.from({ length: columnCount }, (_, index) =>
+    Math.max(3, ...rowCells.map((cells) => cells[index]?.length ?? 0)),
+  );
+  const rowIndex = rows.findIndex(
+    (row) => row.from === node.from && row.to === node.to,
+  );
+  return {
+    cells: rowCells[rowIndex] ?? [],
+    columns: widths.map((width) => `minmax(${width}ch, 1fr)`).join(" "),
+    alignments: delimiterAlignments(delimiter, columnCount),
+    header: node.name === "TableHeader",
+    first: rowIndex === 0,
+    last: rowIndex === rows.length - 1,
+  };
+}
+
+class TableRowWidget extends WidgetType {
+  constructor(readonly layout: TableLayout) {
+    super();
+  }
+
+  override eq(other: TableRowWidget): boolean {
+    return JSON.stringify(other.layout) === JSON.stringify(this.layout);
+  }
+
+  override toDOM(): HTMLElement {
+    const row = document.createElement("div");
+    row.className = [
+      "cm-skr-table-row",
+      this.layout.header ? "cm-skr-table-header" : "",
+      this.layout.first ? "cm-skr-table-first" : "",
+      this.layout.last ? "cm-skr-table-last" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    row.setAttribute("role", "row");
+    row.style.gridTemplateColumns = this.layout.columns;
+    for (const [index, text] of this.layout.cells.entries()) {
+      const cell = document.createElement(
+        this.layout.header ? "strong" : "span",
+      );
+      cell.className = "cm-skr-table-cell";
+      cell.setAttribute("role", this.layout.header ? "columnheader" : "cell");
+      cell.style.textAlign = this.layout.alignments[index] ?? "left";
+      cell.textContent = text;
+      row.append(cell);
+    }
+    return row;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+class TableSeparatorWidget extends WidgetType {
+  override toDOM(): HTMLElement {
+    const separator = document.createElement("div");
+    separator.className = "cm-skr-table-separator";
+    separator.setAttribute("aria-hidden", "true");
+    return separator;
+  }
+}
+
+function fencedCodeSource(node: SyntaxNode, doc: Text): string {
+  const openingLine = doc.lineAt(node.from);
+  const marks = node.getChildren("CodeMark");
+  const closing = marks.at(-1);
+  const bodyFrom = Math.min(openingLine.to + 1, doc.length);
+  const bodyTo =
+    closing !== undefined && closing.from > openingLine.to
+      ? doc.lineAt(closing.from).from
+      : node.to;
+  return doc.sliceString(bodyFrom, Math.max(bodyFrom, bodyTo));
+}
+
+class CodeCopyWidget extends WidgetType {
+  private resetTimer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(readonly source: string) {
+    super();
+  }
+
+  override eq(other: CodeCopyWidget): boolean {
+    return other.source === this.source;
+  }
+
+  override toDOM(): HTMLElement {
+    const button = document.createElement("button");
+    button.className = "cm-skr-code-copy";
+    button.type = "button";
+    button.textContent = STRINGS.copyCode;
+    button.setAttribute("aria-label", STRINGS.copyCode);
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(this.source);
+        button.textContent = STRINGS.codeCopied;
+        button.setAttribute("aria-label", STRINGS.codeCopied);
+        clearTimeout(this.resetTimer);
+        this.resetTimer = setTimeout(() => {
+          button.textContent = STRINGS.copyCode;
+          button.setAttribute("aria-label", STRINGS.copyCode);
+        }, 1_200);
+      } catch {
+        button.textContent = STRINGS.codeCopyFailed;
+      }
+    });
+    return button;
+  }
+
+  override destroy(): void {
+    clearTimeout(this.resetTimer);
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+const nestedViews = new WeakMap<HTMLElement, EditorView>();
+
+function headingLevel(name: string): number | null {
+  const atx = /^ATXHeading([1-6])$/u.exec(name);
+  if (atx !== null) {
+    return Number(atx[1]);
+  }
+  return name === "SetextHeading1" ? 1 : name === "SetextHeading2" ? 2 : null;
+}
+
+function headingTitle(source: string, node: SyntaxNode): string {
+  const text = source.slice(node.from, node.to);
+  if (node.name.startsWith("ATXHeading")) {
+    return text
+      .replace(/^#{1,6}[ \t]*/u, "")
+      .replace(/[ \t]+#+[ \t]*$/u, "")
+      .trim();
+  }
+  return (text.split("\n", 1)[0] ?? "").trim();
+}
+
+function embeddedSection(source: string, fragment: string): string | null {
+  if (fragment.length === 0) {
+    return source;
+  }
+  const wanted = fragment.trim().toLocaleLowerCase();
+  const tree = skribeumMarkdownParser.parse(source);
+  let match: SyntaxNode | null = null;
+  tree.iterate({
+    enter(ref) {
+      if (
+        match === null &&
+        headingLevel(ref.name) !== null &&
+        headingTitle(source, ref.node).toLocaleLowerCase() === wanted
+      ) {
+        match = ref.node;
+      }
+      return match === null ? undefined : false;
+    },
+  });
+  if (match === null) {
+    return null;
+  }
+  const heading = match as SyntaxNode;
+  const level = headingLevel(heading.name) ?? 6;
+  let end = source.length;
+  tree.iterate({
+    from: heading.to,
+    enter(ref) {
+      const candidate = headingLevel(ref.name);
+      if (candidate !== null && candidate <= level) {
+        end = ref.from;
+        return false;
+      }
+      return undefined;
+    },
+  });
+  return source.slice(heading.from, end).replace(/\n+$/u, "");
+}
+
+function nestedMarkdownView(
+  host: HTMLElement,
+  source: string,
+  context: WikilinkResolutionContext,
+  label: string,
+): EditorView {
+  const nested = new EditorView({
+    state: EditorState.create({
+      doc: source,
+      extensions: [
+        markdown({
+          base: markdownLanguage,
+          extensions: obsidianMarkdownExtensions,
+          codeLanguages: codeLanguage,
+        }),
+        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        decorationEngine(context),
+        EditorView.lineWrapping,
+        EditorState.readOnly.of(true),
+        EditorView.editable.of(false),
+        EditorView.contentAttributes.of({
+          "aria-label": label,
+          tabindex: "-1",
+        }),
+      ],
+    }),
+    parent: host,
+  });
+  nestedViews.set(host, nested);
+  return nested;
+}
+
+class EmbedWidget extends WidgetType {
+  constructor(
+    readonly target: string,
+    readonly rootSource: string,
+    readonly context: WikilinkResolutionContext,
+  ) {
+    super();
+  }
+
+  override eq(other: EmbedWidget): boolean {
+    return (
+      other.target === this.target &&
+      other.rootSource === this.rootSource &&
+      other.context === this.context
+    );
+  }
+
+  override toDOM(view: EditorView): HTMLElement {
+    const host = document.createElement("span");
+    host.className = "cm-skr-embed";
+    host.setAttribute("role", "group");
+    const [pathTarget = "", fragment = ""] = this.target.split("#", 2);
+    const resolution = resolveWikilinkTarget(this.target, this.context);
+    const resolvedPath =
+      resolution.kind === "note"
+        ? resolution.path
+        : resolution.kind === "self"
+          ? (this.context.currentPath ?? "")
+          : "";
+    const sourceName = resolvedPath || pathTarget || STRINGS.currentNote;
+    host.setAttribute("aria-label", `${STRINGS.embedLabel}: ${sourceName}`);
+
+    const header = document.createElement("span");
+    header.className = "cm-skr-embed-header";
+    header.textContent =
+      fragment.length > 0 ? `${sourceName} · ${fragment}` : sourceName;
+    host.append(header);
+    const body = document.createElement("span");
+    body.className = "cm-skr-embed-body";
+    host.append(body);
+
+    const notice = (message: string) => {
+      body.className = "cm-skr-embed-body cm-skr-embed-notice";
+      body.setAttribute("role", "status");
+      body.textContent = message;
+    };
+    if (resolution.kind === "unresolved") {
+      notice(STRINGS.embedUnavailable);
+      return host;
+    }
+    const depth = this.context.embedDepth ?? 0;
+    if (depth >= EMBED_DEPTH_LIMIT) {
+      notice(STRINGS.embedDepthLimit);
+      return host;
+    }
+    const ancestry = this.context.embedAncestry ?? [];
+    const directSelfEmbed = resolution.kind === "self" && depth === 0;
+    if (
+      resolvedPath.length > 0 &&
+      ancestry.includes(resolvedPath) &&
+      !directSelfEmbed
+    ) {
+      notice(STRINGS.embedCycle);
+      return host;
+    }
+    const load =
+      resolution.kind === "self"
+        ? Promise.resolve(this.rootSource)
+        : (this.context.loadNote?.(resolvedPath) ?? Promise.resolve(null));
+    body.textContent = STRINGS.embedLoading;
+    void load.then((source) => {
+      if (!host.isConnected && !document.body.contains(host)) {
+        return;
+      }
+      if (source === null) {
+        notice(STRINGS.embedUnavailable);
+        return;
+      }
+      const selected = embeddedSection(source, fragment);
+      if (selected === null) {
+        notice(STRINGS.embedSectionUnavailable);
+        return;
+      }
+      body.textContent = "";
+      nestedMarkdownView(
+        body,
+        selected,
+        {
+          ...this.context,
+          currentPath: resolvedPath,
+          embedDepth: depth + 1,
+          embedAncestry:
+            resolvedPath.length === 0 ? ancestry : [...ancestry, resolvedPath],
+        },
+        `${STRINGS.embedLabel}: ${sourceName}`,
+      );
+      view.requestMeasure();
+    });
+    return host;
+  }
+
+  override destroy(dom: HTMLElement): void {
+    const body = dom.querySelector<HTMLElement>(".cm-skr-embed-body");
+    if (body !== null) {
+      nestedViews.get(body)?.destroy();
+    }
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+class CalloutWidget extends WidgetType {
+  constructor(
+    readonly callout: ParsedCallout,
+    readonly context: WikilinkResolutionContext,
+  ) {
+    super();
+  }
+
+  override eq(other: CalloutWidget): boolean {
+    return (
+      JSON.stringify(other.callout) === JSON.stringify(this.callout) &&
+      other.context === this.context
+    );
+  }
+
+  override toDOM(view: EditorView): HTMLElement {
+    const host = document.createElement("aside");
+    host.className = "cm-skr-rich-callout";
+    host.setAttribute("role", "note");
+    host.setAttribute("data-callout", this.callout.originalType.toLowerCase());
+    host.setAttribute("data-callout-canonical", this.callout.canonicalType);
+    host.setAttribute("data-accent", this.callout.accentGroup);
+
+    const title = document.createElement(
+      this.callout.foldable ? "button" : "div",
+    );
+    title.className = "cm-skr-callout-title";
+    if (title instanceof HTMLButtonElement) {
+      title.type = "button";
+      title.setAttribute(
+        "aria-expanded",
+        this.callout.initiallyExpanded ? "true" : "false",
+      );
+    } else {
+      title.setAttribute("role", "heading");
+      title.setAttribute("aria-level", "3");
+    }
+    const icon = document.createElement("span");
+    icon.className = "cm-skr-callout-icon-host";
+    icon.innerHTML = this.callout.iconSvg;
+    title.append(icon);
+    const label = document.createElement("span");
+    label.className = "cm-skr-callout-title-text";
+    label.textContent = this.callout.title;
+    title.append(label);
+    if (this.callout.foldable) {
+      const fold = document.createElement("span");
+      fold.className = "cm-skr-callout-fold";
+      fold.setAttribute("aria-hidden", "true");
+      fold.textContent = "⌄";
+      title.append(fold);
+    }
+    host.append(title);
+
+    const body = document.createElement("div");
+    body.className = "cm-skr-callout-body";
+    body.hidden = !this.callout.initiallyExpanded;
+    host.append(body);
+    if (this.callout.bodyMarkdown.length > 0) {
+      nestedMarkdownView(
+        body,
+        this.callout.bodyMarkdown,
+        this.context,
+        `${this.callout.title} callout`,
+      );
+    }
+    if (title instanceof HTMLButtonElement) {
+      title.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        body.hidden = !body.hidden;
+        title.setAttribute("aria-expanded", body.hidden ? "false" : "true");
+        host.classList.toggle("cm-skr-callout-collapsed", body.hidden);
+        view.requestMeasure();
+      });
+      host.classList.toggle(
+        "cm-skr-callout-collapsed",
+        !this.callout.initiallyExpanded,
+      );
+    }
+    return host;
+  }
+
+  override destroy(dom: HTMLElement): void {
+    const body = dom.querySelector<HTMLElement>(".cm-skr-callout-body");
+    if (body !== null) {
+      nestedViews.get(body)?.destroy();
+    }
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
 function isBlockWidgetRule(rule: DecorationRule): boolean {
   return (
     rule.presentation.present === "widget" &&
+    rule.presentation.place !== "before" &&
     (rule.presentation.widget === "math-block" ||
-      rule.presentation.widget === "mermaid-diagram")
+      rule.presentation.widget === "mermaid-diagram" ||
+      rule.presentation.widget === "table-row" ||
+      rule.presentation.widget === "table-separator" ||
+      rule.presentation.widget === "callout")
   );
 }
 
@@ -425,6 +918,21 @@ function dynamicAttributes(
       const type = calloutTypeOf(head, doc);
       return type === null ? {} : { "data-callout": type };
     }
+    case "rich-callout": {
+      if (node.name !== "Blockquote") {
+        return null;
+      }
+      for (let parent = node.parent; parent !== null; parent = parent.parent) {
+        if (parent.name === "Blockquote" && calloutHead(parent) !== null) {
+          // The outer callout's nested read-only editor renders this child.
+          // Emitting both replacements here would overlap vertical ranges.
+          return null;
+        }
+      }
+      const head = calloutHead(node);
+      const type = head === null ? null : calloutTypeOf(head, doc);
+      return type === null ? null : { "data-callout": type };
+    }
     case "code-language":
       return { "data-language": doc.sliceString(node.from, node.to) };
     case "mermaid-block": {
@@ -484,6 +992,7 @@ function widgetFor(
   widget: Extract<Presentation, { present: "widget" }>["widget"],
   node: SyntaxNode,
   doc: Text,
+  wikilinks: WikilinkResolutionContext,
 ): { widget: WidgetType; block: boolean; attributes: Record<string, string> } {
   switch (widget) {
     case "task-checkbox": {
@@ -516,6 +1025,58 @@ function widgetFor(
           "data-language": "mermaid",
         },
       };
+    case "table-row": {
+      const layout = tableLayout(node, doc);
+      return {
+        widget: new TableRowWidget(layout),
+        block: true,
+        attributes: {
+          role: "row",
+          "data-header": layout.header ? "true" : "false",
+        },
+      };
+    }
+    case "table-separator":
+      return {
+        widget: new TableSeparatorWidget(),
+        block: true,
+        attributes: { "aria-hidden": "true" },
+      };
+    case "embed": {
+      const target = node.getChild("Wikilink")?.getChild("WikilinkTarget");
+      const targetText =
+        target === null || target === undefined
+          ? ""
+          : doc.sliceString(target.from, target.to);
+      return {
+        widget: new EmbedWidget(targetText, doc.toString(), wikilinks),
+        block: false,
+        attributes: { role: "group", "data-target": targetText },
+      };
+    }
+    case "code-copy":
+      return {
+        widget: new CodeCopyWidget(fencedCodeSource(node, doc)),
+        block: false,
+        attributes: { role: "button", "aria-label": STRINGS.copyCode },
+      };
+    case "callout": {
+      const callout = parseCallout(doc.sliceString(node.from, node.to));
+      if (callout === null) {
+        throw new Error("callout widget requires a callout blockquote");
+      }
+      return {
+        widget: new CalloutWidget(callout, wikilinks),
+        block: true,
+        attributes: {
+          role: "note",
+          "data-callout": callout.originalType.toLowerCase(),
+          "data-callout-canonical": callout.canonicalType,
+          "data-accent": callout.accentGroup,
+          "data-foldable": callout.foldable ? "true" : "false",
+        },
+      };
+    }
   }
 }
 
@@ -618,11 +1179,12 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (doc.lineAt(ref.from).length > LONG_LINE_DECORATION_LIMIT) {
             continue;
           }
-          if (
-            (presentation.present === "hide" ||
-              presentation.present === "widget") &&
-            revealed(rule, node)
-          ) {
+          const revealedNow = revealed(rule, node);
+          // A revealed rule emits nothing, so the source shows through. The
+          // exception is a cursor-line reveal, which still emits a marker
+          // carrying its active state so the transition has something to
+          // animate between.
+          if (revealedNow && rule.reveal !== "cursor-line") {
             continue;
           }
           if (presentation.present === "hide") {
@@ -635,6 +1197,23 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 hideFrom -= 1;
               }
             }
+            if (rule.reveal === "cursor-line") {
+              const className = revealedNow
+                ? "cm-skr-reveal-marker cm-skr-reveal-marker-active"
+                : "cm-skr-reveal-marker";
+              built.push({
+                from: hideFrom,
+                to: hideTo,
+                decoration: Decoration.mark({
+                  class: className,
+                  skr: `${revealedNow ? "reveal" : "hide"} node=${rule.node}`,
+                }),
+              });
+              continue;
+            }
+            if (revealedNow) {
+              continue;
+            }
             built.push({
               from: hideFrom,
               to: hideTo,
@@ -643,16 +1222,34 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               }),
             });
           } else if (presentation.present === "widget") {
-            const builtWidget = widgetFor(presentation.widget, node, doc);
-            built.push({
-              from: ref.from,
-              to: ref.to,
-              decoration: Decoration.replace({
-                widget: builtWidget.widget,
-                block: builtWidget.block,
-                skr: `widget ${presentation.widget}${serializeAttributes(builtWidget.attributes)}`,
-              }),
-            });
+            const builtWidget = widgetFor(
+              presentation.widget,
+              node,
+              doc,
+              wikilinks,
+            );
+            const skr = `widget ${presentation.widget}${serializeAttributes(builtWidget.attributes)}`;
+            if (presentation.place === "before") {
+              built.push({
+                from: ref.from,
+                to: ref.from,
+                decoration: Decoration.widget({
+                  widget: builtWidget.widget,
+                  side: -1,
+                  skr,
+                }),
+              });
+            } else {
+              built.push({
+                from: ref.from,
+                to: ref.to,
+                decoration: Decoration.replace({
+                  widget: builtWidget.widget,
+                  block: builtWidget.block,
+                  skr,
+                }),
+              });
+            }
           } else {
             built.push({
               from: ref.from,
@@ -716,6 +1313,7 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
       from: range.from,
       to: range.to,
     })),
+    wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
   });
 }
 
@@ -760,7 +1358,9 @@ const blockEngineField = StateField.define<BlockEngineState>({
       transaction.selection !== transaction.startState.selection ||
       syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ||
       transaction.state.facet(decorationTable) !==
-        transaction.startState.facet(decorationTable)
+        transaction.startState.facet(decorationTable) ||
+      transaction.state.field(wikilinkContext, false) !==
+        transaction.startState.field(wikilinkContext, false)
     ) {
       return {
         decorations: buildBlockDecorations(transaction.state),
@@ -854,14 +1454,74 @@ const enginePlugin = ViewPlugin.fromClass(
 );
 
 const engineTheme = EditorView.baseTheme({
-  ".cm-skr-heading": { fontWeight: "700" },
-  ".cm-skr-heading-1": { fontSize: "1.6em" },
-  ".cm-skr-heading-2": { fontSize: "1.4em" },
-  ".cm-skr-heading-3": { fontSize: "1.25em" },
-  ".cm-skr-heading-4": { fontSize: "1.1em" },
-  ".cm-skr-heading-5": { fontSize: "1em" },
-  ".cm-skr-heading-6": { fontSize: "1em", opacity: "0.85" },
-  ".cm-skr-setext-underline": { opacity: "0.5" },
+  ".cm-skr-heading": {
+    fontFamily: "var(--skr-font-prose)",
+    lineHeight: "1.22",
+    textWrap: "balance",
+  },
+  ".cm-skr-heading-1": {
+    color: "var(--skr-heading-1)",
+    fontSize: "2.05em",
+    fontWeight: "720",
+    letterSpacing: "-0.028em",
+    paddingTop: "0.6em",
+    paddingBottom: "0.32em",
+    borderBottom: "1px solid var(--skr-border)",
+  },
+  ".cm-skr-heading-2": {
+    color: "var(--skr-heading-2)",
+    fontSize: "1.7em",
+    fontWeight: "690",
+    letterSpacing: "-0.02em",
+    paddingTop: "0.68em",
+    paddingBottom: "0.2em",
+  },
+  ".cm-skr-heading-3": {
+    color: "var(--skr-heading-3)",
+    fontSize: "1.4em",
+    fontWeight: "660",
+    letterSpacing: "-0.012em",
+    paddingTop: "0.62em",
+    paddingBottom: "0.14em",
+  },
+  ".cm-skr-heading-4": {
+    color: "var(--skr-heading-4)",
+    fontSize: "1.18em",
+    fontWeight: "630",
+    letterSpacing: "0.005em",
+    paddingTop: "0.54em",
+  },
+  ".cm-skr-heading-5": {
+    color: "var(--skr-heading-5)",
+    fontSize: "1.02em",
+    fontWeight: "600",
+    letterSpacing: "0.055em",
+    paddingTop: "0.48em",
+    textTransform: "uppercase",
+  },
+  ".cm-skr-heading-6": {
+    color: "var(--skr-heading-6)",
+    fontSize: "0.92em",
+    fontWeight: "570",
+    letterSpacing: "0.075em",
+    paddingTop: "0.42em",
+    textTransform: "uppercase",
+  },
+  ".cm-skr-setext-underline": { color: "var(--skr-text-muted)" },
+  ".cm-skr-reveal-marker": {
+    display: "inline-block",
+    maxWidth: "0",
+    overflow: "hidden",
+    color: "var(--skr-text-muted)",
+    opacity: "0",
+    verticalAlign: "bottom",
+    whiteSpace: "pre",
+    transition: "max-width 120ms ease-out, opacity 90ms ease-out",
+  },
+  ".cm-skr-reveal-marker-active": {
+    maxWidth: "7ch",
+    opacity: "1",
+  },
   ".cm-skr-emphasis": { fontStyle: "italic" },
   ".cm-skr-strong": { fontWeight: "700" },
   ".cm-skr-strikethrough": { textDecoration: "line-through" },
@@ -881,7 +1541,31 @@ const engineTheme = EditorView.baseTheme({
   '.cm-skr-wikilink[data-resolved="false"] .cm-skr-wikilink-target': {
     textDecorationStyle: "dashed",
   },
-  ".cm-skr-embed": { backgroundColor: "var(--skr-accent-soft)" },
+  ".cm-skr-embed": {
+    boxSizing: "border-box",
+    display: "inline-flex",
+    flexDirection: "column",
+    width: "100%",
+    margin: "0.35rem 0",
+    paddingLeft: "0.75rem",
+    borderLeft: "3px solid var(--skr-accent)",
+    backgroundColor: "var(--skr-surface-subtle)",
+    verticalAlign: "top",
+  },
+  ".cm-skr-embed-header": {
+    display: "block",
+    padding: "0.35rem 0.6rem",
+    color: "var(--skr-text-muted)",
+    fontSize: "0.8em",
+    fontWeight: "700",
+  },
+  ".cm-skr-embed-body": { display: "block" },
+  ".cm-skr-embed-body > .cm-editor": { backgroundColor: "transparent" },
+  ".cm-skr-embed-notice": {
+    padding: "0.5rem 0.6rem",
+    color: "var(--skr-text-muted)",
+    fontStyle: "italic",
+  },
   ".cm-skr-list-mark": { color: "var(--skr-accent)" },
   ".cm-skr-task-checkbox": {
     display: "inline-block",
@@ -901,14 +1585,69 @@ const engineTheme = EditorView.baseTheme({
     borderColor: "var(--skr-text-muted)",
   },
   ".cm-skr-inline-code": {
-    fontFamily: "inherit",
+    fontFamily: "var(--skr-font-mono)",
     backgroundColor: "var(--skr-code-surface)",
     borderRadius: "3px",
     padding: "0 2px",
   },
-  ".cm-skr-code-block": { backgroundColor: "var(--skr-code-surface)" },
-  ".cm-skr-code-fence": { opacity: "0.5" },
-  ".cm-skr-code-info": { opacity: "0.7", fontStyle: "italic" },
+  ".cm-skr-table-row": {
+    boxSizing: "border-box",
+    display: "grid",
+    width: "100%",
+    overflow: "hidden",
+    borderLeft: "1px solid var(--skr-border)",
+    borderRight: "1px solid var(--skr-border)",
+    backgroundColor: "var(--skr-surface)",
+  },
+  ".cm-skr-table-first": {
+    borderTop: "1px solid var(--skr-border)",
+    borderTopLeftRadius: "0.35rem",
+    borderTopRightRadius: "0.35rem",
+  },
+  ".cm-skr-table-last": {
+    borderBottom: "1px solid var(--skr-border)",
+    borderBottomLeftRadius: "0.35rem",
+    borderBottomRightRadius: "0.35rem",
+  },
+  ".cm-skr-table-header": {
+    borderBottom: "2px solid var(--skr-border)",
+    backgroundColor: "var(--skr-surface-subtle)",
+  },
+  ".cm-skr-table-cell": {
+    boxSizing: "border-box",
+    minWidth: "0",
+    padding: "0.35rem 0.55rem",
+    overflowWrap: "anywhere",
+    borderRight: "1px solid var(--skr-border)",
+  },
+  ".cm-skr-table-cell:last-child": { borderRight: "0" },
+  ".cm-skr-table-separator": { display: "none" },
+  ".cm-skr-code-block": {
+    position: "relative",
+    backgroundColor: "var(--skr-code-surface)",
+  },
+  ".cm-skr-code-fence": { opacity: "0.28" },
+  ".cm-skr-code-info": { opacity: "0.38", fontStyle: "italic" },
+  ".cm-skr-code-copy": {
+    position: "absolute",
+    zIndex: "2",
+    top: "0.2rem",
+    right: "0.35rem",
+    minWidth: "4.5rem",
+    padding: "0.2rem 0.45rem",
+    color: "var(--skr-text)",
+    backgroundColor:
+      "color-mix(in srgb, var(--skr-surface-raised) 78%, transparent)",
+    border: "1px solid var(--skr-border)",
+    borderRadius: "0.3rem",
+    opacity: "0",
+    pointerEvents: "none",
+  },
+  ".cm-skr-code-block:hover .cm-skr-code-copy, .cm-skr-code-copy:focus-visible":
+    {
+      opacity: "1",
+      pointerEvents: "auto",
+    },
   ".cm-skr-blockquote": {
     borderLeft: "3px solid var(--skr-border)",
     paddingLeft: "0.5em",
@@ -937,14 +1676,82 @@ const engineTheme = EditorView.baseTheme({
     { color: "var(--skr-danger)" },
   '.cm-skr-callout-mark[data-callout="tip"], .cm-skr-callout-mark[data-callout="success"]':
     { color: "var(--skr-success)" },
+  ".cm-skr-rich-callout": {
+    "--skr-callout-color": "var(--skr-callout-blue)",
+    boxSizing: "border-box",
+    width: "100%",
+    overflow: "hidden",
+    color: "var(--skr-text)",
+    backgroundColor:
+      "color-mix(in srgb, var(--skr-callout-color) 10%, var(--skr-surface))",
+    border:
+      "1px solid color-mix(in srgb, var(--skr-callout-color) 45%, var(--skr-border))",
+    borderLeft: "4px solid var(--skr-callout-color)",
+    borderRadius: "0.45rem",
+  },
+  '.cm-skr-rich-callout[data-accent="cyan"]': {
+    "--skr-callout-color": "var(--skr-callout-cyan)",
+  },
+  '.cm-skr-rich-callout[data-accent="green"]': {
+    "--skr-callout-color": "var(--skr-success)",
+  },
+  '.cm-skr-rich-callout[data-accent="yellow"]': {
+    "--skr-callout-color": "var(--skr-callout-yellow)",
+  },
+  '.cm-skr-rich-callout[data-accent="orange"]': {
+    "--skr-callout-color": "var(--skr-callout-orange)",
+  },
+  '.cm-skr-rich-callout[data-accent="red"]': {
+    "--skr-callout-color": "var(--skr-danger)",
+  },
+  '.cm-skr-rich-callout[data-accent="purple"]': {
+    "--skr-callout-color": "var(--skr-callout-purple)",
+  },
+  '.cm-skr-rich-callout[data-accent="gray"]': {
+    "--skr-callout-color": "var(--skr-text-muted)",
+  },
+  ".cm-skr-callout-title": {
+    boxSizing: "border-box",
+    display: "flex",
+    alignItems: "center",
+    gap: "0.45rem",
+    width: "100%",
+    padding: "0.5rem 0.7rem",
+    color: "var(--skr-callout-color)",
+    backgroundColor: "transparent",
+    border: "0",
+    font: "inherit",
+    fontWeight: "700",
+    textAlign: "left",
+  },
+  "button.cm-skr-callout-title": { cursor: "pointer" },
+  ".cm-skr-callout-icon-host, .cm-skr-callout-icon": {
+    display: "inline-flex",
+    flex: "0 0 auto",
+  },
+  ".cm-skr-callout-fold": {
+    marginLeft: "auto",
+    fontSize: "1.15em",
+    transition: "transform 120ms ease",
+  },
+  '.cm-skr-callout-title[aria-expanded="false"] .cm-skr-callout-fold': {
+    transform: "rotate(-90deg)",
+  },
+  ".cm-skr-callout-body": { padding: "0 0.7rem 0.65rem" },
+  ".cm-skr-callout-body[hidden]": { display: "none" },
+  ".cm-skr-callout-body > .cm-editor": { backgroundColor: "transparent" },
   ".cm-skr-tag": {
     color: "var(--skr-accent)",
     backgroundColor: "var(--skr-accent-soft)",
     borderRadius: "8px",
     padding: "0 4px",
   },
-  ".cm-skr-block-id": { opacity: "0.5" },
-  ".cm-skr-frontmatter": { opacity: "0.6" },
+  ".cm-skr-block-id": { color: "var(--skr-text-muted)" },
+  ".cm-skr-frontmatter": {
+    color: "var(--skr-text-muted)",
+    fontFamily: "var(--skr-font-mono)",
+    fontSize: "0.88em",
+  },
   ".cm-skr-math-inline": { display: "inline-block", maxWidth: "100%" },
   ".cm-skr-math-block, .cm-skr-mermaid": {
     boxSizing: "border-box",
@@ -961,7 +1768,7 @@ const engineTheme = EditorView.baseTheme({
     color: "var(--skr-danger)",
     backgroundColor: "var(--skr-danger-surface)",
     borderColor: "var(--skr-danger)",
-    fontFamily: "monospace",
+    fontFamily: "var(--skr-font-mono)",
     whiteSpace: "pre-wrap",
   },
 });
@@ -971,8 +1778,17 @@ const engineTheme = EditorView.baseTheme({
  * view plugin interpreting the decoration table over visible ranges, and
  * the base theme for the table's classes.
  */
-export function decorationEngine(): Extension {
-  return [wikilinkContext, blockEngineField, enginePlugin, engineTheme];
+export function decorationEngine(
+  initialContext?: WikilinkResolutionContext,
+): Extension {
+  return [
+    initialContext === undefined
+      ? wikilinkContext
+      : wikilinkContext.init(() => initialContext),
+    blockEngineField,
+    enginePlugin,
+    engineTheme,
+  ];
 }
 
 /** The live decoration set of a view running the engine; null without it. */

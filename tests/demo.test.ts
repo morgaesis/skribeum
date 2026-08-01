@@ -100,7 +100,8 @@ describe("browser demo IPC", () => {
     await expect(settingsRead()).resolves.toEqual({
       schema_version: 1,
       theme: "system",
-      editor_font_size: 15,
+      editor_font_size: 17,
+      editor_reading_measure: 76,
       search_result_limit: 50,
     });
 
@@ -108,6 +109,7 @@ describe("browser demo IPC", () => {
       schema_version: 1,
       theme: "dark",
       editor_font_size: 18,
+      editor_reading_measure: 84,
       search_result_limit: 24,
     };
     await settingsWrite(settings);
@@ -124,6 +126,7 @@ describe("browser demo IPC", () => {
         schema_version: 1,
         theme: "neon",
         editor_font_size: Number.POSITIVE_INFINITY,
+        editor_reading_measure: 121,
         search_result_limit: 0,
       }),
     );
@@ -131,16 +134,27 @@ describe("browser demo IPC", () => {
     await expect(settingsRead()).resolves.toEqual({
       schema_version: 1,
       theme: "system",
-      editor_font_size: 15,
+      editor_font_size: 17,
+      editor_reading_measure: 76,
       search_result_limit: 50,
     });
     await expect(
       settingsWrite({
         schema_version: 1,
         theme: "system",
-        editor_font_size: 15,
+        editor_font_size: 17,
+        editor_reading_measure: 76,
         search_result_limit: 1001,
       }),
     ).rejects.toThrow("search_result_limit");
+    await expect(
+      settingsWrite({
+        schema_version: 1,
+        theme: "system",
+        editor_font_size: 17,
+        editor_reading_measure: 44,
+        search_result_limit: 50,
+      }),
+    ).rejects.toThrow("editor_reading_measure");
   });
 });

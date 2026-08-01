@@ -402,5 +402,21 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("has no section for v9.9.9", result.stderr)
 
 
+class JudgeFenceTests(unittest.TestCase):
+    def test_parses_judge_json_inside_a_code_fence(self):
+        fenced = (
+            "```json\n"
+            '{"traceable": true, "fabrications": [], "voice": "good", "verdict": "pass"}\n'
+            "```"
+        )
+        result = RELEASE_NOTES.parse_judge(fenced)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertTrue(RELEASE_NOTES.judge_passed(result))
+
+    def test_rejects_a_fence_with_no_object(self):
+        with self.assertRaises(RELEASE_NOTES.ReleaseNotesError):
+            RELEASE_NOTES.parse_judge("```json\nnot an object\n```")
+
+
 if __name__ == "__main__":
     unittest.main()

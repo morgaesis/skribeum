@@ -373,8 +373,15 @@ def chat_completion(
 
 
 def parse_judge(content: str) -> dict[str, object]:
+    # Models routinely wrap the requested JSON in a Markdown code fence even
+    # when told not to. The contract is the object, not its framing, so parse
+    # the outermost object rather than the raw string.
+    start = content.find("{")
+    end = content.rfind("}")
+    if start == -1 or end <= start:
+        raise ReleaseNotesError("the judge returned no JSON object")
     try:
-        result = json.loads(content)
+        result = json.loads(content[start : end + 1])
     except json.JSONDecodeError as error:
         raise ReleaseNotesError("the judge returned malformed JSON") from error
     expected_keys = {"traceable", "fabrications", "voice", "verdict"}

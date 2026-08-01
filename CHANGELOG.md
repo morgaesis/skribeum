@@ -21,6 +21,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of triggering native contenteditable paragraph reconstruction.
 - The editor caret and selection formatting toolbar remain visible and
   readable across light, dark, code and callout surfaces.
+- Callouts retain parent-editor source positions under their rendered lines,
+  so pointer placement reveals the complete editable block and one cursor
+  controls nested and adjacent reveal regions.
 
 ### Added
 
@@ -41,7 +44,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Rendered GFM table rows, recursive whole-note and section embeds, lazy
   fenced-code syntax highlighting, exact-source copy controls, cursor-aware
   fence receding, and the full Obsidian callout taxonomy with icons, themed
-  accents and collapsible rich bodies.
+  accents and source-backed body rendering.
 
 - Standalone `skribeum-import` CLI converting Notion Markdown and CSV export
   archives into Obsidian-compatible vaults, with readable collision-safe

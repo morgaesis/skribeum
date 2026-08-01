@@ -9,7 +9,7 @@
 /** When a hidden or replaced range re-appears as plain source text. */
 export type RevealPolicy = "cursor-inside" | "cursor-line" | "never";
 
-/** Inline widgets the engine knows how to build. */
+/** Widgets the engine knows how to build. */
 export type WidgetName =
   | "task-checkbox"
   | "math-inline"
@@ -19,7 +19,7 @@ export type WidgetName =
   | "table-separator"
   | "embed"
   | "code-copy"
-  | "callout";
+  | "callout-icon";
 
 export type Presentation =
   /** A styled span over the node's text. */
@@ -44,12 +44,14 @@ export type Presentation =
  * Named engine behaviors a row may reference for context-dependent
  * attributes. The table stays data; these are the documented builtins the
  * engine implements: `wikilink-resolution` adds `data-resolved`,
- * `callout-type` adds `data-callout` (and only fires inside a Blockquote
- * headed by a callout mark), `code-language` adds `data-language`.
+ * `callout-type` adds `data-callout` inside a typed callout,
+ * `plain-blockquote` excludes typed callouts, and `code-language` adds
+ * `data-language`.
  */
 export type DynamicAttribute =
   | "wikilink-resolution"
   | "callout-type"
+  | "plain-blockquote"
   | "rich-callout"
   | "code-language"
   | "mermaid-block";
@@ -77,6 +79,10 @@ export type DecorationRule = {
   codeInfo?: string;
   presentation: Presentation;
   reveal: RevealPolicy;
+  /** Override the construct range selected by a cursor reveal. */
+  revealScope?: "node" | "parent";
+  /** Reveal nested constructs as source while retaining this presentation. */
+  revealDescendants?: boolean;
   dynamic?: DynamicAttribute;
 };
 
@@ -332,13 +338,22 @@ const codeRows: DecorationRule[] = [
 const quoteRows: DecorationRule[] = [
   {
     node: "Blockquote",
-    presentation: { present: "widget", widget: "callout" },
+    presentation: { present: "line", class: "cm-skr-rich-callout" },
     reveal: "cursor-inside",
+    revealScope: "node",
+    revealDescendants: true,
     dynamic: "rich-callout",
   },
   {
     node: "Blockquote",
     presentation: { present: "line", class: "cm-skr-blockquote" },
+    reveal: "never",
+    dynamic: "plain-blockquote",
+  },
+  {
+    node: "QuoteMark",
+    ancestor: "Blockquote",
+    presentation: { present: "hide" },
     reveal: "never",
     dynamic: "callout-type",
   },
@@ -350,7 +365,25 @@ const quoteRows: DecorationRule[] = [
   {
     node: "CalloutMark",
     ancestor: "Blockquote",
+    presentation: { present: "hide" },
+    reveal: "never",
+    dynamic: "callout-type",
+  },
+  {
+    node: "CalloutMark",
+    ancestor: "Blockquote",
     presentation: { present: "mark", class: "cm-skr-callout-mark" },
+    reveal: "never",
+    dynamic: "callout-type",
+  },
+  {
+    node: "CalloutMark",
+    ancestor: "Blockquote",
+    presentation: {
+      present: "widget",
+      widget: "callout-icon",
+      place: "before",
+    },
     reveal: "never",
     dynamic: "callout-type",
   },

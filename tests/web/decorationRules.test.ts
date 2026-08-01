@@ -84,7 +84,10 @@ function locate(rule: DecorationRule): Located | null {
       const lines = serializeDecorationSet(
         computeDecorations({ doc, tree, table: DECORATION_TABLE }),
       );
-      return { text, doc, node: { from: node.from, to: node.to }, lines };
+      const range = { from: node.from, to: node.to };
+      if (present(lines, rule, doc, range)) {
+        return { text, doc, node: range, lines };
+      }
     }
   }
   return null;
@@ -198,11 +201,12 @@ describe("cursor-reveal behavior per table row", () => {
       `decoration missing with no selection:\n${away}`,
     ).toBe(true);
 
-    const cursor = located.node.from;
+    const cursor =
+      rule.reveal === "never" ? located.text.length : located.node.from;
     const at = serializedAt(located.text, cursor);
     const stillThere = present(at, rule, located.doc, located.node);
-    if (rule.reveal === "never" || rule.presentation.present === "line") {
-      expect(stillThere, `never-reveal decoration vanished:\n${at}`).toBe(true);
+    if (rule.reveal === "never" || rule.revealDescendants === true) {
+      expect(stillThere, `owning decoration vanished:\n${at}`).toBe(true);
     } else {
       expect(stillThere, `decoration not revealed at cursor:\n${at}`).toBe(
         false,
@@ -224,6 +228,41 @@ describe("cursor-reveal behavior per table row", () => {
     // The first emphasis is revealed, the second still hides its marks.
     expect(at).toContain("12..13 hide node=EmphasisMark");
     expect(at).not.toContain("0..1 hide node=EmphasisMark");
+  });
+
+  it("selects one reveal region when a link is nested in a callout", () => {
+    const text =
+      "[outside](outside-target)\n\n> [!note] Linked note\n> [inside](inside-target)\n";
+    const outsideUrl = text.indexOf("outside-target");
+    const insideUrl = text.indexOf("inside-target");
+    const hiddenUrlRanges = (serialized: string) =>
+      serialized
+        .split("\n")
+        .filter((line) => line.endsWith("hide node=URL"))
+        .map((line) => {
+          const match = /^(\d+)\.\.(\d+)/u.exec(line);
+          return match === null
+            ? null
+            : { from: Number(match[1]), to: Number(match[2]) };
+        })
+        .filter(
+          (range): range is { from: number; to: number } => range !== null,
+        );
+    const hides = (ranges: { from: number; to: number }[], offset: number) =>
+      ranges.some((range) => range.from <= offset && range.to >= offset);
+
+    const inside = serializedAt(text, text.indexOf("inside"));
+    const insideHidden = hiddenUrlRanges(inside);
+    expect(hides(insideHidden, outsideUrl)).toBe(true);
+    expect(hides(insideHidden, insideUrl)).toBe(false);
+    expect(inside).toContain("cm-skr-rich-callout");
+    expect(inside).toContain('data-revealed="true"');
+
+    const outside = serializedAt(text, text.indexOf("outside"));
+    const outsideHidden = hiddenUrlRanges(outside);
+    expect(hides(outsideHidden, outsideUrl)).toBe(false);
+    expect(hides(outsideHidden, insideUrl)).toBe(true);
+    expect(outside).toContain("cm-skr-rich-callout");
   });
 });
 
@@ -247,6 +286,12 @@ describe("docs/decoration-rules.md mirrors the table", () => {
     }
     if (rule.codeInfo !== undefined) {
       parts.push(`codeInfo=${rule.codeInfo}`);
+    }
+    if (rule.revealScope !== undefined) {
+      parts.push(`revealScope=${rule.revealScope}`);
+    }
+    if (rule.revealDescendants === true) {
+      parts.push("revealDescendants");
     }
     return parts.length === 0 ? "-" : parts.join(" ");
   }

@@ -41,7 +41,7 @@ import {
   obsidianMarkdownExtensions,
   skribeumMarkdownParser,
 } from "../markdown/obsidian";
-import { type ParsedCallout, parseCallout } from "./callouts";
+import { calloutIconSvg, parseCallout } from "./callouts";
 import {
   DECORATION_TABLE,
   type DecorationRule,
@@ -625,98 +625,25 @@ class EmbedWidget extends WidgetType {
   }
 }
 
-class CalloutWidget extends WidgetType {
-  constructor(
-    readonly callout: ParsedCallout,
-    readonly context: WikilinkResolutionContext,
-  ) {
+class CalloutIconWidget extends WidgetType {
+  constructor(readonly type: string) {
     super();
   }
 
-  override eq(other: CalloutWidget): boolean {
-    return (
-      JSON.stringify(other.callout) === JSON.stringify(this.callout) &&
-      other.context === this.context
-    );
+  override eq(other: CalloutIconWidget): boolean {
+    return other.type === this.type;
   }
 
-  override toDOM(view: EditorView): HTMLElement {
-    const host = document.createElement("aside");
-    host.className = "cm-skr-rich-callout";
-    host.setAttribute("role", "note");
-    host.setAttribute("data-callout", this.callout.originalType.toLowerCase());
-    host.setAttribute("data-callout-canonical", this.callout.canonicalType);
-    host.setAttribute("data-accent", this.callout.accentGroup);
-
-    const title = document.createElement(
-      this.callout.foldable ? "button" : "div",
-    );
-    title.className = "cm-skr-callout-title";
-    if (title instanceof HTMLButtonElement) {
-      title.type = "button";
-      title.setAttribute(
-        "aria-expanded",
-        this.callout.initiallyExpanded ? "true" : "false",
-      );
-    } else {
-      title.setAttribute("role", "heading");
-      title.setAttribute("aria-level", "3");
-    }
-    const icon = document.createElement("span");
-    icon.className = "cm-skr-callout-icon-host";
-    icon.innerHTML = this.callout.iconSvg;
-    title.append(icon);
-    const label = document.createElement("span");
-    label.className = "cm-skr-callout-title-text";
-    label.textContent = this.callout.title;
-    title.append(label);
-    if (this.callout.foldable) {
-      const fold = document.createElement("span");
-      fold.className = "cm-skr-callout-fold";
-      fold.setAttribute("aria-hidden", "true");
-      fold.textContent = "⌄";
-      title.append(fold);
-    }
-    host.append(title);
-
-    const body = document.createElement("div");
-    body.className = "cm-skr-callout-body";
-    body.hidden = !this.callout.initiallyExpanded;
-    host.append(body);
-    if (this.callout.bodyMarkdown.length > 0) {
-      nestedMarkdownView(
-        body,
-        this.callout.bodyMarkdown,
-        this.context,
-        `${this.callout.title} callout`,
-      );
-    }
-    if (title instanceof HTMLButtonElement) {
-      title.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        body.hidden = !body.hidden;
-        title.setAttribute("aria-expanded", body.hidden ? "false" : "true");
-        host.classList.toggle("cm-skr-callout-collapsed", body.hidden);
-        view.requestMeasure();
-      });
-      host.classList.toggle(
-        "cm-skr-callout-collapsed",
-        !this.callout.initiallyExpanded,
-      );
-    }
+  override toDOM(): HTMLElement {
+    const host = document.createElement("span");
+    host.className = "cm-skr-callout-icon-host";
+    host.setAttribute("aria-hidden", "true");
+    host.innerHTML = calloutIconSvg(this.type);
     return host;
   }
 
-  override destroy(dom: HTMLElement): void {
-    const body = dom.querySelector<HTMLElement>(".cm-skr-callout-body");
-    if (body !== null) {
-      nestedViews.get(body)?.destroy();
-    }
-  }
-
   override ignoreEvent(): boolean {
-    return true;
+    return false;
   }
 }
 
@@ -727,8 +654,7 @@ function isBlockWidgetRule(rule: DecorationRule): boolean {
     (rule.presentation.widget === "math-block" ||
       rule.presentation.widget === "mermaid-diagram" ||
       rule.presentation.widget === "table-row" ||
-      rule.presentation.widget === "table-separator" ||
-      rule.presentation.widget === "callout")
+      rule.presentation.widget === "table-separator")
   );
 }
 
@@ -793,6 +719,14 @@ type ComputeOptions = {
   /** Windows to decorate; the whole document when omitted. */
   ranges?: readonly { from: number; to: number }[];
   wikilinks?: WikilinkResolutionContext;
+  /** Preselected across the full table when decorations are split. */
+  activeReveal?: RevealRegion | null;
+};
+
+type RevealRegion = {
+  from: number;
+  to: number;
+  descendants: boolean;
 };
 
 type RuleIndex = Map<string, DecorationRule[]>;
@@ -944,12 +878,10 @@ function dynamicAttributes(
       };
     }
     case "callout-type": {
-      const blockquote =
-        node.name === "Blockquote"
-          ? node
-          : node.name === "CalloutMark"
-            ? (node.parent?.parent ?? null)
-            : null;
+      let blockquote: SyntaxNode | null = node;
+      while (blockquote !== null && blockquote.name !== "Blockquote") {
+        blockquote = blockquote.parent;
+      }
       if (blockquote === null || blockquote.name !== "Blockquote") {
         return node.name === "Blockquote" ? {} : null;
       }
@@ -963,20 +895,28 @@ function dynamicAttributes(
       const type = calloutTypeOf(head, doc);
       return type === null ? {} : { "data-callout": type };
     }
+    case "plain-blockquote": {
+      let blockquote: SyntaxNode | null = node;
+      while (blockquote !== null && blockquote.name !== "Blockquote") {
+        blockquote = blockquote.parent;
+      }
+      return blockquote !== null && calloutHead(blockquote) === null
+        ? {}
+        : null;
+    }
     case "rich-callout": {
       if (node.name !== "Blockquote") {
         return null;
       }
-      for (let parent = node.parent; parent !== null; parent = parent.parent) {
-        if (parent.name === "Blockquote" && calloutHead(parent) !== null) {
-          // The outer callout's nested read-only editor renders this child.
-          // Emitting both replacements here would overlap vertical ranges.
-          return null;
-        }
-      }
-      const head = calloutHead(node);
-      const type = head === null ? null : calloutTypeOf(head, doc);
-      return type === null ? null : { "data-callout": type };
+      const callout = parseCallout(doc.sliceString(node.from, node.to));
+      return callout === null
+        ? null
+        : {
+            "data-callout": callout.originalType.toLowerCase(),
+            "data-callout-canonical": callout.canonicalType,
+            "data-accent": callout.accentGroup,
+            "data-foldable": callout.foldable ? "true" : "false",
+          };
     }
     case "code-language":
       return { "data-language": doc.sliceString(node.from, node.to) };
@@ -994,6 +934,101 @@ function dynamicAttributes(
     default:
       return {};
   }
+}
+
+function revealRange(
+  rule: DecorationRule,
+  node: SyntaxNode,
+  doc: Text,
+): { from: number; to: number } {
+  const useNode =
+    rule.revealScope === "node" ||
+    (rule.revealScope === undefined &&
+      rule.reveal === "cursor-inside" &&
+      rule.presentation.present === "widget");
+  const scope = useNode ? node : (node.parent ?? node);
+  if (rule.reveal !== "cursor-line") {
+    return { from: scope.from, to: scope.to };
+  }
+  return {
+    from: doc.lineAt(scope.from).from,
+    to: doc.lineAt(Math.min(scope.to, doc.length)).to,
+  };
+}
+
+function selectsDescendants(rule: DecorationRule): boolean {
+  return (
+    rule.revealDescendants === true ||
+    (rule.presentation.present === "widget" &&
+      rule.presentation.place !== "before")
+  );
+}
+
+function findActiveReveal(
+  doc: Text,
+  tree: Tree,
+  table: readonly DecorationRule[],
+  selection: readonly { from: number; to: number }[],
+  wikilinks: WikilinkResolutionContext,
+): RevealRegion | null {
+  const cursor = selection[0]?.to;
+  if (cursor === undefined) {
+    return null;
+  }
+  const rules = ruleIndex(table);
+  let active: RevealRegion | null = null;
+  const relevant = new Map<string, SyntaxNode>();
+  for (const bias of [-1, 1] as const) {
+    for (
+      let node: SyntaxNode | null = tree.resolveInner(cursor, bias);
+      node !== null;
+      node = node.parent
+    ) {
+      relevant.set(`${node.name}:${node.from}:${node.to}`, node);
+      if (node.name === "Document") {
+        continue;
+      }
+      for (
+        let child = node.firstChild;
+        child !== null;
+        child = child.nextSibling
+      ) {
+        relevant.set(`${child.name}:${child.from}:${child.to}`, child);
+      }
+    }
+  }
+  for (const node of relevant.values()) {
+    const nodeRules = rules.get(node.name);
+    if (nodeRules === undefined) {
+      continue;
+    }
+    for (const rule of nodeRules) {
+      if (
+        rule.reveal === "never" ||
+        !ruleMatches(rule, node, doc) ||
+        dynamicAttributes(rule, node, doc, wikilinks) === null
+      ) {
+        continue;
+      }
+      const range = revealRange(rule, node, doc);
+      if (cursor < range.from || cursor > range.to) {
+        continue;
+      }
+      const candidate: RevealRegion = {
+        ...range,
+        descendants: selectsDescendants(rule),
+      };
+      if (
+        active === null ||
+        (candidate.descendants && !active.descendants) ||
+        (candidate.descendants === active.descendants &&
+          candidate.to - candidate.from < active.to - active.from)
+      ) {
+        active = candidate;
+      }
+    }
+  }
+  return active;
 }
 
 type BuiltDecoration = {
@@ -1105,21 +1140,12 @@ function widgetFor(
         block: false,
         attributes: { role: "button", "aria-label": STRINGS.copyCode },
       };
-    case "callout": {
-      const callout = parseCallout(doc.sliceString(node.from, node.to));
-      if (callout === null) {
-        throw new Error("callout widget requires a callout blockquote");
-      }
+    case "callout-icon": {
+      const type = calloutTypeOf(node, doc);
       return {
-        widget: new CalloutWidget(callout, wikilinks),
-        block: true,
-        attributes: {
-          role: "note",
-          "data-callout": callout.originalType.toLowerCase(),
-          "data-callout-canonical": callout.canonicalType,
-          "data-accent": callout.accentGroup,
-          "data-foldable": callout.foldable ? "true" : "false",
-        },
+        widget: new CalloutIconWidget(type ?? "note"),
+        block: false,
+        attributes: { "aria-hidden": "true", "data-callout": type ?? "note" },
       };
     }
   }
@@ -1137,24 +1163,19 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
   const selection = options.selection ?? [];
   const ranges = options.ranges ?? [{ from: 0, to: doc.length }];
   const wikilinks = options.wikilinks ?? EMPTY_WIKILINK_CONTEXT;
+  const activeReveal =
+    options.activeReveal === undefined
+      ? findActiveReveal(doc, tree, table, selection, wikilinks)
+      : options.activeReveal;
   const built: BuiltDecoration[] = [];
   const seenLines = new Set<string>();
 
   const revealed = (rule: DecorationRule, node: SyntaxNode): boolean => {
-    if (rule.reveal === "never" || selection.length === 0) {
+    if (rule.reveal === "never" || activeReveal === null) {
       return false;
     }
-    const scope =
-      rule.reveal === "cursor-inside" && rule.presentation.present === "widget"
-        ? node
-        : (node.parent ?? node);
-    let from = scope.from;
-    let to = scope.to;
-    if (rule.reveal === "cursor-line") {
-      from = doc.lineAt(scope.from).from;
-      to = doc.lineAt(Math.min(scope.to, doc.length)).to;
-    }
-    return selection.some((range) => range.to >= from && range.from <= to);
+    const range = revealRange(rule, node, doc);
+    return range.from === activeReveal.from && range.to === activeReveal.to;
   };
 
   for (const window of ranges) {
@@ -1186,16 +1207,42 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (dynamic === null) {
             continue;
           }
+          const revealedNow = revealed(rule, node);
+          if (
+            activeReveal?.descendants === true &&
+            ref.from >= activeReveal.from &&
+            ref.to <= activeReveal.to &&
+            !revealedNow
+          ) {
+            continue;
+          }
           const presentation = rule.presentation;
           if (presentation.present === "line") {
-            const extraClass =
-              "data-callout" in dynamic ? " cm-skr-callout" : "";
-            const lineClass = presentation.class + extraClass;
+            const lineClass = presentation.class;
             let position = Math.max(ref.from, window.from);
             const end = Math.min(ref.to, window.to);
             while (position <= end) {
               const line = doc.lineAt(position);
-              const key = `${line.from} ${lineClass}${serializeAttributes(dynamic)}`;
+              const firstRichLine = line.from === doc.lineAt(ref.from).from;
+              const lastRichLine =
+                line.from === doc.lineAt(Math.min(ref.to, doc.length)).from;
+              const lineDynamic =
+                rule.dynamic === "rich-callout"
+                  ? {
+                      ...dynamic,
+                      ...(revealedNow ? { "data-revealed": "true" } : {}),
+                      ...(firstRichLine ? { role: "note" } : {}),
+                      "data-callout-line":
+                        firstRichLine && lastRichLine
+                          ? "only"
+                          : firstRichLine
+                            ? "first"
+                            : lastRichLine
+                              ? "last"
+                              : "middle",
+                    }
+                  : dynamic;
+              const key = `${line.from} ${lineClass}${serializeAttributes(lineDynamic)}`;
               if (
                 line.length <= LONG_LINE_DECORATION_LIMIT &&
                 !seenLines.has(key)
@@ -1203,10 +1250,10 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 seenLines.add(key);
                 const spec: Parameters<typeof Decoration.line>[0] = {
                   class: lineClass,
-                  skr: `line class=${JSON.stringify(lineClass)}${serializeAttributes(dynamic)}`,
+                  skr: `line class=${JSON.stringify(lineClass)}${serializeAttributes(lineDynamic)}`,
                 };
-                if (Object.keys(dynamic).length > 0) {
-                  spec.attributes = dynamic;
+                if (Object.keys(lineDynamic).length > 0) {
+                  spec.attributes = lineDynamic;
                 }
                 built.push({
                   from: line.from,
@@ -1224,7 +1271,6 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (doc.lineAt(ref.from).length > LONG_LINE_DECORATION_LIMIT) {
             continue;
           }
-          const revealedNow = revealed(rule, node);
           // A revealed rule emits nothing, so the source shows through. The
           // exception is a cursor-line reveal, which still emits a marker
           // carrying its active state so the transition has something to
@@ -1263,6 +1309,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               from: hideFrom,
               to: hideTo,
               decoration: Decoration.replace({
+                atomic: true,
                 skr: `hide node=${rule.node}`,
               }),
             });
@@ -1289,6 +1336,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 from: ref.from,
                 to: ref.to,
                 decoration: Decoration.replace({
+                  atomic: true,
                   widget: builtWidget.widget,
                   block: builtWidget.block,
                   skr,
@@ -1332,6 +1380,20 @@ export function serializeDecorationSet(set: DecorationSet): string {
 
 function buildViewDecorations(view: EditorView): DecorationSet {
   const state = view.state;
+  const table = state.facet(decorationTable);
+  const cursor = state.selection.main.head;
+  const selection = state.facet(sourceRevealEnabled)
+    ? [{ from: cursor, to: cursor }]
+    : [];
+  const wikilinks =
+    state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
+  const activeReveal = findActiveReveal(
+    state.doc,
+    syntaxTree(state),
+    table,
+    selection,
+    wikilinks,
+  );
   const ranges =
     view.visibleRanges.length > 0
       ? view.visibleRanges.map((range) => ({ from: range.from, to: range.to }))
@@ -1339,30 +1401,35 @@ function buildViewDecorations(view: EditorView): DecorationSet {
   return computeDecorations({
     doc: state.doc,
     tree: syntaxTree(state),
-    table: splitTable(state.facet(decorationTable)).inline,
-    selection: state.facet(sourceRevealEnabled)
-      ? state.selection.ranges.map((range) => ({
-          from: range.from,
-          to: range.to,
-        }))
-      : [],
+    table: splitTable(table).inline,
+    selection,
     ranges,
-    wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    wikilinks,
+    activeReveal,
   });
 }
 
 function buildBlockDecorations(state: EditorState): DecorationSet {
+  const table = state.facet(decorationTable);
+  const cursor = state.selection.main.head;
+  const selection = state.facet(sourceRevealEnabled)
+    ? [{ from: cursor, to: cursor }]
+    : [];
+  const wikilinks =
+    state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
   return computeDecorations({
     doc: state.doc,
     tree: syntaxTree(state),
-    table: splitTable(state.facet(decorationTable)).block,
-    selection: state.facet(sourceRevealEnabled)
-      ? state.selection.ranges.map((range) => ({
-          from: range.from,
-          to: range.to,
-        }))
-      : [],
-    wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    table: splitTable(table).block,
+    selection,
+    wikilinks,
+    activeReveal: findActiveReveal(
+      state.doc,
+      syntaxTree(state),
+      table,
+      selection,
+      wikilinks,
+    ),
   });
 }
 
@@ -1501,6 +1568,69 @@ const enginePlugin = ViewPlugin.fromClass(
   },
   { decorations: (plugin) => plugin.decorations },
 );
+
+function atomicDecorations(view: EditorView): DecorationSet {
+  const ranges: ReturnType<Decoration["range"]>[] = [];
+  const inline = view.plugin(enginePlugin)?.decorations;
+  const block = view.state.field(blockEngineField, false)?.decorations;
+  for (const set of [inline, block]) {
+    if (set === undefined) {
+      continue;
+    }
+    const cursor = set.iter();
+    while (cursor.value !== null) {
+      if ((cursor.value.spec as { atomic?: boolean }).atomic === true) {
+        ranges.push(cursor.value.range(cursor.from, cursor.to));
+      }
+      cursor.next();
+    }
+  }
+  return Decoration.set(ranges, true);
+}
+
+const calloutPointerMapping = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    if (event.button !== 0 || !(event.target instanceof Element)) {
+      return false;
+    }
+    const directLine = event.target.closest<HTMLElement>(
+      ".cm-line.cm-skr-rich-callout",
+    );
+    const lineElement =
+      directLine ??
+      [
+        ...view.contentDOM.querySelectorAll<HTMLElement>(
+          ".cm-line.cm-skr-rich-callout",
+        ),
+      ].find((line) => {
+        const rect = line.getBoundingClientRect();
+        return (
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom
+        );
+      }) ??
+      null;
+    if (lineElement === null || !view.dom.contains(lineElement)) {
+      return false;
+    }
+    const sourceLine = view.state.doc.lineAt(view.posAtDOM(lineElement, 0));
+    const lineRect = lineElement.getBoundingClientRect();
+    const coordinatePosition = view.posAtCoords({
+      x: event.clientX,
+      y: lineRect.top + lineRect.height / 2,
+    });
+    const anchor = Math.min(
+      sourceLine.to,
+      Math.max(sourceLine.from, coordinatePosition ?? sourceLine.from),
+    );
+    event.preventDefault();
+    view.focus();
+    view.dispatch({ selection: { anchor }, scrollIntoView: true });
+    return true;
+  },
+});
 
 const engineTheme = EditorView.baseTheme({
   ".cm-skr-heading": {
@@ -1740,21 +1870,6 @@ const engineTheme = EditorView.baseTheme({
     paddingLeft: "1rem",
   },
   ".cm-skr-quote-mark": { color: "var(--skr-text-muted)" },
-  ".cm-skr-callout": { backgroundColor: "var(--skr-accent-subtle)" },
-  '.cm-skr-callout[data-callout="warning"]': {
-    backgroundColor: "var(--skr-warning-surface)",
-    borderLeftColor: "var(--skr-warning)",
-  },
-  '.cm-skr-callout[data-callout="danger"], .cm-skr-callout[data-callout="error"]':
-    {
-      backgroundColor: "var(--skr-danger-surface)",
-      borderLeftColor: "var(--skr-danger)",
-    },
-  '.cm-skr-callout[data-callout="tip"], .cm-skr-callout[data-callout="success"]':
-    {
-      backgroundColor: "var(--skr-success-surface)",
-      borderLeftColor: "var(--skr-success)",
-    },
   ".cm-skr-callout-mark": { fontWeight: "700", color: "var(--skr-accent)" },
   '.cm-skr-callout-mark[data-callout="warning"]': {
     color: "var(--skr-warning)",
@@ -1763,19 +1878,18 @@ const engineTheme = EditorView.baseTheme({
     { color: "var(--skr-danger)" },
   '.cm-skr-callout-mark[data-callout="tip"], .cm-skr-callout-mark[data-callout="success"]':
     { color: "var(--skr-success)" },
-  ".cm-skr-rich-callout": {
+  ".cm-line.cm-skr-rich-callout": {
     "--skr-callout-color": "var(--skr-callout-blue)",
     boxSizing: "border-box",
     width: "calc(100% + 2rem + 3px)",
     marginLeft: "calc(-1rem - 3px)",
     marginRight: "-1rem",
-    paddingBlock: "0.75rem",
+    paddingInline: "1rem",
     overflow: "hidden",
     color: "var(--skr-text)",
     backgroundColor:
       "color-mix(in srgb, var(--skr-callout-color) var(--skr-callout-tint), var(--skr-surface))",
     borderLeft: "3px solid var(--skr-callout-color)",
-    borderRadius: "0 0.375rem 0.375rem 0",
   },
   '.cm-skr-rich-callout[data-accent="cyan"]': {
     "--skr-callout-color": "var(--skr-callout-cyan)",
@@ -1798,39 +1912,24 @@ const engineTheme = EditorView.baseTheme({
   '.cm-skr-rich-callout[data-accent="gray"]': {
     "--skr-callout-color": "var(--skr-callout-gray)",
   },
-  ".cm-skr-callout-title": {
-    boxSizing: "border-box",
-    display: "flex",
-    alignItems: "center",
-    gap: "0.45rem",
-    width: "100%",
-    padding: "0 1rem",
-    color: "var(--skr-callout-color)",
-    backgroundColor: "transparent",
-    border: "0",
-    font: "inherit",
-    fontWeight: "700",
-    textAlign: "left",
-  },
-  "button.cm-skr-callout-title": { cursor: "pointer" },
+  '.cm-skr-rich-callout[data-callout-line="first"], .cm-skr-rich-callout[data-callout-line="only"]':
+    {
+      paddingTop: "0.75rem",
+      color: "var(--skr-callout-color)",
+      fontWeight: "700",
+      borderTopRightRadius: "0.375rem",
+    },
+  '.cm-skr-rich-callout[data-callout-line="last"], .cm-skr-rich-callout[data-callout-line="only"]':
+    {
+      paddingBottom: "0.75rem",
+      borderBottomRightRadius: "0.375rem",
+    },
   ".cm-skr-callout-icon-host, .cm-skr-callout-icon": {
     display: "inline-flex",
     flex: "0 0 auto",
+    color: "var(--skr-callout-color)",
   },
-  ".cm-skr-callout-fold": {
-    marginLeft: "auto",
-    fontSize: "1.15em",
-  },
-  '.cm-skr-callout-title[aria-expanded="false"] .cm-skr-callout-fold': {
-    transform: "rotate(-90deg)",
-  },
-  ".cm-skr-callout-body": {
-    padding: "0 1rem",
-  },
-  ".cm-skr-callout-body[hidden]": { display: "none" },
-  ".cm-skr-callout-body > .cm-editor, .cm-skr-callout-body > .cm-editor .cm-scroller":
-    { backgroundColor: "transparent" },
-  ".cm-skr-callout-body > .cm-editor .cm-content": { padding: "0" },
+  ".cm-skr-callout-icon-host": { marginRight: "0.4rem" },
   ".cm-skr-tag": {
     color: "var(--skr-accent)",
     backgroundColor: "var(--skr-accent-subtle)",
@@ -1879,6 +1978,8 @@ export function decorationEngine(
       : wikilinkContext.init(() => initialContext),
     blockEngineField,
     enginePlugin,
+    EditorView.atomicRanges.of(atomicDecorations),
+    calloutPointerMapping,
     engineTheme,
   ];
 }

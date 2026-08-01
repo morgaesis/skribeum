@@ -71,6 +71,10 @@ export const VISUAL_NOTE_CONTENT = [
   "",
 ].join("\n");
 
+export const REVEAL_NOTE_NAME = "zzzz-reveal.md";
+export const REVEAL_NOTE_CONTENT =
+  "# Reveal interactions\n\n> [!tip] Linked callout\n> First body line.\n> Read [inside link](inside-target).\n\n[Outside link](outside-target)\n\ncursor parking\n";
+
 export const CANVAS_FILE_NAME = "zzz-board.canvas";
 export const CANVAS_REFERENCE_NAME = "z-live-preview.md";
 export const CANVAS_FILE_CONTENT = JSON.stringify({

@@ -1195,7 +1195,7 @@ onMount(() => {
       if (event.payload.change === "overflow") {
         void refreshTreeIndex(true);
       } else if (event.payload.change === "removed") {
-        void refreshTreeAfterTagCatalog(vault);
+        void refreshTreeIndex(true);
       } else if (event.payload.change !== "modified") {
         void refreshTree();
       }

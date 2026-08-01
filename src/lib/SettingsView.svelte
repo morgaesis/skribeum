@@ -1,6 +1,10 @@
 <script lang="ts">
 import { onDestroy, tick } from "svelte";
 import {
+  SETTINGS_DESCRIPTORS,
+  type SettingSectionId,
+} from "./features/settingsCatalog";
+import {
   DEFAULT_SETTINGS,
   type SettingsDocument,
   type SettingsState,
@@ -29,13 +33,7 @@ type AttachmentFolderMode = "vault" | "note" | "folder";
 type UpdateChannel = "stable" | "beta";
 type SearchScope = "titles" | "full-text";
 type TaskListboxField = "category" | "color_token" | "next_status";
-type SectionId =
-  | "appearance"
-  | "editor"
-  | "files"
-  | "search"
-  | "updates"
-  | "about";
+type SectionId = SettingSectionId;
 
 type NumericSetting =
   | "editor_font_size"
@@ -54,59 +52,14 @@ const sections: { id: SectionId; label: string }[] = [
   { id: "about", label: STRINGS.settingsSectionAbout },
 ];
 
-const settingSearchText: Record<SectionId, [string, string][]> = {
-  appearance: [
-    [STRINGS.settingsTheme, STRINGS.settingsThemeDescription],
-    [STRINGS.settingsLightPalette, STRINGS.settingsPaletteDescription],
-    [STRINGS.settingsDarkPalette, STRINGS.settingsPaletteDescription],
-    [STRINGS.settingsProseFont, STRINGS.settingsProseFontDescription],
-    [STRINGS.settingsCodeFont, STRINGS.settingsCodeFontDescription],
-    [STRINGS.settingsFontSize, STRINGS.settingsFontSizeDescription],
-    [STRINGS.settingsLineHeight, STRINGS.settingsLineHeightDescription],
-    [STRINGS.settingsLineWidth, STRINGS.settingsLineWidthDescription],
-    [STRINGS.settingsAnimations, STRINGS.settingsAnimationsDescription],
-  ],
-  editor: [
-    [STRINGS.settingsAutosave, STRINGS.settingsAutosaveDescription],
-    [STRINGS.settingsSpellCheck, STRINGS.settingsSpellCheckDescription],
-    [STRINGS.settingsIndentStyle, STRINGS.settingsIndentStyleDescription],
-    [STRINGS.settingsIndentWidth, STRINGS.settingsIndentWidthDescription],
-    [STRINGS.settingsWrapLongLines, STRINGS.settingsWrapLongLinesDescription],
-    [STRINGS.settingsLineNumbers, STRINGS.settingsLineNumbersDescription],
-    [STRINGS.settingsInvisibles, STRINGS.settingsInvisiblesDescription],
-    [STRINGS.settingsRevealSyntax, STRINGS.settingsRevealSyntaxDescription],
-    [STRINGS.settingsLinkPreviews, STRINGS.settingsLinkPreviewsHint],
-    [STRINGS.settingsTaskStatuses, STRINGS.settingsTaskStatusesDescription],
-  ],
-  files: [
-    [
-      STRINGS.settingsDefaultNoteFolder,
-      STRINGS.settingsDefaultNoteFolderDescription,
-    ],
-    [
-      STRINGS.settingsAttachmentFolder,
-      STRINGS.settingsAttachmentFolderDescription,
-    ],
-    [STRINGS.settingsHonorObsidian, STRINGS.settingsHonorObsidianDescription],
-  ],
-  search: [
-    [STRINGS.settingsSearchLimit, STRINGS.settingsSearchLimitDescription],
-    [STRINGS.settingsSearchBodies, STRINGS.settingsSearchBodiesDescription],
-    [STRINGS.settingsSearchCase, STRINGS.settingsSearchCaseDescription],
-  ],
-  updates: [
-    [STRINGS.settingsUpdateChannel, STRINGS.settingsUpdateChannelDescription],
-    [STRINGS.settingsCheckUpdates, STRINGS.settingsCheckUpdatesDescription],
-    [STRINGS.settingsVersion, STRINGS.settingsVersionDescription],
-  ],
-  about: [
-    [STRINGS.settingsVersion, STRINGS.settingsVersionDescription],
-    [STRINGS.settingsLicense, STRINGS.settingsLicenseDescription],
-    [STRINGS.settingsRepository, STRINGS.settingsRepositoryDescription],
-    [STRINGS.settingsThreatModel, STRINGS.settingsThreatModelDescription],
-    [STRINGS.settingsFile, STRINGS.settingsFileDescription],
-  ],
-};
+const settingSearchText = Object.fromEntries(
+  sections.map((section) => [
+    section.id,
+    SETTINGS_DESCRIPTORS.filter(
+      (setting) => setting.section === section.id,
+    ).map((setting): [string, string] => [setting.label, setting.description]),
+  ]),
+) as Record<SectionId, [string, string][]>;
 
 const lightPaletteCards: {
   value: LightPaletteName;
@@ -151,6 +104,7 @@ const NEW_STATUS_SYMBOLS: readonly string[] = [
 ];
 
 const booleanEditorSettings: {
+  id: string;
   key:
     | "wrap_long_lines"
     | "show_line_numbers"
@@ -161,26 +115,31 @@ const booleanEditorSettings: {
   description: string;
 }[] = [
   {
+    id: "editor.wrap-long-lines",
     key: "wrap_long_lines",
     label: STRINGS.settingsWrapLongLines,
     description: STRINGS.settingsWrapLongLinesDescription,
   },
   {
+    id: "editor.line-numbers",
     key: "show_line_numbers",
     label: STRINGS.settingsLineNumbers,
     description: STRINGS.settingsLineNumbersDescription,
   },
   {
+    id: "editor.invisibles",
     key: "show_invisible_characters",
     label: STRINGS.settingsInvisibles,
     description: STRINGS.settingsInvisiblesDescription,
   },
   {
+    id: "editor.reveal-syntax",
     key: "reveal_markdown_syntax",
     label: STRINGS.settingsRevealSyntax,
     description: STRINGS.settingsRevealSyntaxDescription,
   },
   {
+    id: "editor.link-previews",
     key: "link_previews",
     label: STRINGS.settingsLinkPreviews,
     description: STRINGS.settingsLinkPreviewsHint,
@@ -198,6 +157,7 @@ let {
   settingsFilePath = null,
   updateState = { kind: "idle" } as UpdateState,
   onCheckUpdate = () => {},
+  targetSetting = null,
 }: {
   settings: SettingsState;
   onUpdate: (patch: Partial<SettingsDocument>) => void;
@@ -209,6 +169,7 @@ let {
   settingsFilePath?: string | null;
   updateState?: UpdateState;
   onCheckUpdate?: () => void;
+  targetSetting?: string | null;
 } = $props();
 
 let dialogElement = $state<HTMLElement | undefined>();
@@ -225,6 +186,7 @@ let jumpMenuOpen = $state(false);
 let previewSettings = $state<Partial<SettingsDocument>>({});
 let taskStatusError = $state<string | null>(null);
 let openTaskListbox = $state<string | null>(null);
+let focusedTargetSetting: string | null = null;
 
 const documentSettings = $derived(settings.document);
 const displayedSettings = $derived({
@@ -241,10 +203,36 @@ const settingsPathText = $derived(
 );
 
 $effect(() => {
-  dialogElement
-    ?.querySelector<HTMLInputElement>("[data-testid='settings-search']")
-    ?.focus();
+  if (targetSetting !== null && focusedTargetSetting !== targetSetting) {
+    focusedTargetSetting = targetSetting;
+    void focusSetting(targetSetting);
+  } else if (targetSetting === null) {
+    dialogElement
+      ?.querySelector<HTMLInputElement>("[data-testid='settings-search']")
+      ?.focus();
+  }
 });
+
+async function focusSetting(id: string) {
+  searchQuery = "";
+  await tick();
+  const row = contentElement?.querySelector<HTMLElement>(
+    `[data-setting-id="${CSS.escape(id)}"]`,
+  );
+  if (contentElement === undefined || row === null || row === undefined) return;
+  const contentBox = contentElement.getBoundingClientRect();
+  const rowBox = row.getBoundingClientRect();
+  contentElement.scrollTop += rowBox.top - contentBox.top;
+  const control = row.querySelector<HTMLElement>(
+    "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]",
+  );
+  if (control !== null) {
+    control.focus({ preventScroll: true });
+  } else {
+    row.tabIndex = -1;
+    row.focus({ preventScroll: true });
+  }
+}
 
 function update(patch: Partial<SettingsDocument>) {
   onUpdate(patch);
@@ -841,7 +829,7 @@ function onKeydown(event: KeyboardEvent) {
             </h3>
 
             {#if matches(STRINGS.settingsTheme, STRINGS.settingsThemeDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="appearance.theme">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsTheme}</span>
                   <p>{STRINGS.settingsThemeDescription}</p>
@@ -882,7 +870,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsLightPalette, STRINGS.settingsPaletteDescription)}
-              <div class="setting-row palette-setting">
+              <div class="setting-row palette-setting" data-setting-id="appearance.light-palette">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsLightPalette}</span>
                   <p>{STRINGS.settingsPaletteDescription}</p>
@@ -933,7 +921,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsDarkPalette, STRINGS.settingsPaletteDescription)}
-              <div class="setting-row palette-setting">
+              <div class="setting-row palette-setting" data-setting-id="appearance.dark-palette">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsDarkPalette}</span>
                   <p>{STRINGS.settingsPaletteDescription}</p>
@@ -984,7 +972,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsProseFont, STRINGS.settingsProseFontDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="appearance.prose-font">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsProseFont}</span>
                   <p>{STRINGS.settingsProseFontDescription}</p>
@@ -1017,7 +1005,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsCodeFont, STRINGS.settingsCodeFontDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="appearance.code-font">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsCodeFont}</span>
                   <p>{STRINGS.settingsCodeFontDescription}</p>
@@ -1050,7 +1038,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsFontSize, STRINGS.settingsFontSizeDescription)}
-              <label class="setting-row">
+              <label class="setting-row" data-setting-id="appearance.font-size">
                 <span class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsFontSize}</span>
                   <span>{STRINGS.settingsFontSizeDescription}</span>
@@ -1075,7 +1063,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsLineHeight, STRINGS.settingsLineHeightDescription)}
-              <label class="setting-row">
+              <label class="setting-row" data-setting-id="appearance.line-height">
                 <span class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsLineHeight}</span>
                   <span>{STRINGS.settingsLineHeightDescription}</span>
@@ -1099,7 +1087,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsLineWidth, STRINGS.settingsLineWidthDescription)}
-              <label class="setting-row">
+              <label class="setting-row" data-setting-id="appearance.line-width">
                 <span class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsLineWidth}</span>
                   <span>{STRINGS.settingsLineWidthDescription}</span>
@@ -1124,7 +1112,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsAnimations, STRINGS.settingsAnimationsDescription)}
-              <label class="setting-row">
+              <label class="setting-row" data-setting-id="appearance.animations">
                 <span class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsAnimations}</span>
                   <span>{STRINGS.settingsAnimationsDescription}</span>
@@ -1157,7 +1145,7 @@ function onKeydown(event: KeyboardEvent) {
             </h3>
 
             {#if matches(STRINGS.settingsAutosave, STRINGS.settingsAutosaveDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="editor.autosave">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsAutosave}</span>
                   <p>{STRINGS.settingsAutosaveDescription}</p>
@@ -1194,7 +1182,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsSpellCheck, STRINGS.settingsSpellCheckDescription)}
-              <label class="setting-row">
+              <label class="setting-row" data-setting-id="editor.spell-check">
                 <span class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsSpellCheck}</span>
                   <span>{STRINGS.settingsSpellCheckDescription}</span>
@@ -1216,7 +1204,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsIndentStyle, STRINGS.settingsIndentStyleDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="editor.indent-style">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsIndentStyle}</span>
                   <p>{STRINGS.settingsIndentStyleDescription}</p>
@@ -1249,7 +1237,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsIndentWidth, STRINGS.settingsIndentWidthDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="editor.indent-width">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsIndentWidth}</span>
                   <p>{STRINGS.settingsIndentWidthDescription}</p>
@@ -1287,7 +1275,7 @@ function onKeydown(event: KeyboardEvent) {
 
             {#each booleanEditorSettings as preference}
               {#if matches(preference.label, preference.description)}
-                <label class="setting-row">
+                <label class="setting-row" data-setting-id={preference.id}>
                   <span class="setting-copy">
                     <span class="setting-label">{preference.label}</span>
                     <span>{preference.description}</span>
@@ -1312,7 +1300,7 @@ function onKeydown(event: KeyboardEvent) {
             {/each}
 
             {#if matches(STRINGS.settingsTaskStatuses, STRINGS.settingsTaskStatusesDescription)}
-              <div class="task-status-setting">
+              <div class="task-status-setting" data-setting-id="editor.task-statuses">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsTaskStatuses}</span>
                   <p>{STRINGS.settingsTaskStatusesDescription}</p>
@@ -1543,7 +1531,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
             <fieldset disabled={!desktopAvailable}>
               {#if matches(STRINGS.settingsDefaultNoteFolder, STRINGS.settingsDefaultNoteFolderDescription)}
-                <label class="setting-row">
+                <label class="setting-row" data-setting-id="files.default-note-folder">
                   <span class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsDefaultNoteFolder}</span>
                     <span>{STRINGS.settingsDefaultNoteFolderDescription}</span>
@@ -1566,7 +1554,7 @@ function onKeydown(event: KeyboardEvent) {
               {/if}
 
               {#if matches(STRINGS.settingsAttachmentFolder, STRINGS.settingsAttachmentFolderDescription)}
-                <div class="setting-row attachment-setting">
+                <div class="setting-row attachment-setting" data-setting-id="files.attachment-folder">
                   <div class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsAttachmentFolder}</span>
                     <p>{STRINGS.settingsAttachmentFolderDescription}</p>
@@ -1620,7 +1608,7 @@ function onKeydown(event: KeyboardEvent) {
               {/if}
 
               {#if matches(STRINGS.settingsHonorObsidian, STRINGS.settingsHonorObsidianDescription)}
-                <label class="setting-row">
+                <label class="setting-row" data-setting-id="files.obsidian-config">
                   <span class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsHonorObsidian}</span>
                     <span>{STRINGS.settingsHonorObsidianDescription}</span>
@@ -1655,7 +1643,7 @@ function onKeydown(event: KeyboardEvent) {
               {STRINGS.settingsSectionSearch}
             </h3>
             {#if matches(STRINGS.settingsSearchLimit, STRINGS.settingsSearchLimitDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="search.result-limit">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsSearchLimit}</span>
                   <p>{STRINGS.settingsSearchLimitDescription}</p>
@@ -1695,7 +1683,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsSearchBodies, STRINGS.settingsSearchBodiesDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="search.note-text">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsSearchBodies}</span>
                   <p>{STRINGS.settingsSearchBodiesDescription}</p>
@@ -1730,7 +1718,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsSearchCase, STRINGS.settingsSearchCaseDescription)}
-              <label class="setting-row">
+              <label class="setting-row" data-setting-id="search.case-sensitive">
                 <span class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsSearchCase}</span>
                   <span>{STRINGS.settingsSearchCaseDescription}</span>
@@ -1769,7 +1757,7 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
             <fieldset disabled={!desktopAvailable}>
               {#if matches(STRINGS.settingsUpdateChannel, STRINGS.settingsUpdateChannelDescription)}
-                <div class="setting-row">
+                <div class="setting-row" data-setting-id="updates.channel">
                   <div class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsUpdateChannel}</span>
                     <p>{STRINGS.settingsUpdateChannelDescription}</p>
@@ -1803,7 +1791,7 @@ function onKeydown(event: KeyboardEvent) {
               {/if}
 
               {#if matches(STRINGS.settingsCheckUpdates, STRINGS.settingsCheckUpdatesDescription)}
-                <div class="setting-row">
+                <div class="setting-row" data-setting-id="updates.check">
                   <div class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsCheckUpdates}</span>
                     <p>{STRINGS.settingsCheckUpdatesDescription}</p>
@@ -1825,12 +1813,12 @@ function onKeydown(event: KeyboardEvent) {
               {/if}
 
               {#if matches(STRINGS.settingsVersion, STRINGS.settingsVersionDescription)}
-                <div class="setting-row">
+                <div class="setting-row" data-setting-id="updates.version">
                   <div class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsVersion}</span>
                     <p>{STRINGS.settingsVersionDescription}</p>
                   </div>
-                  <output>{currentVersion}</output>
+                  <output tabindex="-1">{currentVersion}</output>
                 </div>
               {/if}
             </fieldset>
@@ -1846,16 +1834,16 @@ function onKeydown(event: KeyboardEvent) {
               {STRINGS.settingsSectionAbout}
             </h3>
             {#if matches(STRINGS.settingsVersion, STRINGS.settingsVersionDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="about.version">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsVersion}</span>
                   <p>{STRINGS.settingsVersionDescription}</p>
                 </div>
-                <output>{currentVersion}</output>
+                <output tabindex="-1">{currentVersion}</output>
               </div>
             {/if}
             {#if matches(STRINGS.settingsLicense, STRINGS.settingsLicenseDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="about.license">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsLicense}</span>
                   <p>{STRINGS.settingsLicenseDescription}</p>
@@ -1866,7 +1854,7 @@ function onKeydown(event: KeyboardEvent) {
               </div>
             {/if}
             {#if matches(STRINGS.settingsRepository, STRINGS.settingsRepositoryDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="about.repository">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsRepository}</span>
                   <p>{STRINGS.settingsRepositoryDescription}</p>
@@ -1877,7 +1865,7 @@ function onKeydown(event: KeyboardEvent) {
               </div>
             {/if}
             {#if matches(STRINGS.settingsThreatModel, STRINGS.settingsThreatModelDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="about.security-policy">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsThreatModel}</span>
                   <p>{STRINGS.settingsThreatModelDescription}</p>
@@ -1888,7 +1876,7 @@ function onKeydown(event: KeyboardEvent) {
               </div>
             {/if}
             {#if matches(STRINGS.settingsFile, STRINGS.settingsFileDescription)}
-              <div class="setting-row">
+              <div class="setting-row" data-setting-id="about.settings-file">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsFile}</span>
                   <p>{STRINGS.settingsFileDescription}</p>
@@ -1896,6 +1884,7 @@ function onKeydown(event: KeyboardEvent) {
                 <output
                   class="settings-path"
                   class:desktop-unavailable={!desktopAvailable}
+                  tabindex="-1"
                   >{settingsPathText}</output
                 >
               </div>

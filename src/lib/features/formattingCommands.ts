@@ -42,6 +42,7 @@ export function registerFormatting(registry: CommandRegistry): void {
       id: "format.wikilink",
       title: STRINGS.formatWikilink,
       marker: "wikilink",
+      keybindings: ["Mod-Shift-k"],
     },
   ];
   for (const entry of entries) {

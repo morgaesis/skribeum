@@ -24,9 +24,13 @@ export type CommandContext = {
   createNote?(): Promise<void>;
   /** Opens the view registered under `id`. */
   openView(id: string): void;
+  /** Opens the unified command surface with an optional prefix preloaded. */
+  openCommandSurface(initialQuery: string): void;
+  /** Opens settings aligned to one registered setting row. */
+  openSetting?(id: string): void;
   /** Toggles the view registered under `id`. */
   toggleView(id: string): void;
-  /** Closes any open transient surface (palette, switcher, dialogs). */
+  /** Closes any open transient surface (command surface or dialog). */
   closeSurfaces(): void;
   /** Saves the open note's pending edits. */
   requestSave(): void;
@@ -40,6 +44,12 @@ export type CommandContext = {
   navigateForward(): boolean;
   /** Follows the wikilink under the editor cursor, declining outside one. */
   followLink(view?: EditorView | null): boolean;
+  /** Copies a link to the active note. */
+  copyNoteLink?(): Promise<void>;
+  /** Copies a link to a named heading, or the heading nearest the caret. */
+  copyHeadingLink?(heading?: string): Promise<void>;
+  /** An explicit heading supplied by an outline-row pointer action. */
+  heading?: string;
 };
 
 /**
@@ -60,6 +70,7 @@ export type PointerSurface =
   | "editor-link"
   | "editor-tag"
   | "find-panel"
+  | "outline"
   | "selection-toolbar"
   | "slash-menu"
   | "task-status-menu";
@@ -83,6 +94,10 @@ type CommandBase = {
   scope?: CommandScope;
   /** Listed in the command palette unless explicitly false. */
   palette?: boolean;
+  /** Result subtype used to break command-surface score ties. */
+  kind?: "command" | "setting";
+  /** Additional searchable text that is not displayed as the title. */
+  searchTerms?: readonly string[];
   /**
    * Listed in the slash menu when present; `keywords` extend fuzzy
    * matching beyond the title.

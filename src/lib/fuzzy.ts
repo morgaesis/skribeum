@@ -1,4 +1,4 @@
-// Fuzzy subsequence matching for the palette, quick switcher and slash
+// Fuzzy subsequence matching for the command surface and slash
 // menu: case-insensitive, scoring word-boundary and consecutive hits,
 // returning matched positions so views can highlight without markup
 // injection.

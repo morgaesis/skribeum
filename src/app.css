@@ -354,3 +354,37 @@ select {
     min-height: 2.75rem;
   }
 }
+/* Registry-backed selection-toolbar command tooltips live at the document
+   root so their fixed geometry can clamp to the visual viewport. */
+.cm-skr-toolbar-command-tooltip {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: 1px solid var(--skr-border);
+  border-radius: 0.25rem;
+  padding: 0.25rem 0.375rem;
+  color: var(--skr-text);
+  background: var(--skr-surface-raised);
+  box-shadow: var(--skr-shadow);
+  font-family: var(--skr-font-interface);
+  font-size: 12px;
+  line-height: 1.2;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 50ms linear;
+}
+
+.cm-skr-toolbar-command-tooltip.visible {
+  opacity: 1;
+}
+
+.cm-skr-toolbar-command-tooltip kbd {
+  border: 0;
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.25rem;
+  background: var(--skr-surface-subtle);
+  font-family: var(--skr-font-mono);
+  font-size: 11px;
+}

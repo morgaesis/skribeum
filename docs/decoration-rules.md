@@ -213,7 +213,7 @@ array. Each entry has this shape:
 `symbol` and `next_status` are single source characters. `category` is one of
 `TODO`, `IN_PROGRESS`, `ON_HOLD`, `DONE`, `CANCELLED` or `NON_TASK`.
 `color_token` names an existing `--skr-*` theme custom property. Array order
-drives the listbox and command palette. Symbols must be unique, and every
+drives the listbox and command surface. Symbols must be unique, and every
 `next_status` must refer to another entry. A malformed array, duplicate symbol
 or dangling transition loads the complete default list. Unknown keys in the
 settings document and inside retained status entries survive writes.

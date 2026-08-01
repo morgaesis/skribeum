@@ -1,14 +1,12 @@
-// The application surfaces (command palette, quick switcher, vault
-// search, settings, outline) registered as views with their opening
-// commands, plus the save command. The host maps view ids to concrete
+// The application surfaces (unified command surface, settings, outline)
+// registered as views with their opening commands, plus the save command.
+// The host maps view ids to concrete
 // components; the registry knows only ids and titles.
 
 import type { CommandRegistry } from "../registry";
 import { STRINGS } from "../strings";
 
-export const VIEW_COMMAND_PALETTE = "view.command-palette";
-export const VIEW_QUICK_SWITCHER = "view.quick-switcher";
-export const VIEW_VAULT_SEARCH = "view.vault-search";
+export const VIEW_COMMAND_SURFACE = "view.command-surface";
 export const VIEW_SETTINGS = "view.settings";
 export const VIEW_OUTLINE = "view.outline";
 export const VIEW_FILE_TREE = "view.file-tree";
@@ -17,18 +15,8 @@ export const VIEW_CANVAS = "view.canvas";
 /** Registers the surface views and their commands. */
 export function registerSurfaces(registry: CommandRegistry): void {
   registry.registerView({
-    id: VIEW_COMMAND_PALETTE,
-    title: STRINGS.commandPaletteLabel,
-    kind: "overlay",
-  });
-  registry.registerView({
-    id: VIEW_QUICK_SWITCHER,
-    title: STRINGS.quickSwitcherLabel,
-    kind: "overlay",
-  });
-  registry.registerView({
-    id: VIEW_VAULT_SEARCH,
-    title: STRINGS.vaultSearchLabel,
+    id: VIEW_COMMAND_SURFACE,
+    title: STRINGS.commandSurfaceLabel,
     kind: "overlay",
   });
   registry.registerView({
@@ -59,16 +47,16 @@ export function registerSurfaces(registry: CommandRegistry): void {
     palette: false,
     pointer: ["app-bar"],
     run: (context) => {
-      context.openView(VIEW_COMMAND_PALETTE);
+      context.openCommandSurface(">");
     },
   });
   registry.register({
     id: "quick-switcher.open",
-    title: STRINGS.commandOpenQuickSwitcher,
-    keybindings: ["Mod-o"],
+    title: STRINGS.commandOpenCommandSurface,
+    keybindings: ["Mod-k", "Mod-o"],
     pointer: ["app-bar", "action-menu", "command-palette"],
     run: (context) => {
-      context.openView(VIEW_QUICK_SWITCHER);
+      context.openCommandSurface("");
     },
   });
   registry.register({
@@ -77,7 +65,7 @@ export function registerSurfaces(registry: CommandRegistry): void {
     keybindings: ["Mod-Shift-f"],
     pointer: ["app-bar", "action-menu", "command-palette"],
     run: (context) => {
-      context.openView(VIEW_VAULT_SEARCH);
+      context.openCommandSurface("?");
     },
   });
   registry.register({

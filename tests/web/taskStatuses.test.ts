@@ -119,6 +119,7 @@ describe("task status commands and byte fidelity", () => {
       view,
       openNote: () => Promise.resolve(),
       openView: () => {},
+      openCommandSurface: () => {},
       toggleView: () => {},
       closeSurfaces: () => {},
       requestSave: () => {},

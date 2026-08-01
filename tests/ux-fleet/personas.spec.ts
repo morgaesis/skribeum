@@ -21,10 +21,10 @@ class Flow {
   async open(path: string, text: string, selector = ".cm-content"): Promise<void> {
     await this.session.interact({
       intent: this.intent,
-      action: `Open ${path} through the quick switcher`,
+      action: `Open ${path} through the command surface`,
       perform: async () => {
         await browser.keys([modifier, "o"]);
-        const input = $('[role="combobox"][aria-label="Quick switcher"]');
+        const input = $('[role="combobox"][aria-label="Search notes and commands"]');
         await input.waitForExist({ timeout: 15_000 });
         await input.setValue(path);
         await browser.waitUntil(
@@ -34,7 +34,7 @@ class Flow {
           },
           {
             timeout: 15_000,
-            timeoutMsg: `quick switcher did not find ${path}`,
+            timeoutMsg: `command surface did not find ${path}`,
           },
         );
         await browser.keys(Key.Enter);
@@ -279,8 +279,8 @@ describe("persona-driven UX fleet", () => {
     const flow = new Flow("04-keyboard-power-user", "Keyboard-only power user", "Navigate core command surfaces without pointer input and preserve useful focus", FLEET_SEED + 4);
     await flow.open("quickstart.md", "Quickstart");
     await flow.open(NOTES.keyboard, "Command surface");
-    await flow.surface([modifier, "p"], "Command palette");
-    await $('[role="combobox"]').setValue("toggle outline");
+    await flow.surface([modifier, "p"], "Search notes and commands");
+    await $('[role="combobox"]').setValue(">toggle outline");
     await $('[role="option"]').waitForExist({ timeout: 10_000 });
     await browser.keys(Key.Enter);
     await $('[role="tree"][aria-label="Outline"]').waitForExist({
@@ -307,7 +307,7 @@ describe("persona-driven UX fleet", () => {
           horizontalOverflowPx: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
         })),
     });
-    await flow.surface([modifier, "p"], "Command palette");
+    await flow.surface([modifier, "p"], "Search notes and commands");
     await browser.keys(Key.Escape);
     await browser.execute(() => {
       document.documentElement.style.zoom = "";
@@ -320,7 +320,7 @@ describe("persona-driven UX fleet", () => {
     await flow.open("quickstart.md", "Quickstart");
     await flow.open(NOTES.interruption, "Interrupted draft");
     await flow.type("Type a short burst before an interruption", " before an interruption", "before an interruption");
-    await flow.surface([modifier, "p"], "Command palette");
+    await flow.surface([modifier, "p"], "Search notes and commands");
     await browser.keys(Key.Escape);
     await flow.open(NOTES.interruptionTarget, "Reference during interruption");
     await humanReadingTour(flow);

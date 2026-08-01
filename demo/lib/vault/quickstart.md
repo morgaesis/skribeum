@@ -6,7 +6,7 @@ Welcome to the Skribeum demo vault. This tour takes a few minutes and uses real 
 
 Use the file tree to expand **Features** and **Examples**. Open [[index|Index]] for a compact map of the vault, then return here through a wikilink or the note switcher.
 
-Try the command palette and quick switcher. Search for `cedar` to find several notes that discuss the fictional Cedar Room project, including [[Examples/Work/meeting-notes|meeting notes]] and [[Examples/Work/decision-log|a decision record]].
+Open the command surface with `mod+k`. Search for `cedar` to find notes by name, or enter `?cedar` to search note text across the vault. The results include [[Examples/Work/meeting-notes|meeting notes]] and [[Examples/Work/decision-log|a decision record]].
 
 ## 2. Edit a note
 

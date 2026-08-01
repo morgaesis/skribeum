@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
 import {
   flattenOutline,
+  headingAtOrBefore,
   outlineFromTree,
 } from "../../src/lib/features/outline";
 
@@ -77,6 +78,14 @@ describe("outline computation", () => {
 });
 
 describe("outline flattening", () => {
+  it("finds the nearest heading at or above the caret", () => {
+    const outline = outlineOf(DOCUMENT);
+    expect(headingAtOrBefore(outline, DOCUMENT.indexOf("body"))?.title).toBe(
+      "Setext",
+    );
+    expect(headingAtOrBefore(outline, -1)).toBeNull();
+  });
+
   it("flattens in document order with depths", () => {
     const outline = outlineOf(DOCUMENT);
     const rows = flattenOutline(outline, new Set());

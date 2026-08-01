@@ -8,6 +8,8 @@ export type BannerItem = {
   paths?: string[];
   /** Optional review action; the label is the shared review string. */
   onReview?: () => void;
+  /** Uses the polite status channel instead of the assertive alert channel. */
+  polite?: boolean;
 };
 </script>
 
@@ -26,7 +28,8 @@ let {
 {#each banners as banner (banner.id)}
   <aside
     class="skr-warning flex items-start gap-2 border-b px-3 py-1.5 text-xs"
-    role="alert"
+    role={banner.polite ? "status" : "alert"}
+    aria-live={banner.polite ? "polite" : undefined}
   >
     <div class="min-w-0 flex-1">
       <p class="m-0">{banner.text}</p>

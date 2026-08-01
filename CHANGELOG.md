@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- One prefix-routed command surface handles note and file names, commands and
+  settings, tags, and note text. Existing switcher, palette, and vault-search
+  shortcuts open the same surface with their corresponding mode preloaded.
+- Selection toolbar buttons expose registry-derived command titles and
+  keybindings after hover intent or immediately on keyboard focus.
+
+### Added
+
+- Copy-link commands produce browser note URLs or desktop configured links.
+  Note links are available from Actions and command mode, while heading links
+  are available from outline rows and the heading nearest the caret.
+- Every settings row is a searchable command action that opens settings,
+  aligns the target row to the pane, and focuses its control.
+
 ## [0.0.6] - 2026-08-01
 
 ### Changed

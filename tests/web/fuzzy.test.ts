@@ -1,4 +1,4 @@
-// The fuzzy matcher behind the palette, quick switcher and slash menu.
+// The fuzzy matcher behind the command surface and slash menu.
 
 import { describe, expect, it } from "vitest";
 import { fuzzyMatch, segmentByPositions } from "../../src/lib/fuzzy";

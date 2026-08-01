@@ -20,6 +20,10 @@ import FileTree from "./lib/FileTree.svelte";
 import { createAppRegistry } from "./lib/features";
 import { ContentRequestGate } from "./lib/features/contentRequestGate";
 import {
+  browserLinkForAddress,
+  desktopLinkForAddress,
+} from "./lib/features/copyLinks";
+import {
   createNoteNavigator,
   type FollowWikilinkOptions,
   followWikilinkUnderCursor,
@@ -28,13 +32,20 @@ import {
   type NoteNavigator,
   noteFragmentPosition,
 } from "./lib/features/navigation";
-import { computeOutline, type OutlineEntry } from "./lib/features/outline";
 import {
+  computeOutline,
+  headingAtOrBefore,
+  type OutlineEntry,
+} from "./lib/features/outline";
+import {
+  appendBareDiscoveryItems,
+  commandItems,
+  fileItems,
   firstMatchText,
   type PickerItem,
-  paletteItems,
-  quickSwitcherItems,
+  parsePickerQuery,
   searchResultItems,
+  tagItems,
 } from "./lib/features/pickers";
 import {
   DEFAULT_SETTINGS,
@@ -43,12 +54,10 @@ import {
 } from "./lib/features/settingsStore";
 import {
   VIEW_CANVAS,
-  VIEW_COMMAND_PALETTE,
+  VIEW_COMMAND_SURFACE,
   VIEW_FILE_TREE,
   VIEW_OUTLINE,
-  VIEW_QUICK_SWITCHER,
   VIEW_SETTINGS,
-  VIEW_VAULT_SEARCH,
 } from "./lib/features/surfaces";
 import {
   type TagAffordanceOptions,
@@ -87,7 +96,6 @@ import {
   watchSubscribe,
 } from "./lib/ipc/vault";
 import OutlinePanel from "./lib/OutlinePanel.svelte";
-import PaletteOverlay from "./lib/PaletteOverlay.svelte";
 import { type CommandContext, globalKeydownHandler } from "./lib/registry";
 import CanvasView from "./lib/rendering/CanvasView.svelte";
 import {
@@ -107,6 +115,7 @@ import {
   isProseFontName,
   isThemeName,
 } from "./lib/themes/theme";
+import UnifiedCommandSurface from "./lib/UnifiedCommandSurface.svelte";
 
 let {
   openVaultDisabledReason = null,
@@ -184,6 +193,8 @@ let settingsState = $state<SettingsState>({
 let updateState = $state<UpdateState>({ kind: "idle" });
 let settingsFilePath = $state<string | null>(null);
 let updateCheckGeneration = 0;
+let targetSetting = $state<string | null>(null);
+const transientBannerTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
 function applySettings(documentSettings: SettingsState["document"]) {
   const root = document.documentElement;
@@ -263,6 +274,16 @@ function notePathsOf(entries: TreeEntry[]): string[] {
     .map((entry) => entry.path);
 }
 
+function commandSurfacePathsOf(entries: TreeEntry[]): string[] {
+  return entries
+    .filter(
+      (entry) =>
+        entry.kind === "note" ||
+        entry.path.toLocaleLowerCase().endsWith(".canvas"),
+    )
+    .map((entry) => entry.path);
+}
+
 function refreshOutline() {
   const view = editor?.getView();
   outlineEntries = view === undefined ? [] : computeOutline(view.state);
@@ -299,9 +320,23 @@ function openOverlay(id: string, initialQuery = "") {
   activeOverlay = id;
   overlayQuery = initialQuery;
   searchResults = [];
-  if (id === VIEW_QUICK_SWITCHER) {
+  if (id === VIEW_COMMAND_SURFACE) {
     void refreshTreeIndex();
   }
+}
+
+function openCommandSurface(initialQuery: string) {
+  targetSetting = null;
+  openOverlay(VIEW_COMMAND_SURFACE, initialQuery);
+  const parsed = parsePickerQuery(initialQuery);
+  if (parsed.mode === "text" && parsed.query.length > 0) {
+    void runVaultSearch(parsed.query);
+  }
+}
+
+function openSetting(id: string) {
+  targetSetting = id;
+  openOverlay(VIEW_SETTINGS);
 }
 
 function openSheet(id: SheetId, origin?: HTMLElement) {
@@ -437,9 +472,12 @@ function commandContext(): CommandContext {
           focusFileTree();
         }
       } else {
+        if (id === VIEW_SETTINGS) targetSetting = null;
         openOverlay(id);
       }
     },
+    openCommandSurface,
+    openSetting,
     toggleView: (id) => {
       if (id === VIEW_OUTLINE) {
         if (narrowViewport) {
@@ -470,6 +508,8 @@ function commandContext(): CommandContext {
     navigateBack: () => navigation?.back() ?? false,
     navigateForward: () => navigation?.forward() ?? false,
     followLink: followLinkUnderCursor,
+    copyNoteLink,
+    copyHeadingLink,
   };
 }
 
@@ -498,28 +538,45 @@ function runActionCommand(id: string) {
 // rebuilt from every tree entry on each keystroke, which is what made the
 // surface take most of a second to appear over a large vault.
 const notePaths = $derived(notePathsOf(tree));
+const commandSurfacePaths = $derived(commandSurfacePathsOf(tree));
+const parsedOverlayQuery = $derived(parsePickerQuery(overlayQuery));
 
 const overlayItems = $derived.by((): PickerItem[] => {
   void settingsState.document.task_statuses;
-  switch (activeOverlay) {
-    case VIEW_COMMAND_PALETTE:
-      return paletteItems(registry, overlayQuery, macPlatform);
-    case VIEW_QUICK_SWITCHER:
-      return quickSwitcherItems(notePaths, recents, overlayQuery);
-    case VIEW_VAULT_SEARCH:
+  if (activeOverlay !== VIEW_COMMAND_SURFACE) return [];
+  switch (parsedOverlayQuery.mode) {
+    case "command":
+      return commandItems(registry, parsedOverlayQuery.query, macPlatform);
+    case "file":
+      return appendBareDiscoveryItems(
+        fileItems(
+          commandSurfacePaths,
+          recents,
+          selectedPath === null ? [] : [selectedPath],
+          parsedOverlayQuery.query,
+        ),
+        commandItems(registry, parsedOverlayQuery.query, macPlatform),
+        tagItems(tagCatalogEntries, parsedOverlayQuery.query),
+        parsedOverlayQuery.query,
+      );
+    case "tag":
+      return tagItems(tagCatalogEntries, parsedOverlayQuery.query);
+    case "text":
       return searchResultItems(searchResults);
-    default:
-      return [];
   }
 });
 
 function onOverlayQuery(query: string) {
   overlayQuery = query;
-  if (activeOverlay === VIEW_VAULT_SEARCH) {
+  const parsed = parsePickerQuery(query);
+  clearTimeout(searchDebounce);
+  if (parsed.mode === "text") {
     clearTimeout(searchDebounce);
     searchDebounce = setTimeout(() => {
-      void runVaultSearch(query);
+      void runVaultSearch(parsed.query);
     }, 200);
+  } else {
+    searchResults = [];
   }
 }
 
@@ -533,7 +590,7 @@ async function runVaultSearch(query: string) {
       vault,
       query,
       settingsState.document.search_result_limit,
-      settingsState.document.search_note_bodies,
+      true,
       settingsState.document.search_case_sensitive,
     );
   } catch (error) {
@@ -556,8 +613,7 @@ function openTagSearch(tag: string) {
   const normalized = tag.startsWith("#") ? tag.slice(1) : tag;
   rememberTag(normalized);
   const query = `#${normalized}`;
-  openOverlay(VIEW_VAULT_SEARCH, query);
-  void runVaultSearch(query);
+  openCommandSurface(`?${query}`);
 }
 
 function tagAffordanceOptions(): TagAffordanceOptions {
@@ -599,27 +655,35 @@ async function refreshTreeAfterTagCatalog(handle: VaultHandle) {
   }
 }
 
-function onOverlayPick(id: string) {
-  const overlay = activeOverlay;
-  if (overlay === VIEW_COMMAND_PALETTE) {
+function onOverlayPick(item: PickerItem) {
+  if (item.kind === "command") {
     // Keep the editor's selection stable until editor-scoped commands have
     // consumed it. Restoring focus first can reconcile a browser selection
     // change before the command reads the CodeMirror state.
     activeOverlay = null;
-    const handled = registry.run(id, commandContext());
+    const handled = registry.run(item.value, commandContext());
     if (activeOverlay === null && activeSheet === null) {
-      if (handled && id === "navigation.follow-link") {
+      if (handled && item.value === "navigation.follow-link") {
         surfaceFocusOrigin = null;
       } else {
         restoreSurfaceFocus();
       }
     }
-  } else if (overlay === VIEW_QUICK_SWITCHER) {
+  } else if (item.kind === "file") {
+    if (item.id.startsWith("text-search:")) {
+      overlayQuery = `?${item.value}`;
+      void runVaultSearch(item.value);
+      return;
+    }
     closeOverlay();
-    void navigateToNote(id);
-  } else if (overlay === VIEW_VAULT_SEARCH) {
+    openPath(item.value);
+  } else if (item.kind === "tag") {
+    rememberTag(item.value);
+    overlayQuery = `?#${item.value}`;
+    void runVaultSearch(`#${item.value}`);
+  } else if (item.kind === "text") {
     closeOverlay();
-    void openSearchResult(id);
+    void openSearchResult(item.value);
   }
 }
 
@@ -656,19 +720,80 @@ function outlineNavigate(from: number) {
   view.focus();
 }
 
+function linkGenerationContext(): WikilinkResolutionContext {
+  return {
+    ...(linkContext ?? EMPTY_WIKILINK_CONTEXT),
+    currentPath: selectedPath,
+  };
+}
+
+async function writeLink(address: NoteAddress) {
+  const link =
+    navigationSurface === "browser"
+      ? browserLinkForAddress(address, new URL(window.location.href))
+      : desktopLinkForAddress(address, linkGenerationContext());
+  try {
+    await navigator.clipboard.writeText(link);
+    announceLinkCopied();
+  } catch (error) {
+    errorText = describeError(STRINGS.linkCopyFailed, error);
+  }
+}
+
+async function copyNoteLink() {
+  if (selectedPath !== null && notePaths.includes(selectedPath)) {
+    await writeLink({ path: selectedPath });
+  }
+}
+
+async function copyHeadingLink(heading?: string) {
+  if (selectedPath === null) return;
+  const view = editor?.getView();
+  const target =
+    heading ??
+    (view === undefined
+      ? undefined
+      : headingAtOrBefore(
+          computeOutline(view.state),
+          view.state.selection.main.head,
+        )?.title);
+  if (target !== undefined) {
+    await writeLink({ path: selectedPath, fragment: target });
+  }
+}
+
+function copyOutlineHeading(heading: string) {
+  registry.run("link.copy-heading", {
+    ...commandContext(),
+    heading,
+  });
+}
+
 function onEditorDocChanged() {
   if (outlineOpen) {
     scheduleOutlineRefresh();
   }
 }
 
-function pushBanner(banner: Omit<BannerItem, "id">) {
+function pushBanner(banner: Omit<BannerItem, "id">): number {
   nextBannerId += 1;
   banners = [...banners, { ...banner, id: nextBannerId }];
+  return nextBannerId;
 }
 
 function dismissBanner(id: number) {
+  const timer = transientBannerTimers.get(id);
+  if (timer !== undefined) clearTimeout(timer);
+  transientBannerTimers.delete(id);
   banners = banners.filter((banner) => banner.id !== id);
+}
+
+function announceLinkCopied() {
+  const id = pushBanner({ text: STRINGS.linkCopied, polite: true });
+  transientBannerTimers.set(
+    id,
+    setTimeout(() => dismissBanner(id), 2000),
+  );
 }
 
 function describeError(context: string, error: unknown): string {
@@ -1508,7 +1633,11 @@ onMount(() => {
     </section>
     {#if outlineOpen}
       <aside class="skr-panel skr-desktop-outline w-60 shrink-0 overflow-y-auto border-l">
-        <OutlinePanel entries={outlineEntries} onNavigate={outlineNavigate} />
+        <OutlinePanel
+          entries={outlineEntries}
+          onNavigate={outlineNavigate}
+          onCopyHeading={copyOutlineHeading}
+        />
       </aside>
     {/if}
   </main>
@@ -1571,6 +1700,7 @@ onMount(() => {
   <Sheet label={STRINGS.outlineLabel} onClose={closeSheet} restoreFocus={false}>
     <OutlinePanel
       entries={outlineEntries}
+      onCopyHeading={copyOutlineHeading}
       onNavigate={(from) => {
         closeSheet();
         outlineNavigate(from);
@@ -1605,31 +1735,10 @@ onMount(() => {
   </Sheet>
 {/if}
 
-{#if activeOverlay === VIEW_COMMAND_PALETTE}
-  <PaletteOverlay
-    label={STRINGS.commandPaletteLabel}
-    placeholder={STRINGS.commandPalettePlaceholder}
+{#if activeOverlay === VIEW_COMMAND_SURFACE}
+  <UnifiedCommandSurface
     items={overlayItems}
-    onQueryChange={onOverlayQuery}
-    onPick={onOverlayPick}
-    onClose={closeOverlay}
-    restoreFocus={false}
-  />
-{:else if activeOverlay === VIEW_QUICK_SWITCHER}
-  <PaletteOverlay
-    label={STRINGS.quickSwitcherLabel}
-    placeholder={STRINGS.quickSwitcherPlaceholder}
-    items={overlayItems}
-    onQueryChange={onOverlayQuery}
-    onPick={onOverlayPick}
-    onClose={closeOverlay}
-    restoreFocus={false}
-  />
-{:else if activeOverlay === VIEW_VAULT_SEARCH}
-  <PaletteOverlay
-    label={STRINGS.vaultSearchLabel}
-    placeholder={STRINGS.vaultSearchPlaceholder}
-    items={overlayItems}
+    mode={parsedOverlayQuery.mode}
     initialQuery={overlayQuery}
     onQueryChange={onOverlayQuery}
     onPick={onOverlayPick}
@@ -1649,5 +1758,6 @@ onMount(() => {
     {settingsFilePath}
     {updateState}
     onCheckUpdate={checkSelectedUpdateChannel}
+    {targetSetting}
   />
 {/if}

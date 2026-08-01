@@ -15,6 +15,7 @@ function contextStub(): CommandContext {
     view: null,
     openNote: () => Promise.resolve(),
     openView: () => {},
+    openCommandSurface: () => {},
     toggleView: () => {},
     closeSurfaces: () => {},
     requestSave: () => {},

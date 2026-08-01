@@ -9,10 +9,12 @@ import { STRINGS } from "./strings";
 let {
   entries,
   onNavigate,
+  onCopyHeading,
   touchMode = false,
 }: {
   entries: OutlineEntry[];
   onNavigate: (from: number) => void;
+  onCopyHeading: (heading: string) => void;
   touchMode?: boolean;
 } = $props();
 
@@ -54,6 +56,7 @@ function activate(row: FlatOutlineRow) {
 // the items, scoped to this widget; the command that opens the panel is a
 // registry keybinding.
 function onKeydown(event: KeyboardEvent) {
+  if (event.target instanceof HTMLButtonElement) return;
   const row = rows[focusIndex];
   if (row === undefined) {
     return;
@@ -118,7 +121,7 @@ function onKeydown(event: KeyboardEvent) {
           aria-selected={index === focusIndex}
           aria-expanded={row.hasChildren ? !collapsed.has(row.entry.from) : undefined}
           tabindex={index === focusIndex ? 0 : -1}
-          class="flex cursor-pointer items-center truncate rounded px-2"
+          class="outline-row flex cursor-pointer items-center rounded px-2"
           style={`min-height: ${touchMode ? 44 : 28}px; padding-left: ${0.5 + (row.depth - 1) * 0.75}rem`}
           onclick={() => {
             focusRow(index);
@@ -134,9 +137,47 @@ function onKeydown(event: KeyboardEvent) {
                 toggleCollapse(row);
               }}>{collapsed.has(row.entry.from) ? "▸" : "▾"}</span>
           {/if}
-          {row.entry.title}
+          <span class="min-w-0 flex-1 truncate">{row.entry.title}</span>
+          <button
+            type="button"
+            class="outline-copy"
+            aria-label={`${STRINGS.copyLinkToHeading}: ${row.entry.title}`}
+            data-command-id="link.copy-heading"
+            onclick={(event) => {
+              event.stopPropagation();
+              onCopyHeading(row.entry.title);
+            }}
+          ><span aria-hidden="true">⧉</span></button>
         </li>
       {/each}
     </ul>
   {/if}
 </div>
+
+<style>
+  .outline-copy {
+    display: grid;
+    width: 1rem;
+    height: 1rem;
+    flex: none;
+    place-items: center;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--skr-text-muted);
+    font-size: 0.75rem;
+    line-height: 1;
+    opacity: 0;
+  }
+
+  .outline-row:hover .outline-copy,
+  .outline-row:focus .outline-copy,
+  .outline-row:focus-within .outline-copy {
+    opacity: 1;
+  }
+
+  .outline-copy:focus-visible {
+    outline: 2px solid var(--skr-focus);
+    outline-offset: 2px;
+  }
+</style>

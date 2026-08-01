@@ -18,11 +18,15 @@ crash-safe atomic write path or filesystem watcher. The browser API cannot make
 the conflict check and file replacement one atomic operation, so an external
 edit that lands in the final replacement window can be overwritten.
 
-On viewports up to 60rem wide, the bottom action bar opens files, search, the
-quick switcher, the command palette, and the Actions sheet. The file tree and
-outline appear over the editor instead of narrowing it. Modal surfaces keep
-keyboard focus inside until they close and return focus to their opening
-control. Settings is available from Actions.
+`mod+k` opens the unified command surface. Plain queries find notes, while `>`,
+`#`, and `?` select commands and settings, tags, and note text. The familiar
+switcher, palette, and search shortcuts open this surface with the matching
+prefix. On viewports up to 60rem wide, the surface anchors to the visual
+viewport above the on-screen keyboard. The bottom action bar opens its aliases
+and the Actions sheet. The file tree and outline appear over the editor instead
+of narrowing it. Modal surfaces keep keyboard focus inside until they close and
+return focus to their opening control. Settings and copy link to note are
+available from Actions.
 
 Rendered note-link previews are enabled by default. Hover a resolved note link
 briefly, or focus it and press `P`, to open a preview. Pointer out and `Escape`

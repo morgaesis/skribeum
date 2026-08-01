@@ -1,47 +1,101 @@
-// Item building for the picker overlays: the command palette listing
-// (exactly the registry's palette commands), quick-switcher ranking over
-// the vault tree with recent notes first, and vault-search result rows
-// with match highlighting as text segments, never markup.
+// Item building for the unified command surface. Prefix parsing selects one
+// result builder, so unrelated result kinds never enter the same ranked list.
 
 import { fuzzyMatch, segmentByPositions, type TextSegment } from "../fuzzy";
 import { byteRangesToCharRanges, type SearchResult } from "../ipc/services";
 import type { CommandRegistry } from "../registry";
 import { formatKeybinding } from "../registry";
+import { STRINGS } from "../strings";
 
 /** One row of a picker overlay. */
 export type PickerItem = {
-  /** Stable identity of the row (command id, note path). */
+  /** Stable identity of the row within the open surface. */
   id: string;
+  /** The value consumed when the row is invoked. */
+  value: string;
+  /** Search mode owning this row. */
+  kind: PickerMode;
+  /** Optional semantic subtype within command mode. */
+  actionKind?: "command" | "setting";
+  /** Optional labeled group for file-mode ordering. */
+  group?: string;
+  /** Registered command identity, when this row invokes one. */
+  commandId?: string;
   /** Title as highlight segments. */
   titleSegments: TextSegment[];
   /** Optional secondary line (search snippet) as segments. */
   detailSegments?: TextSegment[];
   /** Displayed keybinding, when one exists. */
   keybinding?: string;
+  /** Prefix hint shown by discovery rows in bare file mode. */
+  prefixHint?: ">" | "#";
 };
+
+export type PickerMode = "file" | "command" | "tag" | "text";
+
+export type ParsedPickerQuery = { mode: PickerMode; query: string };
+
+export function parsePickerQuery(query: string): ParsedPickerQuery {
+  switch (query[0]) {
+    case ">":
+      return { mode: "command", query: query.slice(1) };
+    case "#":
+      return { mode: "tag", query: query.slice(1) };
+    case "?":
+      return { mode: "text", query: query.slice(1) };
+    default:
+      return { mode: "file", query };
+  }
+}
 
 function plainSegments(text: string): TextSegment[] {
   return text.length === 0 ? [] : [{ text, highlighted: false }];
 }
 
-/** The palette listing for `query`: the registry's palette commands. */
-export function paletteItems(
+function bestCommandMatch(
+  query: string,
+  command: ReturnType<CommandRegistry["paletteCommands"]>[number],
+) {
+  return (
+    [command.title, ...(command.searchTerms ?? [])]
+      .map((text) => fuzzyMatch(query, text))
+      .filter((match) => match !== null)
+      .sort((left, right) => (right?.score ?? 0) - (left?.score ?? 0))[0] ??
+    null
+  );
+}
+
+/** Command-mode results, with ordinary commands winning equal setting scores. */
+export function commandItems(
   registry: CommandRegistry,
   query: string,
   macPlatform: boolean,
 ): PickerItem[] {
   return registry
     .paletteCommands()
-    .map((command) => ({ command, match: fuzzyMatch(query, command.title) }))
+    .map((command) => ({ command, match: bestCommandMatch(query, command) }))
     .filter((entry) => entry.match !== null)
-    .sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0))
-    .map(({ command, match }) => {
+    .sort((a, b) => {
+      const score = (b.match?.score ?? 0) - (a.match?.score ?? 0);
+      if (score !== 0) return score;
+      const kind =
+        (a.command.kind === "setting" ? 1 : 0) -
+        (b.command.kind === "setting" ? 1 : 0);
+      return kind !== 0 ? kind : a.command.title.localeCompare(b.command.title);
+    })
+    .map(({ command }) => {
       const binding = command.keybindings?.[0];
+      const titleMatch = fuzzyMatch(query, command.title);
       return {
-        id: command.id,
+        id: `command:${command.id}`,
+        value: command.id,
+        kind: "command" as const,
+        actionKind: command.kind ?? "command",
+        group: STRINGS.commandSurfaceCommands,
+        commandId: command.id,
         titleSegments: segmentByPositions(
           command.title,
-          match?.positions ?? [],
+          titleMatch?.positions ?? [],
         ),
         ...(binding === undefined
           ? {}
@@ -50,49 +104,127 @@ export function paletteItems(
     });
 }
 
-/**
- * Ranks note paths for the quick switcher: with an empty query, recent
- * notes first (most recent leading) then the rest alphabetically; with a
- * query, fuzzy score ordering with a recency bonus.
- */
-export function quickSwitcherItems(
+function displayName(path: string): string {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  return name.toLocaleLowerCase().endsWith(".md") ? name.slice(0, -3) : name;
+}
+
+/** File-mode results grouped as open notes, recent notes, then the vault. */
+export function fileItems(
   paths: readonly string[],
   recents: readonly string[],
+  openPaths: readonly string[],
   query: string,
   limit = 100,
 ): PickerItem[] {
-  const recentRank = new Map<string, number>();
-  for (const [index, path] of recents.entries()) {
-    if (!recentRank.has(path)) {
-      recentRank.set(path, index);
-    }
+  const known = new Set(paths);
+  const open = [...new Set(openPaths)].filter((path) => known.has(path));
+  const recent = [...new Set(recents)].filter(
+    (path) => known.has(path) && !open.includes(path),
+  );
+  const reserved = new Set([...open, ...recent]);
+  const vault = paths.filter((path) => !reserved.has(path));
+  const ranked = (candidates: readonly string[], group: string) =>
+    candidates
+      .map((path) => {
+        const name = displayName(path);
+        const nameMatch = fuzzyMatch(query, name);
+        const pathMatch = fuzzyMatch(query, path);
+        const match =
+          (nameMatch?.score ?? -1) >= (pathMatch?.score ?? -1)
+            ? nameMatch
+            : pathMatch;
+        return { path, name, nameMatch, match };
+      })
+      .filter((entry) => entry.match !== null)
+      .sort(
+        (a, b) =>
+          (b.match?.score ?? 0) - (a.match?.score ?? 0) ||
+          a.path.localeCompare(b.path),
+      )
+      .map(({ path, name, nameMatch }) => ({
+        id: `file:${path}`,
+        value: path,
+        kind: "file" as const,
+        group,
+        titleSegments: segmentByPositions(name, nameMatch?.positions ?? []),
+        detailSegments: plainSegments(path),
+      }));
+  const items: PickerItem[] = [
+    ...ranked(open, STRINGS.commandSurfaceOpenNotes),
+    ...ranked(recent, STRINGS.commandSurfaceRecent),
+    ...ranked(vault, STRINGS.commandSurfaceVault),
+  ].slice(0, limit);
+  if (query.length > 0) {
+    items.push({
+      id: `text-search:${query}`,
+      value: query,
+      kind: "file",
+      group: STRINGS.commandSurfaceVault,
+      titleSegments: plainSegments(
+        `${STRINGS.commandSurfaceSearchTextPrefix}${query}`,
+      ),
+    });
   }
-  if (query.length === 0) {
-    const known = new Set(paths);
-    const recentFirst = recents.filter((path) => known.has(path));
-    const rest = paths
-      .filter((path) => !recentRank.has(path))
-      .sort((a, b) => a.localeCompare(b));
-    return [...recentFirst, ...rest].slice(0, limit).map((path) => ({
-      id: path,
-      titleSegments: plainSegments(path),
+  return items;
+}
+
+export function tagItems(
+  tags: readonly { tag: string; noteCount: number; occurrenceCount: number }[],
+  query: string,
+): PickerItem[] {
+  return tags
+    .map((entry) => ({ entry, match: fuzzyMatch(query, entry.tag) }))
+    .filter(({ match }) => match !== null)
+    .sort(
+      (a, b) =>
+        (b.match?.score ?? 0) - (a.match?.score ?? 0) ||
+        a.entry.tag.localeCompare(b.entry.tag),
+    )
+    .map(({ entry, match }) => ({
+      id: `tag:${entry.tag}`,
+      value: entry.tag,
+      kind: "tag",
+      group: STRINGS.commandSurfaceTags,
+      titleSegments: segmentByPositions(
+        `#${entry.tag}`,
+        (match?.positions ?? []).map((position) => position + 1),
+      ),
     }));
-  }
-  return paths
-    .map((path) => ({ path, match: fuzzyMatch(query, path) }))
-    .filter((entry) => entry.match !== null)
-    .sort((a, b) => {
-      const recencyA = recentRank.has(a.path) ? 20 : 0;
-      const recencyB = recentRank.has(b.path) ? 20 : 0;
-      return (
-        (b.match?.score ?? 0) + recencyB - ((a.match?.score ?? 0) + recencyA)
-      );
-    })
-    .slice(0, limit)
-    .map(({ path, match }) => ({
-      id: path,
-      titleSegments: segmentByPositions(path, match?.positions ?? []),
-    }));
+}
+
+/**
+ * Adds the bounded discovery groups to a non-empty bare query while keeping
+ * each result kind in its own labeled group. The note-text fallback remains
+ * the final row.
+ */
+export function appendBareDiscoveryItems(
+  files: readonly PickerItem[],
+  commands: readonly PickerItem[],
+  tags: readonly PickerItem[],
+  query: string,
+): PickerItem[] {
+  if (query.length === 0) return [...files];
+  const textSearch = files.find((item) => item.id.startsWith("text-search:"));
+  const fileResults = files.filter(
+    (item) => !item.id.startsWith("text-search:"),
+  );
+  return [
+    ...fileResults,
+    ...commands.slice(0, 3).map(({ keybinding: _keybinding, ...item }) => ({
+      ...item,
+      group: STRINGS.commandSurfaceCommands,
+      prefixHint: ">" as const,
+    })),
+    ...tags.slice(0, 3).map((item) => ({
+      ...item,
+      group: STRINGS.commandSurfaceTags,
+      prefixHint: "#" as const,
+    })),
+    ...(textSearch === undefined
+      ? []
+      : [(({ group: _group, ...item }) => item)(textSearch)]),
+  ];
 }
 
 /** Splits `text` into segments from `[from, to)` character ranges. */
@@ -121,7 +253,10 @@ export function searchResultItems(
   results: readonly SearchResult[],
 ): PickerItem[] {
   return results.map((result) => ({
-    id: result.path,
+    id: `text:${result.path}`,
+    value: result.path,
+    kind: "text",
+    group: STRINGS.commandSurfaceNoteText,
     titleSegments: plainSegments(
       result.title.length > 0 ? result.title : result.path,
     ),

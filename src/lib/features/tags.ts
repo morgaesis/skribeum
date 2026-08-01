@@ -36,7 +36,7 @@ export type TagAffordanceOptions = {
   catalog(): readonly TagCatalogEntry[];
   /** Recently used tags, most recent first. */
   recentTags(): readonly string[];
-  /** Opens the existing vault search surface for this tag. */
+  /** Opens note-text mode filtered to this tag. */
   search(tag: string): void;
   /** Records a tag selected from completion. */
   remember(tag: string): void;

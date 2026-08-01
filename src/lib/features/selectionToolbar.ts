@@ -11,6 +11,7 @@ import {
   EditorView as View,
 } from "@codemirror/view";
 import type { CommandContext, CommandRegistry } from "../registry";
+import { formatKeybinding } from "../registry";
 import { STRINGS } from "../strings";
 
 type ToolbarConfig = {
@@ -22,19 +23,85 @@ const toolbarConfig = Facet.define<ToolbarConfig, ToolbarConfig | null>({
   combine: (values) => values[0] ?? null,
 });
 
-/** The toolbar's buttons: command id and accessible label. */
-const TOOLBAR_BUTTONS: readonly { id: string; label: string; glyph: string }[] =
-  [
-    { id: "format.bold", label: STRINGS.formatBold, glyph: "B" },
-    { id: "format.italic", label: STRINGS.formatItalic, glyph: "I" },
-    { id: "format.code", label: STRINGS.formatCode, glyph: "`" },
-    {
-      id: "format.strikethrough",
-      label: STRINGS.formatStrikethrough,
-      glyph: "S",
-    },
-    { id: "format.wikilink", label: STRINGS.formatWikilink, glyph: "[[" },
-  ];
+/** The toolbar owns glyphs only. Titles and bindings come from the registry. */
+const TOOLBAR_BUTTONS: readonly { id: string; glyph: string }[] = [
+  { id: "format.bold", glyph: "B" },
+  { id: "format.italic", glyph: "I" },
+  { id: "format.code", glyph: "`" },
+  { id: "format.strikethrough", glyph: "S" },
+  { id: "format.wikilink", glyph: "[[" },
+];
+
+function isMacPlatform(): boolean {
+  return /Mac|iP[ao]d|iPhone/.test(navigator.platform);
+}
+
+function attachCommandTooltip(
+  button: HTMLButtonElement,
+  title: string,
+  keybinding: string,
+): () => void {
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  let tooltip: HTMLDivElement | null = null;
+  const tooltipId = `skr-toolbar-tooltip-${button.dataset.commandId?.replaceAll(".", "-")}`;
+
+  const hide = () => {
+    clearTimeout(hoverTimer);
+    hoverTimer = undefined;
+    tooltip?.remove();
+    tooltip = null;
+    button.removeAttribute("aria-describedby");
+  };
+  const show = () => {
+    if (tooltip !== null) return;
+    tooltip = document.createElement("div");
+    tooltip.id = tooltipId;
+    tooltip.className = "cm-skr-toolbar-command-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    const label = document.createElement("span");
+    label.textContent = title;
+    const chip = document.createElement("kbd");
+    chip.textContent = keybinding;
+    tooltip.append(label, chip);
+    document.body.append(tooltip);
+    button.setAttribute("aria-describedby", tooltipId);
+
+    const viewport = window.visualViewport;
+    const leftEdge = (viewport?.offsetLeft ?? 0) + 4;
+    const rightEdge = leftEdge + (viewport?.width ?? window.innerWidth) - 8;
+    const topEdge = (viewport?.offsetTop ?? 0) + 4;
+    const buttonBox = button.getBoundingClientRect();
+    const tooltipBox = tooltip.getBoundingClientRect();
+    const left = Math.min(
+      Math.max(
+        leftEdge,
+        buttonBox.left + buttonBox.width / 2 - tooltipBox.width / 2,
+      ),
+      rightEdge - tooltipBox.width,
+    );
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${Math.max(topEdge, buttonBox.top - tooltipBox.height - 6)}px`;
+    requestAnimationFrame(() => tooltip?.classList.add("visible"));
+  };
+  const enter = () => {
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(show, 450);
+  };
+  const focus = () => {
+    if (button.matches(":focus-visible")) show();
+  };
+  button.addEventListener("pointerenter", enter);
+  button.addEventListener("pointerleave", hide);
+  button.addEventListener("focus", focus);
+  button.addEventListener("blur", hide);
+  return () => {
+    button.removeEventListener("pointerenter", enter);
+    button.removeEventListener("pointerleave", hide);
+    button.removeEventListener("focus", focus);
+    button.removeEventListener("blur", hide);
+    hide();
+  };
+}
 
 function toolbarTooltip(view: EditorView): Tooltip | null {
   const range = view.state.selection.main;
@@ -50,14 +117,24 @@ function toolbarTooltip(view: EditorView): Tooltip | null {
       dom.setAttribute("role", "toolbar");
       dom.setAttribute("aria-label", STRINGS.selectionToolbarLabel);
       const config = tooltipView.state.facet(toolbarConfig);
+      const cleanups: (() => void)[] = [];
       for (const button of TOOLBAR_BUTTONS) {
+        const command = config?.registry.command(button.id);
+        const binding = command?.keybindings?.[0];
+        if (command === undefined || binding === undefined) continue;
         const element = document.createElement("button");
         element.type = "button";
         element.className = "cm-skr-toolbar-button";
         element.dataset.commandId = button.id;
-        element.setAttribute("aria-label", button.label);
-        element.title = button.label;
+        element.setAttribute("aria-label", command.title);
         element.textContent = button.glyph;
+        cleanups.push(
+          attachCommandTooltip(
+            element,
+            command.title,
+            formatKeybinding(binding, isMacPlatform()),
+          ),
+        );
         // Prevent pointer focus from replacing the editor selection. Click
         // still handles both pointer activation and keyboard activation.
         element.addEventListener("pointerdown", (event) => {
@@ -73,7 +150,12 @@ function toolbarTooltip(view: EditorView): Tooltip | null {
         });
         dom.append(element);
       }
-      return { dom };
+      return {
+        dom,
+        destroy: () => {
+          for (const cleanup of cleanups) cleanup();
+        },
+      };
     },
   };
 }

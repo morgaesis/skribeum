@@ -1050,7 +1050,7 @@ describe("skribeum shell", () => {
         await mobileActions.$("button=Search").click();
         const searchInput = $('[role="combobox"]');
         await searchInput.waitForDisplayed({ timeout: 10000 });
-        await searchInput.setValue("third");
+        await searchInput.setValue("?third");
         const searchResult = $('[role="option"]');
         await searchResult.waitForDisplayed({ timeout: 10000 });
         await searchResult.click();
@@ -1770,7 +1770,7 @@ describe("skribeum shell", () => {
 
     const input = $('[role="combobox"]');
     await input.waitForExist({ timeout: 10000 });
-    expect(await input.getValue()).toBe("#shared");
+    expect(await input.getValue()).toBe("?#shared");
     await browser.waitUntil(
       async () => (await $$('[role="option"]').length) >= 2,
       { timeout: 20000, timeoutMsg: "tag search did not list its notes" },
@@ -2176,9 +2176,12 @@ describe("skribeum shell", () => {
     const quickSwitcher = $('[role="combobox"]');
     await quickSwitcher.waitForExist({ timeout: 10000 });
     await quickSwitcher.addValue(REVEAL_NOTE_NAME);
-    await browser.waitUntil(
-      async () => (await $$('[role="option"]').length) === 1,
-      { timeout: 10000 },
+    const revealResult = $(
+      '[role="option"][data-result-kind="file"][data-result-group]:not([data-result-group=""])',
+    );
+    await revealResult.waitForDisplayed({ timeout: 10000 });
+    expect(await revealResult.getText()).toContain(
+      REVEAL_NOTE_NAME.replace(/\.md$/i, ""),
     );
     await browser.keys(Key.Enter);
     await $(".cm-line.cm-skr-rich-callout").waitForExist({ timeout: 15000 });
@@ -2485,10 +2488,11 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, "o"]);
     const input = await overlayInput();
     await input.addValue("crlf");
-    await browser.waitUntil(
-      async () => (await $$('[role="option"]').length) === 1,
-      { timeout: 10000 },
+    const noteResult = $(
+      '[role="option"][data-result-kind="file"][data-result-group]:not([data-result-group=""])',
     );
+    await noteResult.waitForDisplayed({ timeout: 10000 });
+    expect((await noteResult.getText()).toLocaleLowerCase()).toContain("crlf");
     await browser.keys(Key.Enter);
     await browser.waitUntil(
       async () => (await editorText()).includes("second"),

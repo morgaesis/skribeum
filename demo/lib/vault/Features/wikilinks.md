@@ -13,6 +13,6 @@ Links can target a section: [[Examples/Work/meeting-notes#Open questions|meeting
 The [[Examples/Work/project-ideas|project ideas]] note proposes a quiet community workspace. The [[Examples/Research/interview-notes|interview notes]] capture what potential visitors need, and the [[Examples/Work/decision-log|decision log]] records which constraints shape the next prototype.
 
 > [!tip]
-> Follow a few links, then use the history controls or quick switcher to move back through the trail.
+> Follow a few links, then use the history controls or the `mod+k` command surface to move back through the trail. Copy link to note produces an address you can paste elsewhere.
 
 #feature/links #demo

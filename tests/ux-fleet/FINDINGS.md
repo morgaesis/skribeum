@@ -1,6 +1,6 @@
 # UX fleet findings
 
-The deterministic fleet completed 8 persona sessions and recorded 147 intent-level interactions. The report ranks the ten highest-impact defects from 129 distinct signal breaches. A wrong screen ranks above a slow screen, so rendering failures precede latency, focus, scroll, and layout signals.
+The deterministic fleet completed 8 persona sessions and recorded 147 intent-level interactions. The report ranks the ten highest-impact defects from 123 distinct signal breaches. A wrong screen ranks above a slow screen, so rendering failures precede latency, focus, scroll, and layout signals.
 
 ## Rendering defect coverage
 
@@ -55,17 +55,7 @@ The latency thresholds are exploratory triage thresholds, not release gates. Eve
   2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
   3. Assert rendered fenced-code.
 
-## 5. Critical: Pixel reference does not render as readable output
-
-- Persona: Checker
-- Session: `08-checker`, interaction 64
-- Measured signal: Expected no more than 3% of pixels differ by over 32 RGB levels; observed 3.90% differ.
-- Reproduction:
-  1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
-  3. Compare canvas with its pixel reference.
-
-## 6. Critical: Tags does not render as readable output
+## 5. Critical: Tags does not render as readable output
 
 - Persona: Checker
 - Session: `08-checker`, interaction 20
@@ -75,7 +65,7 @@ The latency thresholds are exploratory triage thresholds, not release gates. Eve
   2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
   3. Assert rendered tags.
 
-## 7. Critical: Wikilinks does not render as readable output
+## 6. Critical: Wikilinks does not render as readable output
 
 - Persona: Checker
 - Session: `08-checker`, interaction 2
@@ -85,7 +75,7 @@ The latency thresholds are exploratory triage thresholds, not release gates. Eve
   2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
   3. Click a rendered link and expect navigation.
 
-## 8. Critical: The UI session cannot complete: Open Search vault
+## 7. Critical: The UI session cannot complete: Open Search vault
 
 - Persona: Obsidian migrant
 - Session: `01-obsidian-migrant`, interaction 3
@@ -95,7 +85,7 @@ The latency thresholds are exploratory triage thresholds, not release gates. Eve
   2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
   3. Open Search vault.
 
-## 9. Critical: The UI session cannot complete: Open Command palette
+## 8. Critical: The UI session cannot complete: Open Command palette
 
 - Persona: Keyboard-only power user
 - Session: `04-keyboard-power-user`, interaction 3
@@ -105,7 +95,7 @@ The latency thresholds are exploratory triage thresholds, not release gates. Eve
   2. Follow the Keyboard-only power user session intent: Navigate core command surfaces without pointer input and preserve useful focus.
   3. Open Command palette.
 
-## 10. Critical: The UI session cannot complete: Open Command palette
+## 9. Critical: The UI session cannot complete: Open Command palette
 
 - Persona: Low-vision user
 - Session: `05-low-vision`, interaction 4
@@ -113,4 +103,14 @@ The latency thresholds are exploratory triage thresholds, not release gates. Eve
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
   2. Follow the Low-vision user session intent: Use dark theme at 200 percent page zoom without clipping or lost focus.
+  3. Open Command palette.
+
+## 10. Critical: The UI session cannot complete: Open Command palette
+
+- Persona: Interruption-prone user
+- Session: `06-interruption-prone`, interaction 4
+- Measured signal: visibility condition failed for [aria-label="Command palette"]
+- Reproduction:
+  1. Run `bun run ux:fleet` to open the deterministic generated vault.
+  2. Follow the Interruption-prone user session intent: Switch notes during edits and dismiss transient surfaces at unpredictable points.
   3. Open Command palette.

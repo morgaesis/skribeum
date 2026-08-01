@@ -11,6 +11,7 @@ import { registerNavigation } from "./navigation";
 import { registerSlashMenu } from "./slashMenu";
 import { registerSurfaces } from "./surfaces";
 import { registerTableEditing } from "./tableEditing";
+import { registerTags } from "./tags";
 import { registerTaskStatusCommands } from "./taskCommands";
 
 /** Builds the registry with every built-in feature registered. */
@@ -22,6 +23,7 @@ export function createAppRegistry(
   registerFind(registry);
   registerFormatting(registry);
   registerInsertions(registry);
+  registerTags(registry);
   registerSlashMenu(registry);
   registerNavigation(registry);
   registerTableEditing(registry);

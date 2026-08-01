@@ -6,13 +6,14 @@
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { searchPanelOpen } from "@codemirror/search";
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BULK_TEXT_INPUT_LENGTH,
   bulkTextInput,
 } from "../../src/lib/editor/bulkInput";
+import { decorationEngine } from "../../src/lib/editor/decorations/engine";
 import { showInvisibleCharacters } from "../../src/lib/editor/invisibles";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
 import { createAppRegistry } from "../../src/lib/features";
@@ -24,6 +25,12 @@ import {
   slashMenuOpen,
 } from "../../src/lib/features/slashMenu";
 import {
+  filteredTagCompletions,
+  type TagCatalogEntry,
+  tagAffordances,
+  tagCompletionOpen,
+} from "../../src/lib/features/tags";
+import {
   type CommandContext,
   type CommandRegistry,
   editorKeymap,
@@ -32,6 +39,18 @@ import {
 const registry: CommandRegistry = createAppRegistry();
 
 let activeView: EditorView | undefined;
+let tagCatalog: TagCatalogEntry[] = [];
+let recentTags: string[] = [];
+let searchedTags: string[] = [];
+let rememberedTags: string[] = [];
+let followLinkCalls = 0;
+
+const tagOptions = () => ({
+  catalog: () => tagCatalog,
+  recentTags: () => recentTags,
+  search: (tag: string) => searchedTags.push(tag),
+  remember: (tag: string) => rememberedTags.push(tag),
+});
 
 function context(): CommandContext {
   return {
@@ -45,11 +64,18 @@ function context(): CommandContext {
     recentNotePaths: () => [],
     navigateBack: () => false,
     navigateForward: () => false,
-    followLink: () => false,
+    followLink: () => {
+      followLinkCalls += 1;
+      return false;
+    },
   };
 }
 
-function makeView(doc: string, cursor = 0): EditorView {
+function makeView(
+  doc: string,
+  cursor = 0,
+  extensions: readonly Extension[] = [],
+): EditorView {
   const view = new EditorView({
     state: EditorState.create({
       doc,
@@ -60,9 +86,11 @@ function makeView(doc: string, cursor = 0): EditorView {
           extensions: obsidianMarkdownExtensions,
         }),
         editorKeymap(registry, context),
+        tagAffordances(tagOptions),
         slashMenu(registry, context),
         selectionToolbar(registry, context),
         findExtension(),
+        ...extensions,
       ],
     }),
     parent: document.body,
@@ -109,6 +137,11 @@ function runEditorCommand(id: string): boolean {
 afterEach(() => {
   activeView?.destroy();
   activeView = undefined;
+  tagCatalog = [];
+  recentTags = [];
+  searchedTags = [];
+  rememberedTags = [];
+  followLinkCalls = 0;
 });
 
 describe("bulk text input", () => {
@@ -236,6 +269,174 @@ describe("slash menu", () => {
         (option) => option.getAttribute("aria-selected") === "true",
       ),
     ).toHaveLength(1);
+  });
+});
+
+describe("tag affordances", () => {
+  it("ranks fuzzy matches before recency and empty queries by recency and frequency", () => {
+    const catalog = [
+      { tag: "rare", noteCount: 1, occurrenceCount: 1 },
+      { tag: "notes", noteCount: 4, occurrenceCount: 4 },
+      { tag: "occurrence", noteCount: 3, occurrenceCount: 100 },
+      { tag: "beta", noteCount: 3, occurrenceCount: 10 },
+      { tag: "alpha", noteCount: 3, occurrenceCount: 10 },
+    ];
+
+    expect(
+      filteredTagCompletions(catalog, ["rare"], "").map((item) => item.tag),
+    ).toEqual(["rare", "notes", "occurrence", "alpha", "beta"]);
+
+    const fuzzyFirst = filteredTagCompletions(
+      [
+        { tag: "alpha", noteCount: 20, occurrenceCount: 40 },
+        { tag: "aardvark", noteCount: 1, occurrenceCount: 1 },
+        { tag: "missing", noteCount: 100, occurrenceCount: 100 },
+      ],
+      ["alpha"],
+      "aa",
+    );
+    expect(fuzzyFirst.map((item) => item.tag)).toEqual(["aardvark", "alpha"]);
+  });
+
+  it("filters while typing and exposes a keyboard-operated listbox", () => {
+    tagCatalog = [
+      { tag: "project/alpha", noteCount: 4, occurrenceCount: 8 },
+      { tag: "personal", noteCount: 3, occurrenceCount: 3 },
+      { tag: "archive", noteCount: 2, occurrenceCount: 2 },
+    ];
+    const view = makeView("", 0);
+
+    typeText(view, "#pa");
+
+    expect(tagCompletionOpen(view.state)).toBe(true);
+    const listbox = view.dom.querySelector('[role="listbox"]');
+    expect(listbox?.getAttribute("aria-label")).toBe("Tag suggestions");
+    expect(
+      [...(listbox?.querySelectorAll('[role="option"]') ?? [])].map(
+        (option) => option.textContent,
+      ),
+    ).toEqual(["#project/alpha", "#personal"]);
+  });
+
+  it.each([
+    ["Enter", false, "#alpha", "alpha"],
+    ["Control and Enter", true, "#beta", "beta"],
+  ])("accepts with %s", (_label, control, expected, tag) => {
+    tagCatalog = [
+      { tag: "alpha", noteCount: 2, occurrenceCount: 3 },
+      { tag: "beta", noteCount: 1, occurrenceCount: 1 },
+    ];
+    const view = makeView("", 0);
+    typeText(view, `#${tag.slice(0, 2)}`);
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      ctrlKey: control,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe(expected);
+    expect(tagCompletionOpen(view.state)).toBe(false);
+    expect(rememberedTags).toEqual([tag]);
+    expect(followLinkCalls).toBe(0);
+  });
+
+  it("leaves Enter to normal editing when no completion matches", () => {
+    tagCatalog = [{ tag: "alpha", noteCount: 1, occurrenceCount: 1 }];
+    const view = makeView("", 0);
+    typeText(view, "#missing");
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("#missing\n");
+    expect(tagCompletionOpen(view.state)).toBe(false);
+    expect(followLinkCalls).toBe(1);
+  });
+
+  it("bounds the rendered completion candidates", () => {
+    const catalog = Array.from({ length: 150 }, (_, index) => ({
+      tag: `tag-${index.toString().padStart(3, "0")}`,
+      noteCount: 1,
+      occurrenceCount: 1,
+    }));
+
+    expect(filteredTagCompletions(catalog, [], "")).toHaveLength(100);
+  });
+
+  it("removes the trigger and query when dismissed with Escape", () => {
+    tagCatalog = [{ tag: "alpha", noteCount: 1, occurrenceCount: 1 }];
+    const view = makeView("Before ", 7);
+    typeText(view, "#alp");
+    const event = new KeyboardEvent("keydown", {
+      key: "Escape",
+      code: "Escape",
+      keyCode: 27,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("Before ");
+    expect(tagCompletionOpen(view.state)).toBe(false);
+    expect(rememberedTags).toEqual([]);
+  });
+
+  it("accepts a completion from a touch pointer", () => {
+    tagCatalog = [{ tag: "touch", noteCount: 1, occurrenceCount: 1 }];
+    const view = makeView("", 0);
+    typeText(view, "#");
+    const option = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-tag-menu [role="option"]',
+    );
+    const event = new MouseEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+
+    option?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("#touch");
+    expect(rememberedTags).toEqual(["touch"]);
+  });
+
+  it("opens tag search by pointer and by the registered cursor command", () => {
+    const doc = "Read #topic here";
+    const view = makeView(doc, doc.indexOf("topic") + 2, [decorationEngine()]);
+    const renderedTag = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-tag[data-tag="topic"]',
+    );
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+
+    renderedTag?.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(searchedTags).toEqual(["topic"]);
+
+    expect(runEditorCommand("tag.search-under-cursor")).toBe(true);
+    expect(searchedTags).toEqual(["topic", "topic"]);
+    expect(registry.command("tag.search-under-cursor")?.palette).not.toBe(
+      false,
+    );
   });
 });
 

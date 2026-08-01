@@ -44,6 +44,15 @@ export const RENDERING_NOTE_NAME = "zz-rendering.md";
 export const RENDERING_NOTE_CONTENT =
   "# Rendered content\n\nInline $a^2 + b^2 = c^2$.\n\n$$\nE = mc^2\n$$\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\nthis is not valid mermaid\n```\n";
 
+export const TAG_REFRESH_NOTE_NAME = "zz-tag-refresh.md";
+export const TAG_REFRESH_NOTE_CONTENT = "Tag catalog refresh fixture.\n";
+
+export const TAG_DELETE_NOTE_NAME = "zz-tag-delete.md";
+export const TAG_DELETE_NOTE_CONTENT = "Unopened note with #delete-only.\n";
+
+export const TAG_DELETE_PROBE_NOTE_NAME = "zz-tag-delete-probe.md";
+export const TAG_DELETE_PROBE_NOTE_CONTENT = "Tag deletion probe.\n";
+
 export const VISUAL_NOTE_NAME = "zzz-reading-room.md";
 export const VISUAL_NOTE_CONTENT = [
   "---",
@@ -85,10 +94,10 @@ export const REVEAL_NOTE_CONTENT =
 
 export const NAVIGATION_SOURCE_NOTE_NAME = "zzz-navigation-source.md";
 export const NAVIGATION_SOURCE_NOTE_CONTENT =
-  "# Navigation source\n\nFollow [[zzz-navigation-target]].\n";
+  "# Navigation source\n\nFollow [[zzz-navigation-target]].\n\n#shared\n";
 export const NAVIGATION_TARGET_NOTE_NAME = "zzz-navigation-target.md";
 export const NAVIGATION_TARGET_NOTE_CONTENT =
-  "# Navigation target\n\nWikilink destination content.\n";
+  "# Navigation target\n\nWikilink destination content.\n\n#shared\n";
 
 export const CANVAS_FILE_NAME = "zzz-board.canvas";
 export const CANVAS_REFERENCE_NAME = "z-live-preview.md";
@@ -156,6 +165,18 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),
     RENDERING_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TAG_REFRESH_NOTE_NAME),
+    TAG_REFRESH_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TAG_DELETE_NOTE_NAME),
+    TAG_DELETE_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TAG_DELETE_PROBE_NOTE_NAME),
+    TAG_DELETE_PROBE_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, VISUAL_NOTE_NAME),

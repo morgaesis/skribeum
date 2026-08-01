@@ -17,6 +17,7 @@ import {
   settingsPath,
   settingsRead,
   settingsWrite,
+  tagCatalog,
   updateCheck,
   vaultTreeRefresh,
 } from "../../src/lib/ipc/services";
@@ -48,6 +49,20 @@ describe("ipc service wrappers", () => {
       searchNoteBodies: true,
       caseSensitive: false,
     });
+  });
+
+  it("returns tag usage through the catalog command", async () => {
+    const tags = [
+      {
+        tag: "project/alpha",
+        note_count: 3,
+        occurrence_count: 5,
+      },
+    ];
+    invoke.mockResolvedValueOnce(tags);
+    const handle = { id: 3 };
+    await expect(tagCatalog(handle)).resolves.toEqual(tags);
+    expect(invoke).toHaveBeenCalledWith("tag_catalog", { handle });
   });
 
   it("round-trips the settings document shape", async () => {

@@ -1,3 +1,4 @@
+import { parseFrontmatter } from "../../../src/lib/editor/frontmatter";
 import { STRINGS } from "../../../src/lib/strings";
 import {
   defaultTaskStatuses,
@@ -6,12 +7,14 @@ import {
 import type {
   SearchHit,
   SettingsDoc,
+  TagFrequency,
   TreeEntry,
   VaultHandle,
 } from "./bindings";
 import { readNote, vaultTree } from "./vault";
 
 export type SearchResult = SearchHit;
+export type TagCatalogEntry = TagFrequency;
 export type SettingsDocument = SettingsDoc;
 
 const SETTINGS_KEY = "skribeum.demo.settings";
@@ -74,6 +77,38 @@ function queryTerms(query: string, caseSensitive: boolean): string[] {
   return [...new Set(source.match(/[\p{L}\p{N}_-]+/gu) ?? [])];
 }
 
+type TagUse = { tag: string; start: number; end: number };
+
+function tagUses(text: string): TagUse[] {
+  const frontmatter = parseFrontmatter(text);
+  const uses: TagUse[] = [];
+  const tagEntry = frontmatter?.entries.find((entry) => entry.key === "tags");
+  const values =
+    tagEntry?.items ??
+    (tagEntry === undefined
+      ? []
+      : [
+          { from: tagEntry.valueFrom, to: tagEntry.valueTo, raw: tagEntry.raw },
+        ]);
+  for (const value of values) {
+    const tag = value.raw.trim().replace(/^#/, "");
+    if (tag.length > 0) {
+      uses.push({ tag, start: value.from, end: value.to });
+    }
+  }
+  const bodyStart = frontmatter?.to ?? 0;
+  const body = text.slice(bodyStart);
+  for (const match of body.matchAll(/(^|\s)#([\p{L}\p{N}\p{M}_/-]+)/gu)) {
+    const raw = match[2]?.replace(/\/+$/, "") ?? "";
+    if (raw.length === 0 || /^\p{N}+$/u.test(raw)) {
+      continue;
+    }
+    const start = bodyStart + (match.index ?? 0) + (match[1]?.length ?? 0);
+    uses.push({ tag: raw, start, end: start + raw.length + 1 });
+  }
+  return uses;
+}
+
 function byteOffset(text: string, characterOffset: number): number {
   return encoder.encode(text.slice(0, characterOffset)).byteLength;
 }
@@ -110,6 +145,38 @@ export async function searchQuery(
   searchNoteBodies = true,
   caseSensitive = false,
 ): Promise<SearchResult[]> {
+  const exactTag = query.match(/^#([^\s#]+)$/u)?.[1];
+  if (exactTag !== undefined && limit > 0) {
+    const normalized = exactTag.toLocaleLowerCase();
+    const results: SearchResult[] = [];
+    for (const entry of await vaultTree(handle)) {
+      if (entry.kind !== "note") {
+        continue;
+      }
+      const text = (await readNote(handle, entry.path)).text;
+      const matches = tagUses(text).filter(
+        (use) => use.tag.toLocaleLowerCase() === normalized,
+      );
+      if (matches.length === 0) {
+        continue;
+      }
+      const title =
+        entry.path.split("/").at(-1)?.replace(/\.md$/i, "") ?? entry.path;
+      results.push({
+        path: entry.path,
+        title,
+        ...snippetFor(text, [matches[0] as TagUse]),
+        score: matches.length,
+      });
+    }
+    return results
+      .sort(
+        (left, right) =>
+          (right.score ?? 0) - (left.score ?? 0) ||
+          left.path.localeCompare(right.path),
+      )
+      .slice(0, limit);
+  }
   const terms = queryTerms(query, caseSensitive);
   if (terms.length === 0 || limit <= 0) {
     return [];
@@ -155,6 +222,41 @@ export async function searchQuery(
     )
     .slice(0, limit)
     .map(({ firstPosition: _firstPosition, ...result }) => result);
+}
+
+export async function tagCatalog(
+  handle: VaultHandle,
+): Promise<TagCatalogEntry[]> {
+  const totals = new Map<
+    string,
+    { tag: string; note_count: number; occurrence_count: number }
+  >();
+  for (const entry of await vaultTree(handle)) {
+    if (entry.kind !== "note") {
+      continue;
+    }
+    const uses = tagUses((await readNote(handle, entry.path)).text);
+    const noteTags = new Set<string>();
+    for (const use of uses) {
+      const normalized = use.tag.toLocaleLowerCase();
+      const total = totals.get(normalized) ?? {
+        tag: use.tag,
+        note_count: 0,
+        occurrence_count: 0,
+      };
+      total.occurrence_count += 1;
+      if (!noteTags.has(normalized)) {
+        total.note_count += 1;
+        noteTags.add(normalized);
+      }
+      totals.set(normalized, total);
+    }
+  }
+  return [...totals.values()].sort(
+    (left, right) =>
+      right.occurrence_count - left.occurrence_count ||
+      left.tag.localeCompare(right.tag),
+  );
 }
 
 export async function updateCheck(

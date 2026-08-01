@@ -18,6 +18,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Editor reading-column styles match CodeMirror 6's rendered structure, so
   prose typography, a bounded text measure, responsive gutters, callout bleed,
   and narrow block padding apply consistently.
+- Frontmatter source reveals when the cursor enters its block and collapses
+  back to the properties panel when the cursor leaves.
+- Following a note link leaves the destination editor unfocused for reading,
+  including when the source editor already held the cursor.
 - Headings no longer inherit hyperlink decoration or forced bold styling from
   CodeMirror, and syntax colors remain readable in both color modes.
 - Editor typography uses platform-resolvable system faces, supported weights,
@@ -40,6 +44,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   settings, note actions, and navigation history.
 - Command registrations declare pointer surfaces or an explicit widget-only
   audience, with runtime and test coverage for every registered user command.
+- Registered link-following and tag-search commands, clickable tag search
+  results, and fuzzy inline tag completion using vault tag frequency and
+  recent usage.
 - A searchable, sectioned settings surface for appearance, editing, files and
   vaults, search, updates and application information. Every control includes a
   plain-language description, and desktop-only controls remain visible but

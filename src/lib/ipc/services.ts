@@ -7,6 +7,7 @@ import {
   commands,
   type SearchHit,
   type SettingsDoc,
+  type TagFrequency,
   type TreeEntry,
   type UpdateCheckDoc,
   type VaultHandle,
@@ -15,6 +16,9 @@ import { unwrap } from "./vault";
 
 /** One ranked search hit; `match_ranges` are byte offsets into `snippet`. */
 export type SearchResult = SearchHit;
+
+/** One indexed vault tag with aggregate usage counts. */
+export type TagCatalogEntry = TagFrequency;
 
 /** The persisted settings document. */
 export type SettingsDocument = SettingsDoc;
@@ -36,6 +40,13 @@ export async function searchQuery(
       caseSensitive,
     ),
   );
+}
+
+/** Returns the indexed vault tag catalog. */
+export async function tagCatalog(
+  handle: VaultHandle,
+): Promise<TagCatalogEntry[]> {
+  return unwrap(await commands.tagCatalog(handle));
 }
 
 /** Reads the settings document from the app config directory. */

@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
-import axe from "axe-core";
 import { Key } from "webdriverio";
 import {
   CANVAS_FILE_CONTENT,
@@ -17,6 +17,9 @@ import {
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
+  TAG_DELETE_NOTE_NAME,
+  TAG_DELETE_PROBE_NOTE_NAME,
+  TAG_REFRESH_NOTE_NAME,
   VISUAL_NOTE_CONTENT,
   VISUAL_NOTE_NAME,
 } from "./scratchVault";
@@ -34,6 +37,13 @@ import {
 
 const specDirectory = path.dirname(fileURLToPath(import.meta.url));
 const screenshotDirectory = path.join(specDirectory, "screenshots");
+const moduleRequire = createRequire(import.meta.url);
+// The minified distribution performs the same audit while keeping the
+// WebDriver script payload small enough for slower Linux runners.
+const axeSource = readFileSync(
+  moduleRequire.resolve("axe-core/axe.min.js"),
+  "utf8",
+);
 
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
 
@@ -379,7 +389,37 @@ async function selectEditorText(text: string) {
       const selection = window.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
-      root.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+      document.dispatchEvent(new Event("selectionchange"));
+      return;
+    }
+    throw new Error(`text not found: ${needle}`);
+  }, text);
+  await browser.pause(250);
+}
+
+async function placeCursorInsideEditorText(text: string) {
+  await browser.execute((needle: string) => {
+    const root = document.querySelector(".cm-content");
+    if (root === null) {
+      throw new Error("editor content missing");
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (
+      let node = walker.nextNode();
+      node !== null;
+      node = walker.nextNode()
+    ) {
+      const start = node.textContent?.indexOf(needle) ?? -1;
+      if (start < 0) {
+        continue;
+      }
+      const range = document.createRange();
+      range.setStart(node, start + Math.floor(needle.length / 2));
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
       return;
     }
     throw new Error(`text not found: ${needle}`);
@@ -419,43 +459,21 @@ async function activeElementDescriptor(): Promise<string> {
 }
 
 async function expectNoAxeViolations(surface: string) {
-  await browser.execute(axe.source);
   const violations = await browser.executeAsync<
     Array<{ id: string; impact: string | null; targets: string[] }>,
     []
-  >((done) => {
-    const runner = (
-      window as unknown as {
-        axe?: {
-          run: () => Promise<{
-            violations: Array<{
-              id: string;
-              impact: string | null;
-              nodes: Array<{ target: string[] }>;
-            }>;
-          }>;
-        };
-      }
-    ).axe;
-    if (runner === undefined) {
-      done([{ id: "axe-unavailable", impact: "critical", targets: [] }]);
-      return;
-    }
-    runner
-      .run()
-      .then((result) =>
-        done(
-          result.violations.map((violation) => ({
-            id: violation.id,
-            impact: violation.impact,
-            targets: violation.nodes.flatMap((node) => node.target),
-          })),
-        ),
-      )
-      .catch((error: unknown) =>
-        done([{ id: String(error), impact: "critical", targets: [] }]),
-      );
-  });
+  >(`${axeSource}
+const done = arguments[arguments.length - 1];
+window.axe.run()
+  .then((result) => done(result.violations.map((violation) => ({
+    id: violation.id,
+    impact: violation.impact,
+    targets: violation.nodes.flatMap((node) => node.target),
+  }))))
+  .catch((error) => done([
+    { id: String(error), impact: "critical", targets: [] },
+  ]));
+`);
   if (violations.length > 0) {
     throw new Error(`${surface}: ${JSON.stringify(violations)}`);
   }
@@ -880,6 +898,42 @@ describe("skribeum shell", () => {
     });
     expect(rawSourceHidden).toBe(true);
 
+    await browser.execute(() =>
+      document.querySelector<HTMLElement>(".cm-content")?.focus(),
+    );
+    await browser.keys(Key.ArrowUp);
+    await browser.waitUntil(
+      () =>
+        browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              ".cm-line.cm-skr-frontmatter",
+            ),
+          ].some((line) => getComputedStyle(line).display !== "none"),
+        ),
+      { timeout: 5000 },
+    );
+    expect(
+      await browser.execute(() => {
+        const panel = document.querySelector<HTMLElement>(".skr-properties");
+        return panel === null || getComputedStyle(panel).display === "none";
+      }),
+    ).toBe(true);
+    for (let step = 0; step < 12; step += 1) {
+      await browser.keys(Key.ArrowDown);
+    }
+    await browser.waitUntil(
+      () =>
+        browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              ".cm-line.cm-skr-frontmatter",
+            ),
+          ].every((line) => getComputedStyle(line).display === "none"),
+        ),
+      { timeout: 5000 },
+    );
+
     const typography = await browser.execute(() => {
       const prose = document.querySelector<HTMLElement>(".cm-content");
       const code = document.querySelector<HTMLElement>(".cm-skr-inline-code");
@@ -1162,11 +1216,13 @@ describe("skribeum shell", () => {
 
     const link = $(".cm-skr-wikilink-target");
     await link.waitForExist({ timeout: 15000 });
+    await placeCursorAtLineEnd("Navigation source");
     await link.click();
     await browser.waitUntil(
       async () => (await editorText()).includes("Wikilink destination content"),
       { timeout: 15000 },
     );
+    expect(await activeElementDescriptor()).not.toContain("cm-content");
 
     const back = $("button=Back");
     await back.waitForEnabled({ timeout: 15000 });
@@ -1174,6 +1230,119 @@ describe("skribeum shell", () => {
     await browser.waitUntil(
       async () => (await editorText()).includes("Navigation source"),
       { timeout: 15000 },
+    );
+    await $(".cm-skr-wikilink-target").waitForExist({ timeout: 15000 });
+
+    await browser.execute(() =>
+      document.querySelector<HTMLElement>(".cm-content")?.focus(),
+    );
+    await placeCursorInsideEditorText("zzz-navigation-target");
+    await browser.waitUntil(
+      async () => {
+        await browser.execute(() =>
+          document.querySelector<HTMLElement>(".cm-content")?.focus(),
+        );
+        return (await activeElementDescriptor()).includes("cm-content");
+      },
+      { timeout: 5000 },
+    );
+    await browser.keys([modifierKey, Key.Enter]);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Wikilink destination content"),
+      { timeout: 15000 },
+    );
+    expect(await activeElementDescriptor()).not.toContain("cm-content");
+  });
+
+  it("opens_vault_search_from_a_tag", async () => {
+    await openNoteFromTree(NAVIGATION_SOURCE_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Navigation source"),
+      { timeout: 15000 },
+    );
+    const tag = $(".cm-skr-tag");
+    await tag.waitForExist({ timeout: 15000 });
+    await tag.click();
+
+    const input = $('[role="combobox"]');
+    await input.waitForExist({ timeout: 10000 });
+    expect(await input.getValue()).toBe("#shared");
+    await browser.waitUntil(
+      async () => (await $$('[role="option"]').length) >= 2,
+      { timeout: 20000, timeoutMsg: "tag search did not list its notes" },
+    );
+    expect(await $("[role=option]").getText()).toContain("shared");
+    await browser.keys(Key.Escape);
+  });
+
+  it("refreshes_tag_completion_after_saving_a_new_tag", async () => {
+    await openNoteFromTree(TAG_REFRESH_NOTE_NAME);
+    const editor = $(".cm-content");
+    await editor.waitForDisplayed({ timeout: 15000 });
+    await editor.click();
+    await editor.addValue(" #catalog-refresh ");
+    await browser.waitUntil(
+      () => noteOnDisk(TAG_REFRESH_NOTE_NAME).includes("#catalog-refresh"),
+      { timeout: 10000 },
+    );
+
+    await editor.addValue("#");
+    await editor.addValue("catalog-r");
+    try {
+      await browser.waitUntil(
+        async () =>
+          (
+            await $$(".cm-skr-tag-menu [role=option]").map((item) =>
+              item.getText(),
+            )
+          ).includes("#catalog-refresh"),
+        { timeout: 10000 },
+      );
+    } catch {
+      const state = await browser.execute(() => ({
+        editor: document.querySelector(".cm-content")?.textContent ?? null,
+        menu: document.querySelector(".cm-skr-tag-menu")?.textContent ?? null,
+      }));
+      throw new Error(
+        `tag completion did not refresh: ${JSON.stringify(state)}`,
+      );
+    }
+    expect(await $(".cm-skr-tag-menu [role=option]").getText()).toBe(
+      "#catalog-refresh",
+    );
+  });
+
+  it("refreshes_tag_completion_after_deleting_an_unopened_note", async () => {
+    await openNoteFromTree(TAG_DELETE_PROBE_NOTE_NAME);
+    const editor = $(".cm-content");
+    await editor.waitForDisplayed({ timeout: 15000 });
+    await editor.click();
+    await editor.addValue(" ");
+    await editor.addValue("#");
+    await editor.addValue("delete-o");
+    await browser.waitUntil(
+      async () =>
+        (
+          await $$(".cm-skr-tag-menu [role=option]").map((item) =>
+            item.getText(),
+          )
+        ).includes("#delete-only"),
+      { timeout: 10000 },
+    );
+    await browser.keys(Key.Escape);
+
+    rmSync(path.join(SCRATCH_VAULT_PATH, TAG_DELETE_NOTE_NAME));
+    await $(`li=${TAG_DELETE_NOTE_NAME}`).waitForExist({
+      reverse: true,
+      timeout: 15000,
+    });
+
+    await editor.addValue(" ");
+    await editor.addValue("#");
+    await editor.addValue("delete-o");
+    await browser.waitUntil(
+      async () => (await $$(".cm-skr-tag-menu [role=option]")).length === 0,
+      { timeout: 10000 },
     );
   });
 

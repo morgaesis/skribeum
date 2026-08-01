@@ -26,7 +26,7 @@
 577..577 line class="cm-skr-heading cm-skr-heading-1"
 609..609 line class="cm-skr-heading cm-skr-heading-1"
 609..625 mark class="cm-skr-setext-underline"
-627..631 mark class="cm-skr-tag"
+627..631 mark class="cm-skr-tag" aria-label="Search for tag: #Not" data-tag="Not" role="link" tabindex="0"
 672..672 line class="cm-skr-heading cm-skr-heading-1"
 673..675 hide node=HeaderMark
 707..707 line class="cm-skr-heading cm-skr-heading-3"

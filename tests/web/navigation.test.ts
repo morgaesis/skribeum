@@ -17,6 +17,7 @@ import {
   noteFragmentPosition,
   urlForNoteAddress,
 } from "../../src/lib/features/navigation";
+import { paletteItems } from "../../src/lib/features/pickers";
 import { type CommandContext, editorKeymap } from "../../src/lib/registry";
 import { STRINGS } from "../../src/lib/strings";
 
@@ -104,12 +105,15 @@ describe("wikilink pointer navigation", () => {
     const navigate = vi.fn();
     const options = navigationOptions({ navigate });
     const view = makePointerView("Before [[Target note]] after", 0, options);
+    view.focus();
+    expect(view.hasFocus).toBe(true);
 
     const event = pressLink(view);
 
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledOnce();
     expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
+    expect(view.hasFocus).toBe(false);
   });
 
   it("follows an embedded note reference", () => {
@@ -230,54 +234,75 @@ describe("wikilink pointer navigation", () => {
 });
 
 describe("wikilink keyboard navigation", () => {
-  it("follows the cursor link through the registered Enter binding", () => {
+  it.each([
+    ["Enter", false],
+    ["Control and Enter", true],
+  ])(
+    "follows the cursor link with %s when the tag menu is closed",
+    (_label, control) => {
+      const registry = createAppRegistry();
+      const navigate = vi.fn();
+      const options = navigationOptions({ navigate });
+      const doc = "Before [[Target note]] after";
+      let view: EditorView;
+      const commandContext = (): CommandContext => ({
+        view,
+        openNote: () => Promise.resolve(),
+        openView: () => {},
+        toggleView: () => {},
+        closeSurfaces: () => {},
+        requestSave: () => {},
+        notePaths: () => options.context.paths,
+        recentNotePaths: () => [],
+        navigateBack: () => false,
+        navigateForward: () => false,
+        followLink: (activeView) =>
+          followWikilinkUnderCursor(activeView ?? view, options),
+      });
+      view = new EditorView({
+        state: EditorState.create({
+          doc,
+          selection: { anchor: doc.indexOf("Target note") + 2 },
+          extensions: [
+            markdown({
+              base: markdownLanguage,
+              extensions: obsidianMarkdownExtensions,
+            }),
+            editorKeymap(registry, commandContext),
+          ],
+        }),
+        parent: document.body,
+      });
+      views.push(view);
+      view.focus();
+      expect(view.hasFocus).toBe(true);
+
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        ctrlKey: control,
+        bubbles: true,
+        cancelable: true,
+      });
+      view.contentDOM.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
+      expect(view.state.doc.toString()).toBe(doc);
+      expect(view.hasFocus).toBe(false);
+    },
+  );
+
+  it("shows the cross-platform follow binding in the palette", () => {
     const registry = createAppRegistry();
-    const navigate = vi.fn();
-    const options = navigationOptions({ navigate });
-    const doc = "Before [[Target note]] after";
-    let view: EditorView;
-    const commandContext = (): CommandContext => ({
-      view,
-      openNote: () => Promise.resolve(),
-      openView: () => {},
-      toggleView: () => {},
-      closeSurfaces: () => {},
-      requestSave: () => {},
-      notePaths: () => options.context.paths,
-      recentNotePaths: () => [],
-      navigateBack: () => false,
-      navigateForward: () => false,
-      followLink: (activeView) =>
-        followWikilinkUnderCursor(activeView ?? view, options),
-    });
-    view = new EditorView({
-      state: EditorState.create({
-        doc,
-        selection: { anchor: doc.indexOf("Target note") + 2 },
-        extensions: [
-          markdown({
-            base: markdownLanguage,
-            extensions: obsidianMarkdownExtensions,
-          }),
-          editorKeymap(registry, commandContext),
-        ],
-      }),
-      parent: document.body,
-    });
-    views.push(view);
+    const command = registry.command("navigation.follow-link");
+    const item = paletteItems(registry, "Follow link", false).find(
+      (candidate) => candidate.id === "navigation.follow-link",
+    );
 
-    const event = new KeyboardEvent("keydown", {
-      key: "Enter",
-      code: "Enter",
-      keyCode: 13,
-      bubbles: true,
-      cancelable: true,
-    });
-    view.contentDOM.dispatchEvent(event);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
-    expect(view.state.doc.toString()).toBe(doc);
+    expect(command?.keybindings).toEqual(["Mod-Enter", "Enter"]);
+    expect(item?.keybinding).toBe("Ctrl+Enter");
   });
 });
 

@@ -58,6 +58,28 @@ describe("alpha floor registration (criterion 4)", () => {
 });
 
 describe("palette overlay component", () => {
+  it("seeds a prefiltered surface with its initial query", () => {
+    const component = mount(PaletteOverlay, {
+      target: document.body,
+      props: {
+        label: "Vault search",
+        placeholder: "Search",
+        items: [],
+        initialQuery: "#shared",
+        onQueryChange: () => {},
+        onPick: () => {},
+        onClose: () => {},
+      },
+    });
+    flushSync();
+
+    expect(
+      document.body.querySelector<HTMLInputElement>('[role="combobox"]')?.value,
+    ).toBe("#shared");
+
+    unmount(component);
+  });
+
   it("renders the registry listing with combobox semantics and keyboard operation", () => {
     const registry = createAppRegistry();
     const items = paletteItems(registry, "", false);

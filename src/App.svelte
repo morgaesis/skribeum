@@ -50,6 +50,10 @@ import {
   VIEW_SETTINGS,
   VIEW_VAULT_SEARCH,
 } from "./lib/features/surfaces";
+import {
+  type TagAffordanceOptions,
+  type TagCatalogEntry,
+} from "./lib/features/tags";
 import { registerTaskStatusCommands } from "./lib/features/taskCommands";
 import {
   checkForUpdate,
@@ -68,6 +72,7 @@ import {
   type SearchResult,
   searchQuery,
   settingsPath,
+  tagCatalog,
   vaultTreeRefresh,
 } from "./lib/ipc/services";
 import {
@@ -119,6 +124,7 @@ let collisionGroups = $state<string[][]>([]);
 let errorText = $state<string | null>(null);
 let banners = $state<BannerItem[]>([]);
 let editor = $state<ReturnType<typeof Editor> | undefined>();
+let contentHost = $state<HTMLElement | undefined>();
 let obsidianConfig = $state<ObsidianAppConfig>(DEFAULT_OBSIDIAN_APP_CONFIG);
 let linkContext = $state<WikilinkResolutionContext | null>(null);
 let propertyTypes = $state<Record<string, FrontmatterValueType> | null>(null);
@@ -162,6 +168,9 @@ let outlineEntries = $state<OutlineEntry[]>([]);
 /** The live query of the open picker overlay. */
 let overlayQuery = $state("");
 let searchResults = $state<SearchResult[]>([]);
+let tagCatalogEntries = $state<TagCatalogEntry[]>([]);
+let recentTags = $state<string[]>([]);
+let tagCatalogGeneration = 0;
 let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 let cancelOutlineRefresh: (() => void) | undefined;
 /** Recently opened note paths, most recent first. */
@@ -279,7 +288,7 @@ function scheduleOutlineRefresh() {
   cancelOutlineRefresh = () => clearTimeout(timer);
 }
 
-function openOverlay(id: string) {
+function openOverlay(id: string, initialQuery = "") {
   if (
     surfaceFocusOrigin === null &&
     document.activeElement instanceof HTMLElement
@@ -288,7 +297,7 @@ function openOverlay(id: string) {
   }
   activeSheet = null;
   activeOverlay = id;
-  overlayQuery = "";
+  overlayQuery = initialQuery;
   searchResults = [];
   if (id === VIEW_QUICK_SWITCHER) {
     void refreshTreeIndex();
@@ -338,13 +347,24 @@ function focusFileTree() {
     ?.focus();
 }
 
-/** Re-indexes the tree so the switcher lists just-created notes. */
-async function refreshTreeIndex() {
-  if (vault === null) {
+/** Re-indexes the tree so newly discovered notes reach indexed surfaces. */
+async function refreshTreeIndex(refreshTags = false) {
+  const activeVault = vault;
+  if (activeVault === null) {
     return;
   }
   try {
-    tree = await vaultTreeRefresh(vault);
+    const refreshedTree = await vaultTreeRefresh(activeVault);
+    if (vault?.id !== activeVault.id) {
+      return;
+    }
+    if (refreshTags) {
+      await refreshTagCatalog(activeVault);
+      if (vault?.id !== activeVault.id) {
+        return;
+      }
+    }
+    tree = refreshedTree;
     refreshLinkContext();
   } catch {
     // The watcher-maintained tree remains authoritative when the
@@ -386,6 +406,10 @@ function focusContent() {
   } else {
     editor?.getView()?.focus();
   }
+}
+
+function focusReadingSurface() {
+  contentHost?.focus({ preventScroll: true });
 }
 
 function closeOverlay() {
@@ -518,6 +542,63 @@ async function runVaultSearch(query: string) {
   }
 }
 
+function rememberTag(tag: string) {
+  const normalized = tag.startsWith("#") ? tag.slice(1) : tag;
+  recentTags = [
+    normalized,
+    ...recentTags.filter(
+      (entry) => entry.toLocaleLowerCase() !== normalized.toLocaleLowerCase(),
+    ),
+  ].slice(0, 50);
+}
+
+function openTagSearch(tag: string) {
+  const normalized = tag.startsWith("#") ? tag.slice(1) : tag;
+  rememberTag(normalized);
+  const query = `#${normalized}`;
+  openOverlay(VIEW_VAULT_SEARCH, query);
+  void runVaultSearch(query);
+}
+
+function tagAffordanceOptions(): TagAffordanceOptions {
+  return {
+    catalog: () => tagCatalogEntries,
+    recentTags: () => recentTags,
+    search: openTagSearch,
+    remember: rememberTag,
+  };
+}
+
+function setTagCatalog(entries: Awaited<ReturnType<typeof tagCatalog>>) {
+  tagCatalogEntries = entries.map((entry) => ({
+    tag: entry.tag,
+    noteCount: entry.note_count,
+    occurrenceCount: entry.occurrence_count,
+  }));
+}
+
+async function refreshTagCatalog(handle = vault) {
+  if (handle === null) {
+    return;
+  }
+  const generation = ++tagCatalogGeneration;
+  try {
+    const entries = await tagCatalog(handle);
+    if (generation === tagCatalogGeneration && vault?.id === handle.id) {
+      setTagCatalog(entries);
+    }
+  } catch {
+    // Keep the last indexed catalog when search is temporarily unavailable.
+  }
+}
+
+async function refreshTreeAfterTagCatalog(handle: VaultHandle) {
+  await refreshTagCatalog(handle);
+  if (vault?.id === handle.id) {
+    await refreshTree();
+  }
+}
+
 function onOverlayPick(id: string) {
   const overlay = activeOverlay;
   if (overlay === VIEW_COMMAND_PALETTE) {
@@ -525,9 +606,13 @@ function onOverlayPick(id: string) {
     // consumed it. Restoring focus first can reconcile a browser selection
     // change before the command reads the CodeMirror state.
     activeOverlay = null;
-    registry.run(id, commandContext());
+    const handled = registry.run(id, commandContext());
     if (activeOverlay === null && activeSheet === null) {
-      restoreSurfaceFocus();
+      if (handled && id === "navigation.follow-link") {
+        surfaceFocusOrigin = null;
+      } else {
+        restoreSurfaceFocus();
+      }
     }
   } else if (overlay === VIEW_QUICK_SWITCHER) {
     closeOverlay();
@@ -711,6 +796,7 @@ async function readOptionalVaultConfigFile(
 
 async function openVaultAtPath(path: string) {
   errorText = null;
+  tagCatalogGeneration += 1;
   if ((await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
     return;
@@ -718,10 +804,11 @@ async function openVaultAtPath(path: string) {
   const request = contentRequests.next();
   try {
     const handle = await openVault(path);
-    const [nextTree, config] = await Promise.all([
+    const [nextTree, config, , nextTags] = await Promise.all([
       vaultTree(handle),
       loadObsidianConfig(handle),
       watchSubscribe(handle),
+      tagCatalog(handle).catch(() => []),
     ]);
     if (!contentRequests.isCurrent(request)) {
       return;
@@ -736,6 +823,8 @@ async function openVaultAtPath(path: string) {
     canvasError = null;
     obsidianConfig = config.config;
     propertyTypes = config.types;
+    setTagCatalog(nextTags);
+    recentTags = [];
     refreshLinkContext();
     const harnessNote = (window as Window & { __SKRIBEUM_E2E_NOTE__?: string })
       .__SKRIBEUM_E2E_NOTE__;
@@ -892,8 +981,16 @@ function wikilinkNavigationOptions(): FollowWikilinkOptions {
   return {
     context: { ...context, currentPath: selectedPath },
     currentPath: selectedPath,
-    navigate: (address) =>
-      navigation?.open(address) ?? openNoteAddress(address),
+    navigate: async (address) => {
+      focusReadingSurface();
+      try {
+        await (navigation?.open(address) ?? openNoteAddress(address));
+      } finally {
+        focusReadingSurface();
+        requestAnimationFrame(() => focusReadingSurface());
+        setTimeout(focusReadingSurface, 0);
+      }
+    },
     unresolved: (reason) => {
       pushBanner({ text: reason });
     },
@@ -1095,11 +1192,14 @@ onMount(() => {
     // notes arrives through the typed events below, never through raw
     // (possibly unstable) modification events.
     events.vaultChanged.listen((event) => {
-      if (
-        vault !== null &&
-        event.payload.vault === vault.id &&
-        event.payload.change !== "modified"
-      ) {
+      if (vault === null || event.payload.vault !== vault.id) {
+        return;
+      }
+      if (event.payload.change === "overflow") {
+        void refreshTreeIndex(true);
+      } else if (event.payload.change === "removed") {
+        void refreshTreeIndex(true);
+      } else if (event.payload.change !== "modified") {
         void refreshTree();
       }
     }),
@@ -1107,6 +1207,7 @@ onMount(() => {
       if (vault === null || event.payload.vault !== vault.id) {
         return;
       }
+      void refreshTagCatalog(vault);
       if (event.payload.path !== selectedPath || note === null) {
         return;
       }
@@ -1123,7 +1224,7 @@ onMount(() => {
       if (vault === null || event.payload.vault !== vault.id) {
         return;
       }
-      void refreshTree();
+      void refreshTreeAfterTagCatalog(vault);
       if (event.payload.path === selectedPath) {
         editor?.markRemoved();
         pushBanner({
@@ -1328,7 +1429,11 @@ onMount(() => {
         <FileTree entries={tree} {selectedPath} onOpenPath={openPath} />
       </nav>
     {/if}
-    <section class="min-w-0 flex-1">
+    <section
+      class="min-w-0 flex-1"
+      bind:this={contentHost}
+      tabindex="-1"
+    >
       {#if contentView === VIEW_CANVAS && canvas !== null}
         <CanvasView
           bind:this={canvasViewer}
@@ -1378,7 +1483,9 @@ onMount(() => {
           {onConflict}
           {onWriteError}
           onDocChanged={onEditorDocChanged}
+          onSaved={() => void refreshTagCatalog()}
           {wikilinkNavigationOptions}
+          {tagAffordanceOptions}
         />
       {:else}
         <!-- The scaffold fixture stays as the empty-state view. -->
@@ -1390,7 +1497,9 @@ onMount(() => {
           {commandContext}
           settings={settingsState.document}
           onDocChanged={onEditorDocChanged}
+          onSaved={() => void refreshTagCatalog()}
           {wikilinkNavigationOptions}
+          {tagAffordanceOptions}
         />
         {#if vault === null}
           <p class="sr-only">{STRINGS.emptyStateHint}</p>
@@ -1521,6 +1630,7 @@ onMount(() => {
     label={STRINGS.vaultSearchLabel}
     placeholder={STRINGS.vaultSearchPlaceholder}
     items={overlayItems}
+    initialQuery={overlayQuery}
     onQueryChange={onOverlayQuery}
     onPick={onOverlayPick}
     onClose={closeOverlay}

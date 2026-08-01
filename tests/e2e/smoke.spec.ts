@@ -1340,10 +1340,10 @@ describe("skribeum shell", () => {
     await editor.addValue(" ");
     await editor.addValue("#");
     await editor.addValue("delete-o");
-    await $(".cm-skr-tag-menu").waitForExist({
-      reverse: true,
-      timeout: 10000,
-    });
+    await browser.waitUntil(
+      async () => (await $$(".cm-skr-tag-menu [role=option]")).length === 0,
+      { timeout: 10000 },
+    );
   });
 
   it("keyboard_reaches_every_surface_in_order_without_traps", async () => {

@@ -2400,7 +2400,6 @@ describe("skribeum shell", () => {
     await checkbox.waitForExist({ timeout: 15000 });
     expect(await checkbox.getAttribute("aria-label")).toBe("Unchecked");
 
-    await taskControl.moveTo();
     await browser.execute(() => {
       const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
       if (host === null) return;

@@ -1034,8 +1034,14 @@ describe("skribeum shell", () => {
       const shell = await browser.execute(() => {
         const header = document.querySelector<HTMLElement>(".skr-app-header");
         const pane = document.querySelector<HTMLElement>("main > section");
+        const scroller = document.querySelector<HTMLElement>(".cm-scroller");
         const editor = document.querySelector<HTMLElement>(".cm-content");
-        if (header === null || pane === null || editor === null) {
+        if (
+          header === null ||
+          pane === null ||
+          scroller === null ||
+          editor === null
+        ) {
           return null;
         }
         const editorStyle = getComputedStyle(editor);
@@ -1061,6 +1067,7 @@ describe("skribeum shell", () => {
             document.querySelector(".skr-mobile-actions") !== null,
           headerHeight: header.getBoundingClientRect().height,
           paneWidth: pane.getBoundingClientRect().width,
+          scrollbarWidth: scroller.offsetWidth - scroller.clientWidth,
           readingWidth:
             editor.getBoundingClientRect().width -
             Number.parseFloat(editorStyle.paddingLeft) -
@@ -1072,7 +1079,12 @@ describe("skribeum shell", () => {
       expect(shell?.bottomBarExists).toBe(false);
       expect(shell?.headerHeight).toBe(48);
       expect(shell?.paneWidth).toBeGreaterThanOrEqual(389);
-      expect(shell?.readingWidth).toBeGreaterThanOrEqual(341);
+      expect(
+        Math.abs(
+          (shell?.readingWidth ?? 0) -
+            ((shell?.paneWidth ?? 0) - (shell?.scrollbarWidth ?? 0) - 48),
+        ),
+      ).toBeLessThanOrEqual(1);
       expect(shell?.visibleRegions).toHaveLength(3);
       expect(shell?.visibleRegions[0]?.className).toContain("skr-phone-files");
       expect(shell?.visibleRegions[0]?.width).toBe(44);
@@ -2387,10 +2399,19 @@ describe("skribeum shell", () => {
     await checkbox.waitForExist({ timeout: 15000 });
     expect(await checkbox.getAttribute("aria-label")).toBe("Unchecked");
 
+    await checkbox.moveTo();
     await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>(".cm-skr-task-control")
-        ?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
+      const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
+      if (host === null) return;
+      const bounds = host.getBoundingClientRect();
+      host.dispatchEvent(
+        new PointerEvent("pointerenter", {
+          bubbles: true,
+          clientX: bounds.left + bounds.width / 2,
+          clientY: bounds.top + bounds.height / 2,
+          pointerType: "mouse",
+        }),
+      );
     });
     const listbox = $('[role="listbox"]');
     await listbox.waitForDisplayed({ timeout: 5000 });

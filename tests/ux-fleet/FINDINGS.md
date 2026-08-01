@@ -1,105 +1,116 @@
 # UX fleet findings
 
-The deterministic fleet completed 6 persona sessions and recorded 56 intent-level interactions. The report ranks the ten highest-impact defects from 22 distinct signal breaches. Ranking weights blocked work and lost focus above latency, scroll movement, and visual stability, independent of how often a signal occurred.
+The deterministic fleet completed 8 persona sessions and recorded 147 intent-level interactions. The report ranks the ten highest-impact defects from 135 distinct signal breaches. A wrong screen ranks above a slow screen, so rendering failures precede latency, focus, scroll, and layout signals.
 
-The latency thresholds are exploratory triage thresholds, not release gates. Event-to-paint timing starts on the page event and ends at the next confirmed paint. The note threshold is deliberately above the 47 ms in-app p95 reference because this path includes UI dispatch and paint.
+## Rendering defect coverage
 
-## 1. Critical: The UI session cannot complete: Press Enter to insert a table
+| Check | Result |
+| --- | --- |
+| GFM tables show raw pipe syntax instead of a rendered table | Detected |
+| Embeds show source references instead of embedded content | Detected |
+| Fenced code has no syntax highlighting | Detected |
+| Selection toolbar text does not contrast with its background | Detected |
+| The editor caret is not visible against its background | Detected |
+| Frontmatter appears in both the properties panel and the editor source | Passes |
 
-- Persona: Researcher with long documents
-- Session: `03-researcher`, interaction 10
-- Measured signal: visibility condition failed for .cm-content
+The latency thresholds are exploratory triage thresholds, not release gates. Event-to-paint timing starts on the page event and ends at the next confirmed paint. The note threshold is above the 47 ms in-app p95 reference because this path includes UI dispatch and paint.
+
+## 1. Critical: GFM tables show raw pipe syntax instead of a rendered table
+
+- Persona: Checker
+- Session: `08-checker`, interaction 50
+- Measured signal: Expected semantic table output; observed semantic table output absent.
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Researcher with long documents session intent: Review a long document, paste evidence, search within it, and edit tables.
-  3. Press Enter to insert a table.
+  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
+  3. Assert rendered tables.
 
-## 2. Critical: The UI session cannot complete: Type "insert table" into the open picker
+## 2. Critical: Embeds show source references instead of embedded content
 
-- Persona: Researcher with long documents
-- Session: `03-researcher`, interaction 9
-- Measured signal: visibility condition failed for [role="option"]
+- Persona: Checker
+- Session: `08-checker`, interaction 18
+- Measured signal: Expected semantic embed output; observed semantic embed output absent.
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Researcher with long documents session intent: Review a long document, paste evidence, search within it, and edit tables.
-  3. Type "insert table" into the open picker.
+  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
+  3. Assert rendered embeds.
 
-## 3. Critical: The UI session cannot complete: Type "Interrupted draft" into the open picker
+## 3. Critical: Fenced code has no syntax highlighting
 
-- Persona: Interruption-prone user
-- Session: `06-interruption-prone`, interaction 2
-- Measured signal: visibility condition failed for [role="option"]
+- Persona: Checker
+- Session: `08-checker`, interaction 54
+- Measured signal: Expected at least two syntax token colors; observed rgb(23, 32, 51).
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Interruption-prone user session intent: Switch notes during edits and dismiss transient surfaces at unpredictable points.
-  3. Type "Interrupted draft" into the open picker.
+  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
+  3. Assert rendered fenced-code.
 
-## 4. Critical: The UI session cannot complete: Press Enter to open Interruptions/Draft.md
+## 4. Critical: Selection toolbar text does not contrast with its background
 
-- Persona: Interruption-prone user
-- Session: `06-interruption-prone`, interaction 3
-- Measured signal: visibility condition failed for .cm-content
+- Persona: Checker
+- Session: `08-checker`, interaction 66
+- Measured signal: Expected toolbar text contrast of at least 4.5:1; observed 1.04:1 (rgb(248, 250, 252) on rgb(245, 245, 245)).
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Interruption-prone user session intent: Switch notes during edits and dismiss transient surfaces at unpredictable points.
-  3. Press Enter to open Interruptions/Draft.md.
+  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
+  3. Measure caret, toolbar, and interactive chrome visibility.
 
-## 5. High: Visible typing response is delayed while users paste an 80-paragraph evidence extract
+## 5. Critical: The editor caret is not visible against its background
 
-- Persona: Researcher with long documents
-- Session: `03-researcher`, interaction 4
-- Measured signal: Visible typing response: 873.00 ms (event-to-paint); exploratory threshold: 50 ms.
+- Persona: Checker
+- Session: `08-checker`, interaction 66
+- Measured signal: Expected caret contrast of at least 3:1; observed 1.18:1 (rgb(0, 0, 0) on rgb(17, 24, 39)).
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Researcher with long documents session intent: Review a long document, paste evidence, search within it, and edit tables.
-  3. Paste an 80-paragraph evidence extract.
+  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
+  3. Measure caret, toolbar, and interactive chrome visibility.
 
-## 6. High: Content scrolls without a scroll command while users paste an 80-paragraph evidence extract
+## 6. Critical: Callout: abstract does not render as readable output
 
-- Persona: Researcher with long documents
-- Session: `03-researcher`, interaction 4
-- Measured signal: Unexpected aggregate scrollTop delta: 1401 px.
+- Persona: Checker
+- Session: `08-checker`, interaction 24
+- Measured signal: Expected raw markers hidden while the cursor is elsewhere; observed visible source: [!abstract].
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Researcher with long documents session intent: Review a long document, paste evidence, search within it, and edit tables.
-  3. Paste an 80-paragraph evidence extract.
+  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
+  3. Assert rendered callout-abstract.
 
-## 7. High: Content scrolls without a scroll command while users press enter to open keyboard/command surface.md
+## 7. Critical: Callout: bug does not render as readable output
 
-- Persona: Keyboard-only power user
-- Session: `04-keyboard-power-user`, interaction 3
-- Measured signal: Unexpected aggregate scrollTop delta: 1401 px.
+- Persona: Checker
+- Session: `08-checker`, interaction 42
+- Measured signal: Expected raw markers hidden while the cursor is elsewhere; observed visible source: [!bug].
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Keyboard-only power user session intent: Navigate core command surfaces without pointer input and preserve useful focus.
-  3. Press Enter to open Keyboard/Command Surface.md.
+  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
+  3. Assert rendered callout-bug.
 
-## 8. High: Surface appearance is delayed while users press ctrl+o to open the quick switcher
+## 8. Critical: Callout: danger does not render as readable output
 
-- Persona: Obsidian migrant
-- Session: `01-obsidian-migrant`, interaction 2
-- Measured signal: Surface appearance: 804.00 ms (event-to-paint); exploratory threshold: 100 ms.
+- Persona: Checker
+- Session: `08-checker`, interaction 40
+- Measured signal: Expected raw markers hidden while the cursor is elsewhere; observed visible source: [!danger].
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Obsidian migrant session intent: Audit a 2000-note imported vault and reach deeply nested material.
-  3. Press Ctrl+O to open the quick switcher.
+  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
+  3. Assert rendered callout-danger.
 
-## 9. High: Surface appearance is delayed while users press ctrl+o to open the quick switcher
+## 9. Critical: Callout: example does not render as readable output
 
-- Persona: Keyboard-only power user
-- Session: `04-keyboard-power-user`, interaction 1
-- Measured signal: Surface appearance: 923.00 ms (event-to-paint); exploratory threshold: 100 ms.
+- Persona: Checker
+- Session: `08-checker`, interaction 44
+- Measured signal: Expected raw markers hidden while the cursor is elsewhere; observed visible source: [!example].
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Keyboard-only power user session intent: Navigate core command surfaces without pointer input and preserve useful focus.
-  3. Press Ctrl+O to open the quick switcher.
+  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
+  3. Assert rendered callout-example.
 
-## 10. High: Surface appearance is delayed while users press ctrl+o to open the quick switcher
+## 10. Critical: Callout: failure does not render as readable output
 
-- Persona: Interruption-prone user
-- Session: `06-interruption-prone`, interaction 1
-- Measured signal: Surface appearance: 3523.00 ms (event-to-paint); exploratory threshold: 100 ms.
+- Persona: Checker
+- Session: `08-checker`, interaction 38
+- Measured signal: Expected raw markers hidden while the cursor is elsewhere; observed visible source: [!failure].
 - Reproduction:
   1. Run `bun run ux:fleet` to open the deterministic generated vault.
-  2. Follow the Interruption-prone user session intent: Switch notes during edits and dismiss transient surfaces at unpredictable points.
-  3. Press Ctrl+O to open the quick switcher.
+  2. Follow the Checker session intent: Verify that each visible construct matches its deterministic Markdown source.
+  3. Assert rendered callout-failure.

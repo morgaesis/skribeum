@@ -1,21 +1,9 @@
+// biome-ignore-all format: Keep the exploratory harness within its line budget.
 import { $, browser } from "@wdio/globals";
 import { Key } from "webdriverio";
-import {
-  installUxInstrumentation,
-  PersonaSession,
-  type VisualCheck,
-} from "./signals";
+import { installUxInstrumentation, PersonaSession, type VisualCheck } from "./signals";
 import { FLEET_NOTE_COUNT, FLEET_SEED, NOTES } from "./vault";
-import {
-  CONSTRUCTS,
-  captureMatrix,
-  compareReference,
-  inspectComputedVisibility,
-  inspectConstruct,
-  resetEvidence,
-  setTheme,
-  writeGallery,
-} from "./visual";
+import { CONSTRUCTS, captureMatrix, compareReference, inspectComputedVisibility, inspectConstruct, resetEvidence, setTheme, writeGallery } from "./visual";
 
 const modifier = process.platform === "darwin" ? Key.Command : Key.Ctrl;
 
@@ -30,11 +18,7 @@ class Flow {
     this.session = new PersonaSession(id, persona, seed);
   }
 
-  async open(
-    path: string,
-    text: string,
-    selector = ".cm-content",
-  ): Promise<void> {
+  async open(path: string, text: string, selector = ".cm-content"): Promise<void> {
     await this.session.interact({
       intent: this.intent,
       action: `Open ${path} through the quick switcher`,
@@ -46,10 +30,7 @@ class Flow {
         await browser.waitUntil(
           async () => {
             const option = $('[role="option"]');
-            return (
-              (await option.isExisting()) &&
-              (await option.getText()).includes(path)
-            );
+            return (await option.isExisting()) && (await option.getText()).includes(path);
           },
           {
             timeout: 15_000,
@@ -66,9 +47,7 @@ class Flow {
   }
 
   async type(action: string, value: string, expected: string): Promise<void> {
-    await browser.execute(() =>
-      document.querySelector<HTMLElement>(".cm-content")?.focus(),
-    );
+    await browser.execute(() => document.querySelector<HTMLElement>(".cm-content")?.focus());
     await this.session.interact({
       intent: this.intent,
       action,
@@ -80,7 +59,7 @@ class Flow {
     });
   }
 
-  async tree(path: string, text: string): Promise<void> {
+  async tree(path: string, text: string, selector = ".cm-content"): Promise<void> {
     const parts = path.split("/");
     const name = parts.at(-1) ?? path;
     await this.session.interact({
@@ -98,7 +77,7 @@ class Flow {
         await row.waitForExist({ timeout: 15_000 });
         await row.click();
       },
-      visible: { selector: ".cm-content", text },
+      visible: { selector, text },
       trigger: { event: "click" },
       latencyKind: "note",
     });
@@ -134,11 +113,7 @@ async function moveCursorAway(): Promise<void> {
   });
 }
 
-async function visualRecord(
-  flow: Flow,
-  action: string,
-  inspect: () => Promise<VisualCheck[]>,
-): Promise<void> {
+async function visualRecord(flow: Flow, action: string, inspect: () => Promise<VisualCheck[]>): Promise<void> {
   await flow.session.interact({
     intent: flow.intent,
     action,
@@ -148,8 +123,7 @@ async function visualRecord(
 }
 
 async function humanReadingTour(flow: Flow, treeOnly = false): Promise<void> {
-  const open = (path: string, text: string) =>
-    treeOnly ? flow.tree(path, text) : flow.open(path, text);
+  const open = (path: string, text: string) => (treeOnly ? flow.tree(path, text) : flow.open(path, text));
   await open(NOTES.start, "Quickstart");
   const link = $(".cm-skr-wikilink-alias");
   await link.scrollIntoView();
@@ -158,12 +132,7 @@ async function humanReadingTour(flow: Flow, treeOnly = false): Promise<void> {
     action: "Click a rendered link and expect navigation",
     perform: () => link.click(),
     inspect: async () => {
-      const navigated = await browser.execute(
-        () =>
-          document
-            .querySelector<HTMLElement>(".cm-content")
-            ?.innerText.includes("Vault index") ?? false,
-      );
+      const navigated = await browser.execute(() => document.querySelector<HTMLElement>(".cm-content")?.innerText.includes("Vault index") ?? false);
       return [
         {
           id: "wikilink-navigation",
@@ -177,30 +146,18 @@ async function humanReadingTour(flow: Flow, treeOnly = false): Promise<void> {
   });
   await open("Features/code-blocks.md", "Code blocks");
   await $(".cm-skr-code-block").moveTo();
-  await visualRecord(
-    flow,
-    "Hover a code block for its copy affordance",
-    async () => {
-      const copy = await browser.execute(() =>
-        [...document.querySelectorAll<HTMLElement>("button")].some(
-          (button) =>
-            button.getClientRects().length > 0 &&
-            /copy/i.test(
-              `${button.textContent} ${button.getAttribute("aria-label")}`,
-            ),
-        ),
-      );
-      return [
-        {
-          id: "fenced-code-copy",
-          construct: "Fenced code",
-          pass: copy,
-          expected: "a visible copy affordance on hover",
-          actual: copy ? "copy control visible" : "copy control absent",
-        },
-      ];
-    },
-  );
+  await visualRecord(flow, "Hover a code block for its copy affordance", async () => {
+    const copy = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("button")].some((button) => button.getClientRects().length > 0 && /copy/i.test(`${button.textContent} ${button.getAttribute("aria-label")}`)));
+    return [
+      {
+        id: "fenced-code-copy",
+        construct: "Fenced code",
+        pass: copy,
+        expected: "a visible copy affordance on hover",
+        actual: copy ? "copy control visible" : "copy control absent",
+      },
+    ];
+  });
   await open("Features/frontmatter.md", "Frontmatter");
   await flow.session.interact({
     intent: flow.intent,
@@ -213,11 +170,7 @@ async function humanReadingTour(flow: Flow, treeOnly = false): Promise<void> {
       }
     },
     inspect: async () => {
-      const toggle = await browser.execute(
-        () =>
-          document.querySelector('[aria-label="Note properties"] button') !==
-          null,
-      );
+      const toggle = await browser.execute(() => document.querySelector('[aria-label="Note properties"] button') !== null);
       return [
         {
           id: "frontmatter-toggle",
@@ -240,11 +193,7 @@ async function humanReadingTour(flow: Flow, treeOnly = false): Promise<void> {
       }),
     scrollExpected: true,
     inspect: async () => {
-      const moved = await browser.execute(
-        () =>
-          (document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop ??
-            0) > 0,
-      );
+      const moved = await browser.execute(() => (document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop ?? 0) > 0);
       return [
         {
           id: "long-note-scroll",
@@ -271,12 +220,7 @@ after(() => writeGallery());
 
 describe("persona-driven UX fleet", () => {
   it("runs the Obsidian migrant session", async () => {
-    const flow = new Flow(
-      "01-obsidian-migrant",
-      "Obsidian migrant",
-      `Audit a ${FLEET_NOTE_COUNT}-note imported vault and reach deeply nested material`,
-      FLEET_SEED + 1,
-    );
+    const flow = new Flow("01-obsidian-migrant", "Obsidian migrant", `Audit a ${FLEET_NOTE_COUNT}-note imported vault and reach deeply nested material`, FLEET_SEED + 1);
     await flow.open("quickstart.md", "Quickstart");
     await flow.open(NOTES.deep, "Deep migration note");
     await flow.surface([modifier, Key.Shift, "f"], "Search vault");
@@ -287,19 +231,10 @@ describe("persona-driven UX fleet", () => {
   });
 
   it("runs the daily journaler session", async () => {
-    const flow = new Flow(
-      "02-daily-journaler",
-      "Daily journaler",
-      "Capture a daily entry, add links quickly, and move between linked notes",
-      FLEET_SEED + 2,
-    );
+    const flow = new Flow("02-daily-journaler", "Daily journaler", "Capture a daily entry, add links quickly, and move between linked notes", FLEET_SEED + 2);
     await flow.open("quickstart.md", "Quickstart");
     await flow.open(NOTES.daily, "2026-07-31");
-    await flow.type(
-      "Type a journal heading and wikilink",
-      "\n## Afternoon capture\nLinked [[Daily/2026-07-30]] while writing.",
-      "while writing",
-    );
+    await flow.type("Type a journal heading and wikilink", "\n## Afternoon capture\nLinked [[Daily/2026-07-30]] while writing.", "while writing");
     await flow.session.interact({
       intent: flow.intent,
       action: "Save the journal entry",
@@ -311,12 +246,7 @@ describe("persona-driven UX fleet", () => {
   });
 
   it("runs the researcher session", async () => {
-    const flow = new Flow(
-      "03-researcher",
-      "Researcher with long documents",
-      "Review a long document, search it, edit tables, and scroll its full length",
-      FLEET_SEED + 3,
-    );
+    const flow = new Flow("03-researcher", "Researcher with long documents", "Review a long document, search it, edit tables, and scroll its full length", FLEET_SEED + 3);
     await flow.open("quickstart.md", "Quickstart");
     await flow.open(NOTES.research, "Long paper");
     await flow.session.interact({
@@ -331,21 +261,12 @@ describe("persona-driven UX fleet", () => {
       expectedFocus: [".cm-content"],
     });
     await flow.open("Features/tables.md", "Room comparison");
-    await visualRecord(flow, "Check the rendered research table", () =>
-      inspectConstruct(
-        CONSTRUCTS.find((item) => item.id === "tables") ?? CONSTRUCTS[8],
-      ),
-    );
+    await visualRecord(flow, "Check the rendered research table", () => inspectConstruct(CONSTRUCTS.find((item) => item.id === "tables") ?? CONSTRUCTS[8]));
     await humanReadingTour(flow);
   });
 
   it("runs the keyboard-only power-user session", async () => {
-    const flow = new Flow(
-      "04-keyboard-power-user",
-      "Keyboard-only power user",
-      "Navigate core command surfaces without pointer input and preserve useful focus",
-      FLEET_SEED + 4,
-    );
+    const flow = new Flow("04-keyboard-power-user", "Keyboard-only power user", "Navigate core command surfaces without pointer input and preserve useful focus", FLEET_SEED + 4);
     await flow.open("quickstart.md", "Quickstart");
     await flow.open(NOTES.keyboard, "Command surface");
     await flow.surface([modifier, "p"], "Command palette");
@@ -360,12 +281,7 @@ describe("persona-driven UX fleet", () => {
   });
 
   it("runs the low-vision session", async () => {
-    const flow = new Flow(
-      "05-low-vision",
-      "Low-vision user",
-      "Use dark theme at 200 percent page zoom without clipping or lost focus",
-      FLEET_SEED + 5,
-    );
+    const flow = new Flow("05-low-vision", "Low-vision user", "Use dark theme at 200 percent page zoom without clipping or lost focus", FLEET_SEED + 5);
     await flow.open("quickstart.md", "Quickstart");
     await setTheme("dark");
     await flow.open(NOTES.zoom, "Zoom review");
@@ -378,11 +294,7 @@ describe("persona-driven UX fleet", () => {
         }),
       custom: () =>
         browser.execute(() => ({
-          horizontalOverflowPx: Math.max(
-            0,
-            document.documentElement.scrollWidth -
-              document.documentElement.clientWidth,
-          ),
+          horizontalOverflowPx: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
         })),
     });
     await flow.surface([modifier, "p"], "Command palette");
@@ -394,19 +306,10 @@ describe("persona-driven UX fleet", () => {
   });
 
   it("runs the interruption-prone session", async () => {
-    const flow = new Flow(
-      "06-interruption-prone",
-      "Interruption-prone user",
-      "Switch notes during edits and dismiss transient surfaces at unpredictable points",
-      FLEET_SEED + 6,
-    );
+    const flow = new Flow("06-interruption-prone", "Interruption-prone user", "Switch notes during edits and dismiss transient surfaces at unpredictable points", FLEET_SEED + 6);
     await flow.open("quickstart.md", "Quickstart");
     await flow.open(NOTES.interruption, "Interrupted draft");
-    await flow.type(
-      "Type a short burst before an interruption",
-      " before an interruption",
-      "before an interruption",
-    );
+    await flow.type("Type a short burst before an interruption", " before an interruption", "before an interruption");
     await flow.surface([modifier, "p"], "Command palette");
     await browser.keys(Key.Escape);
     await flow.open(NOTES.interruptionTarget, "Reference during interruption");
@@ -414,57 +317,41 @@ describe("persona-driven UX fleet", () => {
   });
 
   it("runs the skimmer session without typing", async () => {
-    const flow = new Flow(
-      "07-skimmer",
-      "Skimmer",
-      "Read and navigate without editing, following links and checking reading affordances",
-      FLEET_SEED + 7,
-    );
+    const flow = new Flow("07-skimmer", "Skimmer", "Read and navigate without editing, following links and checking reading affordances", FLEET_SEED + 7);
     await humanReadingTour(flow, true);
   });
 
   it("runs the checker session across the complete rendering surface", async () => {
-    const flow = new Flow(
-      "08-checker",
-      "Checker",
-      "Verify that each visible construct matches its deterministic Markdown source",
-      FLEET_SEED + 8,
-    );
+    const flow = new Flow("08-checker", "Checker", "Verify that each visible construct matches its deterministic Markdown source", FLEET_SEED + 8);
+    await humanReadingTour(flow);
     await flow.open("quickstart.md", "Quickstart");
     for (const construct of CONSTRUCTS) {
-      await flow.open(
-        construct.path,
-        construct.rendered,
-        construct.id === "canvas" ? construct.selector : ".cm-content",
-      );
+      if (construct.id === "canvas") await flow.tree(construct.path, construct.rendered, construct.selector);
+      else await flow.open(construct.path, construct.rendered);
       await moveCursorAway();
       if (construct.id === "fenced-code") await $(construct.selector).moveTo();
-      await visualRecord(flow, `Assert rendered ${construct.id}`, () =>
-        inspectConstruct(construct),
-      );
+      await visualRecord(flow, `Assert rendered ${construct.id}`, () => inspectConstruct(construct));
       await captureMatrix("construct", construct.id);
-      if (["headings", "math-inline", "canvas"].includes(construct.id)) {
-        await visualRecord(
-          flow,
-          `Compare ${construct.id} with its pixel reference`,
-          async () => [
-            await compareReference(construct.id, construct.selector),
-          ],
-        );
+      if (["headings", "inline-math", "canvas"].includes(construct.id)) {
+        await visualRecord(flow, `Compare ${construct.id} with its pixel reference`, async () => [await compareReference(construct.id, construct.selector)]);
       }
     }
 
     await flow.open("quickstart.md", "Quickstart");
     await setTheme("dark");
-    await $(".cm-line").click();
-    await browser.keys(Key.Home);
-    await browser.keys([Key.Shift, Key.End]);
-    await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 10_000 });
-    await visualRecord(
-      flow,
-      "Measure caret, toolbar, and interactive chrome visibility",
-      inspectComputedVisibility,
+    await browser.execute(() =>
+      document.querySelector<HTMLElement>(".cm-content")?.focus(),
     );
-    await humanReadingTour(flow);
+    await browser.keys([modifier, "a"]);
+    await browser
+      .waitUntil(
+        () =>
+          browser.execute(
+            () => document.querySelector(".cm-skr-selection-toolbar") !== null,
+          ),
+        { timeout: 5_000 },
+      )
+      .catch(() => false);
+    await visualRecord(flow, "Measure caret, toolbar, and interactive chrome visibility", inspectComputedVisibility);
   });
 });

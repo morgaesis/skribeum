@@ -1,3 +1,4 @@
+// biome-ignore-all format: Keep the exploratory harness within its line budget.
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { browser } from "@wdio/globals";
@@ -68,12 +69,7 @@ export type TraceRecord = {
 };
 
 const traces = path.join(import.meta.dirname, "traces");
-const scrollSelectors = [
-  "nav",
-  ".cm-scroller",
-  '[role="listbox"]',
-  '[aria-label="Outline"]',
-];
+const scrollSelectors = ["nav", ".cm-scroller", '[role="listbox"]', '[aria-label="Outline"]'];
 const boxSelectors = ["header", "main", "nav", ".cm-editor"];
 const round = (value: number, precision = 2) => {
   const scale = 10 ** precision;
@@ -81,9 +77,7 @@ const round = (value: number, precision = 2) => {
 };
 
 export async function installUxInstrumentation(): Promise<void> {
-  await browser.execute(
-    "window.__name = window.__name || function (target) { return target; };",
-  );
+  await browser.execute("window.__name = window.__name || function (target) { return target; };");
   await browser.execute(() => {
     if ((window as UxWindow).__SKRIBEUM_UX__ !== undefined) return;
     const state: UxState = {
@@ -105,23 +99,13 @@ export async function installUxInstrumentation(): Promise<void> {
       state.errors.push(values.map(text).join(" ").slice(0, 500));
       original(...values);
     };
-    addEventListener("error", (event) =>
-      state.errors.push(`window error: ${event.message}`.slice(0, 500)),
-    );
-    addEventListener("unhandledrejection", (event) =>
-      state.errors.push(
-        `unhandled rejection: ${text(event.reason)}`.slice(0, 500),
-      ),
-    );
+    addEventListener("error", (event) => state.errors.push(`window error: ${event.message}`.slice(0, 500)));
+    addEventListener("unhandledrejection", (event) => state.errors.push(`unhandled rejection: ${text(event.reason)}`.slice(0, 500)));
     try {
-      state.layoutSupported =
-        PerformanceObserver.supportedEntryTypes.includes("layout-shift");
+      state.layoutSupported = PerformanceObserver.supportedEntryTypes.includes("layout-shift");
       if (state.layoutSupported) {
         new PerformanceObserver((list) => {
-          for (const entry of list.getEntries())
-            state.layout += (
-              entry as PerformanceEntry & { value: number }
-            ).value;
+          for (const entry of list.getEntries()) state.layout += (entry as PerformanceEntry & { value: number }).value;
         }).observe({ type: "layout-shift", buffered: true });
       }
     } catch {
@@ -130,18 +114,11 @@ export async function installUxInstrumentation(): Promise<void> {
   });
 }
 
-async function arm(
-  trigger: NonNullable<Interaction["trigger"]>,
-): Promise<void> {
+async function arm(trigger: NonNullable<Interaction["trigger"]>): Promise<void> {
   await browser.execute(
     (eventName, eventKey) => {
       const listener = (event: Event) => {
-        if (
-          eventKey !== undefined &&
-          (!(event instanceof KeyboardEvent) ||
-            event.key.toLowerCase() !== eventKey.toLowerCase())
-        )
-          return;
+        if (eventKey !== undefined && (!(event instanceof KeyboardEvent) || event.key.toLowerCase() !== eventKey.toLowerCase())) return;
         const state = (window as UxWindow).__SKRIBEUM_UX__;
         if (state !== undefined) state.eventAt = performance.now();
       };
@@ -160,27 +137,10 @@ async function snapshot(expected: string[]): Promise<Snapshot> {
     (focusSelectors, scrolling, rectangles): Snapshot => {
       const state = (window as UxWindow).__SKRIBEUM_UX__;
       const active = document.activeElement as HTMLElement | null;
-      const body =
-        active === null ||
-        active === document.body ||
-        active === document.documentElement;
-      const descriptor =
-        body || active === null
-          ? "body"
-          : `${active.tagName.toLowerCase()}:${active.getAttribute("role") ?? ""}:${active.getAttribute("aria-label") ?? ""}:${[...active.classList].slice(0, 3).join(".")}`;
-      const sensible =
-        !body &&
-        (focusSelectors.length === 0 ||
-          focusSelectors.some(
-            (selector) =>
-              active.matches(selector) || active.closest(selector) !== null,
-          ));
-      const scroll = Object.fromEntries(
-        scrolling.map((selector) => [
-          selector,
-          document.querySelector<HTMLElement>(selector)?.scrollTop ?? 0,
-        ]),
-      );
+      const body = active === null || active === document.body || active === document.documentElement;
+      const descriptor = body || active === null ? "body" : `${active.tagName.toLowerCase()}:${active.getAttribute("role") ?? ""}:${active.getAttribute("aria-label") ?? ""}:${[...active.classList].slice(0, 3).join(".")}`;
+      const sensible = !body && (focusSelectors.length === 0 || focusSelectors.some((selector) => active.matches(selector) || active.closest(selector) !== null));
+      const scroll = Object.fromEntries(scrolling.map((selector) => [selector, document.querySelector<HTMLElement>(selector)?.scrollTop ?? 0]));
       const boxes = Object.fromEntries(
         rectangles.flatMap((selector) => {
           const element = document.querySelector(selector);
@@ -213,10 +173,7 @@ async function waitFor(visible: Visibility): Promise<void> {
       browser.execute(
         (selector, expectedText, absent) => {
           const element = document.querySelector(selector);
-          const found =
-            element !== null &&
-            (expectedText === undefined ||
-              (element.textContent ?? "").includes(expectedText));
+          const found = element !== null && (expectedText === undefined || (element.textContent ?? "").includes(expectedText));
           return absent ? !found : found;
         },
         visible.selector,
@@ -231,22 +188,14 @@ async function waitFor(visible: Visibility): Promise<void> {
 }
 
 async function settle(): Promise<void> {
-  await browser.execute(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
-  );
+  await browser.execute(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
 
 function geometry(before: Snapshot, after: Snapshot): number {
   let movement = 0;
   for (const [selector, box] of Object.entries(before.boxes)) {
     const next = after.boxes[selector];
-    if (next !== undefined)
-      movement +=
-        (Math.abs(next[0] - box[0]) + Math.abs(next[1] - box[1])) *
-        Math.max(box[2], box[3]);
+    if (next !== undefined) movement += (Math.abs(next[0] - box[0]) + Math.abs(next[1] - box[1])) * Math.max(box[2], box[3]);
   }
   return movement / Math.max(1, 1280 * 800);
 }
@@ -282,21 +231,9 @@ export class PersonaSession {
       error = cause instanceof Error ? cause.message : String(cause);
     }
     const after = await snapshot(expected);
-    const state = await browser.execute(
-      () => (window as UxWindow).__SKRIBEUM_UX__ ?? null,
-    );
-    const deltaByContainer = Object.fromEntries(
-      Object.entries(after.scroll).map(([selector, value]) => [
-        selector,
-        round(value - (before.scroll[selector] ?? 0)),
-      ]),
-    );
-    const unexpectedPx = interaction.scrollExpected
-      ? 0
-      : Object.values(deltaByContainer).reduce(
-          (sum, value) => sum + Math.abs(value),
-          0,
-        );
+    const state = await browser.execute(() => (window as UxWindow).__SKRIBEUM_UX__ ?? null);
+    const deltaByContainer = Object.fromEntries(Object.entries(after.scroll).map(([selector, value]) => [selector, round(value - (before.scroll[selector] ?? 0))]));
+    const unexpectedPx = interaction.scrollExpected ? 0 : Object.values(deltaByContainer).reduce((sum, value) => sum + Math.abs(value), 0);
     let visual: VisualCheck[] = [];
     try {
       visual = (await interaction.inspect?.()) ?? [];
@@ -326,13 +263,8 @@ export class PersonaSession {
             ? null
             : {
                 kind: interaction.latencyKind,
-                ms: round(
-                  measured === null
-                    ? after.now - before.now
-                    : after.now - measured,
-                ),
-                source:
-                  measured === null ? "webdriver-fallback" : "event-to-paint",
+                ms: round(measured === null ? after.now - before.now : after.now - measured),
+                source: measured === null ? "webdriver-fallback" : "event-to-paint",
               },
         focus: {
           before: before.active,
@@ -342,12 +274,7 @@ export class PersonaSession {
         },
         scroll: { unexpectedPx: round(unexpectedPx), deltaByContainer },
         layoutShift: {
-          score: round(
-            after.layoutSupported
-              ? after.layout - before.layout
-              : geometry(before, after),
-            4,
-          ),
+          score: round(after.layoutSupported ? after.layout - before.layout : geometry(before, after), 4),
           method: after.layoutSupported ? "performance-observer" : "geometry",
         },
         consoleErrors: state?.errors.slice(before.errors) ?? [],

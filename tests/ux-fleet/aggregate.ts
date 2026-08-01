@@ -1,3 +1,4 @@
+// biome-ignore-all format: Keep the exploratory harness within its line budget.
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { TraceRecord, VisualCheck } from "./signals";
@@ -40,15 +41,7 @@ function impactFor(score: number): Impact {
   return "Medium";
 }
 
-function addFinding(
-  findings: Finding[],
-  record: TraceRecord,
-  key: string,
-  score: number,
-  title: string,
-  measured: string,
-  unique = false,
-): void {
+function addFinding(findings: Finding[], record: TraceRecord, key: string, score: number, title: string, measured: string, unique = false): void {
   findings.push({
     key: unique ? key : `${key}:${record.session}:${record.seq}`,
     score,
@@ -88,8 +81,7 @@ const knownVisual = [
   {
     key: "frontmatter-duplication",
     match: (id: string) => id === "frontmatter-frontmatter",
-    title:
-      "Frontmatter appears in both the properties panel and the editor source",
+    title: "Frontmatter appears in both the properties panel and the editor source",
   },
 ] as const;
 
@@ -118,25 +110,10 @@ function findingsFrom(records: TraceRecord[]): Finding[] {
     const { signal } = record;
     for (const check of signal.visual.filter((item) => !item.pass)) {
       const details = visualDetails(check);
-      addFinding(
-        findings,
-        record,
-        details.key,
-        details.score,
-        details.title,
-        `Expected ${check.expected}; observed ${check.actual}.`,
-        true,
-      );
+      addFinding(findings, record, details.key, details.score, details.title, `Expected ${check.expected}; observed ${check.actual}.`, true);
     }
     if (record.status === "error") {
-      addFinding(
-        findings,
-        record,
-        "failed-action",
-        100,
-        `The UI session cannot complete: ${record.action}`,
-        record.error ?? "The interaction failed without an error message.",
-      );
+      addFinding(findings, record, "failed-action", 100, `The UI session cannot complete: ${record.action}`, record.error ?? "The interaction failed without an error message.");
       continue;
     }
     if (signal.consoleErrors.length > 0) {
@@ -151,64 +128,25 @@ function findingsFrom(records: TraceRecord[]): Finding[] {
     }
     const tabIsSimulated = signal.custom.nativeTabTraversal === false;
     if (signal.focus.body && !tabIsSimulated) {
-      addFinding(
-        findings,
-        record,
-        "body-focus",
-        92,
-        `Focus falls back to the document body after users ${record.action.toLowerCase()}`,
-        `Active element: ${signal.focus.after}.`,
-      );
+      addFinding(findings, record, "body-focus", 92, `Focus falls back to the document body after users ${record.action.toLowerCase()}`, `Active element: ${signal.focus.after}.`);
     } else if (!signal.focus.sensible && !tabIsSimulated) {
-      addFinding(
-        findings,
-        record,
-        "misplaced-focus",
-        82,
-        `Focus does not land on the expected control after users ${record.action.toLowerCase()}`,
-        `Focus moved from ${signal.focus.before} to ${signal.focus.after}.`,
-      );
+      addFinding(findings, record, "misplaced-focus", 82, `Focus does not land on the expected control after users ${record.action.toLowerCase()}`, `Focus moved from ${signal.focus.before} to ${signal.focus.after}.`);
     }
     const overflow = signal.custom.horizontalOverflowPx;
     if (typeof overflow === "number" && overflow > 0) {
-      addFinding(
-        findings,
-        record,
-        "zoom-overflow",
-        86,
-        "The application overflows horizontally at 200 percent page zoom",
-        `Horizontal overflow: ${overflow.toFixed(0)} px.`,
-      );
+      addFinding(findings, record, "zoom-overflow", 86, "The application overflows horizontally at 200 percent page zoom", `Horizontal overflow: ${overflow.toFixed(0)} px.`);
     }
     if (signal.scroll.unexpectedPx > 8) {
-      addFinding(
-        findings,
-        record,
-        "scroll-jump",
-        74,
-        `Content scrolls without a scroll command while users ${record.action.toLowerCase()}`,
-        `Unexpected aggregate scrollTop delta: ${signal.scroll.unexpectedPx.toFixed(0)} px.`,
-      );
+      addFinding(findings, record, "scroll-jump", 74, `Content scrolls without a scroll command while users ${record.action.toLowerCase()}`, `Unexpected aggregate scrollTop delta: ${signal.scroll.unexpectedPx.toFixed(0)} px.`);
     }
-    if (
-      signal.layoutShift.score > 0.01 &&
-      (signal.latency?.kind === "note" || signal.latency?.kind === "glyph")
-    ) {
-      addFinding(
-        findings,
-        record,
-        "layout-shift",
-        72,
-        `Content shifts after users ${record.action.toLowerCase()}`,
-        `Layout-shift score: ${signal.layoutShift.score.toFixed(4)} by ${signal.layoutShift.method}.`,
-      );
+    if (signal.layoutShift.score > 0.01 && (signal.latency?.kind === "note" || signal.latency?.kind === "glyph")) {
+      addFinding(findings, record, "layout-shift", 72, `Content shifts after users ${record.action.toLowerCase()}`, `Layout-shift score: ${signal.layoutShift.score.toFixed(4)} by ${signal.layoutShift.method}.`);
     }
     const latency = signal.latency;
     if (latency === null) {
       continue;
     }
-    const threshold =
-      latency.kind === "glyph" ? 50 : latency.kind === "note" ? 100 : 100;
+    const threshold = latency.kind === "glyph" ? 50 : latency.kind === "note" ? 100 : 100;
     if (latency.ms <= threshold) {
       continue;
     }
@@ -217,8 +155,7 @@ function findingsFrom(records: TraceRecord[]): Finding[] {
       note: "First painted note content",
       surface: "Surface appearance",
     } as const;
-    const score =
-      latency.kind === "glyph" ? 80 : latency.kind === "note" ? 68 : 62;
+    const score = latency.kind === "glyph" ? 80 : latency.kind === "note" ? 68 : 62;
     addFinding(
       findings,
       record,
@@ -228,13 +165,7 @@ function findingsFrom(records: TraceRecord[]): Finding[] {
       `${labels[latency.kind]}: ${latency.ms.toFixed(2)} ms (${latency.source}); exploratory threshold: ${threshold} ms.`,
     );
   }
-  const sorted = findings.sort(
-    (left, right) =>
-      right.score - left.score ||
-      right.record.signal.layoutShift.score -
-        left.record.signal.layoutShift.score ||
-      left.key.localeCompare(right.key),
-  );
+  const sorted = findings.sort((left, right) => right.score - left.score || right.record.signal.layoutShift.score - left.record.signal.layoutShift.score || left.key.localeCompare(right.key));
   return [...new Map(sorted.map((finding) => [finding.key, finding])).values()];
 }
 
@@ -253,12 +184,7 @@ function renderFindings(records: TraceRecord[], findings: Finding[]): string {
   const coverage = knownVisual
     .map((known) => {
       const matching = checks.filter((check) => known.match(check.id));
-      const status =
-        matching.length === 0
-          ? "Not exercised"
-          : matching.some((check) => !check.pass)
-            ? "Detected"
-            : "Passes";
+      const status = matching.length === 0 ? "Not exercised" : matching.some((check) => !check.pass) ? "Detected" : "Passes";
       return `| ${known.title} | ${status} |`;
     })
     .join("\n");

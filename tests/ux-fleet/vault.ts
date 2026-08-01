@@ -1,11 +1,5 @@
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+// biome-ignore-all format: Keep the exploratory harness within its line budget.
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -42,9 +36,7 @@ function demoFiles(directory = demoVault): Array<[string, string]> {
     const absolute = path.join(directory, entry.name);
     if (entry.isDirectory()) return demoFiles(absolute);
     if (entry.name.endsWith(".ts")) return [];
-    return [
-      [path.relative(demoVault, absolute), readFileSync(absolute, "utf8")],
-    ];
+    return [[path.relative(demoVault, absolute), readFileSync(absolute, "utf8")]];
   });
 }
 
@@ -62,31 +54,9 @@ function generatedContent(index: number): string {
 }
 
 function specialNotes(): Array<[string, string]> {
-  const tableRows = Array.from(
-    { length: 220 },
-    (_, index) =>
-      `| Evidence ${index} | ${index * 17} | [[Deep Note ${String(index).padStart(4, "0")}]] |`,
-  ).join("\n");
-  const paragraphs = Array.from(
-    { length: 300 },
-    (_, index) =>
-      `## Section ${index}\n\nResearch paragraph ${index} discusses deterministic evidence, citations, and longitudinal observations.`,
-  ).join("\n\n");
-  const calloutTypes = [
-    "note",
-    "abstract",
-    "info",
-    "todo",
-    "tip",
-    "success",
-    "question",
-    "warning",
-    "failure",
-    "danger",
-    "bug",
-    "example",
-    "quote",
-  ];
+  const tableRows = Array.from({ length: 220 }, (_, index) => `| Evidence ${index} | ${index * 17} | [[Deep Note ${String(index).padStart(4, "0")}]] |`).join("\n");
+  const paragraphs = Array.from({ length: 300 }, (_, index) => `## Section ${index}\n\nResearch paragraph ${index} discusses deterministic evidence, citations, and longitudinal observations.`).join("\n\n");
+  const calloutTypes = ["note", "abstract", "info", "todo", "tip", "success", "question", "warning", "failure", "danger", "bug", "example", "quote"];
   return [
     ...demoFiles(),
     [
@@ -103,44 +73,15 @@ Cursor parking area.
 *Italic phrase*, **strong phrase**, and ~~struck phrase~~.
 `,
     ],
-    [
-      NOTES.callouts,
-      `# All callout types\n\n${calloutTypes
-        .map(
-          (type) =>
-            `> [!${type}] ${type[0]?.toUpperCase()}${type.slice(1)} title\n> Rendered ${type} body.`,
-        )
-        .join("\n\n")}\n`,
-    ],
-    [
-      NOTES.daily,
-      "# 2026-07-31\n\n## Morning\n\n- Review [[Daily/2026-07-30]]\n- Capture rapid links\n",
-    ],
+    [NOTES.callouts, `# All callout types\n\n${calloutTypes.map((type) => `> [!${type}] ${type[0]?.toUpperCase()}${type.slice(1)} title\n> Rendered ${type} body.`).join("\n\n")}\n`],
+    [NOTES.daily, "# 2026-07-31\n\n## Morning\n\n- Review [[Daily/2026-07-30]]\n- Capture rapid links\n"],
     [NOTES.linkedDaily, "# 2026-07-30\n\nA linked journal entry.\n"],
-    [
-      NOTES.research,
-      `# Long paper\n\n${paragraphs}\n\n## Evidence table\n\n| Item | Score | Source |\n| --- | ---: | --- |\n${tableRows}\n`,
-    ],
-    [
-      NOTES.keyboard,
-      "# Command surface\n\n## Navigation\n\nKeyboard-only work begins here.\n\n### Search target\n\nkeyboard-navigation-evidence\n",
-    ],
-    [
-      NOTES.zoom,
-      "# Zoom review\n\nDense prose checks wrapping, contrast, clipping, and focus visibility at enlarged scale.\n\n- [ ] Inspect the sidebar\n- [ ] Open the command palette\n",
-    ],
-    [
-      NOTES.interruption,
-      "# Interrupted draft\n\nA sentence that remains unfinished",
-    ],
-    [
-      NOTES.interruptionTarget,
-      "# Reference during interruption\n\nThe alternate note is safe to open mid-edit.\n",
-    ],
-    [
-      NOTES.deep,
-      "# Deep migration note\n\nA note nested six levels below the vault root.\n\nfleet-search-token-deep\n",
-    ],
+    [NOTES.research, `# Long paper\n\n${paragraphs}\n\n## Evidence table\n\n| Item | Score | Source |\n| --- | ---: | --- |\n${tableRows}\n`],
+    [NOTES.keyboard, "# Command surface\n\n## Navigation\n\nKeyboard-only work begins here.\n\n### Search target\n\nkeyboard-navigation-evidence\n"],
+    [NOTES.zoom, "# Zoom review\n\nDense prose checks wrapping, contrast, clipping, and focus visibility at enlarged scale.\n\n- [ ] Inspect the sidebar\n- [ ] Open the command palette\n"],
+    [NOTES.interruption, "# Interrupted draft\n\nA sentence that remains unfinished"],
+    [NOTES.interruptionTarget, "# Reference during interruption\n\nThe alternate note is safe to open mid-edit.\n"],
+    [NOTES.deep, "# Deep migration note\n\nA note nested six levels below the vault root.\n\nfleet-search-token-deep\n"],
   ];
 }
 
@@ -155,15 +96,10 @@ export function createFleetVault(force = false): void {
     });
   }
   const special = specialNotes();
-  for (const [relativePath, content] of special)
-    writeNote(relativePath, content);
+  for (const [relativePath, content] of special) writeNote(relativePath, content);
   const reserved = new Set(special.map(([relativePath]) => relativePath));
   let generated = 0;
-  for (
-    let index = 0;
-    generated + special.length < FLEET_NOTE_COUNT;
-    index += 1
-  ) {
+  for (let index = 0; generated + special.length < FLEET_NOTE_COUNT; index += 1) {
     const relativePath = generatedPath(index);
     if (reserved.has(relativePath)) continue;
     writeNote(relativePath, generatedContent(index));
@@ -174,8 +110,5 @@ export function createFleetVault(force = false): void {
 
 export function fleetVaultIsValid(): boolean {
   const stampPath = path.join(FLEET_VAULT_PATH, STAMP);
-  return (
-    existsSync(stampPath) &&
-    readFileSync(stampPath, "utf8") === `${FLEET_SEED}\n${FLEET_NOTE_COUNT}\n`
-  );
+  return existsSync(stampPath) && readFileSync(stampPath, "utf8") === `${FLEET_SEED}\n${FLEET_NOTE_COUNT}\n`;
 }

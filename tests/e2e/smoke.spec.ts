@@ -1156,6 +1156,7 @@ describe("skribeum shell", () => {
         { command: "file-tree.open", label: "Open file tree" },
         { command: "note.create", label: "Create new note" },
         { command: "note.save", label: "Save note" },
+        { command: "link.copy-note", label: "Copy link to note" },
         { command: "find.open", label: "Find in note" },
         { command: "navigation.back", label: "Navigate back" },
         { command: "navigation.forward", label: "Navigate forward" },

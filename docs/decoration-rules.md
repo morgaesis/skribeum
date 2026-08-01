@@ -67,6 +67,32 @@ The alternatives have these tradeoffs:
 | Source-backed line decorations with atomic hidden ranges | Browser hit testing maps directly to parent-editor source, while atomic syntax remains keyboard-safe when hidden. | One parent selection chooses one composite or nested region. | Used for callouts because it preserves direct editing and a single reveal authority. |
 | Per-block editing mode | Source positions exist only after an explicit mode transition. | Each block needs additional persistent interaction state and exit behavior. | Rejected because it adds a second editing state and makes ordinary cursor movement insufficient. |
 
+Motion uses the theme tokens `--skr-motion-duration` and
+`--skr-motion-easing`. The duration is `49ms`, below the `50ms` editing
+latency ceiling, and the easing is `linear`. The shared
+`--skr-motion-distance` token limits directional movement to `0.25rem`, the
+smallest spacing step in the theme.
+
+Heading marker geometry changes instantly. Entering the line moves the marker
+in from the inline leading edge while raising its opacity; leaving reverses
+both properties. Links, embeds and callouts use the same duration and easing
+for source and rendered entry states. Source enters from the leading edge,
+while the rendered state enters from the trailing edge, which makes expansion
+and collapse read as opposite directions of one swap.
+
+Motion state follows the one active reveal region. Link marks change state
+when that link owns the region. Embed source receives a temporary mark while
+its atomic replacement is absent. Source-backed callout line decorations stay
+mounted while a state mark moves the visible text on every line in the
+composite region. Nested links do not receive independent source motion while
+their owning callout is active.
+
+Motion changes only opacity and transform. It does not animate width, height,
+padding, margin, font metrics or other layout properties, so the animation
+cannot move surrounding text. Under `prefers-reduced-motion: reduce`, the
+duration and distance tokens resolve to zero and every transition or animation
+becomes instant.
+
 The Context column restricts a row: `parent=` requires one of the listed
 direct parents, `notParent=` excludes them, `ancestor=` requires an
 enclosing node, `withSibling=`/`withoutSibling=` condition on a sibling

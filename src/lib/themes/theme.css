@@ -53,6 +53,9 @@
     ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, "JetBrains Mono",
     "Noto Sans Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
   --skr-gutter: clamp(1.5rem, 4vw, 3rem);
+  --skr-motion-duration: 49ms;
+  --skr-motion-easing: linear;
+  --skr-motion-distance: 0.25rem;
 }
 
 :root[data-theme="dark"] {

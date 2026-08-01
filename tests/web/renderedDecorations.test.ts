@@ -190,6 +190,96 @@ describe("rendered decoration DOM", () => {
     expect(view.state.doc.toString()).toBe("- [x] task\n\noutside");
   });
 
+  it("keeps heading marker geometry stable while cursor visibility changes", async () => {
+    const source = "# Heading\n\nfollowing line";
+    const view = mountedView(source, source.indexOf("following"));
+    const marker = () =>
+      view.dom.querySelector<HTMLElement>(".cm-skr-reveal-marker");
+    expect(marker()?.textContent).toBe("# ");
+    await vi.waitFor(() => {
+      expect(marker()?.classList.contains("cm-skr-reveal-marker-active")).toBe(
+        false,
+      );
+    });
+
+    view.dispatch({ selection: { anchor: source.indexOf("Heading") } });
+    await vi.waitFor(() => {
+      expect(marker()?.classList.contains("cm-skr-reveal-marker-active")).toBe(
+        true,
+      );
+    });
+
+    view.dispatch({ selection: { anchor: source.indexOf("following") } });
+    await vi.waitFor(() => {
+      expect(marker()?.classList.contains("cm-skr-reveal-marker-active")).toBe(
+        false,
+      );
+    });
+  });
+
+  it("labels both directions of link, embed, and callout source swaps", () => {
+    const source =
+      "[label](https://example.com)\n\n![[missing]]\n\n> [!note] Title\n> body\n\noutside";
+    const view = mountedView(source);
+    expect(
+      view.dom
+        .querySelector(".cm-skr-link")
+        ?.classList.contains("cm-skr-reveal-rendered"),
+    ).toBe(true);
+    expect(
+      view.dom
+        .querySelector(".cm-skr-embed")
+        ?.classList.contains("cm-skr-reveal-rendered"),
+    ).toBe(true);
+    expect(
+      view.dom
+        .querySelector(".cm-skr-rich-callout .cm-skr-reveal-motion")
+        ?.classList.contains("cm-skr-reveal-rendered"),
+    ).toBe(true);
+
+    view.dispatch({ selection: { anchor: source.indexOf("example.com") } });
+    expect(
+      view.dom
+        .querySelector(".cm-skr-link")
+        ?.classList.contains("cm-skr-reveal-source"),
+    ).toBe(true);
+
+    view.dispatch({ selection: { anchor: source.indexOf("missing") } });
+    expect(view.dom.querySelector(".cm-skr-embed")).toBeNull();
+    expect(
+      view.dom.querySelector(".cm-skr-reveal-embed-source"),
+    ).not.toBeNull();
+
+    view.dispatch({ selection: { anchor: source.indexOf("Title") } });
+    expect(
+      view.dom
+        .querySelector(".cm-skr-rich-callout .cm-skr-reveal-motion")
+        ?.classList.contains("cm-skr-reveal-source"),
+    ).toBe(true);
+    expect(
+      view.dom
+        .querySelector(".cm-skr-rich-callout")
+        ?.getAttribute("data-revealed"),
+    ).toBe("true");
+
+    view.dispatch({ selection: { anchor: source.indexOf("outside") } });
+    expect(
+      view.dom
+        .querySelector(".cm-skr-link")
+        ?.classList.contains("cm-skr-reveal-rendered"),
+    ).toBe(true);
+    expect(
+      view.dom
+        .querySelector(".cm-skr-embed")
+        ?.classList.contains("cm-skr-reveal-rendered"),
+    ).toBe(true);
+    expect(
+      view.dom
+        .querySelector(".cm-skr-rich-callout .cm-skr-reveal-motion")
+        ?.classList.contains("cm-skr-reveal-rendered"),
+    ).toBe(true);
+  });
+
   it("renders an aligned bordered table and reveals only the cursor row", () => {
     const source =
       "| Name | Score |\n| :--- | ---: |\n| Ada | 10 |\n| Grace | 9 |\n\noutside";

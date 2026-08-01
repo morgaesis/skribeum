@@ -783,7 +783,7 @@ class EmbedWidget extends WidgetType {
 
   override toDOM(view: EditorView): HTMLElement {
     const host = document.createElement("span");
-    host.className = "cm-skr-embed";
+    host.className = "cm-skr-embed cm-skr-reveal-motion cm-skr-reveal-rendered";
     host.setAttribute("role", "group");
     const [pathTarget = "", fragment = ""] = this.target.split("#", 2);
     const resolution = resolveWikilinkTarget(this.target, this.context);
@@ -1306,10 +1306,12 @@ type BuiltDecoration = {
 function markDecoration(
   presentation: Extract<Presentation, { present: "mark" }>,
   dynamic: Record<string, string>,
+  motionClass = "",
 ): Decoration {
   const attributes = { ...(presentation.attributes ?? {}), ...dynamic };
+  const className = `${presentation.class} ${motionClass}`.trim();
   const spec: Parameters<typeof Decoration.mark>[0] = {
-    class: presentation.class,
+    class: className,
     skr: `mark class=${JSON.stringify(presentation.class)}${serializeAttributes(attributes)}`,
   };
   if (Object.keys(attributes).length > 0) {
@@ -1453,6 +1455,12 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
       : options.activeReveal;
   const built: BuiltDecoration[] = [];
   const seenLines = new Set<string>();
+  const seenMotionRanges = new Set<string>();
+
+  const activeRevealOwns = (node: SyntaxNode): boolean =>
+    activeReveal !== null &&
+    node.from === activeReveal.from &&
+    node.to === activeReveal.to;
 
   const revealed = (rule: DecorationRule, node: SyntaxNode): boolean => {
     if (rule.reveal === "never" || activeReveal === null) {
@@ -1532,6 +1540,37 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                               : "middle",
                     }
                   : dynamic;
+              const nestedActiveLine =
+                rule.dynamic === "rich-callout" &&
+                activeReveal !== null &&
+                !revealedNow &&
+                activeReveal.from >= ref.from &&
+                activeReveal.to <= ref.to &&
+                line.from >= activeReveal.from &&
+                line.to <= activeReveal.to;
+              if (
+                rule.dynamic === "rich-callout" &&
+                line.to > line.from &&
+                !nestedActiveLine
+              ) {
+                const motionClass = `cm-skr-reveal-motion ${
+                  revealedNow
+                    ? "cm-skr-reveal-source"
+                    : "cm-skr-reveal-rendered"
+                }`;
+                const motionKey = `${line.from} ${line.to} ${motionClass}`;
+                if (!seenMotionRanges.has(motionKey)) {
+                  seenMotionRanges.add(motionKey);
+                  built.push({
+                    from: line.from,
+                    to: line.to,
+                    decoration: Decoration.mark({
+                      class: motionClass,
+                      skr: `motion ${revealedNow ? "source" : "rendered"}=callout`,
+                    }),
+                  });
+                }
+              }
               const key = `${line.from} ${lineClass}${serializeAttributes(lineDynamic)}`;
               if (
                 line.length <= LONG_LINE_DECORATION_LIMIT &&
@@ -1559,6 +1598,22 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             continue;
           }
           if (doc.lineAt(ref.from).length > LONG_LINE_DECORATION_LIMIT) {
+            continue;
+          }
+          if (
+            revealedNow &&
+            presentation.present === "widget" &&
+            presentation.widget === "embed"
+          ) {
+            built.push({
+              from: ref.from,
+              to: ref.to,
+              decoration: Decoration.mark({
+                class:
+                  "cm-skr-reveal-motion cm-skr-reveal-source cm-skr-reveal-embed-source",
+                skr: "motion source=embed",
+              }),
+            });
             continue;
           }
           // A revealed rule emits nothing, so the source shows through. The
@@ -1635,10 +1690,19 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               });
             }
           } else {
+            const motionClass = ["Link", "Image", "Wikilink"].includes(
+              rule.node,
+            )
+              ? `cm-skr-reveal-motion ${
+                  activeRevealOwns(node)
+                    ? "cm-skr-reveal-source"
+                    : "cm-skr-reveal-rendered"
+                }`
+              : "";
             built.push({
               from: ref.from,
               to: ref.to,
-              decoration: markDecoration(presentation, dynamic),
+              decoration: markDecoration(presentation, dynamic, motionClass),
             });
           }
         }
@@ -1998,12 +2062,11 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-reveal-marker": {
     display: "inline-block",
     maxWidth: "0",
-    overflow: "hidden",
+    overflow: "visible",
     color: "var(--skr-text-muted)",
     opacity: "0",
     verticalAlign: "bottom",
     whiteSpace: "pre",
-    transition: "opacity 50ms linear",
   },
   ".cm-skr-reveal-marker-active": {
     maxWidth: "7ch",

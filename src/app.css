@@ -148,7 +148,67 @@ select {
   background: var(--skr-surface-subtle);
 }
 
+.cm-skr-reveal-marker {
+  display: inline-block;
+  opacity: 0;
+  transform: translateX(calc(-1 * var(--skr-motion-distance)));
+  transition:
+    opacity var(--skr-motion-duration) var(--skr-motion-easing),
+    transform var(--skr-motion-duration) var(--skr-motion-easing);
+}
+
+.cm-skr-reveal-marker-active {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.cm-skr-reveal-motion {
+  animation-duration: var(--skr-motion-duration);
+  animation-fill-mode: both;
+  animation-timing-function: var(--skr-motion-easing);
+  transition:
+    opacity var(--skr-motion-duration) var(--skr-motion-easing),
+    transform var(--skr-motion-duration) var(--skr-motion-easing);
+}
+
+.cm-skr-reveal-source {
+  animation-name: skr-reveal-source;
+}
+
+.cm-skr-reveal-rendered {
+  animation-name: skr-reveal-rendered;
+}
+
+@keyframes skr-reveal-source {
+  from {
+    opacity: 0.68;
+    transform: translateX(calc(-1 * var(--skr-motion-distance)));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes skr-reveal-rendered {
+  from {
+    opacity: 0.68;
+    transform: translateX(var(--skr-motion-distance));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --skr-motion-duration: 0ms;
+    --skr-motion-distance: 0px;
+  }
+
   *,
   *::before,
   *::after {

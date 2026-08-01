@@ -10,8 +10,34 @@ permissions:
   attestations: write
 
 jobs:
+  prepare:
+    name: release notes
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.release-notes.outputs.body }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build release notes
+        id: release-notes
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          python3 .github/scripts/release-notes.py \
+            --changelog CHANGELOG.md \
+            --tag "$GITHUB_REF_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output "$notes"
+          delimiter="release_notes_$(date +%s%N)"
+          {
+            echo "body<<$delimiter"
+            cat "$notes"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.name }}
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -113,12 +139,20 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Skribeum ${{ github.ref_name }}"
-          releaseBody: >-
-            Unsigned build artifacts. Binaries are not code-signed and not
-            notarized; verify the build provenance attestations instead.
-          releaseDraft: false
+          releaseBody: ${{ needs.prepare.outputs.body }}
+          releaseDraft: true
           prerelease: true
+          uploadUpdaterJson: false
+          uploadUpdaterSignatures: false
           args: ${{ matrix.args }}
+
+      - name: Preserve updater signatures for release finalization
+        uses: actions/upload-artifact@v7
+        with:
+          name: updater-signatures-${{ matrix.name }}
+          path: target/**/bundle/**/*.sig
+          if-no-files-found: error
+          retention-days: 1
 
       # Attest the bundle files by glob rather than the action's artifactPaths
       # output: that output also lists directories (macOS .app), which cannot
@@ -137,6 +171,7 @@ jobs:
 
   sbom:
     name: sbom
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -148,3 +183,61 @@ jobs:
           path: .
           format: spdx-json
           artifact-name: skribeum-sbom.spdx.json
+
+  publish:
+    name: publish release
+    needs: [build, sbom]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: updater-signatures-*
+          path: ${{ runner.temp }}/updater-signatures
+          merge-multiple: true
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - name: Assemble and publish release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          release_directory="$(mktemp -d)"
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "$release_directory" \
+            --pattern '*'
+          python3 .github/scripts/bundle-signatures.py \
+            --directory "$RUNNER_TEMP/updater-signatures" \
+            --output "$release_directory/updater-signatures.json"
+          cd "$release_directory"
+          mapfile -d '' assets < <(
+            find . -maxdepth 1 -type f \
+              ! -name CHECKSUM \
+              ! -name CHECKSUM.sig \
+              -printf '%f\0' | sort -z
+          )
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "no release assets found; refusing to publish" >&2
+            exit 1
+          fi
+          sha256sum "${assets[@]}" > CHECKSUM
+          bunx tauri signer sign CHECKSUM
+          # Tauri emits a base64-encoded Minisign document for updater
+          # manifests. Release the decoded document for the Minisign CLI.
+          base64 --decode CHECKSUM.sig > CHECKSUM.minisig
+          mv CHECKSUM.minisig CHECKSUM.sig
+          gh release upload "$GITHUB_REF_NAME" \
+            updater-signatures.json CHECKSUM CHECKSUM.sig \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          gh release edit "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --prerelease

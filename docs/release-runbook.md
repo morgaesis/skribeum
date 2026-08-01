@@ -7,22 +7,49 @@ build never reaches anyone automatically.
 ## Cutting a release
 
 1. Bump the version in `Cargo.toml` and `src-tauri/tauri.conf.json`, commit,
-   and push.
+   move the `Unreleased` changelog entries into a
+   `## [X.Y.Z] - YYYY-MM-DD` section, and push. A tag without a matching,
+   non-empty changelog section fails before a release is created.
 2. Create a signed tag `vX.Y.Z` and push it. The release workflow builds
    Windows, macOS and Linux artifacts for both architectures, signs each
-   with the updater key, attaches build provenance and an SBOM, and
-   publishes the release as a prerelease.
-3. Confirm the artifact list on the release page and that each installer
-   has a matching `.sig` file.
+   with the updater key, records build provenance attestations and an SBOM in
+   the workflow run, and publishes the release as a prerelease. The release
+   body contains the matching changelog section followed by download
+   verification instructions.
+3. Confirm that the release contains `CHECKSUM`, `CHECKSUM.sig`, and
+   `updater-signatures.json`, with no per-artifact `.sig` assets.
+
+## Verifying a download
+
+Download `CHECKSUM`, `CHECKSUM.sig`, and the artifact to the same directory.
+Replace `vX.Y.Z` with the release tag, then obtain the updater public key from
+that tag, verify the checksum manifest, and check the downloaded artifact:
+
+```sh
+curl -fsSLo tauri.conf.json \
+  https://raw.githubusercontent.com/morgaesis/skribeum/vX.Y.Z/src-tauri/tauri.conf.json
+python3 -c 'import base64,json; print(base64.b64decode(json.load(open("tauri.conf.json"))["plugins"]["updater"]["pubkey"]).decode(), end="")' \
+  > skribeum.pub
+minisign -Vm CHECKSUM -x CHECKSUM.sig -p skribeum.pub
+sha256sum --ignore-missing --check CHECKSUM
+```
+
+The binaries are not code-signed or notarized. The signed checksum manifest
+authenticates downloads with the updater key. Build provenance is an
+independent verification path:
+
+```sh
+gh attestation verify ./ARTIFACT --repo morgaesis/skribeum
+```
 
 ## Promoting an update
 
 Run the Promote workflow with the released version and a channel. It
 downloads that release's artifacts, assembles the manifest from the
-detached signatures, and uploads `latest.json` (stable) or `beta.json`
-(beta) to the fixed `updater` release, which is what installed
-applications poll. A platform whose artifact or signature is missing is
-omitted from the manifest rather than published broken.
+signature strings in `updater-signatures.json`, and uploads `latest.json`
+(stable) or `beta.json` (beta) to the fixed `updater` release, which is what
+installed applications poll. A platform whose artifact or signature is
+missing is omitted from the manifest rather than published broken.
 
 ## Rolling back
 

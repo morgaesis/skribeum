@@ -17,7 +17,6 @@ export const NOTES = {
   interruption: "Interruptions/Draft.md",
   interruptionTarget: "Interruptions/Reference.md",
   deep: "Archive/Imported/Department-07/Area-04/Project-03/Topic-02/Migration Deep Note 0199.md",
-  callouts: "Features/all-callout-types.md",
   rendering: "Features/rendering-surface.md",
   canvas: "demo.canvas",
 } as const;
@@ -73,7 +72,7 @@ Cursor parking area.
 *Italic phrase*, **strong phrase**, and ~~struck phrase~~.
 `,
     ],
-    [NOTES.callouts, `# All callout types\n\n${calloutTypes.map((type) => `> [!${type}] ${type[0]?.toUpperCase()}${type.slice(1)} title\n> Rendered ${type} body.`).join("\n\n")}\n`],
+    ...calloutTypes.map((type): [string, string] => [`Features/callout-${type}.md`, `# ${type[0]?.toUpperCase()}${type.slice(1)} callout\n\nCursor parking area.\n\n> [!${type}] ${type[0]?.toUpperCase()}${type.slice(1)} title\n> Rendered ${type} body.\n`]),
     [NOTES.daily, "# 2026-07-31\n\n## Morning\n\n- Review [[Daily/2026-07-30]]\n- Capture rapid links\n"],
     [NOTES.linkedDaily, "# 2026-07-30\n\nA linked journal entry.\n"],
     [NOTES.research, `# Long paper\n\n${paragraphs}\n\n## Evidence table\n\n| Item | Score | Source |\n| --- | ---: | --- |\n${tableRows}\n`],

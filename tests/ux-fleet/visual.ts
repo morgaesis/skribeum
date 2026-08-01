@@ -42,7 +42,7 @@ const definitions: Construct[] = [
     park: "Cursor parking area",
     selector: ".cm-skr-heading",
     minimum: 6,
-    expected: ["Rendered heading one", "Rendered heading six"],
+    expected: ["Rendered heading one", "RENDERED HEADING SIX"],
     raw: ["# Rendered heading one", "###### Rendered heading six"],
   },
   {
@@ -61,7 +61,7 @@ const definitions: Construct[] = [
     name: "Wikilinks",
     note: "Features/wikilinks.md",
     anchor: "return to the guided tour",
-    park: "Common forms",
+    park: "Wikilinks connect notes by name",
     selector: ".cm-skr-wikilink",
     expected: ["return to the guided tour"],
     raw: ["[[quickstart|return to the guided tour]]"],
@@ -71,7 +71,7 @@ const definitions: Construct[] = [
     name: "Embeds",
     note: "Features/embeds.md",
     anchor: "following source points",
-    park: "Whole-note embed",
+    park: "An embed references another note",
     selector: ".cm-skr-embed",
     expected: ["D-01: Preserve a clear window-side route"],
     raw: ["![[Examples/Work/decision-log]]"],
@@ -82,7 +82,7 @@ const definitions: Construct[] = [
     name: "Tags",
     note: "Features/tags.md",
     anchor: "project/cedar-room",
-    park: "Examples",
+    park: "Tags group notes by theme",
     selector: ".cm-skr-tag",
     expected: ["project/cedar-room"],
     raw: ["#project/cedar-room"],
@@ -91,12 +91,13 @@ const definitions: Construct[] = [
     (type): Construct => ({
       id: `callout-${type}`,
       name: `Callout: ${type}`,
-      note: NOTES.callouts,
+      note: `Features/callout-${type}.md`,
       anchor: `${type[0]?.toUpperCase()}${type.slice(1)} title`,
-      park: `Rendered ${type} body`,
-      selector: `.cm-skr-callout[data-callout="${type}"]`,
+      park: "Cursor parking area",
+      selector: `.cm-skr-rich-callout[data-callout="${type}"]`,
       expected: [`${type[0]?.toUpperCase()}${type.slice(1)} title`, `Rendered ${type} body`],
       raw: [`[!${type}]`],
+      openText: `${type[0]?.toUpperCase()}${type.slice(1)} callout`,
     }),
   ),
   {
@@ -104,7 +105,7 @@ const definitions: Construct[] = [
     name: "Tasks",
     note: "Features/tasks.md",
     anchor: "Compare the two table layouts",
-    park: "This week",
+    park: "Task lists keep actions",
     selector: ".cm-skr-task-checkbox",
     minimum: 2,
     expected: ["Compare the two table layouts"],
@@ -115,8 +116,9 @@ const definitions: Construct[] = [
     name: "GFM tables",
     note: "Features/tables.md",
     anchor: "Cedar Room",
-    park: "Room comparison",
-    selector: "table, .cm-skr-table",
+    park: "Tables are useful when each item",
+    selector: '.cm-skr-table-row[role="row"]',
+    minimum: 4,
     expected: ["Cedar Room", "Best fit for focused sessions"],
     raw: ["| Cedar Room | 18 | Yes | Yes | Best fit for focused sessions |"],
     mode: "table",
@@ -126,7 +128,7 @@ const definitions: Construct[] = [
     name: "Inline code",
     note: "Features/code-blocks.md",
     anchor: "Inline code works",
-    park: "Shell example",
+    park: "Fenced code blocks preserve",
     selector: ".cm-skr-inline-code",
     expected: ["displayTitle"],
     raw: ["`displayTitle`"],
@@ -136,7 +138,7 @@ const definitions: Construct[] = [
     name: "Fenced code",
     note: "Features/code-blocks.md",
     anchor: "type NoteSummary",
-    park: "TypeScript example",
+    park: "Fenced code blocks preserve",
     selector: ".cm-skr-code-block",
     minimum: 4,
     expected: ["type NoteSummary", "displayTitle"],
@@ -168,7 +170,7 @@ const definitions: Construct[] = [
     name: "Frontmatter properties",
     note: "Features/frontmatter.md",
     anchor: "Frontmatter stores",
-    park: "A restrained approach",
+    park: "Frontmatter stores structured properties",
     selector: '[aria-label="Note properties"]',
     expected: ["Frontmatter demonstration", "reference", "4"],
     raw: ["---", "title: Frontmatter demonstration"],
@@ -178,7 +180,6 @@ const definitions: Construct[] = [
 
 const noteTitles: Record<string, string> = {
   [NOTES.rendering]: "Rendered heading one",
-  [NOTES.callouts]: "All callout types",
   "Features/wikilinks.md": "Wikilinks",
   "Features/embeds.md": "Embeds",
   "Features/tags.md": "Tags",
@@ -281,6 +282,7 @@ export async function inspectConstruct(spec: Construct): Promise<VisualCheck[]> 
   }
   if (spec.mode !== "frontmatter") await locate(spec.anchor);
   await parkCursor(spec.park);
+  await browser.pause(100);
   if (spec.mode === "code") await $(spec.selector).moveTo();
   const result = await browser.execute((item) => {
     const elements = [...document.querySelectorAll<HTMLElement>(item.selector)];
@@ -293,7 +295,7 @@ export async function inspectConstruct(spec: Construct): Promise<VisualCheck[]> 
     if (item.mode === "code") special = colors.size >= 2;
     if (item.mode === "embed") special = rendered.includes("D-01: Preserve a clear window-side route");
     if (item.mode === "frontmatter") special = !(panel !== null && item.raw.some((source) => (editor?.innerText ?? "").includes(source)));
-    if (item.mode === "table") special = elements.some((element) => element.tagName === "TABLE" || element.getAttribute("role") === "table");
+    if (item.mode === "table") special = elements.some((element) => element.getAttribute("role") === "row" && element.querySelector('[role="columnheader"]') !== null);
     return {
       count: elements.length,
       rendered,
@@ -505,12 +507,12 @@ export async function captureMatrix(kind: "construct" | "persona", name: string)
   await setTheme("light");
 }
 
-export async function compareReference(id: string, _selector: string): Promise<VisualCheck> {
+export async function compareReference(id: string, selector: string): Promise<VisualCheck> {
   await browser.setWindowSize(wide.width, wide.height);
   await setTheme("light");
   const actual = path.join(screenshots, "pixels", `${id}.png`);
   mkdirSync(path.dirname(actual), { recursive: true });
-  await browser.saveScreenshot(actual);
+  await $(id === "canvas" ? selector : ".cm-editor").saveScreenshot(actual);
   return comparePixels(actual, path.join(references, `${id}.png`));
 }
 

@@ -193,14 +193,24 @@ async function humanReadingTour(flow: Flow, treeOnly = false): Promise<void> {
       }),
     scrollExpected: true,
     inspect: async () => {
-      const moved = await browser.execute(() => (document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop ?? 0) > 0);
+      const state = await browser.execute(() => ({
+        moved: (document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop ?? 0) > 0,
+        rawTable: [...document.querySelectorAll<HTMLElement>(".cm-line")].some((line) => /^\s*\|\s*Evidence \d+\s*\|/.test(line.innerText)),
+      }));
       return [
         {
           id: "long-note-scroll",
           construct: "Long note",
-          pass: moved,
+          pass: state.moved,
           expected: "later content becomes reachable",
-          actual: moved ? "later content reached" : "scroll did not move",
+          actual: state.moved ? "later content reached" : "scroll did not move",
+        },
+        {
+          id: "tables-long-note-markers",
+          construct: "GFM tables",
+          pass: !state.rawTable,
+          expected: "visible long-table rows without pipe syntax",
+          actual: state.rawTable ? "raw pipe syntax visible" : "pipe syntax hidden",
         },
       ];
     },
@@ -331,10 +341,10 @@ describe("persona-driven UX fleet", () => {
       await moveCursorAway();
       if (construct.id === "fenced-code") await $(construct.selector).moveTo();
       await visualRecord(flow, `Assert rendered ${construct.id}`, () => inspectConstruct(construct));
-      await captureMatrix("construct", construct.id);
       if (["headings", "inline-math", "canvas"].includes(construct.id)) {
         await visualRecord(flow, `Compare ${construct.id} with its pixel reference`, async () => [await compareReference(construct.id, construct.selector)]);
       }
+      await captureMatrix("construct", construct.id);
     }
 
     await flow.open("quickstart.md", "Quickstart");

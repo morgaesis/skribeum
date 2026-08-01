@@ -2395,11 +2395,12 @@ describe("skribeum shell", () => {
 
   it("cycles_and_sets_task_statuses_through_the_command_palette", async () => {
     await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
-    const checkbox = $(".cm-skr-task-checkbox");
+    const taskControl = $(".cm-skr-task-control");
+    const checkbox = taskControl.$(".cm-skr-task-checkbox");
     await checkbox.waitForExist({ timeout: 15000 });
     expect(await checkbox.getAttribute("aria-label")).toBe("Unchecked");
 
-    await checkbox.moveTo();
+    await taskControl.moveTo();
     await browser.execute(() => {
       const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
       if (host === null) return;
@@ -2413,7 +2414,7 @@ describe("skribeum shell", () => {
         }),
       );
     });
-    const listbox = $('[role="listbox"]');
+    const listbox = taskControl.$('[role="listbox"]');
     await listbox.waitForDisplayed({ timeout: 5000 });
     expect(await listbox.$$('[role="option"]').length).toBe(38);
 

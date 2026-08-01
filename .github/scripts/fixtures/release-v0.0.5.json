@@ -1,0 +1,34 @@
+{
+  "artifacts": [
+    "latest.json",
+    "Skribeum-0.0.5-1.aarch64.rpm",
+    "Skribeum-0.0.5-1.x86_64.rpm",
+    "Skribeum_0.0.5_aarch64.app.tar.gz",
+    "Skribeum_0.0.5_aarch64.AppImage",
+    "Skribeum_0.0.5_aarch64.dmg",
+    "Skribeum_0.0.5_amd64.AppImage",
+    "Skribeum_0.0.5_amd64.deb",
+    "Skribeum_0.0.5_arm64-setup.exe",
+    "Skribeum_0.0.5_arm64.deb",
+    "Skribeum_0.0.5_x64-setup.exe",
+    "Skribeum_0.0.5_x64.app.tar.gz",
+    "Skribeum_0.0.5_x64.dmg",
+    "Skribeum_0.0.5_x64_en-US.msi"
+  ],
+  "missing_platform": "windows-aarch64",
+  "repository": "morgaesis/skribeum",
+  "signatures": {
+    "Skribeum-0.0.5-1.aarch64.rpm": "fixture signature for aarch64 rpm",
+    "Skribeum-0.0.5-1.x86_64.rpm": "fixture signature for x86_64 rpm",
+    "Skribeum_0.0.5_aarch64.app.tar.gz": "fixture signature for darwin aarch64\nwith preserved newlines",
+    "Skribeum_0.0.5_aarch64.AppImage": "fixture signature for linux aarch64",
+    "Skribeum_0.0.5_amd64.AppImage": "fixture signature for linux x86_64",
+    "Skribeum_0.0.5_amd64.deb": "fixture signature for amd64 deb",
+    "Skribeum_0.0.5_arm64.deb": "fixture signature for arm64 deb",
+    "Skribeum_0.0.5_x64-setup.exe": "fixture signature for windows x86_64\nwith preserved newlines",
+    "Skribeum_0.0.5_x64.app.tar.gz": "fixture signature for darwin x86_64",
+    "Skribeum_0.0.5_x64_en-US.msi": "fixture signature for x64 msi"
+  },
+  "tag": "v0.0.5",
+  "version": "0.0.5"
+}

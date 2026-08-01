@@ -14,6 +14,16 @@ env:
     libayatana-appindicator3-dev libssl-dev patchelf
 
 jobs:
+  release-metadata:
+    name: release metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: python3 .github/scripts/test-build-manifest.py
+
+      - run: python3 .github/scripts/test-release-notes.py
+
   rust:
     name: rust (${{ matrix.os }})
     strategy:

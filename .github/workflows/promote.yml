@@ -36,10 +36,11 @@ jobs:
           work="$(mktemp -d)"
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$work" --pattern '*'
           # Each platform key maps to the artifact the updater installs and
-          # its detached signature, which tauri-action writes beside it.
+          # its Tauri signature from the release's consolidated signature map.
           python3 .github/scripts/build-manifest.py \
             --version "$VERSION" \
             --directory "$work" \
+            --signatures "$work/updater-signatures.json" \
             --repository "$GITHUB_REPOSITORY" \
             --tag "$tag" \
             --output "$work/manifest.json"

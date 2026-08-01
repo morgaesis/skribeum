@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Release pages use the matching version section from this changelog, publish
+  one signed checksum manifest and one updater signature map, and refresh the
+  browser demo after publication.
 - Settings use one searchable scrolling pane with header jump navigation,
   compact palette cards, and live previews of each selected palette's text,
   link, code, rule, accent, and task treatments.

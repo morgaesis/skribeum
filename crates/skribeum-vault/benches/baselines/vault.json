@@ -6,30 +6,19 @@
   "benchmarks": {
     "vault/hash": {
       "samples_ns": [
-        3141,
-        3171,
-        3122,
-        3162.7956108377375,
-        3163.6783723522854
+        488.16
       ]
     },
     "vault/index": {
       "samples_ns": [
-        73716,
-        73104,
-        70692,
-        76631.56187658495,
-        78060.31211469535
+        15993.0
       ]
     },
     "vault/reconcile": {
       "samples_ns": [
-        5242,
-        4924,
-        5352,
-        4852.792274052478,
-        5312.420819716775
+        1690.1
       ]
     }
-  }
+  },
+  "note": "Samples come from continuous integration runs on the runner class named above. Locally recorded samples must never seed this file: this machine class differs from the runner class by several times, so a cross-machine comparison measures the host rather than the change."
 }

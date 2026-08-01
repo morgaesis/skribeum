@@ -23,8 +23,11 @@ HEADING = re.compile(r"^## \[([^]]+)](?:\s+-\s+.+)?\s*$")
 MARKDOWN_LINK = re.compile(r"\[[^]]+]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
 URL = re.compile(r"https?://[^\s)>]+")
 FEEL_HEADING = "## What you'll actually feel"
+# The emoji and the bold lead may arrive in either order; models split
+# roughly evenly between the two and both read fine.
 EMOJI_BOLD_LEAD_BULLET = re.compile(
-    r"^\s*-\s+(?P<icon>\S+)\s+\*\*(?P<lead>.+?)\*\*", re.MULTILINE
+    r"^\s*-\s+(?:(?P<icon>\S+)\s+)?\*\*(?P<lead>.+?)\*\*(?:\s+(?P<trailing_icon>\S+))?",
+    re.MULTILINE,
 )
 EMOJI = re.compile(r"[\u2600-\u27bf\U0001f000-\U0001faff]")
 WORD = re.compile(r"[a-z0-9]+")
@@ -229,7 +232,10 @@ def validate_generated_body(
     if not leads:
         errors.append("the introduction has no emoji-led bold bullets")
     elif len(leads) != len(intro_bullets) or any(
-        not EMOJI.search(match.group("icon")) for match in bullet_matches
+        not EMOJI.search(
+            (match.group("icon") or "") + (match.group("trailing_icon") or "")
+        )
+        for match in bullet_matches
     ):
         errors.append("every introduction bullet must have an emoji-led bold phrase")
     entry_words = [normalized_words(entry) for entry in changelog_entries(section)]
@@ -257,7 +263,7 @@ Voice contract:
 - Lead with felt experience, not implementation.
 - Start with one bold TL;DR line in the form **TL;DR: sentence.** and an emoji.
 - Follow with `## What you'll actually feel` and a short list of emoji-led bullets.
-- Start every bullet with a bold lead phrase containing concrete words from one changelog entry.
+- Format every bullet exactly as: - <emoji> **bold lead phrase.** plain continuation. The bold lead must contain concrete words from one changelog entry.
 - Use emojis liberally. Be playful and lightly snarky, but never at a user's expense.
 - Give the prose character without inventing facts.
 - Make no claim that is not directly traceable to a supplied changelog entry.

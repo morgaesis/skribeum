@@ -1,3 +1,4 @@
+// biome-ignore-all format: Keep the exploratory harness within its line budget.
 import path from "node:path";
 import { config as e2eConfig } from "../e2e/wdio.conf";
 import { createFleetVault, FLEET_VAULT_PATH } from "./vault";

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://skribeum.example/schemas/ux-fleet-trace-v1.json",
+  "$id": "https://skribeum.example/schemas/ux-fleet-trace-v2.json",
   "title": "Skribeum UX fleet interaction trace",
   "type": "object",
   "additionalProperties": false,
@@ -16,7 +16,7 @@
     "error"
   ],
   "properties": {
-    "v": { "const": 1 },
+    "v": { "const": 2 },
     "session": { "type": "string" },
     "persona": { "type": "string" },
     "seq": { "type": "integer", "minimum": 1 },
@@ -33,6 +33,7 @@
         "scroll",
         "layoutShift",
         "consoleErrors",
+        "visual",
         "custom"
       ],
       "properties": {
@@ -80,12 +81,27 @@
           "required": ["score", "method"],
           "properties": {
             "score": { "type": "number", "minimum": 0 },
-            "method": { "enum": ["performance-observer", "unsupported"] }
+            "method": { "enum": ["performance-observer", "geometry"] }
           }
         },
         "consoleErrors": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "visual": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "construct", "pass", "expected", "actual"],
+            "properties": {
+              "id": { "type": "string" },
+              "construct": { "type": "string" },
+              "pass": { "type": "boolean" },
+              "expected": { "type": "string" },
+              "actual": { "type": "string" }
+            }
+          }
         },
         "custom": {
           "type": "object",

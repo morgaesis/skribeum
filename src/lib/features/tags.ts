@@ -145,6 +145,7 @@ export function filteredTagCompletions(
   recentTags: readonly string[],
   query: string,
 ): TagCatalogEntry[] {
+  const normalizedQuery = normalizedTag(query).toLocaleLowerCase();
   const recentRanks = new Map(
     recentTags.map((tag, index) => [
       normalizedTag(tag).toLocaleLowerCase(),
@@ -165,7 +166,11 @@ export function filteredTagCompletions(
       };
     })
     .filter((ranked) => {
-      if (ranked.match === null || seen.has(ranked.normalized)) {
+      if (
+        ranked.match === null ||
+        ranked.normalized === normalizedQuery ||
+        seen.has(ranked.normalized)
+      ) {
         return false;
       }
       seen.add(ranked.normalized);

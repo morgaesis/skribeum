@@ -19,6 +19,8 @@ import {
   REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
   TABLE_GEOMETRY_NOTE_CONTENT,
+  TAG_COMPLETION_FINAL_LINE,
+  TAG_COMPLETION_MIDDLE_LINE,
   TAG_COMPLETION_TARGET_NOTE_CONTENT,
   TAG_COMPLETION_TARGET_NOTE_NAME,
   TAG_DELETE_NOTE_NAME,
@@ -255,14 +257,38 @@ async function prepareTagCompletionTarget(): Promise<void> {
   );
   await openNoteFromTree(TAG_COMPLETION_TARGET_NOTE_NAME);
   await browser.waitUntil(
-    async () =>
-      (await editorText()).includes(TAG_COMPLETION_TARGET_NOTE_CONTENT),
+    async () => {
+      const text = await editorText();
+      return (
+        text.includes(TAG_COMPLETION_MIDDLE_LINE) &&
+        text.includes(TAG_COMPLETION_FINAL_LINE)
+      );
+    },
     { timeout: 15000, timeoutMsg: "tag completion target did not open" },
   );
 }
 
-async function typeTagCompletionQuery(query = "ced"): Promise<void> {
-  await placeCursorAtLineEnd(TAG_COMPLETION_TARGET_NOTE_CONTENT);
+type TagCompletionPosition = "middle" | "final";
+
+function tagCompletionResult(
+  position: TagCompletionPosition,
+  replacement: string,
+): string {
+  if (position === "final") {
+    return `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n${replacement}`;
+  }
+  return `${TAG_COMPLETION_MIDDLE_LINE}\n${replacement}\n${TAG_COMPLETION_FINAL_LINE}`;
+}
+
+async function typeTagCompletionQuery(
+  position: TagCompletionPosition = "final",
+  query = "ced",
+): Promise<void> {
+  await placeCursorAtLineEnd(
+    position === "final"
+      ? TAG_COMPLETION_FINAL_LINE
+      : TAG_COMPLETION_MIDDLE_LINE,
+  );
   await browser.keys(Key.Enter);
   await $(".cm-content").addValue("#");
   await $(".cm-content").addValue(query);
@@ -270,6 +296,8 @@ async function typeTagCompletionQuery(query = "ced"): Promise<void> {
     async () => (await $$(".cm-skr-tag-menu [role=option]")).length > 0,
     { timeout: 10000, timeoutMsg: "tag completion menu did not open" },
   );
+  // Let autosave refresh the catalog while the completion query is active.
+  await browser.pause(800);
 }
 
 async function saveAndExpectTagCompletionTarget(expected: string) {
@@ -279,6 +307,12 @@ async function saveAndExpectTagCompletionTarget(expected: string) {
 
 async function editorText(): Promise<string> {
   return $(".cm-content").getText();
+}
+
+async function editorDocumentText(): Promise<string> {
+  return browser.execute(
+    () => document.querySelector<HTMLElement>(".cm-content")?.innerText ?? "",
+  );
 }
 
 /** Places the browser selection at the end of the editor line with `text`. */
@@ -1495,48 +1529,66 @@ describe("skribeum shell", () => {
   });
 
   it("accepts_tag_completion_with_enter_and_control_enter", async () => {
-    for (const chord of [[Key.Enter], [Key.Ctrl, Key.Enter]]) {
-      await prepareTagCompletionTarget();
-      await typeTagCompletionQuery();
-      expect(
-        await $$(".cm-skr-tag-menu [role=option]").map((item) =>
-          item.getText(),
-        ),
-      ).toEqual(["#project/cedar-room", "#context/outdoors"]);
+    for (const position of ["middle", "final"] as const) {
+      for (const chord of [[Key.Enter], [Key.Ctrl, Key.Enter]]) {
+        await prepareTagCompletionTarget();
+        await typeTagCompletionQuery(position);
+        expect(
+          await $$(".cm-skr-tag-menu [role=option]").map((item) =>
+            item.getText(),
+          ),
+        ).toEqual(["#project/cedar-room", "#context/outdoors"]);
 
-      await browser.keys(chord);
-      await $(".cm-skr-tag-menu").waitForExist({
-        reverse: true,
-        timeout: 3000,
-      });
-      await browser.waitUntil(
-        async () => (await editorText()).includes("#project/cedar-room"),
-        { timeout: 3000 },
-      );
-      expect(await editorText()).not.toContain("#ced");
-      await saveAndExpectTagCompletionTarget(
-        `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n#project/cedar-room`,
-      );
+        await browser.keys(chord);
+        await $(".cm-skr-tag-menu").waitForExist({
+          reverse: true,
+          timeout: 3000,
+        });
+        const expected = tagCompletionResult(position, "#project/cedar-room");
+        expect(await editorDocumentText()).toBe(expected);
+        await saveAndExpectTagCompletionTarget(expected);
+      }
     }
   });
 
-  it("inserts_the_arrow_selected_tag_and_ranks_it_as_recent", async () => {
+  it("inserts_the_arrow_selected_tag_mid_document_and_on_the_final_line", async () => {
+    for (const position of ["middle", "final"] as const) {
+      await prepareTagCompletionTarget();
+      await typeTagCompletionQuery(position);
+      await browser.keys(Key.ArrowDown);
+      expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
+        "#context/outdoors",
+      );
+      await browser.keys(Key.Enter);
+      const downExpected = tagCompletionResult(position, "#context/outdoors");
+      expect(await editorDocumentText()).toBe(downExpected);
+      await saveAndExpectTagCompletionTarget(downExpected);
+
+      await prepareTagCompletionTarget();
+      await typeTagCompletionQuery(position);
+      await browser.keys(Key.ArrowDown);
+      expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
+        "#context/outdoors",
+      );
+      await browser.keys(Key.ArrowUp);
+      expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
+        "#project/cedar-room",
+      );
+      await browser.keys(Key.Enter);
+      const upExpected = tagCompletionResult(position, "#project/cedar-room");
+      expect(await editorDocumentText()).toBe(upExpected);
+      await saveAndExpectTagCompletionTarget(upExpected);
+    }
+  });
+
+  it("ranks_an_inserted_tag_as_recent", async () => {
     await prepareTagCompletionTarget();
     await typeTagCompletionQuery();
     await browser.keys(Key.ArrowDown);
-    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
-      "#context/outdoors",
-    );
     await browser.keys(Key.Enter);
-    await browser.waitUntil(
-      async () => (await editorText()).includes("#context/outdoors"),
-      { timeout: 3000 },
-    );
-    expect(await editorText()).not.toContain("#ced");
-    await saveAndExpectTagCompletionTarget(
-      `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n#context/outdoors`,
-    );
-
+    const expected = tagCompletionResult("final", "#context/outdoors");
+    expect(await editorDocumentText()).toBe(expected);
+    await saveAndExpectTagCompletionTarget(expected);
     await placeCursorAtLineEnd("#context/outdoors");
     await browser.keys(Key.Enter);
     await $(".cm-content").addValue("#");
@@ -1556,17 +1608,18 @@ describe("skribeum shell", () => {
   });
 
   it("dismisses_tag_completion_without_leaving_query_text", async () => {
-    await prepareTagCompletionTarget();
-    await typeTagCompletionQuery();
-    await browser.keys(Key.Escape);
-    await browser.waitUntil(
-      async () => !(await $(".cm-skr-tag-menu").isExisting()),
-      { timeout: 3000 },
-    );
-    expect(await editorText()).not.toContain("#ced");
-    await saveAndExpectTagCompletionTarget(
-      `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n`,
-    );
+    for (const position of ["middle", "final"] as const) {
+      await prepareTagCompletionTarget();
+      await typeTagCompletionQuery(position);
+      await browser.keys(Key.Escape);
+      await browser.waitUntil(
+        async () => !(await $(".cm-skr-tag-menu").isExisting()),
+        { timeout: 3000 },
+      );
+      const expected = tagCompletionResult(position, "");
+      expect(await editorDocumentText()).not.toContain("#ced");
+      await saveAndExpectTagCompletionTarget(expected);
+    }
   });
 
   it("refreshes_tag_completion_after_saving_a_new_tag", async () => {

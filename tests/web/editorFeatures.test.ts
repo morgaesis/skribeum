@@ -296,6 +296,16 @@ describe("tag affordances", () => {
       "aa",
     );
     expect(fuzzyFirst.map((item) => item.tag)).toEqual(["aardvark", "alpha"]);
+    expect(
+      filteredTagCompletions(
+        [
+          { tag: "ced", noteCount: 1, occurrenceCount: 1 },
+          { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 1 },
+        ],
+        [],
+        "ced",
+      ).map((item) => item.tag),
+    ).toEqual(["project/cedar-room"]);
   });
 
   it("filters while typing and exposes a keyboard-operated listbox", () => {
@@ -344,6 +354,43 @@ describe("tag affordances", () => {
     expect(tagCompletionOpen(view.state)).toBe(false);
     expect(rememberedTags).toEqual([tag]);
     expect(followLinkCalls).toBe(0);
+  });
+
+  it("ignores the live query when the catalog refreshes before navigation", () => {
+    tagCatalog = [
+      { tag: "project/cedar-room", noteCount: 2, occurrenceCount: 2 },
+      { tag: "context/outdoors", noteCount: 1, occurrenceCount: 1 },
+    ];
+    const view = makeView("", 0);
+    typeText(view, "#ced");
+
+    tagCatalog = [
+      { tag: "ced", noteCount: 1, occurrenceCount: 1 },
+      ...tagCatalog,
+    ];
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        code: "ArrowDown",
+        keyCode: 40,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(view.dom.querySelector('[aria-selected="true"]')?.textContent).toBe(
+      "#context/outdoors",
+    );
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(view.state.doc.toString()).toBe("#context/outdoors");
   });
 
   it("leaves Enter to normal editing when no completion matches", () => {

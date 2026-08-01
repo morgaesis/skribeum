@@ -229,6 +229,12 @@ def validate_generated_body(
     bullet_matches = list(EMOJI_BOLD_LEAD_BULLET.finditer(intro))
     leads = [match.group("lead") for match in bullet_matches]
     intro_bullets = [line for line in intro.splitlines() if line.startswith("- ")]
+    if len(intro_bullets) > 8:
+        errors.append("the introduction has more than eight bullets")
+    for line in intro_bullets:
+        if len(line) > 220:
+            errors.append("an introduction bullet runs past one line")
+            break
     if not leads:
         errors.append("the introduction has no emoji-led bold bullets")
     elif len(leads) != len(intro_bullets) or any(
@@ -261,9 +267,17 @@ def generation_prompt(
 Voice contract:
 - Write for a human deciding whether to update.
 - Lead with felt experience, not implementation.
+- Translate, never restate: no bullet may copy a changelog sentence or its
+  vocabulary wholesale. Say what the user notices, in your own words, the way
+  "tables act like tables" translates a sentence about shared column geometry.
+- Choose the five to eight changes a user would actually feel and write one
+  single-line bullet for each; leave the rest to the changelog block. Fewer,
+  sharper bullets beat complete coverage.
 - Start with one bold TL;DR line in the form **TL;DR: sentence.** and an emoji.
-- Follow with `## What you'll actually feel` and a short list of emoji-led bullets.
-- Format every bullet exactly as: - <emoji> **bold lead phrase.** plain continuation. The bold lead must contain concrete words from one changelog entry.
+- Follow with `## What you'll actually feel` and the bullets.
+- Format every bullet exactly as: - <emoji> **short bold lead.** one plain
+  continuation sentence. The bold lead must share at least one concrete word
+  with the changelog entry it translates.
 - Use emojis liberally. Be playful and lightly snarky, but never at a user's expense.
 - Give the prose character without inventing facts.
 - Make no claim that is not directly traceable to a supplied changelog entry.
@@ -291,7 +305,10 @@ that is not grounded in a specific changelog entry as a fabrication. Playful
 phrasing may add tone, but it may not add behavior, platforms, features,
 performance, compatibility, or user outcomes absent from the changelog.
 The voice is good only when it is human, felt-experience-led, playful, and
-lightly snarky without targeting the user. Answer strict JSON with exactly this
+lightly snarky without targeting the user. The voice is flat when any bullet
+reuses eight or more consecutive words from a changelog entry, or when the
+bullets read as the changelog with emojis attached rather than a translation
+into what a user notices. Answer strict JSON with exactly this
 schema and no Markdown:
 {{"traceable": bool, "fabrications": [string], "voice": "flat"|"good", "verdict": "pass"|"fail"}}
 A pass requires traceable true, an empty fabrications list, voice good, and

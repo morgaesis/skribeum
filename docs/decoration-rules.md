@@ -70,21 +70,22 @@ The alternatives have these tradeoffs:
 Motion uses the theme tokens `--skr-motion-duration` and
 `--skr-motion-easing`. The duration is `49ms`, below the `50ms` editing
 latency ceiling, and the easing is `linear`. The shared
-`--skr-motion-distance` token limits directional movement to `0.125rem`.
+`--skr-motion-distance` token limits directional movement to `0.25rem`, the
+smallest spacing step in the theme.
 
-Heading markers retain their editable inline measure while hidden. Entering
-the line moves the marker in from the inline leading edge while raising its
-opacity; leaving reverses both properties. Links, embeds and callouts use the
-same duration and easing for source and rendered entry states. Source enters
-from the leading edge, while the rendered state enters from the trailing edge,
-which makes expansion and collapse read as opposite directions of one swap.
+Heading marker geometry changes instantly. Entering the line moves the marker
+in from the inline leading edge while raising its opacity; leaving reverses
+both properties. Links, embeds and callouts use the same duration and easing
+for source and rendered entry states. Source enters from the leading edge,
+while the rendered state enters from the trailing edge, which makes expansion
+and collapse read as opposite directions of one swap.
 
 Motion state follows the one active reveal region. Link marks change state
 when that link owns the region. Embed source receives a temporary mark while
 its atomic replacement is absent. Source-backed callout line decorations stay
-mounted and change state together, including every line in the composite
-region. Nested links do not receive independent source motion while their
-owning callout is active.
+mounted while a state mark moves the visible text on every line in the
+composite region. Nested links do not receive independent source motion while
+their owning callout is active.
 
 Motion changes only opacity and transform. It does not animate width, height,
 padding, margin, font metrics or other layout properties, so the animation

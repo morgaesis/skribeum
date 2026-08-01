@@ -233,7 +233,7 @@ describe("rendered decoration DOM", () => {
     ).toBe(true);
     expect(
       view.dom
-        .querySelector(".cm-skr-rich-callout")
+        .querySelector(".cm-skr-rich-callout .cm-skr-reveal-motion")
         ?.classList.contains("cm-skr-reveal-rendered"),
     ).toBe(true);
 
@@ -253,7 +253,7 @@ describe("rendered decoration DOM", () => {
     view.dispatch({ selection: { anchor: source.indexOf("Title") } });
     expect(
       view.dom
-        .querySelector(".cm-skr-rich-callout")
+        .querySelector(".cm-skr-rich-callout .cm-skr-reveal-motion")
         ?.classList.contains("cm-skr-reveal-source"),
     ).toBe(true);
     expect(
@@ -265,12 +265,17 @@ describe("rendered decoration DOM", () => {
     view.dispatch({ selection: { anchor: source.indexOf("outside") } });
     expect(
       view.dom
+        .querySelector(".cm-skr-link")
+        ?.classList.contains("cm-skr-reveal-rendered"),
+    ).toBe(true);
+    expect(
+      view.dom
         .querySelector(".cm-skr-embed")
         ?.classList.contains("cm-skr-reveal-rendered"),
     ).toBe(true);
     expect(
       view.dom
-        .querySelector(".cm-skr-rich-callout")
+        .querySelector(".cm-skr-rich-callout .cm-skr-reveal-motion")
         ?.classList.contains("cm-skr-reveal-rendered"),
     ).toBe(true);
   });

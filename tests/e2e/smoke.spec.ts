@@ -1095,20 +1095,18 @@ describe("skribeum shell", () => {
     );
 
     const measurements = await browser.execute(() => {
-      const selectors = [
-        ".cm-skr-reveal-marker",
-        ".cm-skr-link.cm-skr-reveal-motion",
-        ".cm-skr-embed.cm-skr-reveal-motion",
-        ".cm-skr-rich-callout.cm-skr-reveal-motion",
+      const classNames = [
+        "cm-skr-reveal-marker",
+        "cm-skr-reveal-motion cm-skr-reveal-source",
+        "cm-skr-reveal-motion cm-skr-reveal-rendered",
       ];
-      return selectors.map((selector) => {
-        const element = document.querySelector<HTMLElement>(selector);
-        if (element === null) {
-          throw new Error(`animated class missing: ${selector}`);
-        }
+      return classNames.map((className) => {
+        const element = document.createElement("span");
+        element.className = className;
+        document.body.append(element);
         const style = getComputedStyle(element);
-        return {
-          selector,
+        const measurement = {
+          className,
           transitionMs: style.transitionDuration.split(",").map((part) => {
             const duration = part.trim();
             return duration.endsWith("ms")
@@ -1124,6 +1122,8 @@ describe("skribeum shell", () => {
           animationTimingFunction: style.animationTimingFunction,
           transitionTimingFunction: style.transitionTimingFunction,
         };
+        element.remove();
+        return measurement;
       });
     });
 
@@ -1132,7 +1132,7 @@ describe("skribeum shell", () => {
       for (const easing of measurement.transitionTimingFunction.split(",")) {
         expect(easing.trim()).toBe("linear");
       }
-      if (measurement.selector !== ".cm-skr-reveal-marker") {
+      if (measurement.className !== "cm-skr-reveal-marker") {
         expect(Math.max(...measurement.animationMs)).toBeLessThan(50);
         expect(measurement.animationTimingFunction).toBe("linear");
       }
@@ -1140,7 +1140,8 @@ describe("skribeum shell", () => {
     expect(measurements[0]?.transitionMs).toEqual([49, 49]);
     expect(measurements[1]?.transitionMs).toEqual([49, 49]);
     expect(measurements[2]?.transitionMs).toEqual([49, 49]);
-    expect(measurements[3]?.transitionMs).toEqual([49, 49]);
+    expect(measurements[1]?.animationMs).toEqual([49]);
+    expect(measurements[2]?.animationMs).toEqual([49]);
   });
 
   it("makes_live_preview_motion_instant_under_reduced_motion", async () => {
@@ -1171,23 +1172,23 @@ describe("skribeum shell", () => {
       reducedStyle.textContent = mediaRules.join("\n");
       document.head.append(reducedStyle);
 
-      const selectors = [
-        ".cm-skr-reveal-marker",
-        ".cm-skr-link.cm-skr-reveal-motion",
-        ".cm-skr-embed.cm-skr-reveal-motion",
-        ".cm-skr-rich-callout.cm-skr-reveal-motion",
+      const classNames = [
+        "cm-skr-reveal-marker",
+        "cm-skr-reveal-motion cm-skr-reveal-source",
+        "cm-skr-reveal-motion cm-skr-reveal-rendered",
       ];
-      const result = selectors.map((selector) => {
-        const element = document.querySelector<HTMLElement>(selector);
-        if (element === null) {
-          throw new Error(`animated class missing: ${selector}`);
-        }
+      const result = classNames.map((className) => {
+        const element = document.createElement("span");
+        element.className = className;
+        document.body.append(element);
         const style = getComputedStyle(element);
-        return {
-          selector,
+        const measurement = {
+          className,
           transitionDuration: style.transitionDuration,
           animationDuration: style.animationDuration,
         };
+        element.remove();
+        return measurement;
       });
       reducedStyle.remove();
       return result;

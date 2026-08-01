@@ -1455,6 +1455,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
       : options.activeReveal;
   const built: BuiltDecoration[] = [];
   const seenLines = new Set<string>();
+  const seenMotionRanges = new Set<string>();
 
   const activeRevealOwns = (node: SyntaxNode): boolean =>
     activeReveal !== null &&
@@ -1515,14 +1516,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           }
           const presentation = rule.presentation;
           if (presentation.present === "line") {
-            const lineClass =
-              rule.dynamic === "rich-callout"
-                ? `${presentation.class} cm-skr-reveal-motion ${
-                    revealedNow
-                      ? "cm-skr-reveal-source"
-                      : "cm-skr-reveal-rendered"
-                  }`
-                : presentation.class;
+            const lineClass = presentation.class;
             let position = Math.max(ref.from, window.from);
             const end = Math.min(ref.to, window.to);
             while (position <= end) {
@@ -1546,6 +1540,37 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                               : "middle",
                     }
                   : dynamic;
+              const nestedActiveLine =
+                rule.dynamic === "rich-callout" &&
+                activeReveal !== null &&
+                !revealedNow &&
+                activeReveal.from >= ref.from &&
+                activeReveal.to <= ref.to &&
+                line.from >= activeReveal.from &&
+                line.to <= activeReveal.to;
+              if (
+                rule.dynamic === "rich-callout" &&
+                line.to > line.from &&
+                !nestedActiveLine
+              ) {
+                const motionClass = `cm-skr-reveal-motion ${
+                  revealedNow
+                    ? "cm-skr-reveal-source"
+                    : "cm-skr-reveal-rendered"
+                }`;
+                const motionKey = `${line.from} ${line.to} ${motionClass}`;
+                if (!seenMotionRanges.has(motionKey)) {
+                  seenMotionRanges.add(motionKey);
+                  built.push({
+                    from: line.from,
+                    to: line.to,
+                    decoration: Decoration.mark({
+                      class: motionClass,
+                      skr: `motion ${revealedNow ? "source" : "rendered"}=callout`,
+                    }),
+                  });
+                }
+              }
               const key = `${line.from} ${lineClass}${serializeAttributes(lineDynamic)}`;
               if (
                 line.length <= LONG_LINE_DECORATION_LIMIT &&

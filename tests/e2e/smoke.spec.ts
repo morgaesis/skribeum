@@ -1317,7 +1317,8 @@ describe("skribeum shell", () => {
     const editor = $(".cm-content");
     await editor.waitForDisplayed({ timeout: 15000 });
     await editor.click();
-    await editor.addValue(" #");
+    await editor.addValue(" ");
+    await editor.addValue("#");
     await editor.addValue("delete-o");
     await browser.waitUntil(
       async () =>
@@ -1336,7 +1337,8 @@ describe("skribeum shell", () => {
       timeout: 15000,
     });
 
-    await editor.addValue(" #");
+    await editor.addValue(" ");
+    await editor.addValue("#");
     await editor.addValue("delete-o");
     await $(".cm-skr-tag-menu").waitForExist({
       reverse: true,

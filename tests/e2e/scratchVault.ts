@@ -88,6 +88,25 @@ export const VISUAL_NOTE_CONTENT = [
   "",
 ].join("\n");
 
+export const TABLE_GEOMETRY_NOTE_CONTENT = [
+  "# Table geometry",
+  "",
+  "| Option | Seats | Daylight | Quiet zone | Notes |",
+  "| --- | ---: | :---: | :---: | --- |",
+  "| Cedar Room | 18 | Yes | Yes | Best fit for focused sessions |",
+  "| Workshop Bay | 30 | Limited | No | Good access for large equipment |",
+  "| Courtyard | 24 | Yes | Partial | Needs a rain plan |",
+  "",
+  "A second table keeps its own source-derived proportions.",
+  "",
+  "| Trial | Change | Result | Next step |",
+  "| --- | --- | --- | --- |",
+  "| A | Shorter welcome script | People began sooner | Keep |",
+  "| B | Signs at seated eye level | Routes were easier to find | Test larger type |",
+  "| C | Shared tool table | Created a queue | Split into two stations |",
+  "",
+].join("\n");
+
 export const REVEAL_NOTE_NAME = "zzzz-reveal.md";
 export const REVEAL_NOTE_CONTENT =
   "# Reveal interactions\n\n> [!tip] Linked callout\n> First body line.\n> Read [inside link](inside-target).\n\n[Outside link](outside-target)\n\ncursor parking\n";

@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Rendered Markdown tables share one source-derived column geometry across
+  their header and body rows, and wide cell content wraps inside the reading
+  column instead of creating an independent horizontal scroller for each row.
 - Narrow viewports keep a readable editor measure while the file tree and
   outline open as focus-managed overlay sheets, and frontmatter starts in its
   collapsed properties view.

@@ -13,6 +13,7 @@ import {
   LIVE_PREVIEW_NOTE_NAME,
   MOTION_PREVIEW_NOTE_NAME,
   NAVIGATION_SOURCE_NOTE_NAME,
+  RENDERING_NOTE_CONTENT,
   RENDERING_NOTE_NAME,
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
@@ -20,6 +21,7 @@ import {
   TAG_DELETE_NOTE_NAME,
   TAG_DELETE_PROBE_NOTE_NAME,
   TAG_REFRESH_NOTE_NAME,
+  TABLE_GEOMETRY_NOTE_CONTENT,
   VISUAL_NOTE_CONTENT,
   VISUAL_NOTE_NAME,
 } from "./scratchVault";
@@ -178,6 +180,61 @@ async function horizontalViewportEscapes(): Promise<HorizontalEscape[]> {
       },
     );
   });
+}
+
+type TableGeometry = {
+  rows: Array<{
+    columns: string;
+    cellLefts: number[];
+    left: number;
+    right: number;
+    clientWidth: number;
+    scrollWidth: number;
+    overflowX: string;
+  }>;
+};
+
+async function renderedTableGeometry(): Promise<TableGeometry[]> {
+  return browser.execute(() => {
+    const tables: TableGeometry[] = [];
+    for (const row of document.querySelectorAll<HTMLElement>(
+      ".cm-skr-table-row",
+    )) {
+      if (row.classList.contains("cm-skr-table-first")) {
+        tables.push({ rows: [] });
+      }
+      const table = tables.at(-1);
+      if (table === undefined) {
+        throw new Error("table row appears before a table start");
+      }
+      const box = row.getBoundingClientRect();
+      table.rows.push({
+        columns: getComputedStyle(row).gridTemplateColumns,
+        cellLefts: [
+          ...row.querySelectorAll<HTMLElement>(".cm-skr-table-cell"),
+        ].map((cell) => cell.getBoundingClientRect().left),
+        left: box.left,
+        right: box.right,
+        clientWidth: row.clientWidth,
+        scrollWidth: row.scrollWidth,
+        overflowX: getComputedStyle(row).overflowX,
+      });
+    }
+    return tables;
+  });
+}
+
+async function prepareTableGeometryNote(): Promise<void> {
+  await openNoteFromTree(VISUAL_NOTE_NAME);
+  await browser.waitUntil(
+    async () => (await editorText()).includes("A room for reading"),
+    { timeout: 15000, timeoutMsg: "visual note did not open" },
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),
+    TABLE_GEOMETRY_NOTE_CONTENT,
+  );
+  await waitForDisk(RENDERING_NOTE_NAME, TABLE_GEOMETRY_NOTE_CONTENT);
 }
 
 async function editorText(): Promise<string> {
@@ -787,6 +844,90 @@ describe("skribeum shell", () => {
     }
   });
 
+  it("shares_rendered_column_geometry_within_each_table", async () => {
+    await prepareTableGeometryNote();
+    await openNoteFromTree(RENDERING_NOTE_NAME);
+    await browser.waitUntil(
+      async () =>
+        (await editorText()).includes(
+          "A second table keeps its own source-derived proportions.",
+        ) && (await $$(".cm-skr-table-row")).length === 8,
+      { timeout: 15000, timeoutMsg: "table geometry fixture did not render" },
+    );
+
+    const measurements: Array<{
+      label: string;
+      tables: TableGeometry[];
+    }> = [];
+    const originalFonts = await browser.execute(() => {
+      const root = document.documentElement.style;
+      const prose = root.getPropertyValue("--skr-font-prose");
+      const interfaceFont = root.getPropertyValue("--skr-font-interface");
+      root.setProperty("--skr-font-prose", "serif");
+      root.setProperty("--skr-font-interface", "monospace");
+      return { prose, interfaceFont };
+    });
+    try {
+      for (const [label, width, height] of [
+        ["desktop", 1280, 800],
+        ["narrow", 390, 844],
+      ] as const) {
+        await setViewportSize(width, height);
+        const tables = await renderedTableGeometry();
+        console.info(
+          `table geometry ${label}: ${JSON.stringify(
+            tables.map((table) => ({
+              templates: table.rows.map((row) => row.columns),
+              cellLefts: table.rows.map((row) => row.cellLefts),
+              rowBounds: table.rows.map((row) => [row.left, row.right]),
+            })),
+          )}`,
+        );
+        measurements.push({ label, tables });
+      }
+    } finally {
+      await browser.execute(({ prose, interfaceFont }) => {
+        const root = document.documentElement.style;
+        if (prose === "") {
+          root.removeProperty("--skr-font-prose");
+        } else {
+          root.setProperty("--skr-font-prose", prose);
+        }
+        if (interfaceFont === "") {
+          root.removeProperty("--skr-font-interface");
+        } else {
+          root.setProperty("--skr-font-interface", interfaceFont);
+        }
+      }, originalFonts);
+      await restoreDesktopViewport();
+    }
+
+    for (const { tables } of measurements) {
+      expect(tables).toHaveLength(2);
+      expect(tables.map((table) => table.rows.length)).toEqual([4, 4]);
+
+      for (const table of tables) {
+        const header = table.rows[0];
+        expect(header).toBeDefined();
+        expect(new Set(header?.columns.split(" ")).size).toBeGreaterThan(1);
+        for (const row of table.rows) {
+          expect(row.columns).toBe(header?.columns);
+          expect(row.cellLefts).toHaveLength(header?.cellLefts.length ?? 0);
+          for (const [index, left] of row.cellLefts.entries()) {
+            expect(
+              Math.abs(left - (header?.cellLefts[index] ?? left)),
+            ).toBeLessThanOrEqual(1);
+          }
+        }
+        for (const row of table.rows) {
+          expect(row.overflowX).not.toBe("auto");
+          expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
+        }
+      }
+      expect(tables[0]?.rows[0]?.columns).not.toBe(tables[1]?.rows[0]?.columns);
+    }
+  });
+
   it("keeps_major_narrow_surfaces_inside_the_viewport", async () => {
     const surfaces: Array<{
       surface: string;
@@ -794,6 +935,7 @@ describe("skribeum shell", () => {
     }> = [];
 
     try {
+      await prepareTableGeometryNote();
       await setViewportSize(390, 844);
       const mobileActions = $('[aria-label="Primary actions"]');
       await mobileActions.waitForDisplayed({ timeout: 10000 });
@@ -801,11 +943,18 @@ describe("skribeum shell", () => {
       await mobileActions.$("button=Files").click();
       let sheet = $('[data-testid="overlay-sheet"]');
       await sheet.waitForDisplayed({ timeout: 10000 });
-      await sheet.$(`li=${VISUAL_NOTE_NAME}`).click();
+      await sheet.$(`li=${RENDERING_NOTE_NAME}`).click();
       await sheet.waitForExist({ reverse: true, timeout: 10000 });
-      await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+      await $(".cm-skr-table-row").waitForExist({ timeout: 15000 });
+      await browser.waitUntil(
+        async () =>
+          (await editorText()).includes(
+            "A second table keeps its own source-derived proportions.",
+          ),
+        { timeout: 15000, timeoutMsg: "table-heavy note did not open" },
+      );
       surfaces.push({
-        surface: "note",
+        surface: "table-heavy note",
         escapes: await horizontalViewportEscapes(),
       });
 
@@ -848,10 +997,20 @@ describe("skribeum shell", () => {
       await sheet.waitForExist({ reverse: true, timeout: 10000 });
     } finally {
       await restoreDesktopViewport();
+      await openNoteFromTree(VISUAL_NOTE_NAME);
+      await browser.waitUntil(
+        async () => (await editorText()).includes("A room for reading"),
+        { timeout: 15000, timeoutMsg: "visual note did not reopen" },
+      );
+      writeFileSync(
+        path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),
+        RENDERING_NOTE_CONTENT,
+      );
+      await waitForDisk(RENDERING_NOTE_NAME, RENDERING_NOTE_CONTENT);
     }
 
     expect(surfaces.map(({ surface }) => surface)).toEqual([
-      "note",
+      "table-heavy note",
       "actions sheet",
       "settings",
       "vault search",

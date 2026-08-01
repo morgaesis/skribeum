@@ -6,15 +6,18 @@ import { readOnlyDecorationMode } from "../editor/decorations/engine";
 import type { WikilinkResolutionContext } from "../editor/decorations/wikilinks";
 import { parseFrontmatter } from "../editor/frontmatter";
 import { noteRenderingExtensions } from "../editor/syntaxPolicy";
+import { DEFAULT_TASK_STATUSES, type TaskStatus } from "../taskStatuses";
 
 let {
   source,
   label,
   context,
+  taskStatuses = DEFAULT_TASK_STATUSES,
 }: {
   source: string;
   label: string;
   context?: WikilinkResolutionContext | undefined;
+  taskStatuses?: readonly TaskStatus[];
 } = $props();
 
 let host: HTMLDivElement;
@@ -37,7 +40,7 @@ function stateFor(markdown: string): EditorState {
   return EditorState.create({
     doc: body,
     extensions: [
-      ...noteRenderingExtensions(body, context),
+      ...noteRenderingExtensions(body, context, taskStatuses),
       readOnlyDecorationMode,
       EditorView.lineWrapping,
       EditorState.readOnly.of(true),
@@ -58,8 +61,10 @@ onMount(() => {
 $effect(() => {
   const nextSource = source;
   const nextContext = context;
+  const nextTaskStatuses = taskStatuses;
   if (view !== undefined) {
     void nextContext;
+    void nextTaskStatuses;
     view.setState(stateFor(nextSource));
   }
 });

@@ -1,10 +1,9 @@
 // The decoration engine interprets the mapping table in `table.ts` over
 // the Lezer syntax tree, windowed to the visible ranges. Bulk input remaps
 // existing decorations for the initial paint and rebuilds them after three
-// animation frames. The engine never touches the document; its dispatches
-// are annotated with `decorationOrigin` so the inertness guard in
-// `decorationGuard.ts` asserts `docChanged === false` over everything the
-// engine causes.
+// animation frames. Decoration lifecycle dispatches never touch the document
+// and carry `decorationOrigin`; explicit controls such as task checkboxes
+// dispatch user edits through the editor's normal local-change path.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
@@ -34,11 +33,17 @@ import { tags } from "@lezer/highlight";
 import { renderMath } from "../../rendering/math";
 import { renderMermaid } from "../../rendering/mermaid";
 import { STRINGS } from "../../strings";
+import {
+  DEFAULT_TASK_STATUSES,
+  normalizeTaskStatuses,
+  type TaskStatus,
+  taskStatusBySymbol,
+} from "../../taskStatuses";
 import { bulkTextInputAnnotation } from "../bulkInput";
 import { decorationOrigin } from "../decorationGuard";
 import { codeLanguage } from "../markdown/codeLanguages";
 import {
-  obsidianMarkdownExtensions,
+  obsidianMarkdownExtensionsFor,
   skribeumMarkdownParser,
 } from "../markdown/obsidian";
 import { calloutIconSvg, parseCallout } from "./callouts";
@@ -49,6 +54,7 @@ import {
 } from "./table";
 import {
   EMPTY_WIKILINK_CONTEXT,
+  resolveMarkdownLinkTarget,
   resolveWikilinkTarget,
   type WikilinkResolutionContext,
 } from "./wikilinks";
@@ -97,6 +103,7 @@ export const tokenHighlightStyle = HighlightStyle.define([
  */
 export const LONG_LINE_DECORATION_LIMIT = 10_000;
 export const EMBED_DEPTH_LIMIT = 4;
+export const LINK_PREVIEW_DELAY = 450;
 
 /**
  * The decoration table as an editor facet. With no provider the committed
@@ -116,6 +123,20 @@ const sourceRevealEnabled = Facet.define<boolean, boolean>({
 
 /** Keeps cursor-sensitive source markers hidden on non-editable surfaces. */
 export const readOnlyDecorationMode = sourceRevealEnabled.of(false);
+
+/** Controls whether cursor-sensitive Markdown source markers reveal. */
+export function sourceRevealMode(enabled: boolean): Extension {
+  return sourceRevealEnabled.of(enabled);
+}
+
+/** Ordered task statuses used by parsing, rendering and task commands. */
+export const taskStatusConfiguration = Facet.define<
+  readonly TaskStatus[],
+  readonly TaskStatus[]
+>({
+  combine: (values) =>
+    normalizeTaskStatuses(values.at(-1) ?? DEFAULT_TASK_STATUSES),
+});
 
 /** Replaces the wikilink resolution context (vault tree and app.json knobs). */
 export const setWikilinkContext =
@@ -148,28 +169,262 @@ export function dispatchWikilinkContext(
   });
 }
 
+let nextTaskPaletteId = 0;
+
+function taskAriaChecked(status: TaskStatus): "true" | "false" | "mixed" {
+  if (status.category === "DONE") {
+    return "true";
+  }
+  if (status.category === "TODO") {
+    return "false";
+  }
+  return "mixed";
+}
+
+function applyTaskStatus(
+  view: EditorView,
+  from: number,
+  to: number,
+  currentSymbol: string,
+  symbol: string,
+): void {
+  if (
+    view.state.readOnly ||
+    view.state.doc.sliceString(from, to) !== currentSymbol
+  ) {
+    return;
+  }
+  view.dispatch({
+    changes: { from, to, insert: symbol },
+    userEvent: "input.task-status",
+  });
+}
+
 class TaskCheckboxWidget extends WidgetType {
-  constructor(readonly marker: string) {
+  constructor(
+    readonly status: TaskStatus,
+    readonly statuses: readonly TaskStatus[],
+    readonly markerFrom: number,
+    readonly markerTo: number,
+  ) {
     super();
   }
 
   override eq(other: TaskCheckboxWidget): boolean {
-    return other.marker === this.marker;
+    return (
+      other.status.symbol === this.status.symbol &&
+      other.markerFrom === this.markerFrom &&
+      other.markerTo === this.markerTo &&
+      JSON.stringify(other.statuses) === JSON.stringify(this.statuses)
+    );
   }
 
-  override toDOM(): HTMLElement {
+  override toDOM(view: EditorView): HTMLElement {
+    nextTaskPaletteId += 1;
+    const paletteId = `cm-skr-task-palette-${nextTaskPaletteId}`;
+    const host = document.createElement("span");
+    host.className = "cm-skr-task-control";
+    host.style.setProperty(
+      "--skr-task-color",
+      `var(${this.status.color_token})`,
+    );
+
     const box = document.createElement("span");
     box.className = "cm-skr-task-checkbox";
-    for (const [name, value] of taskCheckboxAttributes(this.marker)) {
+    box.tabIndex = 0;
+    box.setAttribute("contenteditable", "false");
+    box.setAttribute("aria-haspopup", "listbox");
+    box.setAttribute("aria-expanded", "false");
+    box.setAttribute("aria-controls", paletteId);
+    for (const [name, value] of taskCheckboxAttributes(this.status)) {
       box.setAttribute(name, value);
     }
-    return box;
+
+    const glyph = document.createElement("span");
+    glyph.className = "cm-skr-task-glyph";
+    glyph.setAttribute("aria-hidden", "true");
+    glyph.textContent = this.status.glyph;
+    box.append(glyph);
+
+    const palette = document.createElement("span");
+    palette.id = paletteId;
+    palette.className = "cm-skr-task-palette";
+    palette.setAttribute("role", "listbox");
+    palette.setAttribute("aria-label", STRINGS.taskStatusPaletteLabel);
+    palette.tabIndex = -1;
+    palette.hidden = true;
+
+    let activeIndex = Math.max(
+      0,
+      this.statuses.findIndex((entry) => entry.symbol === this.status.symbol),
+    );
+    let options: HTMLElement[] = [];
+
+    const updateActiveOption = () => {
+      for (const [index, option] of options.entries()) {
+        option.classList.toggle(
+          "cm-skr-task-option-active",
+          index === activeIndex,
+        );
+      }
+      const active = options[activeIndex];
+      if (active !== undefined) {
+        palette.setAttribute("aria-activedescendant", active.id);
+        active.scrollIntoView?.({ block: "nearest" });
+      }
+    };
+    const buildOptions = () => {
+      if (options.length > 0) {
+        return;
+      }
+      options = this.statuses.map((entry, index) => {
+        const option = document.createElement("span");
+        option.id = `${paletteId}-option-${index}`;
+        option.className = "cm-skr-task-option";
+        option.setAttribute("role", "option");
+        option.setAttribute(
+          "aria-selected",
+          entry.symbol === this.status.symbol ? "true" : "false",
+        );
+        option.style.setProperty(
+          "--skr-task-option-color",
+          `var(${entry.color_token})`,
+        );
+
+        const optionGlyph = document.createElement("span");
+        optionGlyph.className = "cm-skr-task-option-glyph";
+        optionGlyph.setAttribute("aria-hidden", "true");
+        optionGlyph.textContent = entry.glyph;
+        const optionName = document.createElement("span");
+        optionName.className = "cm-skr-task-option-name";
+        optionName.textContent = entry.name;
+        option.append(optionGlyph, optionName);
+        option.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        option.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          applyTaskStatus(
+            view,
+            this.markerFrom,
+            this.markerTo,
+            this.status.symbol,
+            entry.symbol,
+          );
+        });
+        option.addEventListener("pointerenter", () => {
+          activeIndex = index;
+          updateActiveOption();
+        });
+        palette.append(option);
+        return option;
+      });
+    };
+    const openPalette = (keyboard: boolean) => {
+      buildOptions();
+      palette.hidden = false;
+      box.setAttribute("aria-expanded", "true");
+      updateActiveOption();
+      if (keyboard) {
+        queueMicrotask(() => palette.focus());
+      }
+    };
+    const closePalette = (returnFocus: boolean) => {
+      palette.hidden = true;
+      palette.replaceChildren();
+      palette.removeAttribute("aria-activedescendant");
+      options = [];
+      box.setAttribute("aria-expanded", "false");
+      if (returnFocus) {
+        box.focus();
+      }
+    };
+
+    box.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      applyTaskStatus(
+        view,
+        this.markerFrom,
+        this.markerTo,
+        this.status.symbol,
+        this.status.next_status,
+      );
+    });
+    // registry-exempt keydown: ARIA checkbox and listbox internal navigation.
+    box.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        event.stopPropagation();
+        openPalette(true);
+      } else if (event.key === " " || event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        applyTaskStatus(
+          view,
+          this.markerFrom,
+          this.markerTo,
+          this.status.symbol,
+          this.status.next_status,
+        );
+      }
+    });
+    palette.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+        event.preventDefault();
+        activeIndex = (activeIndex + 1) % options.length;
+        updateActiveOption();
+      } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+        event.preventDefault();
+        activeIndex = (activeIndex - 1 + options.length) % options.length;
+        updateActiveOption();
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        activeIndex = 0;
+        updateActiveOption();
+      } else if (event.key === "End") {
+        event.preventDefault();
+        activeIndex = options.length - 1;
+        updateActiveOption();
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        const selected = this.statuses[activeIndex];
+        if (selected !== undefined) {
+          applyTaskStatus(
+            view,
+            this.markerFrom,
+            this.markerTo,
+            this.status.symbol,
+            selected.symbol,
+          );
+        }
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closePalette(true);
+      }
+    });
+    host.addEventListener("pointerenter", () => openPalette(false));
+    host.addEventListener("pointerleave", () => {
+      if (!host.contains(document.activeElement)) {
+        closePalette(false);
+      }
+    });
+    host.addEventListener("focusout", () => {
+      queueMicrotask(() => {
+        if (!host.contains(document.activeElement)) {
+          closePalette(false);
+        }
+      });
+    });
+    host.append(box, palette);
+    return host;
   }
 
   override ignoreEvent(): boolean {
-    // The checkbox looks interactive but is text-inert at M2: events fall
-    // through to the editor so clicking places the cursor.
-    return false;
+    return true;
   }
 }
 
@@ -484,6 +739,7 @@ function nestedMarkdownView(
   source: string,
   context: WikilinkResolutionContext,
   label: string,
+  taskStatuses: readonly TaskStatus[],
 ): EditorView {
   const nested = new EditorView({
     state: EditorState.create({
@@ -491,10 +747,11 @@ function nestedMarkdownView(
       extensions: [
         markdown({
           base: markdownLanguage,
-          extensions: obsidianMarkdownExtensions,
+          extensions: obsidianMarkdownExtensionsFor(taskStatuses),
           codeLanguages: codeLanguage,
         }),
         syntaxHighlighting(tokenHighlightStyle, { fallback: true }),
+        taskStatusConfiguration.of(taskStatuses),
         decorationEngine(context),
         readOnlyDecorationMode,
         EditorView.lineWrapping,
@@ -512,11 +769,96 @@ function nestedMarkdownView(
   return nested;
 }
 
+function renderLinkedNote(
+  host: HTMLElement,
+  target: string,
+  rootSource: string,
+  context: WikilinkResolutionContext,
+  label: string,
+  taskStatuses: readonly TaskStatus[],
+  onRendered: () => void,
+): () => void {
+  const [, fragment = ""] = target.split("#", 2);
+  const resolution = resolveWikilinkTarget(target, context);
+  const resolvedPath =
+    resolution.kind === "note"
+      ? resolution.path
+      : resolution.kind === "self"
+        ? (context.currentPath ?? "")
+        : "";
+  const notice = (message: string) => {
+    host.classList.add("cm-skr-embed-notice");
+    host.setAttribute("role", "status");
+    host.textContent = message;
+  };
+  if (resolution.kind === "unresolved") {
+    notice(STRINGS.embedUnavailable);
+    return () => {};
+  }
+  const depth = context.embedDepth ?? 0;
+  if (depth >= EMBED_DEPTH_LIMIT) {
+    notice(STRINGS.embedDepthLimit);
+    return () => {};
+  }
+  const ancestry = context.embedAncestry ?? [];
+  const directSelfEmbed = resolution.kind === "self" && depth === 0;
+  if (
+    resolvedPath.length > 0 &&
+    ancestry.includes(resolvedPath) &&
+    !directSelfEmbed
+  ) {
+    notice(STRINGS.embedCycle);
+    return () => {};
+  }
+  const load =
+    resolution.kind === "self"
+      ? Promise.resolve(rootSource)
+      : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null));
+  let destroyed = false;
+  host.textContent = STRINGS.embedLoading;
+  void load.then((source) => {
+    if (destroyed || (!host.isConnected && !document.body.contains(host))) {
+      return;
+    }
+    if (source === null) {
+      notice(STRINGS.embedUnavailable);
+      return;
+    }
+    const selected = embeddedSection(source, fragment);
+    if (selected === null) {
+      notice(STRINGS.embedSectionUnavailable);
+      return;
+    }
+    host.textContent = "";
+    nestedMarkdownView(
+      host,
+      selected,
+      {
+        ...context,
+        currentPath: resolvedPath,
+        embedDepth: depth + 1,
+        embedAncestry:
+          resolvedPath.length === 0 ? ancestry : [...ancestry, resolvedPath],
+      },
+      label,
+      taskStatuses,
+    );
+    onRendered();
+  });
+  return () => {
+    destroyed = true;
+    nestedViews.get(host)?.destroy();
+  };
+}
+
 class EmbedWidget extends WidgetType {
+  private readonly cleanups = new WeakMap<HTMLElement, () => void>();
+
   constructor(
     readonly target: string,
     readonly rootSource: string,
     readonly context: WikilinkResolutionContext,
+    readonly taskStatuses: readonly TaskStatus[],
   ) {
     super();
   }
@@ -525,13 +867,14 @@ class EmbedWidget extends WidgetType {
     return (
       other.target === this.target &&
       other.rootSource === this.rootSource &&
-      other.context === this.context
+      other.context === this.context &&
+      JSON.stringify(other.taskStatuses) === JSON.stringify(this.taskStatuses)
     );
   }
 
   override toDOM(view: EditorView): HTMLElement {
     const host = document.createElement("span");
-    host.className = "cm-skr-embed";
+    host.className = "cm-skr-embed cm-skr-reveal-motion cm-skr-reveal-rendered";
     host.setAttribute("role", "group");
     const [pathTarget = "", fragment = ""] = this.target.split("#", 2);
     const resolution = resolveWikilinkTarget(this.target, this.context);
@@ -553,71 +896,24 @@ class EmbedWidget extends WidgetType {
     body.className = "cm-skr-embed-body";
     host.append(body);
 
-    const notice = (message: string) => {
-      body.className = "cm-skr-embed-body cm-skr-embed-notice";
-      body.setAttribute("role", "status");
-      body.textContent = message;
-    };
-    if (resolution.kind === "unresolved") {
-      notice(STRINGS.embedUnavailable);
-      return host;
-    }
-    const depth = this.context.embedDepth ?? 0;
-    if (depth >= EMBED_DEPTH_LIMIT) {
-      notice(STRINGS.embedDepthLimit);
-      return host;
-    }
-    const ancestry = this.context.embedAncestry ?? [];
-    const directSelfEmbed = resolution.kind === "self" && depth === 0;
-    if (
-      resolvedPath.length > 0 &&
-      ancestry.includes(resolvedPath) &&
-      !directSelfEmbed
-    ) {
-      notice(STRINGS.embedCycle);
-      return host;
-    }
-    const load =
-      resolution.kind === "self"
-        ? Promise.resolve(this.rootSource)
-        : (this.context.loadNote?.(resolvedPath) ?? Promise.resolve(null));
-    body.textContent = STRINGS.embedLoading;
-    void load.then((source) => {
-      if (!host.isConnected && !document.body.contains(host)) {
-        return;
-      }
-      if (source === null) {
-        notice(STRINGS.embedUnavailable);
-        return;
-      }
-      const selected = embeddedSection(source, fragment);
-      if (selected === null) {
-        notice(STRINGS.embedSectionUnavailable);
-        return;
-      }
-      body.textContent = "";
-      nestedMarkdownView(
+    this.cleanups.set(
+      host,
+      renderLinkedNote(
         body,
-        selected,
-        {
-          ...this.context,
-          currentPath: resolvedPath,
-          embedDepth: depth + 1,
-          embedAncestry:
-            resolvedPath.length === 0 ? ancestry : [...ancestry, resolvedPath],
-        },
+        this.target,
+        this.rootSource,
+        this.context,
         `${STRINGS.embedLabel}: ${sourceName}`,
-      );
-      view.requestMeasure();
-    });
+        this.taskStatuses,
+        () => view.requestMeasure(),
+      ),
+    );
     return host;
   }
 
   override destroy(dom: HTMLElement): void {
-    const body = dom.querySelector<HTMLElement>(".cm-skr-embed-body");
-    if (body !== null) {
-      nestedViews.get(body)?.destroy();
-    }
+    this.cleanups.get(dom)?.();
+    this.cleanups.delete(dom);
   }
 
   override ignoreEvent(): boolean {
@@ -678,27 +974,20 @@ function splitTable(table: readonly DecorationRule[]) {
 
 /** The marker character between the task brackets, e.g. `x` for `[x]`. */
 function taskMarkerCharacter(markerText: string): string {
-  return markerText.length >= 3 ? (markerText[1] ?? " ") : " ";
+  return markerText.startsWith("[") && markerText.endsWith("]")
+    ? markerText.slice(1, -1)
+    : "";
 }
 
-function taskCheckboxAttributes(marker: string): [string, string][] {
-  const checked = marker === "x" || marker === "X";
-  const custom = !checked && marker !== " ";
-  const label = checked
-    ? STRINGS.taskCheckboxCheckedLabel
-    : custom
-      ? STRINGS.taskCheckboxOtherLabel
-      : STRINGS.taskCheckboxUncheckedLabel;
-  const attributes: [string, string][] = [
+function taskCheckboxAttributes(status: TaskStatus): [string, string][] {
+  return [
     ["role", "checkbox"],
-    ["aria-checked", checked ? "true" : custom ? "mixed" : "false"],
-    ["aria-disabled", "true"],
-    ["aria-label", label],
+    ["aria-checked", taskAriaChecked(status)],
+    ["aria-label", status.name],
+    ["data-task", status.symbol],
+    ["data-category", status.category],
+    ["data-color-token", status.color_token],
   ];
-  if (custom) {
-    attributes.push(["data-task", marker]);
-  }
-  return attributes;
 }
 
 function serializeAttributes(
@@ -719,6 +1008,7 @@ type ComputeOptions = {
   /** Windows to decorate; the whole document when omitted. */
   ranges?: readonly { from: number; to: number }[];
   wikilinks?: WikilinkResolutionContext;
+  taskStatuses?: readonly TaskStatus[];
   /** Preselected across the full table when decorations are split. */
   activeReveal?: RevealRegion | null;
 };
@@ -862,8 +1152,31 @@ function dynamicAttributes(
   node: SyntaxNode,
   doc: Text,
   wikilinks: WikilinkResolutionContext,
+  taskStatuses: readonly TaskStatus[],
 ): Record<string, string> | null {
   switch (rule.dynamic) {
+    case "markdown-link-preview": {
+      if (wikilinks.linkPreviews === false) {
+        return {};
+      }
+      const url = node.getChild("URL");
+      const target =
+        url === null
+          ? null
+          : resolveMarkdownLinkTarget(
+              doc.sliceString(url.from, url.to),
+              wikilinks,
+            );
+      return target === null
+        ? {}
+        : {
+            "data-preview-target": target,
+            role: "link",
+            tabindex: "0",
+            "aria-haspopup": "dialog",
+            "aria-keyshortcuts": "P",
+          };
+    }
     case "wikilink-resolution": {
       const target = node.getChild("WikilinkTarget");
       if (target === null) {
@@ -873,9 +1186,23 @@ function dynamicAttributes(
         doc.sliceString(target.from, target.to),
         wikilinks,
       );
-      return {
+      const attributes: Record<string, string> = {
         "data-resolved": resolution.kind === "unresolved" ? "false" : "true",
       };
+      if (
+        resolution.kind !== "unresolved" &&
+        wikilinks.linkPreviews !== false
+      ) {
+        attributes["data-preview-target"] = doc.sliceString(
+          target.from,
+          target.to,
+        );
+        attributes.role = "link";
+        attributes.tabindex = "0";
+        attributes["aria-haspopup"] = "dialog";
+        attributes["aria-keyshortcuts"] = "P";
+      }
+      return attributes;
     }
     case "callout-type": {
       let blockquote: SyntaxNode | null = node;
@@ -931,6 +1258,23 @@ function dynamicAttributes(
       }
       return { "data-language": "mermaid" };
     }
+    case "task-status": {
+      const marker = node.getChild("TaskMarker");
+      if (marker === null) {
+        return null;
+      }
+      const symbol = taskMarkerCharacter(
+        doc.sliceString(marker.from, marker.to),
+      );
+      const status = taskStatusBySymbol(taskStatuses, symbol);
+      return status === undefined
+        ? null
+        : {
+            "data-task": status.symbol,
+            "data-category": status.category,
+            "data-color-token": status.color_token,
+          };
+    }
     default:
       return {};
   }
@@ -970,6 +1314,7 @@ function findActiveReveal(
   table: readonly DecorationRule[],
   selection: readonly { from: number; to: number }[],
   wikilinks: WikilinkResolutionContext,
+  taskStatuses: readonly TaskStatus[],
 ): RevealRegion | null {
   const cursor = selection[0]?.to;
   if (cursor === undefined) {
@@ -1006,7 +1351,7 @@ function findActiveReveal(
       if (
         rule.reveal === "never" ||
         !ruleMatches(rule, node, doc) ||
-        dynamicAttributes(rule, node, doc, wikilinks) === null
+        dynamicAttributes(rule, node, doc, wikilinks, taskStatuses) === null
       ) {
         continue;
       }
@@ -1040,10 +1385,12 @@ type BuiltDecoration = {
 function markDecoration(
   presentation: Extract<Presentation, { present: "mark" }>,
   dynamic: Record<string, string>,
+  motionClass = "",
 ): Decoration {
   const attributes = { ...(presentation.attributes ?? {}), ...dynamic };
+  const className = `${presentation.class} ${motionClass}`.trim();
   const spec: Parameters<typeof Decoration.mark>[0] = {
-    class: presentation.class,
+    class: className,
     skr: `mark class=${JSON.stringify(presentation.class)}${serializeAttributes(attributes)}`,
   };
   if (Object.keys(attributes).length > 0) {
@@ -1073,14 +1420,24 @@ function widgetFor(
   node: SyntaxNode,
   doc: Text,
   wikilinks: WikilinkResolutionContext,
+  taskStatuses: readonly TaskStatus[],
 ): { widget: WidgetType; block: boolean; attributes: Record<string, string> } {
   switch (widget) {
     case "task-checkbox": {
       const marker = taskMarkerCharacter(doc.sliceString(node.from, node.to));
+      const status = taskStatusBySymbol(taskStatuses, marker);
+      if (status === undefined) {
+        throw new Error("task checkbox requires a configured marker");
+      }
       return {
-        widget: new TaskCheckboxWidget(marker),
+        widget: new TaskCheckboxWidget(
+          status,
+          taskStatuses,
+          node.from + 1,
+          node.to - 1,
+        ),
         block: false,
-        attributes: Object.fromEntries(taskCheckboxAttributes(marker)),
+        attributes: Object.fromEntries(taskCheckboxAttributes(status)),
       };
     }
     case "math-inline":
@@ -1129,7 +1486,12 @@ function widgetFor(
           ? ""
           : doc.sliceString(target.from, target.to);
       return {
-        widget: new EmbedWidget(targetText, doc.toString(), wikilinks),
+        widget: new EmbedWidget(
+          targetText,
+          doc.toString(),
+          wikilinks,
+          taskStatuses,
+        ),
         block: false,
         attributes: { role: "group", "data-target": targetText },
       };
@@ -1163,12 +1525,21 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
   const selection = options.selection ?? [];
   const ranges = options.ranges ?? [{ from: 0, to: doc.length }];
   const wikilinks = options.wikilinks ?? EMPTY_WIKILINK_CONTEXT;
+  const taskStatuses = normalizeTaskStatuses(
+    options.taskStatuses ?? DEFAULT_TASK_STATUSES,
+  );
   const activeReveal =
     options.activeReveal === undefined
-      ? findActiveReveal(doc, tree, table, selection, wikilinks)
+      ? findActiveReveal(doc, tree, table, selection, wikilinks, taskStatuses)
       : options.activeReveal;
   const built: BuiltDecoration[] = [];
   const seenLines = new Set<string>();
+  const seenMotionRanges = new Set<string>();
+
+  const activeRevealOwns = (node: SyntaxNode): boolean =>
+    activeReveal !== null &&
+    node.from === activeReveal.from &&
+    node.to === activeReveal.to;
 
   const revealed = (rule: DecorationRule, node: SyntaxNode): boolean => {
     if (rule.reveal === "never" || activeReveal === null) {
@@ -1203,7 +1574,13 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (!ruleMatches(rule, node, doc)) {
             continue;
           }
-          const dynamic = dynamicAttributes(rule, node, doc, wikilinks);
+          const dynamic = dynamicAttributes(
+            rule,
+            node,
+            doc,
+            wikilinks,
+            taskStatuses,
+          );
           if (dynamic === null) {
             continue;
           }
@@ -1242,6 +1619,37 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                               : "middle",
                     }
                   : dynamic;
+              const nestedActiveLine =
+                rule.dynamic === "rich-callout" &&
+                activeReveal !== null &&
+                !revealedNow &&
+                activeReveal.from >= ref.from &&
+                activeReveal.to <= ref.to &&
+                line.from >= activeReveal.from &&
+                line.to <= activeReveal.to;
+              if (
+                rule.dynamic === "rich-callout" &&
+                line.to > line.from &&
+                !nestedActiveLine
+              ) {
+                const motionClass = `cm-skr-reveal-motion ${
+                  revealedNow
+                    ? "cm-skr-reveal-source"
+                    : "cm-skr-reveal-rendered"
+                }`;
+                const motionKey = `${line.from} ${line.to} ${motionClass}`;
+                if (!seenMotionRanges.has(motionKey)) {
+                  seenMotionRanges.add(motionKey);
+                  built.push({
+                    from: line.from,
+                    to: line.to,
+                    decoration: Decoration.mark({
+                      class: motionClass,
+                      skr: `motion ${revealedNow ? "source" : "rendered"}=callout`,
+                    }),
+                  });
+                }
+              }
               const key = `${line.from} ${lineClass}${serializeAttributes(lineDynamic)}`;
               if (
                 line.length <= LONG_LINE_DECORATION_LIMIT &&
@@ -1269,6 +1677,22 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             continue;
           }
           if (doc.lineAt(ref.from).length > LONG_LINE_DECORATION_LIMIT) {
+            continue;
+          }
+          if (
+            revealedNow &&
+            presentation.present === "widget" &&
+            presentation.widget === "embed"
+          ) {
+            built.push({
+              from: ref.from,
+              to: ref.to,
+              decoration: Decoration.mark({
+                class:
+                  "cm-skr-reveal-motion cm-skr-reveal-source cm-skr-reveal-embed-source",
+                skr: "motion source=embed",
+              }),
+            });
             continue;
           }
           // A revealed rule emits nothing, so the source shows through. The
@@ -1319,6 +1743,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               node,
               doc,
               wikilinks,
+              taskStatuses,
             );
             const skr = `widget ${presentation.widget}${serializeAttributes(builtWidget.attributes)}`;
             if (presentation.place === "before") {
@@ -1344,10 +1769,19 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               });
             }
           } else {
+            const motionClass = ["Link", "Image", "Wikilink"].includes(
+              rule.node,
+            )
+              ? `cm-skr-reveal-motion ${
+                  activeRevealOwns(node)
+                    ? "cm-skr-reveal-source"
+                    : "cm-skr-reveal-rendered"
+                }`
+              : "";
             built.push({
               from: ref.from,
               to: ref.to,
-              decoration: markDecoration(presentation, dynamic),
+              decoration: markDecoration(presentation, dynamic, motionClass),
             });
           }
         }
@@ -1387,12 +1821,14 @@ function buildViewDecorations(view: EditorView): DecorationSet {
     : [];
   const wikilinks =
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
+  const taskStatuses = state.facet(taskStatusConfiguration);
   const activeReveal = findActiveReveal(
     state.doc,
     syntaxTree(state),
     table,
     selection,
     wikilinks,
+    taskStatuses,
   );
   const ranges =
     view.visibleRanges.length > 0
@@ -1405,6 +1841,7 @@ function buildViewDecorations(view: EditorView): DecorationSet {
     selection,
     ranges,
     wikilinks,
+    taskStatuses,
     activeReveal,
   });
 }
@@ -1417,18 +1854,21 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
     : [];
   const wikilinks =
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
+  const taskStatuses = state.facet(taskStatusConfiguration);
   return computeDecorations({
     doc: state.doc,
     tree: syntaxTree(state),
     table: splitTable(table).block,
     selection,
     wikilinks,
+    taskStatuses,
     activeReveal: findActiveReveal(
       state.doc,
       syntaxTree(state),
       table,
       selection,
       wikilinks,
+      taskStatuses,
     ),
   });
 }
@@ -1475,6 +1915,10 @@ const blockEngineField = StateField.define<BlockEngineState>({
       syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ||
       transaction.state.facet(decorationTable) !==
         transaction.startState.facet(decorationTable) ||
+      transaction.state.facet(sourceRevealEnabled) !==
+        transaction.startState.facet(sourceRevealEnabled) ||
+      transaction.state.facet(taskStatusConfiguration) !==
+        transaction.startState.facet(taskStatusConfiguration) ||
       transaction.state.field(wikilinkContext, false) !==
         transaction.startState.field(wikilinkContext, false)
     ) {
@@ -1497,6 +1941,10 @@ function needsRebuild(update: ViewUpdate): boolean {
     syntaxTree(update.state) !== syntaxTree(update.startState) ||
     update.state.facet(decorationTable) !==
       update.startState.facet(decorationTable) ||
+    update.state.facet(sourceRevealEnabled) !==
+      update.startState.facet(sourceRevealEnabled) ||
+    update.state.facet(taskStatusConfiguration) !==
+      update.startState.facet(taskStatusConfiguration) ||
     update.state.field(wikilinkContext, false) !==
       update.startState.field(wikilinkContext, false)
   );
@@ -1568,6 +2016,284 @@ const enginePlugin = ViewPlugin.fromClass(
   },
   { decorations: (plugin) => plugin.decorations },
 );
+
+let nextPreviewId = 0;
+
+class LinkPreviewController {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private scheduledLink: HTMLElement | null = null;
+  private activeLink: HTMLElement | null = null;
+  private panel: HTMLElement | null = null;
+  private cleanupRender: (() => void) | null = null;
+  private previousDescription: string | null = null;
+  private previousControls: string | null = null;
+  private previousExpanded: string | null = null;
+  private focusedTarget: string | null = null;
+
+  constructor(readonly view: EditorView) {
+    view.dom.addEventListener("pointerover", this.onPointerOver);
+    view.dom.addEventListener("pointerout", this.onPointerOut);
+    view.dom.addEventListener("focusin", this.onFocusIn);
+    view.dom.addEventListener("focusout", this.onFocusOut);
+    window.addEventListener("resize", this.onGeometryChanged);
+    window.addEventListener("scroll", this.onScroll, true);
+  }
+
+  private previewLink(target: EventTarget | null): HTMLElement | null {
+    if (!(target instanceof Element)) {
+      return null;
+    }
+    const link = target.closest<HTMLElement>("[data-preview-target]");
+    return link?.closest(".cm-editor") === this.view.dom ? link : null;
+  }
+
+  private panelContains(target: EventTarget | null): boolean {
+    return target instanceof Node && this.panel?.contains(target) === true;
+  }
+
+  private cancelTimer(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.scheduledLink = null;
+  }
+
+  private schedule(link: HTMLElement): void {
+    if (link === this.activeLink || link === this.scheduledLink) {
+      return;
+    }
+    this.dismiss();
+    this.scheduledLink = link;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.scheduledLink = null;
+      this.show(link);
+    }, LINK_PREVIEW_DELAY);
+  }
+
+  private show(link: HTMLElement): void {
+    const context = currentWikilinkContext(this.view.state);
+    const target = link.dataset.previewTarget;
+    if (context.linkPreviews === false || target === undefined) {
+      return;
+    }
+    this.dismiss();
+    const resolution = resolveWikilinkTarget(target, context);
+    if (resolution.kind === "unresolved") {
+      return;
+    }
+    const pathTarget = target.split("#", 1)[0] ?? "";
+    const sourceName =
+      resolution.kind === "note"
+        ? resolution.path
+        : context.currentPath || pathTarget || STRINGS.currentNote;
+    const panel = document.createElement("aside");
+    panel.className = "cm-skr-link-preview";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute(
+      "aria-label",
+      `${STRINGS.linkPreviewLabel}: ${sourceName}`,
+    );
+    panel.setAttribute("data-testid", "link-preview");
+    nextPreviewId += 1;
+    panel.id = `skr-link-preview-${nextPreviewId}`;
+
+    const header = document.createElement("div");
+    header.className = "cm-skr-link-preview-header";
+    header.textContent = sourceName;
+    const body = document.createElement("div");
+    body.className = "cm-skr-link-preview-body cm-skr-embed-body";
+    panel.append(header, body);
+    this.view.dom.append(panel);
+
+    const bounds = link.getBoundingClientRect();
+    const left = Math.max(12, Math.min(bounds.left, window.innerWidth - 372));
+    panel.style.left = `${left}px`;
+    const maximumTop = Math.max(12, window.innerHeight - 280);
+    const below = bounds.bottom + 8;
+    const above = bounds.top - 264;
+    panel.style.top = `${below <= maximumTop ? Math.max(12, below) : Math.max(12, above)}px`;
+    panel.style.maxHeight = `${Math.min(256, Math.max(0, window.innerHeight - 24))}px`;
+
+    this.activeLink = link;
+    this.panel = panel;
+    this.previousDescription = link.getAttribute("aria-describedby");
+    this.previousControls = link.getAttribute("aria-controls");
+    this.previousExpanded = link.getAttribute("aria-expanded");
+    link.setAttribute("aria-describedby", panel.id);
+    link.setAttribute("aria-controls", panel.id);
+    link.setAttribute("aria-expanded", "true");
+    this.cleanupRender = renderLinkedNote(
+      body,
+      target,
+      this.view.state.doc.toString(),
+      context,
+      `${STRINGS.linkPreviewLabel}: ${sourceName}`,
+      this.view.state.facet(taskStatusConfiguration),
+      () => this.view.requestMeasure(),
+    );
+  }
+
+  private dismiss(): void {
+    this.cancelTimer();
+    this.cleanupRender?.();
+    this.cleanupRender = null;
+    this.panel?.remove();
+    this.panel = null;
+    if (this.activeLink !== null) {
+      this.restoreAttribute(
+        this.activeLink,
+        "aria-describedby",
+        this.previousDescription,
+      );
+      this.restoreAttribute(
+        this.activeLink,
+        "aria-controls",
+        this.previousControls,
+      );
+      this.restoreAttribute(
+        this.activeLink,
+        "aria-expanded",
+        this.previousExpanded,
+      );
+    }
+    this.activeLink = null;
+    this.previousDescription = null;
+    this.previousControls = null;
+    this.previousExpanded = null;
+  }
+
+  private restoreAttribute(
+    element: HTMLElement,
+    name: string,
+    value: string | null,
+  ): void {
+    if (value === null) {
+      element.removeAttribute(name);
+    } else {
+      element.setAttribute(name, value);
+    }
+  }
+
+  private readonly onPointerOver = (event: PointerEvent) => {
+    const link = this.previewLink(event.target);
+    if (link !== null) {
+      this.schedule(link);
+    }
+  };
+
+  private readonly onPointerOut = (event: PointerEvent) => {
+    const link = this.previewLink(event.target);
+    const next = this.previewLink(event.relatedTarget);
+    if (
+      (link !== null &&
+        next !== link &&
+        !this.panelContains(event.relatedTarget)) ||
+      (this.panelContains(event.target) &&
+        next !== this.activeLink &&
+        !this.panelContains(event.relatedTarget))
+    ) {
+      this.dismiss();
+    }
+  };
+
+  private readonly onFocusIn = (event: FocusEvent) => {
+    const link = this.previewLink(event.target);
+    if (link?.dataset.previewTarget !== undefined) {
+      this.focusedTarget = link.dataset.previewTarget;
+    }
+  };
+
+  private readonly onFocusOut = (event: FocusEvent) => {
+    const link = this.previewLink(event.target);
+    if (
+      (link !== null && !this.panelContains(event.relatedTarget)) ||
+      (this.panelContains(event.target) &&
+        this.previewLink(event.relatedTarget) !== this.activeLink &&
+        !this.panelContains(event.relatedTarget))
+    ) {
+      this.dismiss();
+      this.focusedTarget = null;
+    }
+  };
+
+  private readonly onGeometryChanged = () => this.dismiss();
+
+  private readonly onScroll = (event: Event) => {
+    if (!this.panelContains(event.target)) {
+      this.dismiss();
+    }
+  };
+
+  handleKeydown(event: KeyboardEvent): boolean {
+    if (
+      event.key === "Escape" &&
+      (this.panel !== null || this.timer !== null)
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.dismiss();
+      return true;
+    }
+    const link =
+      this.previewLink(event.target) ??
+      [
+        ...this.view.dom.querySelectorAll<HTMLElement>("[data-preview-target]"),
+      ].find(
+        (candidate) => candidate.dataset.previewTarget === this.focusedTarget,
+      ) ??
+      null;
+    if (
+      link !== null &&
+      event.key.toLocaleLowerCase() === "p" &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.show(link);
+      return true;
+    }
+    return false;
+  }
+
+  update(update: ViewUpdate): void {
+    if (
+      update.docChanged ||
+      update.geometryChanged ||
+      update.viewportChanged ||
+      update.state.facet(taskStatusConfiguration) !==
+        update.startState.facet(taskStatusConfiguration) ||
+      update.state.field(wikilinkContext, false) !==
+        update.startState.field(wikilinkContext, false)
+    ) {
+      this.dismiss();
+    }
+  }
+
+  destroy(): void {
+    this.dismiss();
+    this.focusedTarget = null;
+    this.view.dom.removeEventListener("pointerover", this.onPointerOver);
+    this.view.dom.removeEventListener("pointerout", this.onPointerOut);
+    this.view.dom.removeEventListener("focusin", this.onFocusIn);
+    this.view.dom.removeEventListener("focusout", this.onFocusOut);
+    window.removeEventListener("resize", this.onGeometryChanged);
+    window.removeEventListener("scroll", this.onScroll, true);
+  }
+}
+
+const linkPreviewPlugin = ViewPlugin.fromClass(LinkPreviewController);
+
+// registry-exempt keydown: P and Escape operate only on a focused
+// rendered link preview and do not define application commands.
+const linkPreviewKeys = EditorView.domEventHandlers({
+  keydown(event, view) {
+    return view.plugin(linkPreviewPlugin)?.handleKeydown(event) ?? false;
+  },
+});
 
 function atomicDecorations(view: EditorView): DecorationSet {
   const ranges: ReturnType<Decoration["range"]>[] = [];
@@ -1697,12 +2423,11 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-reveal-marker": {
     display: "inline-block",
     maxWidth: "0",
-    overflow: "hidden",
+    overflow: "visible",
     color: "var(--skr-text-muted)",
     opacity: "0",
     verticalAlign: "bottom",
     whiteSpace: "pre",
-    transition: "opacity 50ms linear",
   },
   ".cm-skr-reveal-marker-active": {
     maxWidth: "7ch",
@@ -1757,23 +2482,142 @@ const engineTheme = EditorView.baseTheme({
     color: "var(--skr-text-muted)",
     fontStyle: "italic",
   },
+  ".cm-skr-link-preview": {
+    position: "fixed",
+    zIndex: "40",
+    boxSizing: "border-box",
+    width: "min(22rem, calc(100vw - 1.5rem))",
+    maxHeight: "16rem",
+    overflow: "auto",
+    border: "1px solid var(--skr-border)",
+    borderTop: "3px solid var(--skr-accent)",
+    borderRadius: "0.65rem",
+    color: "var(--skr-text)",
+    backgroundColor: "var(--skr-surface-raised)",
+    boxShadow: "var(--skr-shadow)",
+  },
+  ".cm-skr-link-preview-header": {
+    position: "sticky",
+    top: "0",
+    zIndex: "1",
+    padding: "0.45rem 0.65rem",
+    borderBottom: "1px solid var(--skr-border)",
+    color: "var(--skr-accent)",
+    backgroundColor: "var(--skr-accent-subtle)",
+    fontSize: "0.8125em",
+    fontWeight: "600",
+  },
+  ".cm-skr-link-preview-body": { padding: "0.35rem 0.55rem" },
   ".cm-skr-list-mark": { color: "var(--skr-accent)" },
+  ".cm-skr-task-control": {
+    position: "relative",
+    display: "inline-flex",
+    verticalAlign: "text-bottom",
+    margin: "0 0.15em",
+    color: "var(--skr-task-color, var(--skr-accent))",
+  },
   ".cm-skr-task-checkbox": {
-    display: "inline-block",
+    boxSizing: "border-box",
+    display: "inline-grid",
+    placeItems: "center",
     width: "1em",
     height: "1em",
-    verticalAlign: "text-bottom",
+    padding: "0",
+    color: "inherit",
+    backgroundColor: "transparent",
     border: "1.5px solid var(--skr-border-strong)",
     borderRadius: "3px",
-    margin: "0 0.15em",
+    cursor: "pointer",
+    userSelect: "none",
   },
-  '.cm-skr-task-checkbox[aria-checked="true"]': {
-    backgroundColor: "var(--skr-accent)",
-    borderColor: "var(--skr-accent)",
+  ".cm-skr-task-checkbox:focus-visible, .cm-skr-task-palette:focus-visible": {
+    outline: "2px solid var(--skr-focus)",
+    outlineOffset: "2px",
   },
-  '.cm-skr-task-checkbox[aria-checked="mixed"]': {
-    backgroundColor: "var(--skr-text-muted)",
-    borderColor: "var(--skr-text-muted)",
+  ".cm-skr-task-glyph": {
+    fontSize: "0.78em",
+    fontWeight: "800",
+    lineHeight: "1",
+  },
+  '.cm-skr-task-checkbox[data-category="IN_PROGRESS"]': {
+    borderColor: "currentColor",
+    backgroundColor: "color-mix(in srgb, currentColor 18%, var(--skr-surface))",
+  },
+  '.cm-skr-task-checkbox[data-category="ON_HOLD"]': {
+    borderColor: "currentColor",
+    borderStyle: "dashed",
+    backgroundColor: "color-mix(in srgb, currentColor 12%, var(--skr-surface))",
+  },
+  '.cm-skr-task-checkbox[data-category="DONE"]': {
+    color: "var(--skr-surface)",
+    backgroundColor: "var(--skr-task-color, var(--skr-success))",
+    borderColor: "var(--skr-task-color, var(--skr-success))",
+  },
+  '.cm-skr-task-checkbox[data-category="CANCELLED"]': {
+    borderColor: "currentColor",
+    opacity: "0.72",
+  },
+  '.cm-skr-task-checkbox[data-category="NON_TASK"]': {
+    borderColor: "transparent",
+    borderRadius: "0",
+  },
+  '.cm-skr-task[data-category="DONE"]': {
+    color: "var(--skr-text-muted)",
+    textDecoration: "line-through",
+    textDecorationThickness: "1px",
+  },
+  '.cm-skr-task[data-category="CANCELLED"]': {
+    color: "var(--skr-text-muted)",
+    textDecoration: "line-through",
+    opacity: "0.68",
+  },
+  ".cm-skr-task-palette": {
+    position: "absolute",
+    zIndex: "20",
+    top: "calc(100% + 0.35rem)",
+    left: "-0.4rem",
+    boxSizing: "border-box",
+    display: "grid",
+    gridTemplateColumns: "repeat(2, minmax(7.5rem, 1fr))",
+    gap: "0.15rem",
+    width: "max-content",
+    maxWidth: "min(22rem, calc(100vw - 2rem))",
+    maxHeight: "15rem",
+    padding: "0.35rem",
+    overflow: "auto",
+    color: "var(--skr-text)",
+    backgroundColor: "var(--skr-surface-raised)",
+    border: "1px solid var(--skr-border)",
+    borderRadius: "0.5rem",
+    boxShadow: "var(--skr-shadow)",
+  },
+  ".cm-skr-task-palette[hidden]": { display: "none" },
+  ".cm-skr-task-option": {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    minWidth: "0",
+    padding: "0.28rem 0.42rem",
+    borderRadius: "0.3rem",
+    cursor: "pointer",
+    transition: "background-color 50ms linear, color 50ms linear",
+  },
+  ".cm-skr-task-option:hover, .cm-skr-task-option-active": {
+    backgroundColor: "var(--skr-accent-subtle)",
+  },
+  ".cm-skr-task-option-glyph": {
+    display: "inline-grid",
+    placeItems: "center",
+    flex: "0 0 1.1rem",
+    color: "var(--skr-task-option-color, var(--skr-accent))",
+    fontWeight: "800",
+  },
+  ".cm-skr-task-option-name": {
+    overflow: "hidden",
+    fontSize: "0.82em",
+    lineHeight: "1.3",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
   },
   ".cm-skr-inline-code": {
     fontFamily: "var(--skr-font-mono)",
@@ -1978,6 +2822,8 @@ export function decorationEngine(
       : wikilinkContext.init(() => initialContext),
     blockEngineField,
     enginePlugin,
+    linkPreviewPlugin,
+    linkPreviewKeys,
     EditorView.atomicRanges.of(atomicDecorations),
     calloutPointerMapping,
     engineTheme,

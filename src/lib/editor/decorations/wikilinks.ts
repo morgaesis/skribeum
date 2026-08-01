@@ -3,7 +3,7 @@
 // presentation question the decoration engine asks synchronously per
 // visible wikilink: does this target name a note in the vault tree the
 // webview already holds? Configuration knobs are read from
-// `.obsidian/app.json` and honored, never overridden (decision 27).
+// `.obsidian/app.json` or the application's explicit vault preferences.
 
 /** The `.obsidian/app.json` knobs the link layer honors. */
 export type ObsidianAppConfig = {
@@ -64,6 +64,8 @@ export type WikilinkResolutionContext = {
   embedAncestry?: readonly string[];
   /** Current rendered-embed nesting depth. */
   embedDepth?: number;
+  /** Whether note links expose delayed rendered previews. */
+  linkPreviews?: boolean;
 };
 
 export const EMPTY_WIKILINK_CONTEXT: WikilinkResolutionContext = {
@@ -108,6 +110,27 @@ function resolutionIndex(paths: readonly string[]): ResolutionIndex {
   return index;
 }
 
+function attachmentCandidate(
+  target: string,
+  context: WikilinkResolutionContext,
+): string | null {
+  const configured = context.config.attachmentFolderPath;
+  if (configured === null || target.includes("/")) {
+    return null;
+  }
+  if (configured === "/") {
+    return target;
+  }
+  if (configured === "./") {
+    const current = context.currentPath ?? "";
+    const separator = current.lastIndexOf("/");
+    return separator === -1
+      ? target
+      : `${current.slice(0, separator)}/${target}`;
+  }
+  return `${configured.replace(/\/$/u, "")}/${target}`;
+}
+
 export type WikilinkResolution =
   /** The target names the current note (`[[#Heading]]`, `[[#^block]]`). */
   | { kind: "self" }
@@ -134,6 +157,14 @@ export function resolveWikilinkTarget(
   }
   const index = resolutionIndex(context.paths);
   const key = normalizeKey(pathPart);
+  const attachment = attachmentCandidate(pathPart, context);
+  if (attachment !== null) {
+    const attachmentKey = normalizeKey(attachment);
+    const configuredMatch = index.byPath.get(attachmentKey);
+    if (configuredMatch !== undefined) {
+      return { kind: "note", path: configuredMatch };
+    }
+  }
   const exact = index.byPath.get(key) ?? index.byPath.get(`${key}.md`);
   if (exact !== undefined) {
     return { kind: "note", path: exact };
@@ -144,4 +175,58 @@ export function resolveWikilinkTarget(
     return { kind: "note", path: byName };
   }
   return { kind: "unresolved" };
+}
+
+/** Resolves a local Markdown-link URL to a canonical preview target. */
+export function resolveMarkdownLinkTarget(
+  rawTarget: string,
+  context: WikilinkResolutionContext,
+): string | null {
+  const unwrapped =
+    rawTarget.startsWith("<") && rawTarget.endsWith(">")
+      ? rawTarget.slice(1, -1)
+      : rawTarget;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(unwrapped);
+  } catch {
+    return null;
+  }
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(decoded) || decoded.startsWith("//")) {
+    return null;
+  }
+  const hash = decoded.indexOf("#");
+  const pathPart = hash === -1 ? decoded : decoded.slice(0, hash);
+  const fragment = hash === -1 ? "" : decoded.slice(hash);
+  if (pathPart.length === 0) {
+    return context.currentPath === null || context.currentPath === undefined
+      ? null
+      : fragment;
+  }
+  if (pathPart.startsWith("/") || pathPart.includes("?")) {
+    return null;
+  }
+  const base = context.currentPath?.split("/").slice(0, -1) ?? [];
+  const segments = [...base];
+  for (const segment of pathPart.split("/")) {
+    if (segment === "." || segment.length === 0) {
+      continue;
+    }
+    if (segment === "..") {
+      if (segments.length === 0) {
+        return null;
+      }
+      segments.pop();
+    } else {
+      segments.push(segment);
+    }
+  }
+  const candidates = [segments.join("/"), pathPart];
+  for (const candidate of candidates) {
+    const resolution = resolveWikilinkTarget(candidate, context);
+    if (resolution.kind === "note") {
+      return `${resolution.path}${fragment}`;
+    }
+  }
+  return null;
 }

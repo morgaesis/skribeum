@@ -309,9 +309,12 @@ slicing text, never by injecting HTML.
 
 `settings.json` lives in the OS app-config directory, never in a vault.
 The document carries a `schema_version` and typed known keys (theme,
-editor font size, search result limit); writes are whole-document,
+editor font size, search result limit and the ordered `task_statuses` graph);
+writes are whole-document,
 validated, durable through the crash-safe sequence, and preserve every
 unknown key already in the file, so settings written by a newer build
 survive a round trip through an older one. A missing file reads as the
 defaults; a file that does not parse as a JSON object fails loudly on
-read and write rather than being silently replaced.
+read and write rather than being silently replaced. Invalid task status
+entries, duplicate symbols and dangling transitions load the default graph.
+Unknown fields inside retained task status entries survive writes.

@@ -16,6 +16,8 @@ use skribeum_vault::{
 };
 use tauri::ipc::InvokeResponseBody;
 use tauri::{AppHandle, Manager, Runtime, State};
+#[cfg(not(feature = "webdriver"))]
+use tauri_plugin_updater::UpdaterExt;
 use tauri_specta::Event;
 
 use crate::error::AppError;
@@ -306,21 +308,157 @@ pub struct SearchHit {
     pub score: f64,
 }
 
+/// Result of checking the selected release channel.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum UpdateCheckDoc {
+    /// The installed version matches the selected channel manifest.
+    Current,
+    /// A signed update is available from the selected channel manifest.
+    Available {
+        /// Version announced by the manifest.
+        version: String,
+        /// Release notes from the manifest, when supplied.
+        notes: String,
+    },
+}
+
+/// Semantic task status category over IPC.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TaskStatusCategory {
+    /// An open task.
+    Todo,
+    /// Work is underway.
+    InProgress,
+    /// Work is intentionally paused.
+    OnHold,
+    /// Work is complete.
+    Done,
+    /// Work was cancelled.
+    Cancelled,
+    /// A checkbox-like marker that is not a task.
+    NonTask,
+}
+
+/// One configured task marker over IPC.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct TaskStatusDoc {
+    /// The single source character between brackets.
+    pub symbol: String,
+    /// Custom status name, or empty when the frontend resolves a default name.
+    pub name: String,
+    /// Semantic status category.
+    pub category: TaskStatusCategory,
+    /// Short glyph rendered inside the checkbox.
+    pub glyph: String,
+    /// Existing CSS theme custom property used for the status color.
+    pub color_token: String,
+    /// Symbol written by the default click transition.
+    pub next_status: String,
+}
+
 /// The typed settings document over IPC. Unknown keys in the underlying
 /// `settings.json` never cross the boundary; they are preserved internally
 /// on every write.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "flat fields mirror the typed settings IPC document"
+)]
 pub struct SettingsDoc {
     /// Schema version of the document.
     pub schema_version: u32,
     /// Color theme: `system`, `light` or `dark`.
     pub theme: String,
+    /// Palette used in light mode.
+    pub light_palette: String,
+    /// Palette used in dark mode.
+    pub dark_palette: String,
+    /// Prose font family choice.
+    pub prose_font: String,
+    /// Code font family choice.
+    pub code_font: String,
     /// Editor font size in CSS pixels.
     pub editor_font_size: u32,
-    /// Editor reading measure in characters.
-    pub editor_reading_measure: u32,
+    /// Editor line height as a percentage.
+    pub editor_line_height: u32,
+    /// Editor line width in characters.
+    pub editor_line_width: u32,
+    /// Whether line numbers appear beside the editor.
+    pub show_line_numbers: bool,
+    /// Whether interface animations are enabled.
+    pub animations: bool,
+    /// Idle delay before saving edits, in milliseconds.
+    pub autosave_delay_ms: u32,
+    /// Whether platform spell checking is enabled.
+    pub spell_check: bool,
+    /// Indentation uses spaces or tabs.
+    pub indent_style: String,
+    /// Indentation width in columns.
+    pub indent_width: u32,
+    /// Whether long lines wrap in the editor.
+    pub wrap_long_lines: bool,
+    /// Whether whitespace characters are shown.
+    pub show_invisible_characters: bool,
+    /// Whether Markdown syntax is revealed at the cursor.
+    pub reveal_markdown_syntax: bool,
+    /// Default folder for new notes, relative to the vault.
+    pub default_note_folder: String,
+    /// Attachment placement mode.
+    pub attachment_folder_mode: String,
+    /// Attachment folder, relative to the vault.
+    pub attachment_folder_path: String,
+    /// Whether supported Obsidian configuration is honored.
+    pub honor_obsidian_config: bool,
     /// Maximum number of results a search query returns.
     pub search_result_limit: u32,
+    /// Whether note links show rendered previews.
+    pub link_previews: bool,
+    /// Whether note bodies are included in search.
+    pub search_note_bodies: bool,
+    /// Whether search matches case sensitively.
+    pub search_case_sensitive: bool,
+    /// Update release channel.
+    pub update_channel: String,
+    /// Ordered task marker vocabulary and click-transition graph.
+    pub task_statuses: Vec<TaskStatusDoc>,
+}
+
+fn task_status_from_vault(status: skribeum_vault::TaskStatus) -> TaskStatusDoc {
+    TaskStatusDoc {
+        symbol: status.symbol,
+        name: status.name,
+        category: match status.category {
+            skribeum_vault::TaskStatusCategory::Todo => TaskStatusCategory::Todo,
+            skribeum_vault::TaskStatusCategory::InProgress => TaskStatusCategory::InProgress,
+            skribeum_vault::TaskStatusCategory::OnHold => TaskStatusCategory::OnHold,
+            skribeum_vault::TaskStatusCategory::Done => TaskStatusCategory::Done,
+            skribeum_vault::TaskStatusCategory::Cancelled => TaskStatusCategory::Cancelled,
+            skribeum_vault::TaskStatusCategory::NonTask => TaskStatusCategory::NonTask,
+        },
+        glyph: status.glyph,
+        color_token: status.color_token,
+        next_status: status.next_status,
+    }
+}
+
+fn task_status_into_vault(status: TaskStatusDoc) -> skribeum_vault::TaskStatus {
+    skribeum_vault::TaskStatus {
+        symbol: status.symbol,
+        name: status.name,
+        category: match status.category {
+            TaskStatusCategory::Todo => skribeum_vault::TaskStatusCategory::Todo,
+            TaskStatusCategory::InProgress => skribeum_vault::TaskStatusCategory::InProgress,
+            TaskStatusCategory::OnHold => skribeum_vault::TaskStatusCategory::OnHold,
+            TaskStatusCategory::Done => skribeum_vault::TaskStatusCategory::Done,
+            TaskStatusCategory::Cancelled => skribeum_vault::TaskStatusCategory::Cancelled,
+            TaskStatusCategory::NonTask => skribeum_vault::TaskStatusCategory::NonTask,
+        },
+        glyph: status.glyph,
+        color_token: status.color_token,
+        next_status: status.next_status,
+    }
 }
 
 struct OpenVault {
@@ -496,6 +634,40 @@ fn vault_tree_refresh<R: Runtime>(
     Ok(entries)
 }
 
+/// Creates an empty Markdown note at a vault-relative path without
+/// overwriting an existing file. Missing parent folders are created inside
+/// the vault, and the in-memory tree and search index update immediately.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn note_create(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    rel_path: String,
+) -> Result<(), AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let search = {
+        let mut vaults = registry.lock();
+        let open = vaults
+            .get_mut(&handle.id)
+            .ok_or_else(AppError::unknown_handle)?;
+        open.vault
+            .create_note(&RealFs, &path)
+            .map_err(|error| AppError::from(error).with_path(path.as_str()))?;
+        Arc::clone(&open.search)
+    };
+    if let Some(index) = search
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
+        index
+            .index_note(path.as_str(), b"")
+            .map_err(AppError::from)?;
+    }
+    Ok(())
+}
+
 /// Reads a note. Metadata returns as JSON; the note bytes are sent over
 /// `content` as a single raw-payload message (an `ArrayBuffer` in the
 /// webview), so large files never cross the bridge as JSON.
@@ -627,38 +799,52 @@ fn note_write(
         .write_note(&RealFs, &path, &changes, &expected_projection_hash)
         .map_err(|e| AppError::from(e).with_path(path.as_str()))?;
 
-    match &result {
+    let (response, search_update) = match result {
         skribeum_vault::WriteResult::Written { projection_hash } => {
             if let Some(journal) = &journal.0 {
-                let _ = journal.append_commit(&RealFs, &root, path.as_str(), projection_hash);
+                let _ = journal.append_commit(&RealFs, &root, path.as_str(), &projection_hash);
             }
             if let Some(base) = open.vault.note_base(&path) {
                 open.reconciler
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .record_write(&path, &base.bytes, registry.clock.now());
-                // Update the search index on save with the written bytes.
-                if let Some(index) = open
-                    .search
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .as_ref()
-                {
-                    let _ = index.index_note(path.as_str(), &base.bytes);
-                }
+                (
+                    WriteResult::Written {
+                        projection_hash: projection_hash.clone(),
+                    },
+                    Some((Arc::clone(&open.search), base.bytes)),
+                )
+            } else {
+                (
+                    WriteResult::Written {
+                        projection_hash: projection_hash.clone(),
+                    },
+                    None,
+                )
             }
-            Ok(WriteResult::Written {
-                projection_hash: projection_hash.clone(),
-            })
         }
         skribeum_vault::WriteResult::Conflict {
             current_projection_hash,
             reconciliation,
-        } => Ok(WriteResult::Conflict {
-            current_projection_hash: current_projection_hash.clone(),
-            reconciliation: *reconciliation,
-        }),
+        } => (
+            WriteResult::Conflict {
+                current_projection_hash,
+                reconciliation,
+            },
+            None,
+        ),
+    };
+    drop(vaults);
+    if let Some((search, bytes)) = search_update
+        && let Some(index) = search
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+    {
+        let _ = index.index_note(path.as_str(), &bytes);
     }
+    Ok(response)
 }
 
 /// Subscribes to change events under an open vault. Events arrive as the
@@ -786,14 +972,30 @@ fn search_query(
     handle: VaultHandle,
     query: String,
     limit: u32,
+    search_note_bodies: bool,
+    case_sensitive: bool,
 ) -> Result<Vec<SearchHit>, AppError> {
-    let vaults = registry.lock();
-    let open = vaults
-        .get(&handle.id)
-        .ok_or_else(AppError::unknown_handle)?;
-    let guard = open.search.lock().unwrap_or_else(PoisonError::into_inner);
+    const MAX_QUERY_BYTES: usize = 512;
+    const MAX_QUERY_TERMS: usize = 16;
+    const MAX_SEARCH_RESULTS: u32 = 1000;
+    if query.len() > MAX_QUERY_BYTES
+        || query.split_whitespace().count() > MAX_QUERY_TERMS
+        || !(1..=MAX_SEARCH_RESULTS).contains(&limit)
+    {
+        return Err(AppError::search_invalid());
+    }
+    let search = {
+        let vaults = registry.lock();
+        let open = vaults
+            .get(&handle.id)
+            .ok_or_else(AppError::unknown_handle)?;
+        Arc::clone(&open.search)
+    };
+    let guard = search.lock().unwrap_or_else(PoisonError::into_inner);
     let index = guard.as_ref().ok_or_else(AppError::search_unavailable)?;
-    let hits = index.query(&query, limit).map_err(AppError::from)?;
+    let hits = index
+        .query_with_options(&query, limit, search_note_bodies, case_sensitive)
+        .map_err(AppError::from)?;
     Ok(hits
         .into_iter()
         .map(|hit| SearchHit {
@@ -804,6 +1006,80 @@ fn search_query(
             score: hit.score,
         })
         .collect())
+}
+
+/// Checks the signed manifest for the selected release channel.
+#[cfg(any(not(feature = "webdriver"), test))]
+fn update_manifest_names(channel: &str) -> Option<&'static [&'static str]> {
+    match channel {
+        "stable" => Some(&["latest.json"]),
+        "beta" => Some(&["beta.json", "latest.json"]),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+async fn update_check(app: AppHandle, channel: String) -> Result<UpdateCheckDoc, AppError> {
+    #[cfg(feature = "webdriver")]
+    {
+        let _ = (app, channel);
+        return Err(AppError::update_failed(
+            "update checks are unavailable in the WebDriver build",
+        ));
+    }
+
+    #[cfg(not(feature = "webdriver"))]
+    {
+        let manifests = update_manifest_names(&channel)
+            .ok_or_else(|| AppError::update_failed("unknown update channel"))?;
+        let endpoints = manifests
+            .iter()
+            .map(|manifest| {
+                format!(
+                    "https://github.com/morgaesis/skribeum/releases/download/updater/{manifest}"
+                )
+                .parse::<tauri::Url>()
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| AppError::update_failed(error.to_string()))?;
+        let updater = app
+            .updater_builder()
+            .endpoints(endpoints)
+            .map_err(|error| AppError::update_failed(error.to_string()))?
+            .build()
+            .map_err(|error| AppError::update_failed(error.to_string()))?;
+        match updater
+            .check()
+            .await
+            .map_err(|error| AppError::update_failed(error.to_string()))?
+        {
+            Some(update) => Ok(UpdateCheckDoc::Available {
+                version: update.version,
+                notes: update.body.unwrap_or_default(),
+            }),
+            None => Ok(UpdateCheckDoc::Current),
+        }
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::update_manifest_names;
+
+    #[test]
+    fn beta_checks_the_stable_manifest_when_no_beta_is_published() {
+        assert_eq!(
+            update_manifest_names("beta"),
+            Some(["beta.json", "latest.json"].as_slice())
+        );
+        assert_eq!(
+            update_manifest_names("stable"),
+            Some(["latest.json"].as_slice())
+        );
+        assert_eq!(update_manifest_names("nightly"), None);
+    }
 }
 
 /// Reads a recognized Obsidian configuration file from the vault's
@@ -841,10 +1117,53 @@ fn settings_read(settings: State<'_, SettingsState>) -> Result<SettingsDoc, AppE
     Ok(SettingsDoc {
         schema_version: doc.schema_version,
         theme: doc.theme,
+        light_palette: doc.light_palette,
+        dark_palette: doc.dark_palette,
+        prose_font: doc.prose_font,
+        code_font: doc.code_font,
         editor_font_size: doc.editor_font_size,
-        editor_reading_measure: doc.editor_reading_measure,
+        editor_line_height: doc.editor_line_height,
+        editor_line_width: doc.editor_line_width,
+        show_line_numbers: doc.show_line_numbers,
+        animations: doc.animations,
+        autosave_delay_ms: doc.autosave_delay_ms,
+        spell_check: doc.spell_check,
+        indent_style: doc.indent_style,
+        indent_width: doc.indent_width,
+        wrap_long_lines: doc.wrap_long_lines,
+        show_invisible_characters: doc.show_invisible_characters,
+        reveal_markdown_syntax: doc.reveal_markdown_syntax,
+        default_note_folder: doc.default_note_folder,
+        attachment_folder_mode: doc.attachment_folder_mode,
+        attachment_folder_path: doc.attachment_folder_path,
+        honor_obsidian_config: doc.honor_obsidian_config,
         search_result_limit: doc.search_result_limit,
+        link_previews: doc.link_previews,
+        search_note_bodies: doc.search_note_bodies,
+        search_case_sensitive: doc.search_case_sensitive,
+        update_channel: doc.update_channel,
+        task_statuses: doc
+            .task_statuses
+            .into_iter()
+            .map(task_status_from_vault)
+            .collect(),
     })
+}
+
+/// Returns the resolved settings document path for display in the settings
+/// footer and About section.
+#[tauri::command]
+#[specta::specta]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands extract managed state by value"
+)]
+fn settings_path(settings: State<'_, SettingsState>) -> Result<String, AppError> {
+    let store = settings
+        .0
+        .as_ref()
+        .ok_or_else(AppError::settings_unavailable)?;
+    Ok(store.path().to_string_lossy().into_owned())
 }
 
 /// Writes the settings document whole. Values are validated first, and
@@ -864,9 +1183,36 @@ fn settings_write(settings: State<'_, SettingsState>, doc: SettingsDoc) -> Resul
             &Settings {
                 schema_version: doc.schema_version,
                 theme: doc.theme,
+                light_palette: doc.light_palette,
+                dark_palette: doc.dark_palette,
+                prose_font: doc.prose_font,
+                code_font: doc.code_font,
                 editor_font_size: doc.editor_font_size,
-                editor_reading_measure: doc.editor_reading_measure,
+                editor_line_height: doc.editor_line_height,
+                editor_line_width: doc.editor_line_width,
+                show_line_numbers: doc.show_line_numbers,
+                animations: doc.animations,
+                autosave_delay_ms: doc.autosave_delay_ms,
+                spell_check: doc.spell_check,
+                indent_style: doc.indent_style,
+                indent_width: doc.indent_width,
+                wrap_long_lines: doc.wrap_long_lines,
+                show_invisible_characters: doc.show_invisible_characters,
+                reveal_markdown_syntax: doc.reveal_markdown_syntax,
+                default_note_folder: doc.default_note_folder,
+                attachment_folder_mode: doc.attachment_folder_mode,
+                attachment_folder_path: doc.attachment_folder_path,
+                honor_obsidian_config: doc.honor_obsidian_config,
                 search_result_limit: doc.search_result_limit,
+                link_previews: doc.link_previews,
+                search_note_bodies: doc.search_note_bodies,
+                search_case_sensitive: doc.search_case_sensitive,
+                update_channel: doc.update_channel,
+                task_statuses: doc
+                    .task_statuses
+                    .into_iter()
+                    .map(task_status_into_vault)
+                    .collect(),
             },
         )
         .map_err(AppError::from)
@@ -1043,12 +1389,15 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             vault_open::<tauri::Wry>,
             vault_tree,
             vault_tree_refresh::<tauri::Wry>,
+            note_create,
             note_read,
             vault_file_read,
             note_write,
             watch_subscribe::<tauri::Wry>,
             search_query,
+            update_check,
             settings_read,
+            settings_path,
             settings_write,
             vault_config_read,
         ])

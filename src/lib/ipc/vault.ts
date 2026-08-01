@@ -60,6 +60,14 @@ export async function watchSubscribe(handle: VaultHandle): Promise<void> {
   unwrap(await commands.watchSubscribe(handle));
 }
 
+/** Creates an empty Markdown note without overwriting an existing path. */
+export async function noteCreate(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<void> {
+  unwrap(await commands.noteCreate(handle, relPath));
+}
+
 /**
  * Writes a note through the change-set path: byte-range replacements
  * against the last-read projection, verified against the expected

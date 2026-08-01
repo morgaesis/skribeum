@@ -50,6 +50,10 @@ const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
   ["lib/OutlinePanel.svelte", "ARIA tree pattern internal navigation"],
   ["lib/PaletteOverlay.svelte", "ARIA combobox pattern internal navigation"],
   ["lib/SettingsView.svelte", "ARIA dialog pattern internal dismissal"],
+  [
+    "lib/editor/decorations/engine.ts",
+    "task checkbox and listbox internal navigation",
+  ],
   ["lib/rendering/CanvasView.svelte", "canvas camera internal navigation"],
   ["lib/features/findPanel.ts", "find widget internal keys"],
 ]);

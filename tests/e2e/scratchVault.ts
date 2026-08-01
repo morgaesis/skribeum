@@ -30,7 +30,11 @@ export const CRLF_NOTE_CONTENT = "first\r\nsecond\r\nthird\r\n";
 // arrow-key expectations over the first two rows stay stable.
 export const LIVE_PREVIEW_NOTE_NAME = "z-live-preview.md";
 export const LIVE_PREVIEW_NOTE_CONTENT =
-  "# Sunrise heading\n\nbody text here\n";
+  "# Sunrise heading\n\nbody text here\n\n- [ ] Review task\n";
+
+export const MOTION_PREVIEW_NOTE_NAME = "zy-motion-preview.md";
+export const MOTION_PREVIEW_NOTE_CONTENT =
+  "# Motion heading\n\n[short link](https://example.com/path)\n\n![[missing-note]]\n\n> [!note]+ Deliberate callout\n> callout body\n\nafter motion constructs\n";
 
 export const RENDERING_NOTE_NAME = "zz-rendering.md";
 export const RENDERING_NOTE_CONTENT =
@@ -54,7 +58,7 @@ export const VISUAL_NOTE_CONTENT = [
   "- Aligned blocks keep the reading rhythm steady.",
   "",
   "> [!tip] Reading note",
-  "> Callout text follows the same comfortable reading measure as the surrounding prose, even when the sentence is long enough to wrap onto several visual lines inside its padded frame.",
+  "> Callout text follows the same comfortable column width as the surrounding prose, even when the sentence is long enough to wrap onto several visual lines inside its padded frame.",
   "",
   "### Practical details",
   "",
@@ -132,6 +136,10 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, LIVE_PREVIEW_NOTE_NAME),
     LIVE_PREVIEW_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, MOTION_PREVIEW_NOTE_NAME),
+    MOTION_PREVIEW_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),

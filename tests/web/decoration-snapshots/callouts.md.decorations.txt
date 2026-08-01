@@ -3,6 +3,7 @@
 12..12 line class="cm-skr-rich-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="first" data-foldable="false" role="note"
 12..13 hide node=QuoteMark
 12..13 mark class="cm-skr-quote-mark"
+12..21 motion rendered=callout
 14..14 widget callout-icon aria-hidden="true" data-callout="note"
 14..21 hide node=CalloutMark
 14..21 mark class="cm-skr-callout-mark" data-callout="note"
@@ -10,9 +11,11 @@
 22..22 line class="cm-skr-rich-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="last" data-foldable="false"
 22..23 hide node=QuoteMark
 22..23 mark class="cm-skr-quote-mark"
+22..69 motion rendered=callout
 71..71 line class="cm-skr-rich-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="first" data-foldable="false" role="note"
 71..72 hide node=QuoteMark
 71..72 mark class="cm-skr-quote-mark"
+71..108 motion rendered=callout
 73..73 widget callout-icon aria-hidden="true" data-callout="note"
 73..80 hide node=CalloutMark
 73..80 mark class="cm-skr-callout-mark" data-callout="note"
@@ -20,9 +23,11 @@
 109..109 line class="cm-skr-rich-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="last" data-foldable="false"
 109..110 hide node=QuoteMark
 109..110 mark class="cm-skr-quote-mark"
+109..144 motion rendered=callout
 146..146 line class="cm-skr-rich-callout" data-accent="orange" data-callout="warning" data-callout-canonical="warning" data-callout-line="first" data-foldable="false" role="note"
 146..147 hide node=QuoteMark
 146..147 mark class="cm-skr-quote-mark"
+146..158 motion rendered=callout
 148..148 widget callout-icon aria-hidden="true" data-callout="warning"
 148..158 hide node=CalloutMark
 148..158 mark class="cm-skr-callout-mark" data-callout="warning"
@@ -30,9 +35,11 @@
 159..159 line class="cm-skr-rich-callout" data-accent="orange" data-callout="warning" data-callout-canonical="warning" data-callout-line="last" data-foldable="false"
 159..160 hide node=QuoteMark
 159..160 mark class="cm-skr-quote-mark"
+159..210 motion rendered=callout
 212..212 line class="cm-skr-rich-callout" data-accent="cyan" data-callout="tip" data-callout-canonical="tip" data-callout-line="first" data-foldable="false" role="note"
 212..213 hide node=QuoteMark
 212..213 mark class="cm-skr-quote-mark"
+212..240 motion rendered=callout
 214..214 widget callout-icon aria-hidden="true" data-callout="tip"
 214..220 hide node=CalloutMark
 214..220 mark class="cm-skr-callout-mark" data-callout="tip"
@@ -40,9 +47,11 @@
 241..241 line class="cm-skr-rich-callout" data-accent="cyan" data-callout="tip" data-callout-canonical="tip" data-callout-line="last" data-foldable="false"
 241..242 hide node=QuoteMark
 241..242 mark class="cm-skr-quote-mark"
+241..294 motion rendered=callout
 296..296 line class="cm-skr-rich-callout" data-accent="yellow" data-callout="faq" data-callout-canonical="question" data-callout-line="first" data-foldable="true" role="note"
 296..297 hide node=QuoteMark
 296..297 mark class="cm-skr-quote-mark"
+296..327 motion rendered=callout
 298..298 widget callout-icon aria-hidden="true" data-callout="faq"
 298..305 hide node=CalloutMark
 298..305 mark class="cm-skr-callout-mark" data-callout="faq"
@@ -50,9 +59,11 @@
 328..328 line class="cm-skr-rich-callout" data-accent="yellow" data-callout="faq" data-callout-canonical="question" data-callout-line="last" data-foldable="true"
 328..329 hide node=QuoteMark
 328..329 mark class="cm-skr-quote-mark"
+328..382 motion rendered=callout
 384..384 line class="cm-skr-rich-callout" data-accent="blue" data-callout="info" data-callout-canonical="info" data-callout-line="first" data-foldable="true" role="note"
 384..385 hide node=QuoteMark
 384..385 mark class="cm-skr-quote-mark"
+384..422 motion rendered=callout
 386..386 widget callout-icon aria-hidden="true" data-callout="info"
 386..394 hide node=CalloutMark
 386..394 mark class="cm-skr-callout-mark" data-callout="info"
@@ -60,9 +71,11 @@
 423..423 line class="cm-skr-rich-callout" data-accent="blue" data-callout="info" data-callout-canonical="info" data-callout-line="last" data-foldable="true"
 423..424 hide node=QuoteMark
 423..424 mark class="cm-skr-quote-mark"
+423..470 motion rendered=callout
 472..472 line class="cm-skr-rich-callout" data-accent="gray" data-callout="quote" data-callout-canonical="quote" data-callout-line="first" data-foldable="false" role="note"
 472..473 hide node=QuoteMark
 472..473 mark class="cm-skr-quote-mark"
+472..482 motion rendered=callout
 474..474 widget callout-icon aria-hidden="true" data-callout="quote"
 474..482 hide node=CalloutMark
 474..482 mark class="cm-skr-callout-mark" data-callout="quote"
@@ -70,12 +83,15 @@
 483..483 line class="cm-skr-rich-callout" data-accent="gray" data-callout="quote" data-callout-canonical="quote" data-callout-line="middle" data-foldable="false"
 483..484 hide node=QuoteMark
 483..484 mark class="cm-skr-quote-mark"
+483..506 motion rendered=callout
 507..507 line class="cm-skr-rich-callout" data-accent="gray" data-callout="quote" data-callout-canonical="quote" data-callout-line="last" data-foldable="false"
 507..508 hide node=QuoteMark
 507..508 mark class="cm-skr-quote-mark"
+507..535 motion rendered=callout
 537..537 line class="cm-skr-rich-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="first" data-foldable="false" role="note"
 537..538 hide node=QuoteMark
 537..538 mark class="cm-skr-quote-mark"
+537..546 motion rendered=callout
 539..539 widget callout-icon aria-hidden="true" data-callout="note"
 539..546 hide node=CalloutMark
 539..546 mark class="cm-skr-callout-mark" data-callout="note"
@@ -83,10 +99,13 @@
 547..547 line class="cm-skr-rich-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="middle" data-foldable="false"
 547..548 hide node=QuoteMark
 547..548 mark class="cm-skr-quote-mark"
+547..581 motion rendered=callout
 582..582 line class="cm-skr-rich-callout" data-accent="blue" data-callout="note" data-callout-canonical="note" data-callout-line="last" data-foldable="false"
+582..612 motion rendered=callout
 614..614 line class="cm-skr-rich-callout" data-accent="blue" data-callout="todo" data-callout-canonical="todo" data-callout-line="first" data-foldable="false" role="note"
 614..615 hide node=QuoteMark
 614..615 mark class="cm-skr-quote-mark"
+614..649 motion rendered=callout
 616..616 widget callout-icon aria-hidden="true" data-callout="todo"
 616..623 hide node=CalloutMark
 616..623 mark class="cm-skr-callout-mark" data-callout="todo"
@@ -94,14 +113,17 @@
 650..650 line class="cm-skr-rich-callout" data-accent="blue" data-callout="todo" data-callout-canonical="todo" data-callout-line="middle" data-foldable="false"
 650..651 hide node=QuoteMark
 650..651 mark class="cm-skr-quote-mark"
+650..683 motion rendered=callout
 652..653 mark class="cm-skr-list-mark"
 684..684 line class="cm-skr-rich-callout" data-accent="blue" data-callout="todo" data-callout-canonical="todo" data-callout-line="last" data-foldable="false"
 684..685 hide node=QuoteMark
 684..685 mark class="cm-skr-quote-mark"
+684..718 motion rendered=callout
 686..687 mark class="cm-skr-list-mark"
 720..720 line class="cm-skr-rich-callout" data-accent="cyan" data-callout="abstract" data-callout-canonical="abstract" data-callout-line="first" data-foldable="false" role="note"
 720..721 hide node=QuoteMark
 720..721 mark class="cm-skr-quote-mark"
+720..733 motion rendered=callout
 722..722 widget callout-icon aria-hidden="true" data-callout="abstract"
 722..733 hide node=CalloutMark
 722..733 mark class="cm-skr-callout-mark" data-callout="abstract"
@@ -109,10 +131,12 @@
 734..734 line class="cm-skr-rich-callout" data-accent="cyan" data-callout="abstract" data-callout-canonical="abstract" data-callout-line="middle" data-foldable="false"
 734..735 hide node=QuoteMark
 734..735 mark class="cm-skr-quote-mark"
+734..755 motion rendered=callout
 756..756 line class="cm-skr-rich-callout" data-accent="cyan" data-callout="abstract" data-callout-canonical="abstract" data-callout-line="middle" data-foldable="false"
 756..756 line class="cm-skr-rich-callout" data-accent="purple" data-callout="example" data-callout-canonical="example" data-callout-line="first" data-foldable="false" role="note"
 756..757 hide node=QuoteMark
 756..757 mark class="cm-skr-quote-mark"
+756..770 motion rendered=callout
 758..759 hide node=QuoteMark
 758..759 mark class="cm-skr-quote-mark"
 760..760 widget callout-icon aria-hidden="true" data-callout="example"
@@ -123,11 +147,13 @@
 771..771 line class="cm-skr-rich-callout" data-accent="purple" data-callout="example" data-callout-canonical="example" data-callout-line="last" data-foldable="false"
 771..772 hide node=QuoteMark
 771..772 mark class="cm-skr-quote-mark"
+771..801 motion rendered=callout
 773..774 hide node=QuoteMark
 773..774 mark class="cm-skr-quote-mark"
 803..803 line class="cm-skr-rich-callout" data-accent="blue" data-callout="unknown-custom-type" data-callout-canonical="note" data-callout-line="first" data-foldable="false" role="note"
 803..804 hide node=QuoteMark
 803..804 mark class="cm-skr-quote-mark"
+803..827 motion rendered=callout
 805..805 widget callout-icon aria-hidden="true" data-callout="unknown-custom-type"
 805..827 hide node=CalloutMark
 805..827 mark class="cm-skr-callout-mark" data-callout="unknown-custom-type"
@@ -135,6 +161,7 @@
 828..828 line class="cm-skr-rich-callout" data-accent="blue" data-callout="unknown-custom-type" data-callout-canonical="note" data-callout-line="last" data-foldable="false"
 828..829 hide node=QuoteMark
 828..829 mark class="cm-skr-quote-mark"
+828..892 motion rendered=callout
 894..894 line class="cm-skr-blockquote"
 894..895 mark class="cm-skr-quote-mark"
 940..941 hide node=LinkMark

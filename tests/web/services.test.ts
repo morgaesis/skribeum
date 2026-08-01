@@ -11,13 +11,17 @@ vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {},
 }));
 
+import { DEFAULT_SETTINGS } from "../../src/lib/features/settingsStore";
 import {
   searchQuery,
+  settingsPath,
   settingsRead,
   settingsWrite,
+  updateCheck,
   vaultTreeRefresh,
 } from "../../src/lib/ipc/services";
 import { IpcError } from "../../src/lib/ipc/vault";
+import { defaultTaskStatuses } from "../../src/lib/taskStatuses";
 
 describe("ipc service wrappers", () => {
   beforeEach(() => {
@@ -41,15 +45,21 @@ describe("ipc service wrappers", () => {
       handle,
       query: "term",
       limit: 25,
+      searchNoteBodies: true,
+      caseSensitive: false,
     });
   });
 
   it("round-trips the settings document shape", async () => {
     const doc = {
-      schema_version: 1,
+      ...DEFAULT_SETTINGS,
       theme: "dark",
+      light_palette: "studio",
+      dark_palette: "graphite",
       editor_font_size: 17,
       search_result_limit: 40,
+      link_previews: false,
+      task_statuses: defaultTaskStatuses(),
     };
     invoke.mockResolvedValueOnce(doc);
     await expect(settingsRead()).resolves.toEqual(doc);
@@ -58,6 +68,18 @@ describe("ipc service wrappers", () => {
     invoke.mockResolvedValueOnce(null);
     await settingsWrite(doc);
     expect(invoke).toHaveBeenCalledWith("settings_write", { doc });
+  });
+
+  it("reads the resolved settings path", async () => {
+    invoke.mockResolvedValueOnce("/config/settings.json");
+    await expect(settingsPath()).resolves.toBe("/config/settings.json");
+    expect(invoke).toHaveBeenCalledWith("settings_path");
+  });
+
+  it("checks the selected update channel", async () => {
+    invoke.mockResolvedValueOnce({ kind: "current" });
+    await expect(updateCheck("beta")).resolves.toEqual({ kind: "current" });
+    expect(invoke).toHaveBeenCalledWith("update_check", { channel: "beta" });
   });
 
   it("refreshes the tree by handle", async () => {

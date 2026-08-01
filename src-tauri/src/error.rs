@@ -42,12 +42,32 @@ impl AppError {
         }
     }
 
+    /// A search request outside the bounded renderer contract.
+    #[must_use]
+    pub fn search_invalid() -> Self {
+        Self {
+            code: "search/invalid",
+            message: "the search request is outside the supported limits".to_owned(),
+            path: None,
+        }
+    }
+
     /// An error for an unresolvable settings location.
     #[must_use]
     pub fn settings_unavailable() -> Self {
         Self {
             code: "settings/unavailable",
             message: "the settings directory could not be resolved".to_owned(),
+            path: None,
+        }
+    }
+
+    /// An update check that cannot run or complete.
+    #[must_use]
+    pub fn update_failed(message: impl Into<String>) -> Self {
+        Self {
+            code: "update/check",
+            message: message.into(),
             path: None,
         }
     }
@@ -77,6 +97,7 @@ impl From<&VaultError> for AppError {
             VaultError::RootNotADirectory => "vault/not-a-directory",
             VaultError::Path(_) => "path/invalid",
             VaultError::NoteNotFound => "note/not-found",
+            VaultError::NoteAlreadyExists => "note/already-exists",
             VaultError::NotANote => "note/not-a-note",
             VaultError::NoteNotRead => "note/not-read",
             VaultError::NoteReadOnly => "note/read-only",
@@ -153,6 +174,7 @@ mod tests {
                 "vault/not-a-directory",
             ),
             (VaultError::NoteNotFound.into(), "note/not-found"),
+            (VaultError::NoteAlreadyExists.into(), "note/already-exists"),
             (VaultError::NotANote.into(), "note/not-a-note"),
             (VaultError::NoteNotRead.into(), "note/not-read"),
             (VaultError::NoteReadOnly.into(), "note/read-only"),
@@ -186,6 +208,7 @@ mod tests {
                 "search/index",
             ),
             (AppError::search_unavailable(), "search/unavailable"),
+            (AppError::search_invalid(), "search/invalid"),
             (SettingsError::Corrupt.into(), "settings/corrupt"),
             (
                 SettingsError::InvalidValue("theme").into(),
@@ -193,6 +216,7 @@ mod tests {
             ),
             (SettingsError::Fs(FsError::NoSpace).into(), "fs/no-space"),
             (AppError::settings_unavailable(), "settings/unavailable"),
+            (AppError::update_failed("offline"), "update/check"),
         ];
         for (error, expected) in cases {
             assert_eq!(error.code, expected);

@@ -9,7 +9,9 @@ import {
   CANVAS_FILE_NAME,
   CRLF_NOTE_NAME,
   LF_NOTE_NAME,
+  LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
+  MOTION_PREVIEW_NOTE_NAME,
   RENDERING_NOTE_NAME,
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
@@ -81,7 +83,8 @@ async function placeCursorAtLineEnd(text: string) {
         )) {
           marker.remove();
         }
-        return visibleContent.textContent === lineText;
+        const content = visibleContent.textContent ?? "";
+        return content === lineText || content.endsWith(lineText);
       },
     );
     if (line === undefined) {
@@ -229,18 +232,15 @@ async function calloutVisualIdentity() {
   });
 }
 
-/** Sets the theme select's value and fires the change event it binds on. */
+/** Activates one of the direct theme radio buttons. */
 async function selectTheme(value: string) {
-  await browser.execute((themeValue: string) => {
-    const select = document.querySelector<HTMLSelectElement>(
-      '[data-testid="settings-theme"]',
-    );
-    if (select === null) {
-      throw new Error("settings theme select missing");
-    }
-    select.value = themeValue;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
+  const button = $(`[data-testid="settings-theme-${value}"]`);
+  await button.waitForClickable({ timeout: 10000 });
+  await button.click();
+  await browser.waitUntil(
+    async () => (await button.getAttribute("aria-checked")) === "true",
+    { timeout: 10000, timeoutMsg: `${value} theme did not become active` },
+  );
 }
 
 async function applyVisualTheme(value: "light" | "dark") {
@@ -801,7 +801,7 @@ describe("skribeum shell", () => {
     const tabUncanceled = await browser.execute(() => {
       const targets = [
         document.querySelector("header button"),
-        document.querySelector('[role="treeitem"][tabindex="0"]'),
+        document.querySelector('[role="treeitem"]'),
         document.querySelector(".cm-content"),
       ];
       return targets.every((target) => {
@@ -842,11 +842,16 @@ describe("skribeum shell", () => {
         const style = getComputedStyle(marker);
         return {
           active: marker.classList.contains("cm-skr-reveal-marker-active"),
-          maxWidth: Number.parseFloat(style.maxWidth),
           opacity: style.opacity,
+          reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+          transform: style.transform,
           transitionDurations: style.transitionDuration
             .split(",")
-            .map((duration) => Number.parseFloat(duration) * 1000),
+            .map((duration) =>
+              duration.trim().endsWith("ms")
+                ? Number.parseFloat(duration)
+                : Number.parseFloat(duration) * 1000,
+            ),
         };
       });
 
@@ -863,11 +868,21 @@ describe("skribeum shell", () => {
       },
     );
     const hidden = await headingMarkerState();
-    expect(hidden?.maxWidth).toBe(0);
     expect(hidden?.opacity).toBe("0");
-    expect(
-      hidden?.transitionDurations.every((duration) => duration < 200),
-    ).toBe(true);
+    expect(hidden?.transform).not.toBe("none");
+    expect(hidden?.transitionDurations.every((duration) => duration < 50)).toBe(
+      true,
+    );
+    const followingPositionBefore = await browser.execute(() => {
+      const following = [
+        ...document.querySelectorAll<HTMLElement>(".cm-line"),
+      ].find((line) => line.textContent === "body text here");
+      if (following === undefined) {
+        throw new Error("following line missing");
+      }
+      const rect = following.getBoundingClientRect();
+      return { left: rect.left, top: rect.top };
+    });
 
     // Entering the heading line with the cursor reveals the source
     // marker (cursor-line reveal per docs/decoration-rules.md).
@@ -880,8 +895,26 @@ describe("skribeum shell", () => {
       },
     );
     const revealed = await headingMarkerState();
-    expect(revealed?.maxWidth ?? 0).toBeGreaterThan(0);
     expect(revealed?.opacity).toBe("1");
+    if (revealed?.reducedMotion) {
+      expect(
+        revealed.transitionDurations.every((duration) => duration === 0),
+      ).toBe(true);
+    } else {
+      expect(revealed?.transform).not.toBe(hidden?.transform);
+      expect(revealed?.transitionDurations).toEqual([49, 49]);
+    }
+    const followingPositionAfter = await browser.execute(() => {
+      const following = [
+        ...document.querySelectorAll<HTMLElement>(".cm-line"),
+      ].find((line) => line.textContent === "body text here");
+      if (following === undefined) {
+        throw new Error("following line missing");
+      }
+      const rect = following.getBoundingClientRect();
+      return { left: rect.left, top: rect.top };
+    });
+    expect(followingPositionAfter).toEqual(followingPositionBefore);
 
     // Leaving the line hides the marker again.
     await placeCursorAtLineEnd("body text here");
@@ -891,6 +924,50 @@ describe("skribeum shell", () => {
         timeout: 10000,
         timeoutMsg: "heading marker did not hide after the cursor left",
       },
+    );
+  });
+
+  it("cycles_and_sets_task_statuses_through_the_command_palette", async () => {
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    const checkbox = $(".cm-skr-task-checkbox");
+    await checkbox.waitForExist({ timeout: 15000 });
+    expect(await checkbox.getAttribute("aria-label")).toBe("Unchecked");
+
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>(".cm-skr-task-control")
+        ?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
+    });
+    const listbox = $('[role="listbox"]');
+    await listbox.waitForDisplayed({ timeout: 5000 });
+    expect(await listbox.$$('[role="option"]').length).toBe(38);
+
+    await checkbox.click();
+    await browser.waitUntil(
+      () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [/] Review task"),
+      { timeout: 10000, timeoutMsg: "task click did not persist" },
+    );
+
+    await placeCursorAtLineEnd("Review task");
+    await browser.keys([modifierKey, "p"]);
+    const input = $('[role="combobox"]');
+    await input.waitForExist({ timeout: 10000 });
+    await input.addValue("set task status dropped");
+    await browser.waitUntil(
+      async () => (await $$('[role="option"]').length) === 1,
+      { timeout: 10000 },
+    );
+    expect(await $('[role="option"]').getText()).toContain("Dropped");
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [-] Review task"),
+      { timeout: 10000, timeoutMsg: "task command did not persist" },
+    );
+
+    await $(".cm-skr-task-checkbox").click();
+    await browser.waitUntil(
+      () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME) === LIVE_PREVIEW_NOTE_CONTENT,
+      { timeout: 10000, timeoutMsg: "task source did not restore" },
     );
   });
 
@@ -1013,6 +1090,145 @@ describe("skribeum shell", () => {
       { timeout: 10000 },
     );
     rmSync(path.join(SCRATCH_VAULT_PATH, REVEAL_NOTE_NAME));
+  });
+
+  it("keeps_every_live_preview_transition_below_the_motion_ceiling", async () => {
+    await openNoteFromTree(MOTION_PREVIEW_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("after motion constructs"),
+      { timeout: 15000 },
+    );
+
+    const measurements = await browser.execute(() => {
+      const classNames = [
+        "cm-skr-reveal-marker",
+        "cm-skr-reveal-motion cm-skr-reveal-source",
+        "cm-skr-reveal-motion cm-skr-reveal-rendered",
+      ];
+      const prefersReducedMotion = matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      return classNames.map((className) => {
+        const element = document.createElement("span");
+        element.className = className;
+        document.body.append(element);
+        const style = getComputedStyle(element);
+        const transitionProperties = style.transitionProperty
+          .split(",")
+          .map((part) => part.trim());
+        const transitionMs = style.transitionDuration.split(",").map((part) => {
+          const duration = part.trim();
+          return duration.endsWith("ms")
+            ? Number.parseFloat(duration)
+            : Number.parseFloat(duration) * 1000;
+        });
+        const measurement = {
+          className,
+          prefersReducedMotion,
+          transitionProperties,
+          transitionMs,
+          effectiveTransitionMs: transitionProperties.map(
+            (_, index) => transitionMs[index % transitionMs.length],
+          ),
+          animationMs: style.animationDuration.split(",").map((part) => {
+            const duration = part.trim();
+            return duration.endsWith("ms")
+              ? Number.parseFloat(duration)
+              : Number.parseFloat(duration) * 1000;
+          }),
+          animationTimingFunction: style.animationTimingFunction,
+          transitionTimingFunction: style.transitionTimingFunction,
+        };
+        element.remove();
+        return measurement;
+      });
+    });
+
+    for (const measurement of measurements) {
+      expect(Math.max(...measurement.transitionMs)).toBeLessThan(50);
+      for (const easing of measurement.transitionTimingFunction.split(",")) {
+        expect(easing.trim()).toBe("linear");
+      }
+      if (measurement.className !== "cm-skr-reveal-marker") {
+        expect(Math.max(...measurement.animationMs)).toBeLessThan(50);
+        expect(measurement.animationTimingFunction).toBe("linear");
+      }
+    }
+    const expectedDuration = measurements[0]?.transitionMs[0] ?? 0;
+    expect(measurements[0]?.effectiveTransitionMs).toEqual([
+      expectedDuration,
+      expectedDuration,
+    ]);
+    expect(measurements[1]?.effectiveTransitionMs).toEqual([
+      expectedDuration,
+      expectedDuration,
+    ]);
+    expect(measurements[2]?.effectiveTransitionMs).toEqual([
+      expectedDuration,
+      expectedDuration,
+    ]);
+    expect(measurements[1]?.animationMs).toEqual([expectedDuration]);
+    expect(measurements[2]?.animationMs).toEqual([expectedDuration]);
+  });
+
+  it("makes_live_preview_motion_instant_under_reduced_motion", async () => {
+    await openNoteFromTree(MOTION_PREVIEW_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("after motion constructs"),
+      { timeout: 15000 },
+    );
+
+    const measurements = await browser.execute(() => {
+      const reducedStyle = document.createElement("style");
+      const mediaRules: string[] = [];
+      for (const sheet of document.styleSheets) {
+        for (const rule of sheet.cssRules) {
+          if (
+            rule instanceof CSSMediaRule &&
+            rule.conditionText.includes("prefers-reduced-motion")
+          ) {
+            mediaRules.push(
+              ...Array.from(rule.cssRules, (nestedRule) => nestedRule.cssText),
+            );
+          }
+        }
+      }
+      if (mediaRules.length === 0) {
+        throw new Error("prefers-reduced-motion rule missing");
+      }
+      reducedStyle.textContent = mediaRules.join("\n");
+      document.head.append(reducedStyle);
+
+      const classNames = [
+        "cm-skr-reveal-marker",
+        "cm-skr-reveal-motion cm-skr-reveal-source",
+        "cm-skr-reveal-motion cm-skr-reveal-rendered",
+      ];
+      const result = classNames.map((className) => {
+        const element = document.createElement("span");
+        element.className = className;
+        document.body.append(element);
+        const style = getComputedStyle(element);
+        const measurement = {
+          className,
+          transitionDuration: style.transitionDuration,
+          animationDuration: style.animationDuration,
+        };
+        element.remove();
+        return measurement;
+      });
+      reducedStyle.remove();
+      return result;
+    });
+
+    for (const measurement of measurements) {
+      for (const duration of measurement.transitionDuration.split(",")) {
+        expect(Number.parseFloat(duration)).toBe(0);
+      }
+      for (const duration of measurement.animationDuration.split(",")) {
+        expect(Number.parseFloat(duration)).toBe(0);
+      }
+    }
   });
 
   it("surfaces_and_dismisses_the_note_removed_banner_by_keyboard", async () => {
@@ -1197,16 +1413,14 @@ describe("skribeum core editing surfaces", () => {
     });
   }
 
-  /** Reads the persisted reading measure through IPC. */
-  async function persistedReadingMeasure(): Promise<number | string> {
+  /** Reads the persisted text column width through IPC. */
+  async function persistedLineWidth(): Promise<number | string> {
     return browser.executeAsync<number | string, []>((done) => {
       const tauri = (
         window as unknown as {
           __TAURI__?: {
             core: {
-              invoke: (
-                name: string,
-              ) => Promise<{ editor_reading_measure: number }>;
+              invoke: (name: string) => Promise<{ editor_line_width: number }>;
             };
           };
         }
@@ -1217,42 +1431,84 @@ describe("skribeum core editing surfaces", () => {
       }
       tauri.core
         .invoke("settings_read")
-        .then((doc) => done(doc.editor_reading_measure))
+        .then((doc) => done(doc.editor_line_width))
+        .catch((error: unknown) => done(String(error)));
+    });
+  }
+
+  /** Reads the persisted link-preview preference through IPC. */
+  async function persistedLinkPreviews(): Promise<boolean | string> {
+    return browser.executeAsync<boolean | string, []>((done) => {
+      const tauri = (
+        window as unknown as {
+          __TAURI__?: {
+            core: {
+              invoke: (name: string) => Promise<{ link_previews: boolean }>;
+            };
+          };
+        }
+      ).__TAURI__;
+      if (tauri === undefined) {
+        done("no-global-tauri");
+        return;
+      }
+      tauri.core
+        .invoke("settings_read")
+        .then((doc) => done(doc.link_previews))
         .catch((error: unknown) => done(String(error)));
     });
   }
 
   /** Sets the settings font size through the open dialog's input. */
   async function setFontSizeThroughDialog(value: number) {
-    const fontInput = $('[data-testid="settings-font-size"]');
-    await fontInput.setValue(String(value));
-    // Commit the change event explicitly: the synthesized driver does
-    // not move focus, which is what fires change on number inputs.
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLInputElement>('[data-testid="settings-font-size"]')
-        ?.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    // WebDriver key input does not assign a predictable value to range
+    // controls, so set the native value and exercise their real events.
+    await browser.execute((nextValue: number) => {
+      const input = document.querySelector<HTMLInputElement>(
+        '[data-testid="settings-font-size"]',
+      );
+      if (input === null) throw new Error("font size control missing");
+      input.value = String(nextValue);
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+      input?.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
   }
 
-  /** Sets the reading measure through the open dialog's input. */
-  async function setReadingMeasureThroughDialog(value: number) {
-    const input = $('[data-testid="settings-reading-measure"]');
-    await input.setValue(String(value));
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLInputElement>(
-          '[data-testid="settings-reading-measure"]',
-        )
-        ?.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+  /** Sets the text column width through the open dialog's input. */
+  async function setLineWidthThroughDialog(value: number) {
+    await browser.execute((nextValue: number) => {
+      const input = document.querySelector<HTMLInputElement>(
+        '[data-testid="settings-line-width"]',
+      );
+      if (input === null) throw new Error("text column width control missing");
+      input.value = String(nextValue);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
+  }
+
+  async function linkPreviewsControl() {
+    const checkbox = $('[data-testid="settings-link-previews"]');
+    if (!(await checkbox.isExisting())) {
+      const search = $('[data-testid="settings-search"]');
+      await search.setValue("link previews");
+      await checkbox.waitForExist({ timeout: 5000 });
+    }
+    return checkbox;
+  }
+
+  async function setLinkPreviewsThroughDialog(value: boolean) {
+    const checkbox = await linkPreviewsControl();
+    if ((await checkbox.isSelected()) !== value) {
+      await checkbox.click();
+    }
   }
 
   it("settings_round_trip_applies_restart_free_and_persists", async () => {
     // The settings file is the real per-user document; pick a target
     // that differs from the current value and restore it afterwards.
     const original = await persistedFontSize();
-    const originalMeasure = await persistedReadingMeasure();
+    const originalMeasure = await persistedLineWidth();
     expect(typeof original).toBe("number");
     expect(typeof originalMeasure).toBe("number");
     const target = original === 21 ? 22 : 21;
@@ -1262,7 +1518,7 @@ describe("skribeum core editing surfaces", () => {
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
     await setFontSizeThroughDialog(target);
-    await setReadingMeasureThroughDialog(targetMeasure);
+    await setLineWidthThroughDialog(targetMeasure);
 
     // Restart-free apply: the editor font size follows immediately.
     await browser.waitUntil(
@@ -1293,8 +1549,8 @@ describe("skribeum core editing surfaces", () => {
       { timeout: 10000, timeoutMsg: "font size did not persist" },
     );
     await browser.waitUntil(
-      async () => (await persistedReadingMeasure()) === targetMeasure,
-      { timeout: 10000, timeoutMsg: "reading measure did not persist" },
+      async () => (await persistedLineWidth()) === targetMeasure,
+      { timeout: 10000, timeoutMsg: "text column width did not persist" },
     );
 
     await browser.keys([modifierKey, ","]);
@@ -1302,19 +1558,19 @@ describe("skribeum core editing surfaces", () => {
     expect(await $('[data-testid="settings-font-size"]').getValue()).toBe(
       String(target),
     );
-    expect(await $('[data-testid="settings-reading-measure"]').getValue()).toBe(
+    expect(await $('[data-testid="settings-line-width"]').getValue()).toBe(
       String(targetMeasure),
     );
 
     // Restore the pre-test value through the same UI path.
     await setFontSizeThroughDialog(original as number);
-    await setReadingMeasureThroughDialog(originalMeasure as number);
+    await setLineWidthThroughDialog(originalMeasure as number);
     await browser.waitUntil(
       async () => (await persistedFontSize()) === original,
       { timeout: 10000 },
     );
     await browser.waitUntil(
-      async () => (await persistedReadingMeasure()) === originalMeasure,
+      async () => (await persistedLineWidth()) === originalMeasure,
       { timeout: 10000 },
     );
     await browser.keys(Key.Escape);
@@ -1322,6 +1578,40 @@ describe("skribeum core editing surfaces", () => {
       async () => !(await $('[data-testid="settings-view"]').isExisting()),
       { timeout: 5000 },
     );
+  });
+
+  it("link_preview_setting_changes_affordances_and_persists", async () => {
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    const original = await persistedLinkPreviews();
+    expect(typeof original).toBe("boolean");
+    const target = !(original as boolean);
+
+    await browser.keys([modifierKey, ","]);
+    const dialog = $('[data-testid="settings-view"]');
+    await dialog.waitForExist({ timeout: 10000 });
+    await setLinkPreviewsThroughDialog(target);
+    await browser.waitUntil(
+      async () => (await persistedLinkPreviews()) === target,
+      { timeout: 10000, timeoutMsg: "link preview setting did not persist" },
+    );
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(async () => !(await dialog.isExisting()), {
+      timeout: 5000,
+    });
+    expect(await $("[data-preview-target]").isExisting()).toBe(target);
+
+    await browser.keys([modifierKey, ","]);
+    await dialog.waitForExist({ timeout: 10000 });
+    expect(await (await linkPreviewsControl()).isSelected()).toBe(target);
+    await setLinkPreviewsThroughDialog(original as boolean);
+    await browser.waitUntil(
+      async () => (await persistedLinkPreviews()) === original,
+      { timeout: 10000 },
+    );
+    await browser.keys(Key.Escape);
+    await browser.waitUntil(async () => !(await dialog.isExisting()), {
+      timeout: 5000,
+    });
   });
 
   it("ranked_search_finds_notes_with_highlighted_snippets", async () => {
@@ -1393,12 +1683,10 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    const select = $('[data-testid="settings-theme"]');
-    const original = await select.getValue();
+    const original = await browser.execute(
+      () => document.documentElement.dataset.theme ?? "system",
+    );
 
-    // The embedded provider cannot drive native select interaction; set the
-    // value and dispatch the change event, which still exercises the real
-    // binding, store, and theme application path.
     await selectTheme("dark");
     await browser.waitUntil(
       async () =>

@@ -3,15 +3,19 @@
 // lands by adding its `register*` call here and nowhere else.
 
 import { CommandRegistry } from "../registry";
+import { DEFAULT_TASK_STATUSES, type TaskStatus } from "../taskStatuses";
 import { registerFind } from "./findPanel";
 import { registerFormatting } from "./formattingCommands";
 import { registerInsertions } from "./insertions";
 import { registerSlashMenu } from "./slashMenu";
 import { registerSurfaces } from "./surfaces";
 import { registerTableEditing } from "./tableEditing";
+import { registerTaskStatusCommands } from "./taskCommands";
 
 /** Builds the registry with every built-in feature registered. */
-export function createAppRegistry(): CommandRegistry {
+export function createAppRegistry(
+  taskStatuses: readonly TaskStatus[] = DEFAULT_TASK_STATUSES,
+): CommandRegistry {
   const registry = new CommandRegistry();
   registerSurfaces(registry);
   registerFind(registry);
@@ -19,5 +23,6 @@ export function createAppRegistry(): CommandRegistry {
   registerInsertions(registry);
   registerSlashMenu(registry);
   registerTableEditing(registry);
+  registerTaskStatusCommands(registry, taskStatuses);
   return registry;
 }

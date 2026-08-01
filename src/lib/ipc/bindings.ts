@@ -21,6 +21,12 @@ export const commands = {
 	 */
 	vaultTreeRefresh: (handle: VaultHandle) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("vault_tree_refresh", { handle })),
 	/**
+	 *  Creates an empty Markdown note at a vault-relative path without
+	 *  overwriting an existing file. Missing parent folders are created inside
+	 *  the vault, and the in-memory tree and search index update immediately.
+	 */
+	noteCreate: (handle: VaultHandle, relPath: string) => typedError<null, AppError>(__TAURI_INVOKE("note_create", { handle, relPath })),
+	/**
 	 *  Reads a note. Metadata returns as JSON; the note bytes are sent over
 	 *  `content` as a single raw-payload message (an `ArrayBuffer` in the
 	 *  webview), so large files never cross the bridge as JSON.
@@ -53,12 +59,18 @@ export const commands = {
 	 *  matches), a Rust-assembled snippet and byte-offset match ranges into
 	 *  that snippet. At most `limit` hits return, best first.
 	 */
-	searchQuery: (handle: VaultHandle, query: string, limit: number) => typedError<SearchHit[], AppError>(__TAURI_INVOKE("search_query", { handle, query, limit })),
+	searchQuery: (handle: VaultHandle, query: string, limit: number, searchNoteBodies: boolean, caseSensitive: boolean) => typedError<SearchHit[], AppError>(__TAURI_INVOKE("search_query", { handle, query, limit, searchNoteBodies, caseSensitive })),
+	updateCheck: (channel: string) => typedError<UpdateCheckDoc, AppError>(__TAURI_INVOKE("update_check", { channel })),
 	/**
 	 *  Reads the settings document from `settings.json` in the OS app-config
 	 *  directory. A missing file yields the defaults.
 	 */
 	settingsRead: () => typedError<SettingsDoc, AppError>(__TAURI_INVOKE("settings_read")),
+	/**
+	 *  Returns the resolved settings document path for display in the settings
+	 *  footer and About section.
+	 */
+	settingsPath: () => typedError<string, AppError>(__TAURI_INVOKE("settings_path")),
 	/**
 	 *  Writes the settings document whole. Values are validated first, and
 	 *  unknown keys already present in the file are preserved, so settings
@@ -250,12 +262,89 @@ export type SettingsDoc = {
 	schema_version: number,
 	/**  Color theme: `system`, `light` or `dark`. */
 	theme: string,
+	/**  Palette used in light mode. */
+	light_palette: string,
+	/**  Palette used in dark mode. */
+	dark_palette: string,
+	/**  Prose font family choice. */
+	prose_font: string,
+	/**  Code font family choice. */
+	code_font: string,
 	/**  Editor font size in CSS pixels. */
 	editor_font_size: number,
-	/**  Editor reading measure in characters. */
-	editor_reading_measure: number,
+	/**  Editor line height as a percentage. */
+	editor_line_height: number,
+	/**  Editor line width in characters. */
+	editor_line_width: number,
+	/**  Whether line numbers appear beside the editor. */
+	show_line_numbers: boolean,
+	/**  Whether interface animations are enabled. */
+	animations: boolean,
+	/**  Idle delay before saving edits, in milliseconds. */
+	autosave_delay_ms: number,
+	/**  Whether platform spell checking is enabled. */
+	spell_check: boolean,
+	/**  Indentation uses spaces or tabs. */
+	indent_style: string,
+	/**  Indentation width in columns. */
+	indent_width: number,
+	/**  Whether long lines wrap in the editor. */
+	wrap_long_lines: boolean,
+	/**  Whether whitespace characters are shown. */
+	show_invisible_characters: boolean,
+	/**  Whether Markdown syntax is revealed at the cursor. */
+	reveal_markdown_syntax: boolean,
+	/**  Default folder for new notes, relative to the vault. */
+	default_note_folder: string,
+	/**  Attachment placement mode. */
+	attachment_folder_mode: string,
+	/**  Attachment folder, relative to the vault. */
+	attachment_folder_path: string,
+	/**  Whether supported Obsidian configuration is honored. */
+	honor_obsidian_config: boolean,
 	/**  Maximum number of results a search query returns. */
 	search_result_limit: number,
+	/**  Whether note links show rendered previews. */
+	link_previews: boolean,
+	/**  Whether note bodies are included in search. */
+	search_note_bodies: boolean,
+	/**  Whether search matches case sensitively. */
+	search_case_sensitive: boolean,
+	/**  Update release channel. */
+	update_channel: string,
+	/**  Ordered task marker vocabulary and click-transition graph. */
+	task_statuses: TaskStatusDoc[],
+};
+
+/**  Semantic task status category over IPC. */
+export type TaskStatusCategory = 
+/**  An open task. */
+"TODO" | 
+/**  Work is underway. */
+"IN_PROGRESS" | 
+/**  Work is intentionally paused. */
+"ON_HOLD" | 
+/**  Work is complete. */
+"DONE" | 
+/**  Work was cancelled. */
+"CANCELLED" | 
+/**  A checkbox-like marker that is not a task. */
+"NON_TASK";
+
+/**  One configured task marker over IPC. */
+export type TaskStatusDoc = {
+	/**  The single source character between brackets. */
+	symbol: string,
+	/**  Custom status name, or empty when the frontend resolves a default name. */
+	name: string,
+	/**  Semantic status category. */
+	category: TaskStatusCategory,
+	/**  Short glyph rendered inside the checkbox. */
+	glyph: string,
+	/**  Existing CSS theme custom property used for the status color. */
+	color_token: string,
+	/**  Symbol written by the default click transition. */
+	next_status: string,
 };
 
 /**
@@ -280,6 +369,17 @@ export type TreeEntryKind =
 "note" | 
 /**  Any other file; listed and typed, never parsed. */
 "file";
+
+/**  Result of checking the selected release channel. */
+export type UpdateCheckDoc = 
+/**  The installed version matches the selected channel manifest. */
+{ kind: "current" } | 
+/**  A signed update is available from the selected channel manifest. */
+{ kind: "available"; 
+/**  Version announced by the manifest. */
+version: string; 
+/**  Release notes from the manifest, when supplied. */
+notes: string };
 
 /**  Kinds of watched change. */
 export type VaultChangeKind = 

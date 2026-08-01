@@ -1,6 +1,6 @@
 <script lang="ts">
 import { history } from "@codemirror/commands";
-import { syntaxTree } from "@codemirror/language";
+import { indentUnit, syntaxTree } from "@codemirror/language";
 import {
   Annotation,
   type ChangeSet,
@@ -9,12 +9,15 @@ import {
   type Extension,
   Transaction,
 } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { onMount } from "svelte";
 import { bulkTextInput } from "./editor/bulkInput";
 import type { ByteChange } from "./editor/byteChangeSet";
 import { assertDecorationsInert } from "./editor/decorationGuard";
-import { dispatchWikilinkContext } from "./editor/decorations/engine";
+import {
+  dispatchWikilinkContext,
+  sourceRevealMode,
+} from "./editor/decorations/engine";
 import type { WikilinkResolutionContext } from "./editor/decorations/wikilinks";
 import {
   applyTypeOverrides,
@@ -22,16 +25,29 @@ import {
   type FrontmatterValueType,
   parseFrontmatter,
 } from "./editor/frontmatter";
+import { showInvisibleCharacters } from "./editor/invisibles";
 import { NoteSession } from "./editor/noteSession";
 import { noteRenderingExtensions } from "./editor/syntaxPolicy";
 import { findExtension } from "./features/findPanel";
 import { selectionToolbar } from "./features/selectionToolbar";
+import {
+  DEFAULT_SETTINGS,
+  type SettingsDocument,
+} from "./features/settingsStore";
 import { slashMenu } from "./features/slashMenu";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
 import PropertiesPanel from "./PropertiesPanel.svelte";
 import { type CommandContext, CommandRegistry, editorKeymap } from "./registry";
 import { STRINGS } from "./strings";
+import {
+  DEFAULT_TASK_STATUSES,
+  normalizeTaskStatuses,
+  type TaskStatus,
+} from "./taskStatuses";
+
+// registry-exempt keydown: indentation is editor input behavior controlled
+// by the current indentation settings, not an application command.
 
 let {
   doc = "",
@@ -40,8 +56,10 @@ let {
   path = null,
   linkContext = null,
   propertyTypes = null,
+  taskStatuses = DEFAULT_TASK_STATUSES,
   registry = null,
   commandContext = null,
+  settings = DEFAULT_SETTINGS,
   onConflict,
   onWriteError,
   onDocChanged,
@@ -55,17 +73,19 @@ let {
   linkContext?: WikilinkResolutionContext | null;
   /** Declared Obsidian property types for the properties panel. */
   propertyTypes?: Readonly<Record<string, FrontmatterValueType>> | null;
+  /** Ordered task marker vocabulary from application settings. */
+  taskStatuses?: readonly TaskStatus[];
   /** The registration API; keybindings, slash menu and toolbar read it. */
   registry?: CommandRegistry | null;
   /** Capability provider for commands fired inside the editor. */
   commandContext?: (() => CommandContext) | null;
+  /** Live editor preferences from the persisted settings document. */
+  settings?: SettingsDocument;
   onConflict?: () => void;
   onWriteError?: (message: string) => void;
   /** Notified after any document-changing transaction (outline refresh). */
   onDocChanged?: () => void;
 } = $props();
-
-const IDLE_SAVE_DELAY_MILLISECONDS = 400;
 
 let host: HTMLDivElement;
 let view: EditorView | undefined;
@@ -74,9 +94,11 @@ let session: NoteSession | null = null;
 let removed = false;
 let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
 /** Serializes saves so change sets always apply to the base they expect. */
-let saveChain: Promise<void> = Promise.resolve();
+let saveChain: Promise<boolean> = Promise.resolve(true);
 
 const historyCompartment = new Compartment();
+const renderingCompartment = new Compartment();
+const settingsCompartment = new Compartment();
 
 const editorAppearance = EditorView.theme({
   ".cm-content": {
@@ -156,6 +178,7 @@ function registryExtensions(): Extension[] {
     ((): CommandContext => ({
       view: view ?? null,
       openNote: () => Promise.resolve(),
+      createNote: () => Promise.resolve(),
       openView: () => {},
       toggleView: () => {},
       closeSurfaces: () => {},
@@ -177,12 +200,15 @@ function registryExtensions(): Extension[] {
 }
 
 function stateFor(content: string, locked: boolean): EditorState {
+  const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
   return EditorState.create({
     doc: content,
     extensions: [
-      ...noteRenderingExtensions(content),
+      renderingCompartment.of(
+        noteRenderingExtensions(content, undefined, normalizedTaskStatuses),
+      ),
       editorAppearance,
-      EditorView.lineWrapping,
+      settingsCompartment.of(settingsExtensions(settings)),
       bulkTextInput(),
       historyCompartment.of(history()),
       ...registryExtensions(),
@@ -193,10 +219,6 @@ function stateFor(content: string, locked: boolean): EditorState {
       // it also makes the scrollable region's focusability visible to
       // accessibility checkers whose focusable-descendant selectors do not
       // recognize contenteditable.
-      EditorView.contentAttributes.of({
-        "aria-label": STRINGS.editorLabel,
-        tabindex: "0",
-      }),
       EditorView.domEventHandlers({
         blur: () => {
           requestSave();
@@ -207,11 +229,31 @@ function stateFor(content: string, locked: boolean): EditorState {
   });
 }
 
+function settingsExtensions(document: SettingsDocument): Extension[] {
+  return [
+    ...(document.show_line_numbers ? [lineNumbers()] : []),
+    ...(document.wrap_long_lines ? [EditorView.lineWrapping] : []),
+    EditorState.tabSize.of(document.indent_width),
+    indentUnit.of(
+      document.indent_style === "tabs"
+        ? "\t"
+        : " ".repeat(document.indent_width),
+    ),
+    sourceRevealMode(document.reveal_markdown_syntax),
+    ...(document.show_invisible_characters ? [showInvisibleCharacters()] : []),
+    EditorView.contentAttributes.of({
+      "aria-label": STRINGS.editorLabel,
+      spellcheck: document.spell_check ? "true" : "false",
+      tabindex: "0",
+    }),
+  ];
+}
+
 function scheduleIdleSave() {
   clearTimeout(idleSaveTimer);
   idleSaveTimer = setTimeout(() => {
     requestSave();
-  }, IDLE_SAVE_DELAY_MILLISECONDS);
+  }, settings.autosave_delay_ms);
 }
 
 function dispatchTransactions(
@@ -295,7 +337,7 @@ function dispatchSessionChanges(changes: ChangeSet) {
   }
 }
 
-async function performSave(): Promise<void> {
+async function performSave(): Promise<boolean> {
   if (
     view === undefined ||
     session === null ||
@@ -303,7 +345,7 @@ async function performSave(): Promise<void> {
     path === null ||
     removed
   ) {
-    return;
+    return session?.dirty !== true;
   }
   let request: ReturnType<NoteSession["beginSave"]>;
   try {
@@ -313,10 +355,10 @@ async function performSave(): Promise<void> {
     // document; recover by re-reading the note.
     onWriteError?.(String(error));
     await rereadAndReconcile();
-    return;
+    return false;
   }
   if (request === null) {
-    return;
+    return true;
   }
   try {
     const result = await noteWrite(
@@ -330,6 +372,7 @@ async function performSave(): Promise<void> {
         session.commitSave(result.projection_hash);
       } catch {
         await rereadAndReconcile();
+        return false;
       }
     } else {
       // The on-disk projection moved: never overwrite. Roll the save
@@ -337,23 +380,26 @@ async function performSave(): Promise<void> {
       session.rollbackSave();
       onConflict?.();
       await rereadAndReconcile();
+      return false;
     }
   } catch (error) {
     session.rollbackSave();
     onWriteError?.(
       error instanceof IpcError ? error.app.message : String(error),
     );
+    return false;
   }
+  return true;
 }
 
 /** Queues a save; consecutive requests coalesce onto one serialized chain. */
-export function requestSave(): Promise<void> {
+export function requestSave(): Promise<boolean> {
   saveChain = saveChain.then(performSave);
   return saveChain;
 }
 
-/** Saves any pending edits and resolves when the write concluded. */
-export function flush(): Promise<void> {
+/** Saves pending edits and reports whether the buffer is safe to replace. */
+export function flush(): Promise<boolean> {
   clearTimeout(idleSaveTimer);
   return requestSave();
 }
@@ -507,6 +553,22 @@ $effect(() => {
   }
 });
 
+// Status settings apply without rebuilding the editor or touching the source.
+$effect(() => {
+  const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
+  if (view !== undefined) {
+    view.dispatch({
+      effects: renderingCompartment.reconfigure(
+        noteRenderingExtensions(
+          view.state.doc,
+          undefined,
+          normalizedTaskStatuses,
+        ),
+      ),
+    });
+  }
+});
+
 // Push wikilink context updates (tree refreshes, config reads) into the
 // live editor state; the dispatch is decoration-annotated and inert.
 $effect(() => {
@@ -519,6 +581,17 @@ $effect(() => {
 $effect(() => {
   void propertyTypes;
   refreshFrontmatter();
+});
+
+$effect(() => {
+  const nextSettings = settings;
+  if (view !== undefined) {
+    view.dispatch({
+      effects: settingsCompartment.reconfigure(
+        settingsExtensions(nextSettings),
+      ),
+    });
+  }
 });
 </script>
 
@@ -562,7 +635,7 @@ $effect(() => {
     padding-block: clamp(2rem, 5vh, 4rem);
     padding-inline: var(--skr-gutter);
     font-family: var(--skr-font-prose);
-    line-height: 1.7;
+    line-height: var(--skr-editor-line-height, 1.7);
   }
   .editor :global(.cm-line) {
     padding-inline: 0;

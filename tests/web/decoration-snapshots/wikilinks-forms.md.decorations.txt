@@ -51,7 +51,7 @@
 683..708 mark class="cm-skr-wikilink-target"
 708..710 hide node=WikilinkMark
 751..753 hide node=WikilinkMark
-751..770 mark class="cm-skr-wikilink" data-resolved="true"
+751..770 mark class="cm-skr-wikilink" aria-haspopup="dialog" aria-keyshortcuts="P" data-preview-target="#Bare note link" data-resolved="true" role="link" tabindex="0"
 753..768 mark class="cm-skr-wikilink-target"
 768..770 hide node=WikilinkMark
 791..793 hide node=WikilinkMark

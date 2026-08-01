@@ -31,6 +31,9 @@ pub enum VaultError {
     /// The requested note is not in the vault index.
     #[error("note not found in vault")]
     NoteNotFound,
+    /// A new note path already exists.
+    #[error("note already exists in vault")]
+    NoteAlreadyExists,
     /// The requested path exists in the index but is not a markdown note.
     #[error("path is not a note")]
     NotANote,
@@ -285,6 +288,48 @@ impl Vault {
         Ok(note)
     }
 
+    /// Creates an empty Markdown note without overwriting an existing path,
+    /// then refreshes the vault index so the note can be opened immediately.
+    /// Missing parent folders are created inside the vault.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VaultError::NotANote`] for a non-Markdown path,
+    /// [`VaultError::NoteAlreadyExists`] when the path is occupied, and
+    /// propagates filesystem and refresh failures.
+    pub fn create_note(&mut self, fs: &dyn FileSystem, path: &VaultPath) -> Result<(), VaultError> {
+        if !path.is_note() || !is_indexed_path(path) {
+            return Err(VaultError::NotANote);
+        }
+        let relative_parent = Path::new(path.as_str())
+            .parent()
+            .ok_or(FsError::NotADirectory)?;
+        let mut parent = self.root.clone();
+        for segment in relative_parent.components() {
+            parent.push(segment.as_os_str());
+            match fs.metadata(&parent) {
+                Ok(metadata) if !metadata.is_dir => return Err(FsError::NotADirectory.into()),
+                Ok(_) => {}
+                Err(FsError::NotFound) => fs.create_dir_all(&parent)?,
+                Err(error) => return Err(error.into()),
+            }
+            let canonical = fs.canonicalize(&parent)?;
+            if !canonical.starts_with(&self.root) {
+                return Err(VaultPathError::Absolute.into());
+            }
+            parent = canonical;
+        }
+        let absolute = parent.join(path.file_name());
+        if !fs.create_new_file(&absolute)? {
+            return Err(VaultError::NoteAlreadyExists);
+        }
+        fs.fsync_file(&absolute)?;
+        fs.fsync_dir(&parent)?;
+        self.refresh(fs)?;
+        self.lock_notes().insert(path.clone(), classify(Vec::new()));
+        Ok(())
+    }
+
     /// Reads any indexed regular file without creating note editing state.
     ///
     /// # Errors
@@ -329,7 +374,12 @@ impl Vault {
             return Err(VaultError::NoteNotFound);
         }
         let absolute = self.root.join(".obsidian").join(name);
-        let bytes = match fs.read(&absolute) {
+        let canonical = match fs.canonicalize(&absolute) {
+            Ok(canonical) if canonical.starts_with(&self.root) => canonical,
+            Ok(_) | Err(FsError::NotFound) => return Ok(None),
+            Err(other) => return Err(VaultError::Fs(other)),
+        };
+        let bytes = match fs.read(&canonical) {
             Ok(bytes) => bytes,
             Err(FsError::NotFound) => return Ok(None),
             Err(other) => return Err(VaultError::Fs(other)),
@@ -545,6 +595,7 @@ fn record_spelling(seen: &mut Vec<(VaultPath, usize)>, path: &VaultPath) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sim::SimFs;
 
     #[test]
     fn classify_detects_bom_and_non_utf8() {
@@ -587,5 +638,25 @@ mod tests {
         assert!(is_excluded_file(".skribeum-write-note.md.tmp"));
         assert!(!is_excluded_file("note.md"));
         assert!(!is_excluded_file(".hidden.md"));
+    }
+
+    #[test]
+    fn create_note_makes_parent_folders_and_never_overwrites() {
+        let fs = SimFs::new();
+        let root = PathBuf::from("vault");
+        fs.external_create_dir(&root);
+        let mut vault = Vault::open(&fs, &root).expect("vault opens");
+        let path = VaultPath::new("drafts/Untitled.md").expect("path is valid");
+
+        vault.create_note(&fs, &path).expect("new note is created");
+        assert_eq!(
+            fs.read(&root.join(path.as_str())).expect("file exists"),
+            b""
+        );
+        assert!(vault.tree().iter().any(|entry| entry.path == path));
+        assert_eq!(
+            vault.create_note(&fs, &path),
+            Err(VaultError::NoteAlreadyExists)
+        );
     }
 }

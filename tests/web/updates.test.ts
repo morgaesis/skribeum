@@ -20,7 +20,9 @@ async function collect(
 
 describe("update states", () => {
   it("reports checking then unavailable when the plugin is absent", async () => {
-    const states = await collect(checkForUpdate);
+    const states = await collect((onState) =>
+      checkForUpdate("stable", onState),
+    );
     expect(states[0]?.kind).toBe("checking");
     expect(states.at(-1)?.kind).toBe("unavailable");
   });

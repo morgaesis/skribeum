@@ -6,21 +6,22 @@
   "benchmarks": {
     "parse_extract/parse": {
       "samples_ns": [
-        7844,
-        7858,
-        7690.9601396376165,
-        7893.918345572243,
-        7774.097570663624
+        2722.9,
+        4434.0,
+        3819.0,
+        4397.0,
+        4363.0
       ]
     },
     "parse_extract/extract": {
       "samples_ns": [
-        6839,
-        6743,
-        6873.900570693674,
-        7611.991853448276,
-        7655.157603686635
+        2412.2,
+        4145.0,
+        3429.0,
+        4056.0,
+        4022.0
       ]
     }
-  }
+  },
+  "note": "Samples come from continuous integration runs on the runner class named above. Locally recorded samples must never seed this file: this machine class differs from the runner class by several times, so a cross-machine comparison measures the host rather than the change."
 }

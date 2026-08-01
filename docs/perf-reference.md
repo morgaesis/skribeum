@@ -36,15 +36,15 @@ The full editor policy satisfies the p99 budget of less than 16 ms.
 
 ## Rust benchmark regression gate
 
-Criterion benchmarks cover Markdown parsing, extraction, search indexing, content hashing, and reconciliation. The committed JSON files under each crate's `benches/baselines/` retain five measurements for the Linux x64 runner class. The Linux leg of the existing Rust CI job compares the current Criterion median with the committed rolling median and fails when a benchmark is more than 10% slower.
+Criterion benchmarks cover Markdown parsing, extraction, search indexing, content hashing, and reconciliation. The committed JSON files under each crate's `benches/baselines/` retain up to five measurements for the Linux x64 runner class. The Linux leg of the existing Rust CI job compares the current Criterion median with the committed rolling median and fails when a benchmark is more than 10% slower.
 
 | Benchmark | Baseline median | Reference run | Relative change |
 | --- | ---: | ---: | ---: |
-| Parse | 7,844 ns | 7,952 ns | +1.37% |
-| Extract | 6,874 ns | 7,028 ns | +2.24% |
-| Hash | 3,163 ns | 3,134 ns | -0.92% |
-| Index | 73,716 ns | 72,072 ns | -2.23% |
-| Reconcile | 5,242 ns | 4,789 ns | -8.63% |
+| Parse | 4,363 ns | 4,363 ns | 0.00% |
+| Extract | 4,022 ns | 4,022 ns | 0.00% |
+| Hash | 799 ns | 811 ns | +1.41% |
+| Index | 30,699 ns | 30,538 ns | -0.52% |
+| Reconcile | 2,008 ns | 1,971 ns | -1.83% |
 
 The comparator returns zero for an unchanged baseline and returns one for an artificial 24.94% parse regression and 30.93% extraction regression.
 

@@ -31,6 +31,10 @@ pub enum VaultPathError {
     /// The path contains a NUL byte.
     #[error("vault path contains a NUL byte")]
     Nul,
+    /// The path contains a colon, which can introduce a Windows drive prefix
+    /// or alternate data stream.
+    #[error("vault path contains a colon")]
+    Colon,
 }
 
 /// A `/`-separated, NFC-normalized path relative to the vault root.
@@ -60,6 +64,9 @@ impl VaultPath {
         }
         if raw.contains('\\') {
             return Err(VaultPathError::Backslash);
+        }
+        if raw.contains(':') {
+            return Err(VaultPathError::Colon);
         }
         if raw.starts_with('/') {
             return Err(VaultPathError::Absolute);
@@ -202,6 +209,8 @@ mod tests {
         assert_eq!(VaultPath::new("../x"), Err(VaultPathError::Traversal));
         assert_eq!(VaultPath::new("a/./b"), Err(VaultPathError::Traversal));
         assert_eq!(VaultPath::new("a\\b"), Err(VaultPathError::Backslash));
+        assert_eq!(VaultPath::new("C:/outside.md"), Err(VaultPathError::Colon));
+        assert_eq!(VaultPath::new("note.md:stream"), Err(VaultPathError::Colon));
         assert_eq!(VaultPath::new("a\0b"), Err(VaultPathError::Nul));
     }
 

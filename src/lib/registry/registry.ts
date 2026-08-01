@@ -32,6 +32,11 @@ export class CommandRegistry {
     this.commandsById.set(command.id, command);
   }
 
+  /** Removes one command. Returns false when the id was not registered. */
+  unregister(id: string): boolean {
+    return this.commandsById.delete(id);
+  }
+
   /** Registers a view id. The host maps ids to concrete surfaces. */
   registerView(view: ViewDescriptor): void {
     if (!ID_PATTERN.test(view.id)) {

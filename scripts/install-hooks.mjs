@@ -15,6 +15,11 @@ const local = path.join(
   process.platform === "win32" ? "lefthook.cmd" : "lefthook",
 );
 const lefthook = existsSync(local) ? local : "lefthook";
+const commonGitDirectory = execFileSync(
+  "git",
+  ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+  { cwd: repoRoot, encoding: "utf8" },
+).trim();
 
 execFileSync(lefthook, ["install"], {
   stdio: "inherit",
@@ -23,6 +28,6 @@ execFileSync(lefthook, ["install"], {
     ...process.env,
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: "core.hooksPath",
-    GIT_CONFIG_VALUE_0: ".git/hooks",
+    GIT_CONFIG_VALUE_0: path.join(commonGitDirectory, "hooks"),
   },
 });

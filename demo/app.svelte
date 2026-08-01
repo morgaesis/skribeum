@@ -1,8 +1,36 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import Skribeum from "../src/App.svelte";
+import {
+  demoVaultStatus,
+  localFolderAccessSupported,
+  subscribeDemoVaultStatus,
+} from "./lib/ipc/vault";
 import { DEMO_INITIAL_NOTE } from "./lib/vault/seed";
 
 let noticeVisible = $state(true);
+let sourceStatus = $state(demoVaultStatus());
+const folderAccessSupported = localFolderAccessSupported();
+const unsupportedReason = folderAccessSupported
+  ? null
+  : "This browser does not support local folder access.";
+const storageMessage = $derived.by(() => {
+  if (sourceStatus.source === "folder") {
+    const skipped =
+      sourceStatus.skipped === 0
+        ? ""
+        : ` ${sourceStatus.skipped} unreadable file${sourceStatus.skipped === 1 ? " was" : "s were"} skipped.`;
+    if (sourceStatus.writes === "folder") {
+      return `Reading Markdown from “${sourceStatus.name}”. Edits are written to that folder using the browser permission you granted.${skipped}`;
+    }
+    return `Reading Markdown from “${sourceStatus.name}”. Write permission is unavailable, so edits stay in browser memory and are lost on reload.${skipped}`;
+  }
+  return folderAccessSupported
+    ? "The sample vault stays in browser memory until you open a folder. Sample edits are lost on reload."
+    : "This browser does not support local folder access. The sample vault stays in browser memory, and edits are lost on reload.";
+});
+
+onMount(() => subscribeDemoVaultStatus((next) => (sourceStatus = next)));
 
 if (typeof window !== "undefined") {
   const demoWindow = window as Window & {
@@ -25,7 +53,7 @@ if (typeof window !== "undefined") {
             >Download the desktop app</a
           >.
         </p>
-        <p>Edits here live only in browser memory and are lost on reload.</p>
+        <p>{storageMessage}</p>
       </div>
       <button
         type="button"
@@ -39,8 +67,13 @@ if (typeof window !== "undefined") {
       </button>
     </aside>
   {/if}
+  {#if !noticeVisible}
+    <aside class="demo-storage-status" aria-label="Browser storage status">
+      {storageMessage}
+    </aside>
+  {/if}
   <div class="demo-app">
-    <Skribeum />
+    <Skribeum openVaultDisabledReason={unsupportedReason} />
   </div>
 </div>
 
@@ -64,7 +97,7 @@ if (typeof window !== "undefined") {
     padding: 0.65rem 0.8rem 0.7rem 1rem;
     background: var(--skr-warning-surface);
     color: var(--skr-warning);
-    box-shadow: 0 1px 0 var(--skr-border);
+    box-shadow: var(--skr-shadow);
     font-size: 0.8125rem;
     line-height: 1.45;
   }
@@ -117,6 +150,15 @@ if (typeof window !== "undefined") {
   .demo-app {
     min-height: 0;
     flex: 1;
+  }
+
+  .demo-storage-status {
+    flex: none;
+    border-bottom: 1px solid var(--skr-border);
+    padding: 0.35rem 0.75rem;
+    color: var(--skr-accent);
+    background: var(--skr-accent-subtle);
+    font-size: 0.75rem;
   }
 
   .demo-app > :global(.h-screen) {

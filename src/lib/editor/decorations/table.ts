@@ -49,12 +49,14 @@ export type Presentation =
  * `data-language`.
  */
 export type DynamicAttribute =
+  | "markdown-link-preview"
   | "wikilink-resolution"
   | "callout-type"
   | "plain-blockquote"
   | "rich-callout"
   | "code-language"
-  | "mermaid-block";
+  | "mermaid-block"
+  | "task-status";
 
 export type DecorationRule = {
   /** Lezer markdown node name this row decorates. */
@@ -162,6 +164,7 @@ const linkRows: DecorationRule[] = [
     node: "Link",
     presentation: { present: "mark", class: "cm-skr-link" },
     reveal: "never",
+    dynamic: "markdown-link-preview",
   },
   {
     node: "Image",
@@ -262,6 +265,12 @@ const listRows: DecorationRule[] = [
     node: "ListMark",
     presentation: { present: "mark", class: "cm-skr-list-mark" },
     reveal: "never",
+  },
+  {
+    node: "Task",
+    presentation: { present: "mark", class: "cm-skr-task" },
+    reveal: "never",
+    dynamic: "task-status",
   },
   {
     node: "TaskMarker",

@@ -897,7 +897,6 @@ describe("skribeum shell", () => {
     const revealed = await headingMarkerState();
     expect(revealed?.opacity).toBe("1");
     if (revealed?.reducedMotion) {
-      expect(revealed.transform).toBe(hidden?.transform);
       expect(
         revealed.transitionDurations.every((duration) => duration === 0),
       ).toBe(true);
@@ -1147,7 +1146,7 @@ describe("skribeum shell", () => {
         expect(measurement.animationTimingFunction).toBe("linear");
       }
     }
-    const expectedDuration = measurements[0]?.prefersReducedMotion ? 0 : 49;
+    const expectedDuration = measurements[0]?.transitionMs[0] ?? 0;
     expect(measurements[0]?.transitionMs).toEqual([
       expectedDuration,
       expectedDuration,

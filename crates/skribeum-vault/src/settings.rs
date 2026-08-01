@@ -145,6 +145,10 @@ pub enum SettingsError {
 /// The typed settings document. Unknown keys in the file pass through writes
 /// untouched, including retired keys from earlier schemas.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "flat fields mirror the forward-compatible settings document"
+)]
 pub struct Settings {
     pub schema_version: u32,
     pub theme: String,
@@ -234,6 +238,11 @@ const UPDATE_CHANNELS: &[&str] = &["stable", "beta"];
 
 impl Settings {
     /// Validates every typed value before a write touches the file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SettingsError::InvalidValue`] when any field falls outside
+    /// its accepted range, choice set, path rules, or task-status graph.
     pub fn validate(&self) -> Result<(), SettingsError> {
         validate_choice("theme", &self.theme, THEMES)?;
         validate_choice("light_palette", &self.light_palette, LIGHT_PALETTES)?;
@@ -320,6 +329,11 @@ impl SettingsStore {
     /// Reads the settings document. Each malformed known key falls back to
     /// its default while the on-disk value remains available for preservation
     /// until a subsequent successful write.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read or its root is not a JSON
+    /// object. Malformed individual settings do not produce an error.
     pub fn read(&self, fs: &dyn FileSystem) -> Result<Settings, SettingsError> {
         let object = match self.read_object(fs) {
             Ok(object) => object,
@@ -407,6 +421,11 @@ impl SettingsStore {
 
     /// Writes the settings document, validating it first and preserving every
     /// unknown key already in the file. The write is whole-document and durable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation, serialization, directory creation, or
+    /// the durable filesystem write fails.
     pub fn write(&self, fs: &dyn FileSystem, settings: &Settings) -> Result<(), SettingsError> {
         settings.validate()?;
         let mut object = match self.read_object(fs) {
@@ -414,105 +433,70 @@ impl SettingsStore {
             Err(SettingsError::Fs(FsError::NotFound)) => Map::new(),
             Err(error) => return Err(error),
         };
-        object.insert(
-            "schema_version".to_owned(),
-            Value::from(settings.schema_version),
-        );
-        object.insert("theme".to_owned(), Value::from(settings.theme.clone()));
-        object.insert(
-            "prose_font".to_owned(),
-            Value::from(settings.prose_font.clone()),
-        );
-        object.insert(
-            "code_font".to_owned(),
-            Value::from(settings.code_font.clone()),
-        );
-        object.insert(
-            "light_palette".to_owned(),
-            Value::from(settings.light_palette.clone()),
-        );
-        object.insert(
-            "dark_palette".to_owned(),
-            Value::from(settings.dark_palette.clone()),
-        );
-        object.insert(
-            "editor_font_size".to_owned(),
-            Value::from(settings.editor_font_size),
-        );
-        object.insert(
-            "editor_line_height".to_owned(),
-            Value::from(settings.editor_line_height),
-        );
-        object.insert(
-            "editor_line_width".to_owned(),
-            Value::from(settings.editor_line_width),
-        );
-        object.insert(
-            "show_line_numbers".to_owned(),
-            Value::from(settings.show_line_numbers),
-        );
-        object.insert("animations".to_owned(), Value::from(settings.animations));
-        object.insert(
-            "autosave_delay_ms".to_owned(),
-            Value::from(settings.autosave_delay_ms),
-        );
-        object.insert("spell_check".to_owned(), Value::from(settings.spell_check));
-        object.insert(
-            "indent_style".to_owned(),
-            Value::from(settings.indent_style.clone()),
-        );
-        object.insert(
-            "indent_width".to_owned(),
-            Value::from(settings.indent_width),
-        );
-        object.insert(
-            "wrap_long_lines".to_owned(),
-            Value::from(settings.wrap_long_lines),
-        );
-        object.insert(
-            "show_invisible_characters".to_owned(),
-            Value::from(settings.show_invisible_characters),
-        );
-        object.insert(
-            "reveal_markdown_syntax".to_owned(),
-            Value::from(settings.reveal_markdown_syntax),
-        );
-        object.insert(
-            "default_note_folder".to_owned(),
-            Value::from(settings.default_note_folder.clone()),
-        );
-        object.insert(
-            "attachment_folder_mode".to_owned(),
-            Value::from(settings.attachment_folder_mode.clone()),
-        );
-        object.insert(
-            "attachment_folder_path".to_owned(),
-            Value::from(settings.attachment_folder_path.clone()),
-        );
-        object.insert(
-            "honor_obsidian_config".to_owned(),
-            Value::from(settings.honor_obsidian_config),
-        );
-        object.insert(
-            "search_result_limit".to_owned(),
-            Value::from(settings.search_result_limit),
-        );
-        object.insert(
-            "link_previews".to_owned(),
-            Value::from(settings.link_previews),
-        );
-        object.insert(
-            "search_note_bodies".to_owned(),
-            Value::from(settings.search_note_bodies),
-        );
-        object.insert(
-            "search_case_sensitive".to_owned(),
-            Value::from(settings.search_case_sensitive),
-        );
-        object.insert(
-            "update_channel".to_owned(),
-            Value::from(settings.update_channel.clone()),
-        );
+        for (key, value) in [
+            ("schema_version", Value::from(settings.schema_version)),
+            ("theme", Value::from(settings.theme.clone())),
+            ("light_palette", Value::from(settings.light_palette.clone())),
+            ("dark_palette", Value::from(settings.dark_palette.clone())),
+            ("prose_font", Value::from(settings.prose_font.clone())),
+            ("code_font", Value::from(settings.code_font.clone())),
+            ("editor_font_size", Value::from(settings.editor_font_size)),
+            (
+                "editor_line_height",
+                Value::from(settings.editor_line_height),
+            ),
+            ("editor_line_width", Value::from(settings.editor_line_width)),
+            ("show_line_numbers", Value::from(settings.show_line_numbers)),
+            ("animations", Value::from(settings.animations)),
+            ("autosave_delay_ms", Value::from(settings.autosave_delay_ms)),
+            ("spell_check", Value::from(settings.spell_check)),
+            ("indent_style", Value::from(settings.indent_style.clone())),
+            ("indent_width", Value::from(settings.indent_width)),
+            ("wrap_long_lines", Value::from(settings.wrap_long_lines)),
+            (
+                "show_invisible_characters",
+                Value::from(settings.show_invisible_characters),
+            ),
+            (
+                "reveal_markdown_syntax",
+                Value::from(settings.reveal_markdown_syntax),
+            ),
+            (
+                "default_note_folder",
+                Value::from(settings.default_note_folder.clone()),
+            ),
+            (
+                "attachment_folder_mode",
+                Value::from(settings.attachment_folder_mode.clone()),
+            ),
+            (
+                "attachment_folder_path",
+                Value::from(settings.attachment_folder_path.clone()),
+            ),
+            (
+                "honor_obsidian_config",
+                Value::from(settings.honor_obsidian_config),
+            ),
+            (
+                "search_result_limit",
+                Value::from(settings.search_result_limit),
+            ),
+            ("link_previews", Value::from(settings.link_previews)),
+            (
+                "search_note_bodies",
+                Value::from(settings.search_note_bodies),
+            ),
+            (
+                "search_case_sensitive",
+                Value::from(settings.search_case_sensitive),
+            ),
+            (
+                "update_channel",
+                Value::from(settings.update_channel.clone()),
+            ),
+        ] {
+            object.insert(key.to_owned(), value);
+        }
         let task_statuses =
             merged_task_statuses(object.get("task_statuses"), &settings.task_statuses)?;
         object.insert("task_statuses".to_owned(), task_statuses);

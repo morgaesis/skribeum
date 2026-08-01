@@ -362,6 +362,10 @@ pub struct TaskStatusDoc {
 /// `settings.json` never cross the boundary; they are preserved internally
 /// on every write.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "flat fields mirror the typed settings IPC document"
+)]
 pub struct SettingsDoc {
     /// Schema version of the document.
     pub schema_version: u32,
@@ -1150,6 +1154,10 @@ fn settings_read(settings: State<'_, SettingsState>) -> Result<SettingsDoc, AppE
 /// footer and About section.
 #[tauri::command]
 #[specta::specta]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands extract managed state by value"
+)]
 fn settings_path(settings: State<'_, SettingsState>) -> Result<String, AppError> {
     let store = settings
         .0

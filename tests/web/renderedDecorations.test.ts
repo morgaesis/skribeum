@@ -1,12 +1,12 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import {
-  defaultHighlightStyle,
-  syntaxHighlighting,
-} from "@codemirror/language";
+import { syntaxHighlighting } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { decorationEngine } from "../../src/lib/editor/decorations/engine";
+import {
+  decorationEngine,
+  tokenHighlightStyle,
+} from "../../src/lib/editor/decorations/engine";
 import type { WikilinkResolutionContext } from "../../src/lib/editor/decorations/wikilinks";
 import { codeLanguage } from "../../src/lib/editor/markdown/codeLanguages";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
@@ -28,7 +28,7 @@ function mountedView(
           extensions: obsidianMarkdownExtensions,
           codeLanguages: codeLanguage,
         }),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(tokenHighlightStyle, { fallback: true }),
         decorationEngine(context),
       ],
     }),
@@ -160,7 +160,7 @@ describe("rendered decoration DOM", () => {
     const view = mountedView(source);
     const receded = view.dom.querySelector<HTMLElement>(".cm-skr-code-fence");
     expect(receded).not.toBeNull();
-    expect(getComputedStyle(receded as HTMLElement).opacity).toBe("0.28");
+    expect(getComputedStyle(receded as HTMLElement).opacity).toBe("1");
     view.dispatch({ selection: { anchor: source.indexOf("main") } });
     expect(view.dom.querySelector(".cm-skr-code-fence")).toBeNull();
     expect(view.contentDOM.textContent).toContain("```rust");

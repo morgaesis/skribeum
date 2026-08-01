@@ -50,7 +50,7 @@ $effect(() => {
 </script>
 
 <div
-  class="fixed inset-0 z-40 flex items-start justify-center bg-black/20 pt-24"
+  class="skr-overlay fixed inset-0 z-40 flex items-start justify-center pt-24"
   role="presentation"
   onclick={(event) => {
     if (event.target === event.currentTarget) {
@@ -60,7 +60,7 @@ $effect(() => {
 >
   <div
     bind:this={dialogElement}
-    class="w-[28rem] max-w-[90vw] rounded-lg border border-gray-300 bg-white p-4 shadow-xl"
+    class="w-[28rem] max-w-[90vw] rounded-lg border p-4"
     role="dialog"
     aria-modal="true"
     aria-label={STRINGS.settingsLabel}
@@ -72,7 +72,7 @@ $effect(() => {
       <h2 class="m-0 text-sm font-semibold">{STRINGS.settingsLabel}</h2>
       <button
         type="button"
-        class="rounded border border-gray-300 px-2 py-0.5 text-sm outline-offset-1 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-blue-500"
+        class="skr-control rounded border px-2 py-0.5 text-sm"
         onclick={onClose}
       >
         {STRINGS.closeAction}
@@ -80,7 +80,7 @@ $effect(() => {
     </div>
 
     {#if settings.error !== null}
-      <p class="mb-3 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs" role="alert">
+      <p class="skr-error mb-3 rounded border px-2 py-1 text-xs" role="alert">
         {settings.loaded ? STRINGS.settingsWriteFailed : STRINGS.settingsReadFailed}:
         {settings.error}
       </p>
@@ -90,7 +90,7 @@ $effect(() => {
       <label class="flex items-center justify-between gap-3">
         <span>{STRINGS.settingsTheme}</span>
         <select
-          class="rounded border border-gray-300 px-2 py-1"
+          class="skr-control rounded border px-2 py-1"
           bind:value={selectedTheme}
           data-testid="settings-theme"
         >
@@ -106,7 +106,7 @@ $effect(() => {
           type="number"
           min="8"
           max="40"
-          class="w-24 rounded border border-gray-300 px-2 py-1"
+          class="skr-control w-24 rounded border px-2 py-1"
           value={settings.document.editor_font_size}
           data-testid="settings-font-size"
           onchange={(event) => {
@@ -147,7 +147,7 @@ $effect(() => {
           type="number"
           min="1"
           max="500"
-          class="w-24 rounded border border-gray-300 px-2 py-1"
+          class="skr-control w-24 rounded border px-2 py-1"
           value={settings.document.search_result_limit}
           data-testid="settings-search-limit"
           onchange={(event) => {

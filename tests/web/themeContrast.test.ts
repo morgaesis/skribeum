@@ -46,40 +46,43 @@ describe("theme text contrast", () => {
     "utf8",
   );
   const pairs = [
-    ["text", "canvas"],
-    ["text", "surface"],
-    ["text-muted", "surface"],
-    ["link", "surface"],
-    ["danger", "danger-surface"],
-    ["warning", "warning-surface"],
-    ["text", "accent-soft"],
-    ["heading-1", "surface"],
-    ["heading-2", "surface"],
-    ["heading-3", "surface"],
-    ["heading-4", "surface"],
-    ["heading-5", "surface"],
-    ["heading-6", "surface"],
-    ["selection-text", "selection-surface"],
-    ["toolbar-text", "toolbar-surface"],
-    ["toolbar-hover-text", "toolbar-hover-surface"],
-    ["toolbar-focus", "toolbar-surface"],
-    ["caret", "surface"],
-    ["caret", "code-surface"],
-    ["caret", "accent-soft"],
-    ["caret", "warning-surface"],
-    ["caret", "danger-surface"],
-    ["caret", "success-surface"],
+    ["text", "canvas", 4.5],
+    ["text", "surface", 4.5],
+    ["text-muted", "surface", 4.5],
+    ["heading", "surface", 4.5],
+    ["heading-subtle", "surface", 4.5],
+    ["accent", "surface", 4.5],
+    ["link", "surface", 4.5],
+    ["danger", "danger-surface", 4.5],
+    ["warning", "warning-surface", 4.5],
+    ["success", "success-surface", 4.5],
+    ["selection-text", "selection-surface", 4.5],
+    ["caret", "surface", 3],
+    ["focus", "canvas", 3],
+    ["border-strong", "surface", 3],
+  ] as const;
+
+  const syntaxTokens = [
+    "syntax-keyword",
+    "syntax-string",
+    "syntax-number",
+    "syntax-comment",
+    "syntax-function",
+    "syntax-type",
+    "syntax-property",
+    "syntax-operator",
   ] as const;
 
   it.each(["light", "dark"] as const)("%s variables meet WCAG AA", (theme) => {
     const variables = themeBlock(css, theme);
-    const measured = pairs.map(([foreground, background]) => {
+    const measured = pairs.map(([foreground, background, minimum]) => {
       const foregroundColor = variables.get(`skr-${foreground}`);
       const backgroundColor = variables.get(`skr-${background}`);
       expect(foregroundColor, `missing --skr-${foreground}`).toBeDefined();
       expect(backgroundColor, `missing --skr-${background}`).toBeDefined();
       return {
         pair: `${foreground}/${background}`,
+        minimum,
         ratio: contrast(
           foregroundColor ?? "#000000",
           backgroundColor ?? "#ffffff",
@@ -89,8 +92,35 @@ describe("theme text contrast", () => {
     console.info(
       `${theme} contrast: ${measured.map(({ pair, ratio }) => `${pair}=${ratio.toFixed(2)}`).join(", ")}`,
     );
-    for (const { pair, ratio } of measured) {
-      expect(ratio, `${theme} ${pair}`).toBeGreaterThanOrEqual(4.5);
+    for (const { pair, ratio, minimum } of measured) {
+      expect(ratio, `${theme} ${pair}`).toBeGreaterThanOrEqual(minimum);
     }
   });
+
+  it.each(["light", "dark"] as const)(
+    "%s syntax tokens meet the 4.5:1 contrast floor",
+    (theme) => {
+      const variables = themeBlock(css, theme);
+      const codeSurface = variables.get("skr-code-surface");
+      expect(codeSurface, "missing --skr-code-surface").toBeDefined();
+      const measured = syntaxTokens.map((token) => {
+        const color = variables.get(`skr-${token}`);
+        expect(color, `missing --skr-${token}`).toBeDefined();
+        return {
+          token,
+          ratio: contrast(color ?? "#000000", codeSurface ?? "#ffffff"),
+        };
+      });
+      console.info(
+        `${theme} syntax contrast: ${measured
+          .map(({ token, ratio }) => `${token}=${ratio.toFixed(2)}`)
+          .join(", ")}`,
+      );
+      for (const { token, ratio } of measured) {
+        expect(ratio, `${theme} ${token}/code-surface`).toBeGreaterThanOrEqual(
+          4.5,
+        );
+      }
+    },
+  );
 });

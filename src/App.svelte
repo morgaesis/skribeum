@@ -130,7 +130,7 @@ function applyEditorFontSize(pixels: number) {
 function applyEditorReadingMeasure(characters: number) {
   document.documentElement.style.setProperty(
     "--skr-editor-measure",
-    `${characters}ch`,
+    String(characters),
   );
 }
 
@@ -761,7 +761,7 @@ onMount(() => {
     <h1 class="m-0 text-sm font-semibold">{STRINGS.appTitle}</h1>
     <button
       type="button"
-      class="rounded border border-gray-300 px-2 py-0.5 text-sm outline-offset-1 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-blue-500"
+      class="skr-control rounded border px-2 py-0.5 text-sm"
       onclick={pickVault}
     >
       {STRINGS.openVault}

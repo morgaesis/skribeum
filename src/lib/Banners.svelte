@@ -25,7 +25,7 @@ let {
 
 {#each banners as banner (banner.id)}
   <aside
-    class="flex items-start gap-2 border-b border-amber-300 bg-amber-50 px-3 py-1.5 text-xs"
+    class="skr-warning flex items-start gap-2 border-b px-3 py-1.5 text-xs"
     role="alert"
   >
     <div class="min-w-0 flex-1">
@@ -41,7 +41,7 @@ let {
     {#if banner.onReview !== undefined}
       <button
         type="button"
-        class="shrink-0 rounded border border-amber-400 px-2 py-0.5 outline-offset-1 hover:bg-amber-100 focus-visible:outline-2 focus-visible:outline-blue-500"
+        class="skr-warning-control shrink-0 rounded border px-2 py-0.5"
         onclick={banner.onReview}
       >
         {STRINGS.reviewAction}
@@ -49,7 +49,7 @@ let {
     {/if}
     <button
       type="button"
-      class="shrink-0 rounded border border-amber-400 px-2 py-0.5 outline-offset-1 hover:bg-amber-100 focus-visible:outline-2 focus-visible:outline-blue-500"
+      class="skr-warning-control shrink-0 rounded border px-2 py-0.5"
       onclick={() => onDismiss(banner.id)}
     >
       {STRINGS.dismissAction}

@@ -8,7 +8,7 @@
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
-  defaultHighlightStyle,
+  HighlightStyle,
   syntaxHighlighting,
   syntaxTree,
 } from "@codemirror/language";
@@ -30,6 +30,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
+import { tags } from "@lezer/highlight";
 import { renderMath } from "../../rendering/math";
 import { renderMermaid } from "../../rendering/mermaid";
 import { STRINGS } from "../../strings";
@@ -40,7 +41,7 @@ import {
   obsidianMarkdownExtensions,
   skribeumMarkdownParser,
 } from "../markdown/obsidian";
-import { type ParsedCallout, parseCallout } from "./callouts";
+import { calloutIconSvg, parseCallout } from "./callouts";
 import {
   DECORATION_TABLE,
   type DecorationRule,
@@ -51,6 +52,42 @@ import {
   resolveWikilinkTarget,
   type WikilinkResolutionContext,
 } from "./wikilinks";
+
+/** Syntax colors shared by editable notes and nested read-only notes. */
+export const tokenHighlightStyle = HighlightStyle.define([
+  {
+    tag: [tags.keyword, tags.modifier],
+    color: "var(--skr-syntax-keyword)",
+  },
+  {
+    tag: [tags.string, tags.regexp],
+    color: "var(--skr-syntax-string)",
+  },
+  {
+    tag: [tags.number, tags.bool, tags.atom],
+    color: "var(--skr-syntax-number)",
+  },
+  {
+    tag: [tags.comment, tags.meta],
+    color: "var(--skr-syntax-comment)",
+  },
+  {
+    tag: [tags.function(tags.variableName), tags.definition(tags.variableName)],
+    color: "var(--skr-syntax-function)",
+  },
+  {
+    tag: [tags.typeName, tags.className, tags.namespace],
+    color: "var(--skr-syntax-type)",
+  },
+  {
+    tag: [tags.propertyName, tags.attributeName, tags.tagName],
+    color: "var(--skr-syntax-property)",
+  },
+  {
+    tag: [tags.operator, tags.punctuation, tags.bracket],
+    color: "var(--skr-syntax-operator)",
+  },
+]);
 
 /**
  * Long-line safeguard: no decoration is computed for content on a line
@@ -457,7 +494,7 @@ function nestedMarkdownView(
           extensions: obsidianMarkdownExtensions,
           codeLanguages: codeLanguage,
         }),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(tokenHighlightStyle, { fallback: true }),
         decorationEngine(context),
         readOnlyDecorationMode,
         EditorView.lineWrapping,
@@ -588,98 +625,25 @@ class EmbedWidget extends WidgetType {
   }
 }
 
-class CalloutWidget extends WidgetType {
-  constructor(
-    readonly callout: ParsedCallout,
-    readonly context: WikilinkResolutionContext,
-  ) {
+class CalloutIconWidget extends WidgetType {
+  constructor(readonly type: string) {
     super();
   }
 
-  override eq(other: CalloutWidget): boolean {
-    return (
-      JSON.stringify(other.callout) === JSON.stringify(this.callout) &&
-      other.context === this.context
-    );
+  override eq(other: CalloutIconWidget): boolean {
+    return other.type === this.type;
   }
 
-  override toDOM(view: EditorView): HTMLElement {
-    const host = document.createElement("aside");
-    host.className = "cm-skr-rich-callout";
-    host.setAttribute("role", "note");
-    host.setAttribute("data-callout", this.callout.originalType.toLowerCase());
-    host.setAttribute("data-callout-canonical", this.callout.canonicalType);
-    host.setAttribute("data-accent", this.callout.accentGroup);
-
-    const title = document.createElement(
-      this.callout.foldable ? "button" : "div",
-    );
-    title.className = "cm-skr-callout-title";
-    if (title instanceof HTMLButtonElement) {
-      title.type = "button";
-      title.setAttribute(
-        "aria-expanded",
-        this.callout.initiallyExpanded ? "true" : "false",
-      );
-    } else {
-      title.setAttribute("role", "heading");
-      title.setAttribute("aria-level", "3");
-    }
-    const icon = document.createElement("span");
-    icon.className = "cm-skr-callout-icon-host";
-    icon.innerHTML = this.callout.iconSvg;
-    title.append(icon);
-    const label = document.createElement("span");
-    label.className = "cm-skr-callout-title-text";
-    label.textContent = this.callout.title;
-    title.append(label);
-    if (this.callout.foldable) {
-      const fold = document.createElement("span");
-      fold.className = "cm-skr-callout-fold";
-      fold.setAttribute("aria-hidden", "true");
-      fold.textContent = "⌄";
-      title.append(fold);
-    }
-    host.append(title);
-
-    const body = document.createElement("div");
-    body.className = "cm-skr-callout-body";
-    body.hidden = !this.callout.initiallyExpanded;
-    host.append(body);
-    if (this.callout.bodyMarkdown.length > 0) {
-      nestedMarkdownView(
-        body,
-        this.callout.bodyMarkdown,
-        this.context,
-        `${this.callout.title} callout`,
-      );
-    }
-    if (title instanceof HTMLButtonElement) {
-      title.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        body.hidden = !body.hidden;
-        title.setAttribute("aria-expanded", body.hidden ? "false" : "true");
-        host.classList.toggle("cm-skr-callout-collapsed", body.hidden);
-        view.requestMeasure();
-      });
-      host.classList.toggle(
-        "cm-skr-callout-collapsed",
-        !this.callout.initiallyExpanded,
-      );
-    }
+  override toDOM(): HTMLElement {
+    const host = document.createElement("span");
+    host.className = "cm-skr-callout-icon-host";
+    host.setAttribute("aria-hidden", "true");
+    host.innerHTML = calloutIconSvg(this.type);
     return host;
   }
 
-  override destroy(dom: HTMLElement): void {
-    const body = dom.querySelector<HTMLElement>(".cm-skr-callout-body");
-    if (body !== null) {
-      nestedViews.get(body)?.destroy();
-    }
-  }
-
   override ignoreEvent(): boolean {
-    return true;
+    return false;
   }
 }
 
@@ -690,8 +654,7 @@ function isBlockWidgetRule(rule: DecorationRule): boolean {
     (rule.presentation.widget === "math-block" ||
       rule.presentation.widget === "mermaid-diagram" ||
       rule.presentation.widget === "table-row" ||
-      rule.presentation.widget === "table-separator" ||
-      rule.presentation.widget === "callout")
+      rule.presentation.widget === "table-separator")
   );
 }
 
@@ -756,6 +719,14 @@ type ComputeOptions = {
   /** Windows to decorate; the whole document when omitted. */
   ranges?: readonly { from: number; to: number }[];
   wikilinks?: WikilinkResolutionContext;
+  /** Preselected across the full table when decorations are split. */
+  activeReveal?: RevealRegion | null;
+};
+
+type RevealRegion = {
+  from: number;
+  to: number;
+  descendants: boolean;
 };
 
 type RuleIndex = Map<string, DecorationRule[]>;
@@ -907,12 +878,10 @@ function dynamicAttributes(
       };
     }
     case "callout-type": {
-      const blockquote =
-        node.name === "Blockquote"
-          ? node
-          : node.name === "CalloutMark"
-            ? (node.parent?.parent ?? null)
-            : null;
+      let blockquote: SyntaxNode | null = node;
+      while (blockquote !== null && blockquote.name !== "Blockquote") {
+        blockquote = blockquote.parent;
+      }
       if (blockquote === null || blockquote.name !== "Blockquote") {
         return node.name === "Blockquote" ? {} : null;
       }
@@ -926,20 +895,28 @@ function dynamicAttributes(
       const type = calloutTypeOf(head, doc);
       return type === null ? {} : { "data-callout": type };
     }
+    case "plain-blockquote": {
+      let blockquote: SyntaxNode | null = node;
+      while (blockquote !== null && blockquote.name !== "Blockquote") {
+        blockquote = blockquote.parent;
+      }
+      return blockquote !== null && calloutHead(blockquote) === null
+        ? {}
+        : null;
+    }
     case "rich-callout": {
       if (node.name !== "Blockquote") {
         return null;
       }
-      for (let parent = node.parent; parent !== null; parent = parent.parent) {
-        if (parent.name === "Blockquote" && calloutHead(parent) !== null) {
-          // The outer callout's nested read-only editor renders this child.
-          // Emitting both replacements here would overlap vertical ranges.
-          return null;
-        }
-      }
-      const head = calloutHead(node);
-      const type = head === null ? null : calloutTypeOf(head, doc);
-      return type === null ? null : { "data-callout": type };
+      const callout = parseCallout(doc.sliceString(node.from, node.to));
+      return callout === null
+        ? null
+        : {
+            "data-callout": callout.originalType.toLowerCase(),
+            "data-callout-canonical": callout.canonicalType,
+            "data-accent": callout.accentGroup,
+            "data-foldable": callout.foldable ? "true" : "false",
+          };
     }
     case "code-language":
       return { "data-language": doc.sliceString(node.from, node.to) };
@@ -957,6 +934,101 @@ function dynamicAttributes(
     default:
       return {};
   }
+}
+
+function revealRange(
+  rule: DecorationRule,
+  node: SyntaxNode,
+  doc: Text,
+): { from: number; to: number } {
+  const useNode =
+    rule.revealScope === "node" ||
+    (rule.revealScope === undefined &&
+      rule.reveal === "cursor-inside" &&
+      rule.presentation.present === "widget");
+  const scope = useNode ? node : (node.parent ?? node);
+  if (rule.reveal !== "cursor-line") {
+    return { from: scope.from, to: scope.to };
+  }
+  return {
+    from: doc.lineAt(scope.from).from,
+    to: doc.lineAt(Math.min(scope.to, doc.length)).to,
+  };
+}
+
+function selectsDescendants(rule: DecorationRule): boolean {
+  return (
+    rule.revealDescendants === true ||
+    (rule.presentation.present === "widget" &&
+      rule.presentation.place !== "before")
+  );
+}
+
+function findActiveReveal(
+  doc: Text,
+  tree: Tree,
+  table: readonly DecorationRule[],
+  selection: readonly { from: number; to: number }[],
+  wikilinks: WikilinkResolutionContext,
+): RevealRegion | null {
+  const cursor = selection[0]?.to;
+  if (cursor === undefined) {
+    return null;
+  }
+  const rules = ruleIndex(table);
+  let active: RevealRegion | null = null;
+  const relevant = new Map<string, SyntaxNode>();
+  for (const bias of [-1, 1] as const) {
+    for (
+      let node: SyntaxNode | null = tree.resolveInner(cursor, bias);
+      node !== null;
+      node = node.parent
+    ) {
+      relevant.set(`${node.name}:${node.from}:${node.to}`, node);
+      if (node.name === "Document") {
+        continue;
+      }
+      for (
+        let child = node.firstChild;
+        child !== null;
+        child = child.nextSibling
+      ) {
+        relevant.set(`${child.name}:${child.from}:${child.to}`, child);
+      }
+    }
+  }
+  for (const node of relevant.values()) {
+    const nodeRules = rules.get(node.name);
+    if (nodeRules === undefined) {
+      continue;
+    }
+    for (const rule of nodeRules) {
+      if (
+        rule.reveal === "never" ||
+        !ruleMatches(rule, node, doc) ||
+        dynamicAttributes(rule, node, doc, wikilinks) === null
+      ) {
+        continue;
+      }
+      const range = revealRange(rule, node, doc);
+      if (cursor < range.from || cursor > range.to) {
+        continue;
+      }
+      const candidate: RevealRegion = {
+        ...range,
+        descendants: selectsDescendants(rule),
+      };
+      if (
+        active === null ||
+        (candidate.descendants && !active.descendants) ||
+        (candidate.descendants === active.descendants &&
+          candidate.to - candidate.from < active.to - active.from)
+      ) {
+        active = candidate;
+      }
+    }
+  }
+  return active;
 }
 
 type BuiltDecoration = {
@@ -1068,21 +1140,12 @@ function widgetFor(
         block: false,
         attributes: { role: "button", "aria-label": STRINGS.copyCode },
       };
-    case "callout": {
-      const callout = parseCallout(doc.sliceString(node.from, node.to));
-      if (callout === null) {
-        throw new Error("callout widget requires a callout blockquote");
-      }
+    case "callout-icon": {
+      const type = calloutTypeOf(node, doc);
       return {
-        widget: new CalloutWidget(callout, wikilinks),
-        block: true,
-        attributes: {
-          role: "note",
-          "data-callout": callout.originalType.toLowerCase(),
-          "data-callout-canonical": callout.canonicalType,
-          "data-accent": callout.accentGroup,
-          "data-foldable": callout.foldable ? "true" : "false",
-        },
+        widget: new CalloutIconWidget(type ?? "note"),
+        block: false,
+        attributes: { "aria-hidden": "true", "data-callout": type ?? "note" },
       };
     }
   }
@@ -1100,24 +1163,19 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
   const selection = options.selection ?? [];
   const ranges = options.ranges ?? [{ from: 0, to: doc.length }];
   const wikilinks = options.wikilinks ?? EMPTY_WIKILINK_CONTEXT;
+  const activeReveal =
+    options.activeReveal === undefined
+      ? findActiveReveal(doc, tree, table, selection, wikilinks)
+      : options.activeReveal;
   const built: BuiltDecoration[] = [];
   const seenLines = new Set<string>();
 
   const revealed = (rule: DecorationRule, node: SyntaxNode): boolean => {
-    if (rule.reveal === "never" || selection.length === 0) {
+    if (rule.reveal === "never" || activeReveal === null) {
       return false;
     }
-    const scope =
-      rule.reveal === "cursor-inside" && rule.presentation.present === "widget"
-        ? node
-        : (node.parent ?? node);
-    let from = scope.from;
-    let to = scope.to;
-    if (rule.reveal === "cursor-line") {
-      from = doc.lineAt(scope.from).from;
-      to = doc.lineAt(Math.min(scope.to, doc.length)).to;
-    }
-    return selection.some((range) => range.to >= from && range.from <= to);
+    const range = revealRange(rule, node, doc);
+    return range.from === activeReveal.from && range.to === activeReveal.to;
   };
 
   for (const window of ranges) {
@@ -1149,16 +1207,42 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (dynamic === null) {
             continue;
           }
+          const revealedNow = revealed(rule, node);
+          if (
+            activeReveal?.descendants === true &&
+            ref.from >= activeReveal.from &&
+            ref.to <= activeReveal.to &&
+            !revealedNow
+          ) {
+            continue;
+          }
           const presentation = rule.presentation;
           if (presentation.present === "line") {
-            const extraClass =
-              "data-callout" in dynamic ? " cm-skr-callout" : "";
-            const lineClass = presentation.class + extraClass;
+            const lineClass = presentation.class;
             let position = Math.max(ref.from, window.from);
             const end = Math.min(ref.to, window.to);
             while (position <= end) {
               const line = doc.lineAt(position);
-              const key = `${line.from} ${lineClass}${serializeAttributes(dynamic)}`;
+              const firstRichLine = line.from === doc.lineAt(ref.from).from;
+              const lastRichLine =
+                line.from === doc.lineAt(Math.min(ref.to, doc.length)).from;
+              const lineDynamic =
+                rule.dynamic === "rich-callout"
+                  ? {
+                      ...dynamic,
+                      ...(revealedNow ? { "data-revealed": "true" } : {}),
+                      ...(firstRichLine ? { role: "note" } : {}),
+                      "data-callout-line":
+                        firstRichLine && lastRichLine
+                          ? "only"
+                          : firstRichLine
+                            ? "first"
+                            : lastRichLine
+                              ? "last"
+                              : "middle",
+                    }
+                  : dynamic;
+              const key = `${line.from} ${lineClass}${serializeAttributes(lineDynamic)}`;
               if (
                 line.length <= LONG_LINE_DECORATION_LIMIT &&
                 !seenLines.has(key)
@@ -1166,10 +1250,10 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 seenLines.add(key);
                 const spec: Parameters<typeof Decoration.line>[0] = {
                   class: lineClass,
-                  skr: `line class=${JSON.stringify(lineClass)}${serializeAttributes(dynamic)}`,
+                  skr: `line class=${JSON.stringify(lineClass)}${serializeAttributes(lineDynamic)}`,
                 };
-                if (Object.keys(dynamic).length > 0) {
-                  spec.attributes = dynamic;
+                if (Object.keys(lineDynamic).length > 0) {
+                  spec.attributes = lineDynamic;
                 }
                 built.push({
                   from: line.from,
@@ -1187,7 +1271,6 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (doc.lineAt(ref.from).length > LONG_LINE_DECORATION_LIMIT) {
             continue;
           }
-          const revealedNow = revealed(rule, node);
           // A revealed rule emits nothing, so the source shows through. The
           // exception is a cursor-line reveal, which still emits a marker
           // carrying its active state so the transition has something to
@@ -1226,6 +1309,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               from: hideFrom,
               to: hideTo,
               decoration: Decoration.replace({
+                atomic: true,
                 skr: `hide node=${rule.node}`,
               }),
             });
@@ -1252,6 +1336,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 from: ref.from,
                 to: ref.to,
                 decoration: Decoration.replace({
+                  atomic: true,
                   widget: builtWidget.widget,
                   block: builtWidget.block,
                   skr,
@@ -1295,6 +1380,20 @@ export function serializeDecorationSet(set: DecorationSet): string {
 
 function buildViewDecorations(view: EditorView): DecorationSet {
   const state = view.state;
+  const table = state.facet(decorationTable);
+  const cursor = state.selection.main.head;
+  const selection = state.facet(sourceRevealEnabled)
+    ? [{ from: cursor, to: cursor }]
+    : [];
+  const wikilinks =
+    state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
+  const activeReveal = findActiveReveal(
+    state.doc,
+    syntaxTree(state),
+    table,
+    selection,
+    wikilinks,
+  );
   const ranges =
     view.visibleRanges.length > 0
       ? view.visibleRanges.map((range) => ({ from: range.from, to: range.to }))
@@ -1302,30 +1401,35 @@ function buildViewDecorations(view: EditorView): DecorationSet {
   return computeDecorations({
     doc: state.doc,
     tree: syntaxTree(state),
-    table: splitTable(state.facet(decorationTable)).inline,
-    selection: state.facet(sourceRevealEnabled)
-      ? state.selection.ranges.map((range) => ({
-          from: range.from,
-          to: range.to,
-        }))
-      : [],
+    table: splitTable(table).inline,
+    selection,
     ranges,
-    wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    wikilinks,
+    activeReveal,
   });
 }
 
 function buildBlockDecorations(state: EditorState): DecorationSet {
+  const table = state.facet(decorationTable);
+  const cursor = state.selection.main.head;
+  const selection = state.facet(sourceRevealEnabled)
+    ? [{ from: cursor, to: cursor }]
+    : [];
+  const wikilinks =
+    state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
   return computeDecorations({
     doc: state.doc,
     tree: syntaxTree(state),
-    table: splitTable(state.facet(decorationTable)).block,
-    selection: state.facet(sourceRevealEnabled)
-      ? state.selection.ranges.map((range) => ({
-          from: range.from,
-          to: range.to,
-        }))
-      : [],
-    wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    table: splitTable(table).block,
+    selection,
+    wikilinks,
+    activeReveal: findActiveReveal(
+      state.doc,
+      syntaxTree(state),
+      table,
+      selection,
+      wikilinks,
+    ),
   });
 }
 
@@ -1465,58 +1569,128 @@ const enginePlugin = ViewPlugin.fromClass(
   { decorations: (plugin) => plugin.decorations },
 );
 
+function atomicDecorations(view: EditorView): DecorationSet {
+  const ranges: ReturnType<Decoration["range"]>[] = [];
+  const inline = view.plugin(enginePlugin)?.decorations;
+  const block = view.state.field(blockEngineField, false)?.decorations;
+  for (const set of [inline, block]) {
+    if (set === undefined) {
+      continue;
+    }
+    const cursor = set.iter();
+    while (cursor.value !== null) {
+      if ((cursor.value.spec as { atomic?: boolean }).atomic === true) {
+        ranges.push(cursor.value.range(cursor.from, cursor.to));
+      }
+      cursor.next();
+    }
+  }
+  return Decoration.set(ranges, true);
+}
+
+const calloutPointerMapping = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    if (event.button !== 0 || !(event.target instanceof Element)) {
+      return false;
+    }
+    const directLine = event.target.closest<HTMLElement>(
+      ".cm-line.cm-skr-rich-callout",
+    );
+    const lineElement =
+      directLine ??
+      [
+        ...view.contentDOM.querySelectorAll<HTMLElement>(
+          ".cm-line.cm-skr-rich-callout",
+        ),
+      ].find((line) => {
+        const rect = line.getBoundingClientRect();
+        return (
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom
+        );
+      }) ??
+      null;
+    if (lineElement === null || !view.dom.contains(lineElement)) {
+      return false;
+    }
+    const sourceLine = view.state.doc.lineAt(view.posAtDOM(lineElement, 0));
+    const lineRect = lineElement.getBoundingClientRect();
+    const coordinatePosition = view.posAtCoords({
+      x: event.clientX,
+      y: lineRect.top + lineRect.height / 2,
+    });
+    const anchor = Math.min(
+      sourceLine.to,
+      Math.max(sourceLine.from, coordinatePosition ?? sourceLine.from),
+    );
+    event.preventDefault();
+    view.focus();
+    view.dispatch({ selection: { anchor }, scrollIntoView: true });
+    return true;
+  },
+});
+
 const engineTheme = EditorView.baseTheme({
   ".cm-skr-heading": {
     fontFamily: "var(--skr-font-prose)",
-    lineHeight: "1.22",
     textWrap: "balance",
   },
   ".cm-skr-heading-1": {
-    color: "var(--skr-heading-1)",
-    fontSize: "2.05em",
-    fontWeight: "720",
-    letterSpacing: "-0.028em",
-    paddingTop: "0.6em",
-    paddingBottom: "0.32em",
+    color: "var(--skr-heading)",
+    fontSize: "1.75em",
+    fontWeight: "700",
+    lineHeight: "1.25",
+    letterSpacing: "-0.015em",
+    paddingTop: "1.5rem",
+    paddingBottom: "0.5rem",
     borderBottom: "1px solid var(--skr-border)",
   },
   ".cm-skr-heading-2": {
-    color: "var(--skr-heading-2)",
-    fontSize: "1.7em",
-    fontWeight: "690",
-    letterSpacing: "-0.02em",
-    paddingTop: "0.68em",
-    paddingBottom: "0.2em",
+    color: "var(--skr-heading)",
+    fontSize: "1.5em",
+    fontWeight: "700",
+    lineHeight: "1.3",
+    letterSpacing: "-0.01em",
+    paddingTop: "1.25rem",
+    paddingBottom: "0.375rem",
   },
   ".cm-skr-heading-3": {
-    color: "var(--skr-heading-3)",
-    fontSize: "1.4em",
-    fontWeight: "660",
-    letterSpacing: "-0.012em",
-    paddingTop: "0.62em",
-    paddingBottom: "0.14em",
+    color: "var(--skr-heading)",
+    fontSize: "1.25em",
+    fontWeight: "700",
+    lineHeight: "1.35",
+    letterSpacing: "-0.005em",
+    paddingTop: "1rem",
+    paddingBottom: "0.25rem",
   },
   ".cm-skr-heading-4": {
-    color: "var(--skr-heading-4)",
-    fontSize: "1.18em",
-    fontWeight: "630",
-    letterSpacing: "0.005em",
-    paddingTop: "0.54em",
+    color: "var(--skr-heading)",
+    fontSize: "1.125em",
+    fontWeight: "700",
+    lineHeight: "1.4",
+    letterSpacing: "0",
+    paddingTop: "1rem",
+    paddingBottom: "0.125rem",
   },
   ".cm-skr-heading-5": {
-    color: "var(--skr-heading-5)",
-    fontSize: "1.02em",
-    fontWeight: "600",
-    letterSpacing: "0.055em",
-    paddingTop: "0.48em",
-    textTransform: "uppercase",
+    color: "var(--skr-heading-subtle)",
+    fontSize: "1em",
+    fontWeight: "700",
+    lineHeight: "1.5",
+    letterSpacing: "0",
+    paddingTop: "1rem",
+    paddingBottom: "0.125rem",
   },
   ".cm-skr-heading-6": {
-    color: "var(--skr-heading-6)",
-    fontSize: "0.92em",
-    fontWeight: "570",
-    letterSpacing: "0.075em",
-    paddingTop: "0.42em",
+    color: "var(--skr-heading-subtle)",
+    fontSize: "0.875em",
+    fontWeight: "700",
+    lineHeight: "1.5",
+    letterSpacing: "0.06em",
+    paddingTop: "1rem",
+    paddingBottom: "0.125rem",
     textTransform: "uppercase",
   },
   ".cm-skr-setext-underline": { color: "var(--skr-text-muted)" },
@@ -1528,7 +1702,7 @@ const engineTheme = EditorView.baseTheme({
     opacity: "0",
     verticalAlign: "bottom",
     whiteSpace: "pre",
-    transition: "max-width 120ms ease-out, opacity 90ms ease-out",
+    transition: "opacity 50ms linear",
   },
   ".cm-skr-reveal-marker-active": {
     maxWidth: "7ch",
@@ -1536,10 +1710,14 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-emphasis": { fontStyle: "italic" },
   ".cm-skr-strong": { fontWeight: "700" },
-  ".cm-skr-strikethrough": { textDecoration: "line-through" },
+  ".cm-skr-strikethrough": {
+    color: "var(--skr-text-muted)",
+    textDecoration: "line-through",
+  },
   ".cm-skr-link, .cm-skr-url": {
     color: "var(--skr-link)",
     textDecoration: "underline",
+    textUnderlineOffset: "0.15em",
   },
   ".cm-skr-link-label": { color: "var(--skr-link)" },
   ".cm-skr-wikilink": { color: "var(--skr-link)" },
@@ -1568,8 +1746,9 @@ const engineTheme = EditorView.baseTheme({
     display: "block",
     padding: "0.35rem 0.6rem",
     color: "var(--skr-text-muted)",
-    fontSize: "0.8em",
-    fontWeight: "700",
+    fontFamily: "var(--skr-font-interface)",
+    fontSize: "0.8125em",
+    fontWeight: "400",
   },
   ".cm-skr-embed-body": { display: "block" },
   ".cm-skr-embed-body > .cm-editor": { backgroundColor: "transparent" },
@@ -1581,10 +1760,10 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-list-mark": { color: "var(--skr-accent)" },
   ".cm-skr-task-checkbox": {
     display: "inline-block",
-    width: "0.9em",
-    height: "0.9em",
+    width: "1em",
+    height: "1em",
     verticalAlign: "text-bottom",
-    border: "1.5px solid var(--skr-text-muted)",
+    border: "1.5px solid var(--skr-border-strong)",
     borderRadius: "3px",
     margin: "0 0.15em",
   },
@@ -1598,6 +1777,8 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-inline-code": {
     fontFamily: "var(--skr-font-mono)",
+    fontSize: "0.9em",
+    fontWeight: "400",
     backgroundColor: "var(--skr-code-surface)",
     borderRadius: "3px",
     padding: "0 2px",
@@ -1606,45 +1787,68 @@ const engineTheme = EditorView.baseTheme({
     boxSizing: "border-box",
     display: "grid",
     width: "100%",
-    overflow: "hidden",
+    overflowX: "auto",
     borderLeft: "1px solid var(--skr-border)",
     borderRight: "1px solid var(--skr-border)",
     backgroundColor: "var(--skr-surface)",
   },
   ".cm-skr-table-first": {
     borderTop: "1px solid var(--skr-border)",
-    borderTopLeftRadius: "0.35rem",
-    borderTopRightRadius: "0.35rem",
+    borderTopLeftRadius: "0.375rem",
+    borderTopRightRadius: "0.375rem",
   },
   ".cm-skr-table-last": {
     borderBottom: "1px solid var(--skr-border)",
-    borderBottomLeftRadius: "0.35rem",
-    borderBottomRightRadius: "0.35rem",
+    borderBottomLeftRadius: "0.375rem",
+    borderBottomRightRadius: "0.375rem",
   },
   ".cm-skr-table-header": {
-    borderBottom: "2px solid var(--skr-border)",
+    borderBottom: "1px solid var(--skr-border)",
     backgroundColor: "var(--skr-surface-subtle)",
+    fontFamily: "var(--skr-font-interface)",
+    fontSize: "0.875em",
+    fontWeight: "600",
   },
   ".cm-skr-table-cell": {
     boxSizing: "border-box",
     minWidth: "0",
-    padding: "0.35rem 0.55rem",
+    padding: "0.375rem 0.625rem",
     overflowWrap: "anywhere",
     borderRight: "1px solid var(--skr-border)",
   },
   ".cm-skr-table-cell:last-child": { borderRight: "0" },
   ".cm-skr-table-separator": { display: "none" },
   ".cm-skr-code-block": {
+    boxSizing: "border-box",
     position: "relative",
+    overflowX: "auto",
     backgroundColor: "var(--skr-code-surface)",
+    boxShadow:
+      "-1rem 0 0 var(--skr-code-surface), 1rem 0 0 var(--skr-code-surface)",
   },
-  ".cm-skr-code-fence": { opacity: "0.28" },
-  ".cm-skr-code-info": { opacity: "0.38", fontStyle: "italic" },
+  ".cm-line:not(.cm-skr-code-block) + .cm-skr-code-block, .cm-skr-code-block:first-child":
+    {
+      paddingTop: "0.75rem",
+      overflow: "visible",
+      borderTopLeftRadius: "0.375rem",
+      borderTopRightRadius: "0.375rem",
+    },
+  ".cm-skr-code-block:has(+ .cm-line:not(.cm-skr-code-block)), .cm-skr-code-block:last-child":
+    {
+      paddingBottom: "0.75rem",
+      borderBottomLeftRadius: "0.375rem",
+      borderBottomRightRadius: "0.375rem",
+    },
+  ".cm-skr-code-fence, .cm-skr-code-info": {
+    color: "var(--skr-text-muted)",
+    opacity: "1",
+  },
+  ".cm-skr-code-info": { fontStyle: "italic" },
   ".cm-skr-code-copy": {
     position: "absolute",
     zIndex: "2",
-    top: "0.2rem",
-    right: "0.35rem",
+    top: "0.5rem",
+    right: "-0.5rem",
     minWidth: "4.5rem",
     padding: "0.2rem 0.45rem",
     color: "var(--skr-text)",
@@ -1661,25 +1865,11 @@ const engineTheme = EditorView.baseTheme({
       pointerEvents: "auto",
     },
   ".cm-skr-blockquote": {
-    borderLeft: "3px solid var(--skr-border)",
-    paddingLeft: "0.5em",
+    color: "var(--skr-text-muted)",
+    borderLeft: "3px solid var(--skr-border-strong)",
+    paddingLeft: "1rem",
   },
   ".cm-skr-quote-mark": { color: "var(--skr-text-muted)" },
-  ".cm-skr-callout": { backgroundColor: "var(--skr-accent-soft)" },
-  '.cm-skr-callout[data-callout="warning"]': {
-    backgroundColor: "var(--skr-warning-surface)",
-    borderLeftColor: "var(--skr-warning)",
-  },
-  '.cm-skr-callout[data-callout="danger"], .cm-skr-callout[data-callout="error"]':
-    {
-      backgroundColor: "var(--skr-danger-surface)",
-      borderLeftColor: "var(--skr-danger)",
-    },
-  '.cm-skr-callout[data-callout="tip"], .cm-skr-callout[data-callout="success"]':
-    {
-      backgroundColor: "var(--skr-success-surface)",
-      borderLeftColor: "var(--skr-success)",
-    },
   ".cm-skr-callout-mark": { fontWeight: "700", color: "var(--skr-accent)" },
   '.cm-skr-callout-mark[data-callout="warning"]': {
     color: "var(--skr-warning)",
@@ -1688,24 +1878,24 @@ const engineTheme = EditorView.baseTheme({
     { color: "var(--skr-danger)" },
   '.cm-skr-callout-mark[data-callout="tip"], .cm-skr-callout-mark[data-callout="success"]':
     { color: "var(--skr-success)" },
-  ".cm-skr-rich-callout": {
+  ".cm-line.cm-skr-rich-callout": {
     "--skr-callout-color": "var(--skr-callout-blue)",
     boxSizing: "border-box",
-    width: "100%",
+    width: "calc(100% + 2rem + 3px)",
+    marginLeft: "calc(-1rem - 3px)",
+    marginRight: "-1rem",
+    paddingInline: "1rem",
     overflow: "hidden",
     color: "var(--skr-text)",
     backgroundColor:
-      "color-mix(in srgb, var(--skr-callout-color) 10%, var(--skr-surface))",
-    border:
-      "1px solid color-mix(in srgb, var(--skr-callout-color) 45%, var(--skr-border))",
-    borderLeft: "4px solid var(--skr-callout-color)",
-    borderRadius: "0.45rem",
+      "color-mix(in srgb, var(--skr-callout-color) var(--skr-callout-tint), var(--skr-surface))",
+    borderLeft: "3px solid var(--skr-callout-color)",
   },
   '.cm-skr-rich-callout[data-accent="cyan"]': {
     "--skr-callout-color": "var(--skr-callout-cyan)",
   },
   '.cm-skr-rich-callout[data-accent="green"]': {
-    "--skr-callout-color": "var(--skr-success)",
+    "--skr-callout-color": "var(--skr-callout-green)",
   },
   '.cm-skr-rich-callout[data-accent="yellow"]': {
     "--skr-callout-color": "var(--skr-callout-yellow)",
@@ -1714,47 +1904,35 @@ const engineTheme = EditorView.baseTheme({
     "--skr-callout-color": "var(--skr-callout-orange)",
   },
   '.cm-skr-rich-callout[data-accent="red"]': {
-    "--skr-callout-color": "var(--skr-danger)",
+    "--skr-callout-color": "var(--skr-callout-red)",
   },
   '.cm-skr-rich-callout[data-accent="purple"]': {
     "--skr-callout-color": "var(--skr-callout-purple)",
   },
   '.cm-skr-rich-callout[data-accent="gray"]': {
-    "--skr-callout-color": "var(--skr-text-muted)",
+    "--skr-callout-color": "var(--skr-callout-gray)",
   },
-  ".cm-skr-callout-title": {
-    boxSizing: "border-box",
-    display: "flex",
-    alignItems: "center",
-    gap: "0.45rem",
-    width: "100%",
-    padding: "0.5rem 0.7rem",
-    color: "var(--skr-callout-color)",
-    backgroundColor: "transparent",
-    border: "0",
-    font: "inherit",
-    fontWeight: "700",
-    textAlign: "left",
-  },
-  "button.cm-skr-callout-title": { cursor: "pointer" },
+  '.cm-skr-rich-callout[data-callout-line="first"], .cm-skr-rich-callout[data-callout-line="only"]':
+    {
+      paddingTop: "0.75rem",
+      color: "var(--skr-callout-color)",
+      fontWeight: "700",
+      borderTopRightRadius: "0.375rem",
+    },
+  '.cm-skr-rich-callout[data-callout-line="last"], .cm-skr-rich-callout[data-callout-line="only"]':
+    {
+      paddingBottom: "0.75rem",
+      borderBottomRightRadius: "0.375rem",
+    },
   ".cm-skr-callout-icon-host, .cm-skr-callout-icon": {
     display: "inline-flex",
     flex: "0 0 auto",
+    color: "var(--skr-callout-color)",
   },
-  ".cm-skr-callout-fold": {
-    marginLeft: "auto",
-    fontSize: "1.15em",
-    transition: "transform 120ms ease",
-  },
-  '.cm-skr-callout-title[aria-expanded="false"] .cm-skr-callout-fold': {
-    transform: "rotate(-90deg)",
-  },
-  ".cm-skr-callout-body": { padding: "0 0.7rem 0.65rem" },
-  ".cm-skr-callout-body[hidden]": { display: "none" },
-  ".cm-skr-callout-body > .cm-editor": { backgroundColor: "transparent" },
+  ".cm-skr-callout-icon-host": { marginRight: "0.4rem" },
   ".cm-skr-tag": {
     color: "var(--skr-accent)",
-    backgroundColor: "var(--skr-accent-soft)",
+    backgroundColor: "var(--skr-accent-subtle)",
     borderRadius: "8px",
     padding: "0 4px",
   },
@@ -1762,7 +1940,8 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-frontmatter": {
     color: "var(--skr-text-muted)",
     fontFamily: "var(--skr-font-mono)",
-    fontSize: "0.88em",
+    fontSize: "0.8125em",
+    lineHeight: "1.5",
   },
   ".cm-skr-math-inline": { display: "inline-block", maxWidth: "100%" },
   ".cm-skr-math-block, .cm-skr-mermaid": {
@@ -1799,6 +1978,8 @@ export function decorationEngine(
       : wikilinkContext.init(() => initialContext),
     blockEngineField,
     enginePlugin,
+    EditorView.atomicRanges.of(atomicDecorations),
+    calloutPointerMapping,
     engineTheme,
   ];
 }

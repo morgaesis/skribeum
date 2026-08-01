@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
@@ -11,6 +11,8 @@ import {
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_NAME,
   RENDERING_NOTE_NAME,
+  REVEAL_NOTE_CONTENT,
+  REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
   VISUAL_NOTE_CONTENT,
   VISUAL_NOTE_NAME,
@@ -95,6 +97,136 @@ async function placeCursorAtLineEnd(text: string) {
   }, text);
   // Let CodeMirror's DOM observer sync the selection change.
   await browser.pause(200);
+}
+
+type RevealClickPoint = "top" | "title" | "body" | "bottom";
+
+async function clickRevealPoint(point: RevealClickPoint) {
+  const coordinates = await browser.execute(
+    (requestedPoint: RevealClickPoint) => {
+      const calloutLines = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".cm-line.cm-skr-rich-callout",
+        ),
+      ];
+      let x: number;
+      let y: number;
+      const first = calloutLines[0];
+      const last = calloutLines.at(-1);
+      if (first === undefined || last === undefined) {
+        throw new Error("rendered callout lines missing");
+      }
+      if (requestedPoint === "top") {
+        const rect = first.getBoundingClientRect();
+        const editorRect = first
+          .closest<HTMLElement>(".cm-editor")
+          ?.getBoundingClientRect();
+        x = Math.max(rect.left + 8, (editorRect?.left ?? rect.left) + 8);
+        y = rect.top + 2;
+      } else if (requestedPoint === "bottom") {
+        const rect = last.getBoundingClientRect();
+        x = rect.left + rect.width / 2;
+        y = rect.bottom - 2;
+      } else {
+        const text =
+          requestedPoint === "title" ? "Linked callout" : "First body line";
+        const line = [
+          ...document.querySelectorAll<HTMLElement>(".cm-line"),
+        ].find((candidate) => candidate.textContent?.includes(text));
+        if (line === undefined) {
+          throw new Error(`callout line missing: ${text}`);
+        }
+        const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+        let rect: DOMRect | null = null;
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          const value = node.textContent ?? "";
+          const index = value.indexOf(text);
+          if (index >= 0) {
+            const range = document.createRange();
+            range.setStart(node, index);
+            range.setEnd(node, index + text.length);
+            rect = range.getBoundingClientRect();
+            break;
+          }
+        }
+        if (rect === null) {
+          throw new Error(`callout text missing: ${text}`);
+        }
+        x = rect.left + rect.width / 2;
+        y = rect.top + rect.height / 2;
+      }
+
+      if (document.elementFromPoint(x, y) === null) {
+        throw new Error(`no click target for ${requestedPoint}`);
+      }
+      return { x: Math.round(x), y: Math.round(y) };
+    },
+    point,
+  );
+  await browser.performActions([
+    {
+      type: "pointer",
+      id: "callout-reveal-pointer",
+      parameters: { pointerType: "mouse" },
+      actions: [
+        {
+          type: "pointerMove",
+          duration: 0,
+          origin: "viewport",
+          x: coordinates.x,
+          y: coordinates.y,
+        },
+        { type: "pointerDown", button: 0 },
+        { type: "pointerUp", button: 0 },
+      ],
+    },
+  ]);
+  await browser.releaseActions();
+  await browser.pause(200);
+}
+
+async function editorCursor() {
+  return browser.execute(() => {
+    const selection = window.getSelection();
+    const anchor = selection?.anchorNode;
+    const line =
+      anchor instanceof Element
+        ? anchor.closest<HTMLElement>(".cm-line")
+        : anchor?.parentElement?.closest<HTMLElement>(".cm-line");
+    if (
+      selection === null ||
+      anchor === undefined ||
+      anchor === null ||
+      line === null
+    ) {
+      return { line: "", offset: -1 };
+    }
+    const range = document.createRange();
+    range.selectNodeContents(line);
+    const maximumOffset =
+      anchor.nodeType === Node.TEXT_NODE
+        ? (anchor.textContent?.length ?? 0)
+        : anchor.childNodes.length;
+    range.setEnd(anchor, Math.min(selection.anchorOffset, maximumOffset));
+    return { line: line.textContent ?? "", offset: range.toString().length };
+  });
+}
+
+async function calloutVisualIdentity() {
+  return browser.execute(() => {
+    const line = document.querySelector<HTMLElement>(
+      ".cm-line.cm-skr-rich-callout",
+    );
+    if (line === null) {
+      return null;
+    }
+    return {
+      accent: line.dataset.accent ?? "",
+      borderLeftColor: getComputedStyle(line).borderLeftColor,
+      revealed: line.dataset.revealed === "true",
+    };
+  });
 }
 
 /** Sets the theme select's value and fires the change event it binds on. */
@@ -384,6 +516,126 @@ describe("skribeum shell", () => {
     await clearEditorSelection();
   });
 
+  it("aligns_block_text_and_wraps_callouts_within_the_reading_measure", async () => {
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+
+    const geometry = await browser.execute(() => {
+      const outerContent = document.querySelector<HTMLElement>(
+        ".editor > .cm-editor .cm-content",
+      );
+      if (outerContent === null) {
+        throw new Error("editor content missing");
+      }
+      const heading = outerContent.querySelector<HTMLElement>(
+        ".cm-line.cm-skr-heading-1",
+      );
+      const callout = outerContent.querySelector<HTMLElement>(
+        ".cm-skr-rich-callout",
+      );
+      const listMark =
+        outerContent.querySelector<HTMLElement>(".cm-skr-list-mark");
+      const listLine = listMark?.closest<HTMLElement>(".cm-line") ?? null;
+      const calloutLine = [
+        ...outerContent.querySelectorAll<HTMLElement>(
+          ".cm-line.cm-skr-rich-callout",
+        ),
+      ].find((line) => line.textContent?.includes("Callout text follows"));
+      const codeLine = outerContent.querySelector<HTMLElement>(
+        ".cm-line.cm-skr-code-block",
+      );
+      let paragraphLine: HTMLElement | null = null;
+      for (const element of outerContent.children) {
+        if (element.textContent?.includes("Patient typography")) {
+          paragraphLine = element as HTMLElement;
+          break;
+        }
+      }
+      if (
+        heading === null ||
+        callout === null ||
+        listLine === null ||
+        calloutLine === null ||
+        codeLine === null ||
+        paragraphLine === null
+      ) {
+        throw new Error("reading geometry fixture missing");
+      }
+
+      const headingStyle = getComputedStyle(heading);
+      const headingBox = heading.getBoundingClientRect();
+      const paragraphStyle = getComputedStyle(paragraphLine);
+      const paragraphBox = paragraphLine.getBoundingClientRect();
+      const listStyle = getComputedStyle(listLine);
+      const listBox = listLine.getBoundingClientRect();
+      const calloutLineStyle = getComputedStyle(calloutLine);
+      const calloutLineBox = calloutLine.getBoundingClientRect();
+      const codeStyle = getComputedStyle(codeLine);
+      const codeBox = codeLine.getBoundingClientRect();
+      const headingText = [
+        ...heading.querySelectorAll<HTMLElement>("span"),
+      ].find((element) => element.textContent?.includes("A room for reading"));
+      const proseBounds = {
+        left: paragraphBox.left + Number.parseFloat(paragraphStyle.paddingLeft),
+        right:
+          paragraphBox.right - Number.parseFloat(paragraphStyle.paddingRight),
+      };
+      const calloutBox = callout.getBoundingClientRect();
+
+      return {
+        leftEdges: {
+          heading:
+            headingBox.left + Number.parseFloat(headingStyle.paddingLeft),
+          paragraph: proseBounds.left,
+          list: listBox.left + Number.parseFloat(listStyle.paddingLeft),
+          callout:
+            calloutLineBox.left +
+            Number.parseFloat(calloutLineStyle.borderLeftWidth) +
+            Number.parseFloat(calloutLineStyle.paddingLeft),
+          code: codeBox.left + Number.parseFloat(codeStyle.paddingLeft),
+        },
+        calloutTextBounds: {
+          left:
+            calloutLineBox.left +
+            Number.parseFloat(calloutLineStyle.borderLeftWidth) +
+            Number.parseFloat(calloutLineStyle.paddingLeft),
+          right:
+            calloutLineBox.right -
+            Number.parseFloat(calloutLineStyle.paddingRight),
+        },
+        calloutLineHeight: calloutLineBox.height,
+        calloutTextLineHeight: Number.parseFloat(calloutLineStyle.lineHeight),
+        calloutBox: { left: calloutBox.left, right: calloutBox.right },
+        proseBounds,
+        headingTextDecorationLine: getComputedStyle(headingText ?? heading)
+          .textDecorationLine,
+      };
+    });
+
+    const leftEdges = Object.values(geometry.leftEdges);
+    const leftEdgeSpread = Math.max(...leftEdges) - Math.min(...leftEdges);
+    console.info(
+      `reading left edges: ${Object.entries(geometry.leftEdges)
+        .map(([block, edge]) => `${block}=${edge.toFixed(2)}`)
+        .join(", ")}`,
+    );
+    expect(leftEdgeSpread).toBeLessThan(1);
+    expect(geometry.calloutLineHeight).toBeGreaterThan(
+      geometry.calloutTextLineHeight * 1.5,
+    );
+    expect(geometry.calloutTextBounds.left).toBeGreaterThanOrEqual(
+      geometry.proseBounds.left - 1,
+    );
+    expect(geometry.calloutTextBounds.right).toBeLessThanOrEqual(
+      geometry.proseBounds.right + 1,
+    );
+    expect(geometry.calloutBox.left).toBeLessThan(geometry.proseBounds.left);
+    expect(geometry.calloutBox.right).toBeGreaterThan(
+      geometry.proseBounds.right,
+    );
+    expect(geometry.headingTextDecorationLine).toBe("none");
+  });
+
   it("edits_saves_and_reopens_a_note", async () => {
     await openNoteFromTree(LF_NOTE_NAME);
     await browser.waitUntil(
@@ -640,6 +892,127 @@ describe("skribeum shell", () => {
         timeoutMsg: "heading marker did not hide after the cursor left",
       },
     );
+  });
+
+  it("maps_callout_clicks_to_one_source_reveal_region", async () => {
+    writeFileSync(
+      path.join(SCRATCH_VAULT_PATH, REVEAL_NOTE_NAME),
+      REVEAL_NOTE_CONTENT,
+    );
+    await browser.keys([modifierKey, "o"]);
+    const quickSwitcher = $('[role="combobox"]');
+    await quickSwitcher.waitForExist({ timeout: 10000 });
+    await quickSwitcher.addValue(REVEAL_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await $$('[role="option"]').length) === 1,
+      { timeout: 10000 },
+    );
+    await browser.keys(Key.Enter);
+    await $(".cm-line.cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+    const renderedIdentity = await calloutVisualIdentity();
+    expect(renderedIdentity?.accent).toBe("cyan");
+    expect(renderedIdentity?.revealed).toBe(false);
+
+    const cases: Array<{
+      point: RevealClickPoint;
+      line: string;
+      minimumOffset: number;
+      maximumOffset: number;
+    }> = [
+      {
+        point: "top",
+        line: "> [!tip] Linked callout",
+        minimumOffset: 0,
+        maximumOffset: 2,
+      },
+      {
+        point: "title",
+        line: "> [!tip] Linked callout",
+        minimumOffset: 0,
+        maximumOffset: 24,
+      },
+      {
+        point: "body",
+        line: "> First body line.",
+        minimumOffset: 0,
+        maximumOffset: 18,
+      },
+      {
+        point: "bottom",
+        line: "> Read [inside link](inside-target).",
+        minimumOffset: 0,
+        maximumOffset: 37,
+      },
+    ];
+
+    for (const testCase of cases) {
+      await placeCursorAtLineEnd("cursor parking");
+      await browser.waitUntil(
+        async () =>
+          !(await $(
+            '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+          ).isExisting()),
+        {
+          timeout: 10000,
+          timeoutMsg: "callout source did not collapse after the cursor left",
+        },
+      );
+      await clickRevealPoint(testCase.point);
+      await $(
+        '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+      ).waitForExist({
+        timeout: 10000,
+        timeoutMsg: `${testCase.point} click did not reveal callout source`,
+      });
+      const cursor = await editorCursor();
+      expect(cursor.line).toBe(testCase.line);
+      expect(cursor.offset).toBeGreaterThanOrEqual(testCase.minimumOffset);
+      expect(cursor.offset).toBeLessThanOrEqual(testCase.maximumOffset);
+      const text = await editorText();
+      expect(text).toContain("inside-target");
+      expect(text).not.toContain("outside-target");
+      const revealedIdentity = await calloutVisualIdentity();
+      expect(revealedIdentity?.accent).toBe(renderedIdentity?.accent);
+      expect(revealedIdentity?.borderLeftColor).toBe(
+        renderedIdentity?.borderLeftColor,
+      );
+      expect(revealedIdentity?.revealed).toBe(true);
+    }
+
+    await placeCursorAtLineEnd("cursor parking");
+    await browser.waitUntil(
+      async () =>
+        !(await $(
+          '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+        ).isExisting()),
+      {
+        timeout: 10000,
+        timeoutMsg: "callout source did not collapse before outside reveal",
+      },
+    );
+    await placeCursorAtLineEnd("Outside link");
+    await browser.waitUntil(
+      async () => (await editorText()).includes("outside-target"),
+      {
+        timeout: 10000,
+        timeoutMsg: "outside link did not reveal",
+      },
+    );
+    expect(await $(".cm-line.cm-skr-rich-callout").isExisting()).toBe(true);
+    const text = await editorText();
+    expect(text).toContain("outside-target");
+    expect(text).not.toContain("inside-target");
+    const cursor = await editorCursor();
+    expect(cursor.line).toBe("[Outside link](outside-target)");
+    expect(cursor.offset).toBeGreaterThanOrEqual(0);
+    expect(cursor.offset).toBeLessThanOrEqual(30);
+
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("body text here"),
+      { timeout: 10000 },
+    );
+    rmSync(path.join(SCRATCH_VAULT_PATH, REVEAL_NOTE_NAME));
   });
 
   it("surfaces_and_dismisses_the_note_removed_banner_by_keyboard", async () => {
@@ -906,7 +1279,7 @@ describe("skribeum core editing surfaces", () => {
       await browser.execute(() =>
         document.documentElement.style.getPropertyValue("--skr-editor-measure"),
       ),
-    ).toBe(`${targetMeasure}ch`);
+    ).toBe(String(targetMeasure));
 
     // Close, then confirm the persisted value by re-reading through IPC
     // and by reopening the dialog.

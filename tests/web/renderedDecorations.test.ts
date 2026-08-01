@@ -1,12 +1,13 @@
+import { cursorCharForward } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import {
-  defaultHighlightStyle,
-  syntaxHighlighting,
-} from "@codemirror/language";
+import { syntaxHighlighting } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { decorationEngine } from "../../src/lib/editor/decorations/engine";
+import {
+  decorationEngine,
+  tokenHighlightStyle,
+} from "../../src/lib/editor/decorations/engine";
 import type { WikilinkResolutionContext } from "../../src/lib/editor/decorations/wikilinks";
 import { codeLanguage } from "../../src/lib/editor/markdown/codeLanguages";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
@@ -28,7 +29,7 @@ function mountedView(
           extensions: obsidianMarkdownExtensions,
           codeLanguages: codeLanguage,
         }),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(tokenHighlightStyle, { fallback: true }),
         decorationEngine(context),
       ],
     }),
@@ -160,35 +161,102 @@ describe("rendered decoration DOM", () => {
     const view = mountedView(source);
     const receded = view.dom.querySelector<HTMLElement>(".cm-skr-code-fence");
     expect(receded).not.toBeNull();
-    expect(getComputedStyle(receded as HTMLElement).opacity).toBe("0.28");
+    expect(getComputedStyle(receded as HTMLElement).opacity).toBe("1");
     view.dispatch({ selection: { anchor: source.indexOf("main") } });
     expect(view.dom.querySelector(".cm-skr-code-fence")).toBeNull();
     expect(view.contentDOM.textContent).toContain("```rust");
   });
 
-  it("renders a themed callout with an icon, title, and collapsible rich body", () => {
+  it("renders a source-backed themed callout and reveals its whole source", () => {
     const source =
       "> [!faq]- Need help\n> **Rendered answer**\n> - first\n\noutside";
     const view = mountedView(source);
-    const callout = view.dom.querySelector<HTMLElement>(
-      '[role="note"][data-callout="faq"]',
+    const titleLine = view.dom.querySelector<HTMLElement>(
+      '.cm-line.cm-skr-rich-callout[data-callout="faq"][data-callout-line="first"]',
     );
-    expect(callout).not.toBeNull();
-    expect(callout?.getAttribute("data-callout-canonical")).toBe("question");
-    expect(callout?.getAttribute("data-accent")).toBe("yellow");
-    expect(callout?.querySelector("svg.cm-skr-callout-icon")).not.toBeNull();
-    const button = callout?.querySelector<HTMLButtonElement>(
-      'button[aria-expanded="false"]',
-    );
-    expect(button?.textContent).toContain("Need help");
-    const body = callout?.querySelector<HTMLElement>(".cm-skr-callout-body");
-    expect(body?.hidden).toBe(true);
-    button?.click();
-    expect(button?.getAttribute("aria-expanded")).toBe("true");
-    expect(body?.hidden).toBe(false);
-    expect(body?.querySelector(".cm-skr-strong")?.textContent).toContain(
+    expect(titleLine).not.toBeNull();
+    expect(titleLine?.getAttribute("data-callout-canonical")).toBe("question");
+    expect(titleLine?.getAttribute("data-accent")).toBe("yellow");
+    expect(titleLine?.querySelector("svg.cm-skr-callout-icon")).not.toBeNull();
+    expect(titleLine?.textContent).toContain("Need help");
+    expect(titleLine?.textContent).not.toContain("[!faq]");
+    expect(view.dom.querySelector(".cm-skr-strong")?.textContent).toContain(
       "Rendered answer",
     );
-    expect(body?.textContent).toContain("first");
+
+    view.dispatch({ selection: { anchor: source.indexOf("Rendered answer") } });
+    const revealedLine = view.dom.querySelector<HTMLElement>(
+      '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+    );
+    expect(revealedLine).not.toBeNull();
+    expect(revealedLine?.getAttribute("data-accent")).toBe("yellow");
+    expect(view.dom.querySelector(".cm-skr-callout-icon-host")).toBeNull();
+    expect(view.dom.querySelector(".cm-skr-strong")).toBeNull();
+    expect(view.contentDOM.textContent).toContain(
+      "> [!faq]- Need help> **Rendered answer**> - first",
+    );
+
+    view.dispatch({ selection: { anchor: source.indexOf("outside") } });
+    expect(view.dom.querySelector(".cm-skr-rich-callout")).not.toBeNull();
+    expect(view.dom.querySelector(".cm-skr-strong")).not.toBeNull();
+  });
+
+  it("keeps the callout accent colour while its source is revealed", () => {
+    const source = "> [!tip] Typed identity\n> Source body\n\noutside";
+    const view = mountedView(source);
+    const rendered = view.dom.querySelector<HTMLElement>(
+      '.cm-line.cm-skr-rich-callout[data-accent="cyan"]',
+    );
+    expect(rendered).not.toBeNull();
+    const renderedAccent = getComputedStyle(
+      rendered as HTMLElement,
+    ).getPropertyValue("--skr-callout-color");
+
+    view.dispatch({ selection: { anchor: source.indexOf("Source body") } });
+    const revealed = view.dom.querySelector<HTMLElement>(
+      '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+    );
+    expect(revealed).not.toBeNull();
+    expect(revealed?.getAttribute("data-accent")).toBe("cyan");
+    expect(
+      getComputedStyle(revealed as HTMLElement).getPropertyValue(
+        "--skr-callout-color",
+      ),
+    ).toBe(renderedAccent);
+  });
+
+  it("moves the cursor into and out of callout source by keyboard", () => {
+    const source = "before\n> [!tip] Typed identity\n> Source body\n\nafter";
+    const calloutFrom = source.indexOf("> [!tip]");
+    const calloutTo = source.indexOf("\nafter");
+    const view = mountedView(source, calloutFrom - 1);
+
+    expect(cursorCharForward(view)).toBe(true);
+    expect(view.state.selection.main.head).toBeGreaterThanOrEqual(calloutFrom);
+    expect(view.state.selection.main.head).toBeLessThanOrEqual(calloutTo);
+    expect(
+      view.dom.querySelector(
+        '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+      ),
+    ).not.toBeNull();
+
+    let movements = 0;
+    while (
+      view.dom.querySelector(
+        '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+      ) !== null &&
+      movements < 100
+    ) {
+      expect(cursorCharForward(view)).toBe(true);
+      movements += 1;
+    }
+    expect(movements).toBeLessThan(100);
+    expect(view.state.selection.main.head).toBeGreaterThanOrEqual(calloutTo);
+    expect(
+      view.dom.querySelector(
+        '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+      ),
+    ).toBeNull();
+    expect(view.dom.querySelector(".cm-skr-rich-callout")).not.toBeNull();
   });
 });

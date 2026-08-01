@@ -1,13 +1,10 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import {
-  bracketMatching,
-  defaultHighlightStyle,
-  syntaxHighlighting,
-} from "@codemirror/language";
+import { bracketMatching, syntaxHighlighting } from "@codemirror/language";
 import type { Extension, Text } from "@codemirror/state";
 import {
   decorationEngine,
   LONG_LINE_DECORATION_LIMIT,
+  tokenHighlightStyle,
 } from "./decorations/engine";
 import type { WikilinkResolutionContext } from "./decorations/wikilinks";
 import { codeLanguage } from "./markdown/codeLanguages";
@@ -66,7 +63,7 @@ export function noteRenderingExtensions(
       codeLanguages: codeLanguage,
       extensions: obsidianMarkdownExtensions,
     }),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    syntaxHighlighting(tokenHighlightStyle, { fallback: true }),
     decorationEngine(context),
   ];
 }

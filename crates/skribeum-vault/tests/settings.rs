@@ -29,8 +29,8 @@ fn missing_file_yields_defaults() {
     assert_eq!(settings, Settings::default());
     assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
     assert_eq!(settings.theme, "system");
-    assert_eq!(settings.editor_font_size, 17);
-    assert_eq!(settings.editor_reading_measure, 76);
+    assert_eq!(settings.editor_font_size, 16);
+    assert_eq!(settings.editor_reading_measure, 72);
 }
 
 /// A full round trip: unknown keys already in the file, including nested

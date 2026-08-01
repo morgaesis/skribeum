@@ -51,8 +51,10 @@ export const VISUAL_NOTE_CONTENT = [
   "",
   "## Deliberate hierarchy",
   "",
+  "- Aligned blocks keep the reading rhythm steady.",
+  "",
   "> [!tip] Reading note",
-  "> Keep the prose calm and reserve visual emphasis for meaning.",
+  "> Callout text follows the same comfortable reading measure as the surrounding prose, even when the sentence is long enough to wrap onto several visual lines inside its padded frame.",
   "",
   "### Practical details",
   "",
@@ -68,6 +70,10 @@ export const VISUAL_NOTE_CONTENT = [
   "| Code | Exact notation |",
   "",
 ].join("\n");
+
+export const REVEAL_NOTE_NAME = "zzzz-reveal.md";
+export const REVEAL_NOTE_CONTENT =
+  "# Reveal interactions\n\n> [!tip] Linked callout\n> First body line.\n> Read [inside link](inside-target).\n\n[Outside link](outside-target)\n\ncursor parking\n";
 
 export const CANVAS_FILE_NAME = "zzz-board.canvas";
 export const CANVAS_REFERENCE_NAME = "z-live-preview.md";

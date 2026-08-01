@@ -64,7 +64,7 @@ if (typeof window !== "undefined") {
     padding: 0.65rem 0.8rem 0.7rem 1rem;
     background: var(--skr-warning-surface);
     color: var(--skr-warning);
-    box-shadow: 0 1px 0 rgb(15 23 42 / 5%);
+    box-shadow: 0 1px 0 var(--skr-border);
     font-size: 0.8125rem;
     line-height: 1.45;
   }

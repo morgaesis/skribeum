@@ -87,6 +87,17 @@ async function setViewport(width: number, height: number) {
   );
 }
 
+async function restoreDesktopViewport() {
+  await browser.setWindowSize(1100, 750);
+  await browser.waitUntil(
+    async () => browser.execute(() => window.innerWidth > 960),
+    {
+      timeout: 10000,
+      timeoutMsg: "viewport did not return above the narrow breakpoint",
+    },
+  );
+}
+
 async function editorText(): Promise<string> {
   return $(".cm-content").getText();
 }
@@ -564,7 +575,7 @@ describe("skribeum shell", () => {
         ).toBe(true);
       }
     } finally {
-      await setViewport(1000, 700);
+      await restoreDesktopViewport();
     }
   });
 

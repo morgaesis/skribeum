@@ -521,6 +521,7 @@ describe("skribeum shell", () => {
           const style = getComputedStyle(editor);
           return {
             paneWidth: pane.getBoundingClientRect().width,
+            contentWidth: editor.getBoundingClientRect().width,
             readingWidth:
               editor.getBoundingClientRect().width -
               Number.parseFloat(style.paddingLeft) -
@@ -532,7 +533,9 @@ describe("skribeum shell", () => {
         expect(layout).not.toBeNull();
         expect(layout?.sidebarDisplay).toBe("none");
         expect(layout?.paneWidth).toBeGreaterThanOrEqual(width - 1);
-        expect(layout?.readingWidth).toBeGreaterThanOrEqual(width - 49);
+        expect(layout?.readingWidth).toBeGreaterThanOrEqual(
+          (layout?.contentWidth ?? 0) - 49,
+        );
         expect(layout?.overflow).toBe(false);
 
         const launchTargets = await browser.execute(() =>
@@ -718,7 +721,7 @@ describe("skribeum shell", () => {
             fontFamily: style.fontFamily,
             proseFontToken,
             readingWidth: readingRight - readingLeft,
-            minimumWidth: Math.min(minimumWidth, scrollerBox.width - 2 * 24),
+            minimumWidth: Math.min(minimumWidth, contentBox.width - 2 * 24),
             maximumWidth,
             scrollerWidth: scrollerBox.width,
             leftGutter: readingLeft - scrollerBox.left,

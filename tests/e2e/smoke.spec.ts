@@ -1174,7 +1174,19 @@ describe("skribeum shell", () => {
         ["vault-search.open", "?", "text"],
         ["palette.open", ">", "command"],
       ] as const) {
-        await overflowButton.click();
+        await browser.waitUntil(
+          () =>
+            browser.execute(() =>
+              document.activeElement?.classList.contains("skr-phone-overflow"),
+            ),
+          {
+            timeout: 10000,
+            timeoutMsg: "overflow button did not regain focus",
+          },
+        );
+        const aliasOverflowButton = $('button[aria-label="More actions"]');
+        await aliasOverflowButton.waitForClickable({ timeout: 10000 });
+        await aliasOverflowButton.click();
         await overflowSheet.waitForDisplayed({ timeout: 10000 });
         await overflowSheet.$(`[data-command-id="${commandId}"]`).click();
         const commandSurface = $('[data-testid="unified-command-surface"]');

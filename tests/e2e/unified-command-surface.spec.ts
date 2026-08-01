@@ -4,6 +4,12 @@ import { Key } from "webdriverio";
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
 let testRun = 0;
 
+type ClipboardReadback = {
+  done: boolean;
+  text: string;
+  error: string | null;
+};
+
 async function overlayInput() {
   const input = $('[role="combobox"]');
   await input.waitForExist({ timeout: 10000 });
@@ -11,14 +17,55 @@ async function overlayInput() {
 }
 
 async function readClipboardText() {
-  const windowHandle = await browser.getWindowHandle();
-  await browser.switchToWindow(windowHandle);
-  await browser.execute(() => window.focus());
-  await browser.waitUntil(() => browser.execute(() => document.hasFocus()), {
-    timeout: 5000,
-    timeoutMsg: "browser document did not regain focus for clipboard read",
+  await browser.execute(() => {
+    const state: ClipboardReadback = { done: false, text: "", error: null };
+    const stateWindow = window as Window & {
+      __skribeumClipboardReadback?: ClipboardReadback;
+    };
+    stateWindow.__skribeumClipboardReadback = state;
+    document.addEventListener(
+      "click",
+      async (event) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        try {
+          state.text = await navigator.clipboard.readText();
+        } catch (error) {
+          state.error = error instanceof Error ? error.message : String(error);
+        } finally {
+          state.done = true;
+        }
+      },
+      { capture: true, once: true },
+    );
   });
-  return browser.execute(() => navigator.clipboard.readText());
+  await $(".demo-shell").click();
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        () =>
+          (
+            window as Window & {
+              __skribeumClipboardReadback?: ClipboardReadback;
+            }
+          ).__skribeumClipboardReadback?.done === true,
+      ),
+    {
+      timeout: 5000,
+      timeoutMsg: "clipboard readback did not complete",
+    },
+  );
+  const readback = await browser.execute(
+    () =>
+      (
+        window as Window & {
+          __skribeumClipboardReadback?: ClipboardReadback;
+        }
+      ).__skribeumClipboardReadback,
+  );
+  if (readback === undefined) throw new Error("clipboard readback is missing");
+  if (readback.error !== null) throw new Error(readback.error);
+  return readback.text;
 }
 
 async function selectEditorText(text: string) {

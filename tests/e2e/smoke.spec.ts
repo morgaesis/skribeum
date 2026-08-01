@@ -564,7 +564,7 @@ describe("skribeum shell", () => {
         ).toBe(true);
       }
     } finally {
-      await setViewport(1100, 750);
+      await setViewport(1000, 700);
     }
   });
 

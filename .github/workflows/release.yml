@@ -3,6 +3,16 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Intended release tag, such as v0.0.7
+        required: true
+        type: string
+      changelog_section:
+        description: Optional raw changelog section body; overrides tag lookup
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -10,8 +20,55 @@ permissions:
   attestations: write
 
 jobs:
+  release-notes-quality:
+    name: release notes quality check
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Generate and validate candidate
+        env:
+          OPENROUTER_RELEASE_NOTES_KEY: ${{ secrets.OPENROUTER_RELEASE_NOTES_KEY }}
+          RAW_CHANGELOG_SECTION: ${{ inputs.changelog_section }}
+          RELEASE_NOTES_MODEL: ${{ vars.RELEASE_NOTES_MODEL }}
+          RELEASE_NOTES_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          section_arguments=()
+          if [ -n "$RAW_CHANGELOG_SECTION" ]; then
+            section="$RUNNER_TEMP/changelog-section.md"
+            printf '%s\n' "$RAW_CHANGELOG_SECTION" > "$section"
+            section_arguments=(--section-file "$section")
+          fi
+          python3 .github/scripts/release-notes.py \
+            --changelog CHANGELOG.md \
+            --tag "$RELEASE_NOTES_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output "$notes" \
+            "${section_arguments[@]}"
+          {
+            echo "## Candidate release body"
+            echo
+            cat "$notes"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes-candidate
+          path: ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
   prepare:
     name: release notes
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     outputs:
       body: ${{ steps.release-notes.outputs.body }}
@@ -20,6 +77,9 @@ jobs:
 
       - name: Build release notes
         id: release-notes
+        env:
+          OPENROUTER_RELEASE_NOTES_KEY: ${{ secrets.OPENROUTER_RELEASE_NOTES_KEY }}
+          RELEASE_NOTES_MODEL: ${{ vars.RELEASE_NOTES_MODEL }}
         run: |
           set -euo pipefail
           notes="$RUNNER_TEMP/release-notes.md"
@@ -37,6 +97,7 @@ jobs:
 
   build:
     name: ${{ matrix.name }}
+    if: github.event_name == 'push'
     needs: prepare
     strategy:
       fail-fast: false
@@ -171,6 +232,7 @@ jobs:
 
   sbom:
     name: sbom
+    if: github.event_name == 'push'
     needs: prepare
     runs-on: ubuntu-latest
     steps:
@@ -186,6 +248,7 @@ jobs:
 
   publish:
     name: publish release
+    if: github.event_name == 'push'
     needs: [build, sbom]
     runs-on: ubuntu-latest
     steps:

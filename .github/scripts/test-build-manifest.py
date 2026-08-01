@@ -63,6 +63,8 @@ def main() -> int:
                 fixture["version"],
                 "--directory",
                 str(legacy),
+                "--version",
+                fixture["version"],
                 "--output",
                 str(signature_bundle),
             ],

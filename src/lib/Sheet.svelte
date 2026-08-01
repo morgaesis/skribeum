@@ -106,9 +106,12 @@ onDestroy(() => {
     align-items: flex-end;
     background: var(--skr-overlay);
     display: flex;
-    inset: 0;
+    top: var(--skr-visual-viewport-top);
+    left: var(--skr-visual-viewport-left);
     justify-content: center;
     position: fixed;
+    width: var(--skr-visual-viewport-width);
+    height: var(--skr-visual-viewport-height);
     z-index: 45;
   }
 
@@ -121,7 +124,7 @@ onDestroy(() => {
     color: var(--skr-text);
     display: flex;
     flex-direction: column;
-    height: min(80dvh, 40rem);
+    height: min(80dvh, 40rem, var(--skr-visual-viewport-height));
     max-width: 32rem;
     outline: none;
     overflow: hidden;
@@ -150,8 +153,10 @@ onDestroy(() => {
   }
 
   .sheet-content {
+    box-sizing: border-box;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    padding-bottom: env(safe-area-inset-bottom);
   }
 </style>

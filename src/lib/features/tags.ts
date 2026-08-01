@@ -426,7 +426,7 @@ const tagTheme = View.baseTheme({
     margin: "0",
     padding: "2px",
     minWidth: "12em",
-    maxHeight: "14em",
+    maxHeight: "12rem",
     overflowY: "auto",
     color: "var(--skr-text)",
     backgroundColor: "var(--skr-surface-raised)",

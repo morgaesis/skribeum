@@ -67,6 +67,7 @@ export type PointerSurface =
   | "app-bar"
   | "command-palette"
   | "action-menu"
+  | "overflow-menu"
   | "editor-link"
   | "editor-tag"
   | "find-panel"

@@ -45,7 +45,7 @@ export function registerSurfaces(registry: CommandRegistry): void {
     title: STRINGS.commandOpenPalette,
     keybindings: ["Mod-p", "Mod-Shift-p"],
     palette: false,
-    pointer: ["app-bar"],
+    pointer: ["app-bar", "overflow-menu"],
     run: (context) => {
       context.openCommandSurface(">");
     },
@@ -54,7 +54,7 @@ export function registerSurfaces(registry: CommandRegistry): void {
     id: "quick-switcher.open",
     title: STRINGS.commandOpenCommandSurface,
     keybindings: ["Mod-k", "Mod-o"],
-    pointer: ["app-bar", "action-menu", "command-palette"],
+    pointer: ["app-bar", "overflow-menu", "command-palette"],
     run: (context) => {
       context.openCommandSurface("");
     },
@@ -63,7 +63,7 @@ export function registerSurfaces(registry: CommandRegistry): void {
     id: "vault-search.open",
     title: STRINGS.commandOpenVaultSearch,
     keybindings: ["Mod-Shift-f"],
-    pointer: ["app-bar", "action-menu", "command-palette"],
+    pointer: ["app-bar", "overflow-menu", "command-palette"],
     run: (context) => {
       context.openCommandSurface("?");
     },

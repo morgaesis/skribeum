@@ -39,6 +39,10 @@ import {
   type TaskStatus,
   taskStatusBySymbol,
 } from "../../taskStatuses";
+import {
+  observeVisualViewport,
+  visualViewportRect,
+} from "../../visualViewport";
 import { bulkTextInputAnnotation } from "../bulkInput";
 import { decorationOrigin } from "../decorationGuard";
 import { codeLanguage } from "../markdown/codeLanguages";
@@ -256,23 +260,37 @@ class TaskCheckboxWidget extends WidgetType {
     palette.tabIndex = -1;
     palette.hidden = true;
 
-    let activeIndex = Math.max(
+    let activeIndex: number | null = Math.max(
       0,
       this.statuses.findIndex((entry) => entry.symbol === this.status.symbol),
     );
     let options: HTMLElement[] = [];
+    let paletteAnchor: { x: number; y: number } | null = null;
+    let stopObservingViewport: (() => void) | null = null;
+    let press: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+      holdTimer: ReturnType<typeof setTimeout>;
+      cancelled: boolean;
+      menuOpen: boolean;
+    } | null = null;
 
-    const updateActiveOption = () => {
+    const updateActiveOption = (scroll = false) => {
       for (const [index, option] of options.entries()) {
         option.classList.toggle(
           "cm-skr-task-option-active",
           index === activeIndex,
         );
       }
-      const active = options[activeIndex];
+      const active = activeIndex === null ? undefined : options[activeIndex];
       if (active !== undefined) {
         palette.setAttribute("aria-activedescendant", active.id);
-        active.scrollIntoView?.({ block: "nearest" });
+        if (scroll) {
+          active.scrollIntoView?.({ block: "nearest" });
+        }
+      } else {
+        palette.removeAttribute("aria-activedescendant");
       }
     };
     const buildOptions = () => {
@@ -308,6 +326,7 @@ class TaskCheckboxWidget extends WidgetType {
         option.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
+          closePalette(false);
           applyTaskStatus(
             view,
             this.markerFrom,
@@ -324,11 +343,66 @@ class TaskCheckboxWidget extends WidgetType {
         return option;
       });
     };
-    const openPalette = (keyboard: boolean) => {
+
+    const positionPalette = () => {
+      if (palette.hidden || paletteAnchor === null) {
+        return;
+      }
+      const targetWindow = view.dom.ownerDocument.defaultView ?? window;
+      const viewport = visualViewportRect(targetWindow);
+      const inset = 8;
+      const fingerGap = 12;
+      palette.style.maxHeight = `${Math.max(0, viewport.height - 2 * inset)}px`;
+      const bounds = palette.getBoundingClientRect();
+      const checkboxBounds = box.getBoundingClientRect();
+      const maximumLeft = Math.max(
+        viewport.left + inset,
+        viewport.right - bounds.width - inset,
+      );
+      palette.style.left = `${Math.min(
+        Math.max(checkboxBounds.left, viewport.left + inset),
+        maximumLeft,
+      )}px`;
+      const spaceAbove = paletteAnchor.y - fingerGap - viewport.top;
+      if (spaceAbove >= bounds.height) {
+        palette.style.top = `${paletteAnchor.y - fingerGap - bounds.height}px`;
+      } else {
+        const top = paletteAnchor.y + fingerGap;
+        palette.style.top = `${top}px`;
+        palette.style.maxHeight = `${Math.max(
+          0,
+          viewport.bottom - top - inset,
+        )}px`;
+      }
+    };
+
+    const openPalette = (
+      keyboard: boolean,
+      anchor?: { x: number; y: number },
+    ) => {
       buildOptions();
+      if (keyboard && activeIndex === null) {
+        activeIndex = Math.max(
+          0,
+          this.statuses.findIndex(
+            (entry) => entry.symbol === this.status.symbol,
+          ),
+        );
+      }
       palette.hidden = false;
       box.setAttribute("aria-expanded", "true");
-      updateActiveOption();
+      const bounds = box.getBoundingClientRect();
+      paletteAnchor = anchor ?? {
+        x: bounds.left + bounds.width / 2,
+        y: bounds.bottom,
+      };
+      positionPalette();
+      updateActiveOption(keyboard);
+      stopObservingViewport?.();
+      stopObservingViewport = observeVisualViewport(
+        positionPalette,
+        view.dom.ownerDocument.defaultView ?? window,
+      );
       if (keyboard) {
         queueMicrotask(() => palette.focus());
       }
@@ -338,13 +412,157 @@ class TaskCheckboxWidget extends WidgetType {
       palette.replaceChildren();
       palette.removeAttribute("aria-activedescendant");
       options = [];
+      paletteAnchor = null;
+      stopObservingViewport?.();
+      stopObservingViewport = null;
       box.setAttribute("aria-expanded", "false");
       if (returnFocus) {
         box.focus();
       }
     };
 
+    const movementFromStart = (event: PointerEvent) =>
+      Math.hypot(
+        event.clientX - (press?.startX ?? event.clientX),
+        event.clientY - (press?.startY ?? event.clientY),
+      );
+
+    const optionAt = (x: number, y: number): number | null => {
+      const target = document.elementFromPoint(x, y);
+      const option =
+        target instanceof Element
+          ? target.closest<HTMLElement>(".cm-skr-task-option")
+          : null;
+      if (option === null || !palette.contains(option)) {
+        return null;
+      }
+      const index = options.indexOf(option);
+      return index < 0 ? null : index;
+    };
+
+    const updatePointerOption = (event: PointerEvent) => {
+      activeIndex = optionAt(event.clientX, event.clientY);
+      updateActiveOption();
+    };
+
+    const finishPress = () => {
+      if (press !== null) {
+        clearTimeout(press.holdTimer);
+      }
+      press = null;
+      host.classList.remove("cm-skr-task-control-pressing");
+    };
+
+    box.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || press !== null) {
+        return;
+      }
+      event.stopPropagation();
+      if (event.pointerType === "mouse") {
+        event.preventDefault();
+      }
+      const state = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        holdTimer: 0 as unknown as ReturnType<typeof setTimeout>,
+        cancelled: false,
+        menuOpen: false,
+      };
+      press = state;
+      host.classList.add("cm-skr-task-control-pressing");
+      try {
+        box.setPointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture can be unavailable for synthesized browser input.
+        // The listeners stay on the control, so the gesture remains usable.
+      }
+      state.holdTimer = setTimeout(() => {
+        if (press !== state || state.cancelled) {
+          return;
+        }
+        state.menuOpen = true;
+        activeIndex = null;
+        openPalette(false, { x: state.startX, y: state.startY });
+      }, 500);
+    });
+
+    box.addEventListener("pointermove", (event) => {
+      if (press === null || event.pointerId !== press.pointerId) {
+        return;
+      }
+      if (!press.menuOpen && movementFromStart(event) > 8) {
+        clearTimeout(press.holdTimer);
+        press.cancelled = true;
+        if (box.hasPointerCapture(event.pointerId)) {
+          box.releasePointerCapture(event.pointerId);
+        }
+        finishPress();
+        return;
+      }
+      if (press.menuOpen) {
+        event.preventDefault();
+        updatePointerOption(event);
+      }
+    });
+
+    box.addEventListener("pointerup", (event) => {
+      const currentPress = press;
+      if (currentPress === null || event.pointerId !== currentPress.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const moved = movementFromStart(event);
+      if (currentPress.menuOpen) {
+        const selectedIndex = optionAt(event.clientX, event.clientY);
+        const selected =
+          selectedIndex === null ? undefined : this.statuses[selectedIndex];
+        closePalette(false);
+        finishPress();
+        if (selected !== undefined) {
+          applyTaskStatus(
+            view,
+            this.markerFrom,
+            this.markerTo,
+            this.status.symbol,
+            selected.symbol,
+          );
+        }
+      } else {
+        const advance = !currentPress.cancelled && moved <= 8;
+        closePalette(false);
+        finishPress();
+        if (advance) {
+          applyTaskStatus(
+            view,
+            this.markerFrom,
+            this.markerTo,
+            this.status.symbol,
+            this.status.next_status,
+          );
+        }
+      }
+    });
+
+    box.addEventListener("pointercancel", (event) => {
+      if (press === null || event.pointerId !== press.pointerId) {
+        return;
+      }
+      closePalette(false);
+      finishPress();
+    });
+
+    box.addEventListener("contextmenu", (event) => {
+      if (press !== null || !palette.hidden) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    });
     box.addEventListener("click", (event) => {
+      if (event.detail !== 0) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       applyTaskStatus(
@@ -376,24 +594,27 @@ class TaskCheckboxWidget extends WidgetType {
     palette.addEventListener("keydown", (event) => {
       if (event.key === "ArrowDown" || event.key === "ArrowRight") {
         event.preventDefault();
-        activeIndex = (activeIndex + 1) % options.length;
-        updateActiveOption();
+        activeIndex = ((activeIndex ?? -1) + 1) % options.length;
+        updateActiveOption(true);
       } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
         event.preventDefault();
-        activeIndex = (activeIndex - 1 + options.length) % options.length;
-        updateActiveOption();
+        activeIndex =
+          ((activeIndex ?? 0) - 1 + options.length) % options.length;
+        updateActiveOption(true);
       } else if (event.key === "Home") {
         event.preventDefault();
         activeIndex = 0;
-        updateActiveOption();
+        updateActiveOption(true);
       } else if (event.key === "End") {
         event.preventDefault();
         activeIndex = options.length - 1;
-        updateActiveOption();
+        updateActiveOption(true);
       } else if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        const selected = this.statuses[activeIndex];
+        const selected =
+          activeIndex === null ? undefined : this.statuses[activeIndex];
         if (selected !== undefined) {
+          closePalette(false);
           applyTaskStatus(
             view,
             this.markerFrom,
@@ -408,9 +629,13 @@ class TaskCheckboxWidget extends WidgetType {
         closePalette(true);
       }
     });
-    host.addEventListener("pointerenter", () => openPalette(false));
+    host.addEventListener("pointerenter", (event) => {
+      if (event.pointerType !== "touch" && (event.buttons ?? 0) === 0) {
+        openPalette(false, { x: event.clientX, y: event.clientY });
+      }
+    });
     host.addEventListener("pointerleave", () => {
-      if (!host.contains(document.activeElement)) {
+      if (press === null && !host.contains(document.activeElement)) {
         closePalette(false);
       }
     });
@@ -2135,13 +2360,17 @@ class LinkPreviewController {
   private previousControls: string | null = null;
   private previousExpanded: string | null = null;
   private focusedTarget: string | null = null;
+  private readonly stopObservingViewport: () => void;
 
   constructor(readonly view: EditorView) {
     view.dom.addEventListener("pointerover", this.onPointerOver);
     view.dom.addEventListener("pointerout", this.onPointerOut);
     view.dom.addEventListener("focusin", this.onFocusIn);
     view.dom.addEventListener("focusout", this.onFocusOut);
-    window.addEventListener("resize", this.onGeometryChanged);
+    this.stopObservingViewport = observeVisualViewport(
+      this.onGeometryChanged,
+      view.dom.ownerDocument.defaultView ?? window,
+    );
     window.addEventListener("scroll", this.onScroll, true);
   }
 
@@ -2213,14 +2442,27 @@ class LinkPreviewController {
     panel.append(header, body);
     this.view.dom.append(panel);
 
+    const viewport = visualViewportRect(
+      this.view.dom.ownerDocument.defaultView ?? window,
+    );
     const bounds = link.getBoundingClientRect();
-    const left = Math.max(12, Math.min(bounds.left, window.innerWidth - 372));
+    panel.style.maxHeight = `${Math.min(
+      256,
+      Math.max(0, viewport.height - 24),
+    )}px`;
+    const panelBounds = panel.getBoundingClientRect();
+    const left = Math.max(
+      viewport.left + 12,
+      Math.min(bounds.left, viewport.right - panelBounds.width - 12),
+    );
     panel.style.left = `${left}px`;
-    const maximumTop = Math.max(12, window.innerHeight - 280);
     const below = bounds.bottom + 8;
-    const above = bounds.top - 264;
-    panel.style.top = `${below <= maximumTop ? Math.max(12, below) : Math.max(12, above)}px`;
-    panel.style.maxHeight = `${Math.min(256, Math.max(0, window.innerHeight - 24))}px`;
+    const above = bounds.top - panelBounds.height - 8;
+    panel.style.top = `${
+      below + panelBounds.height <= viewport.bottom - 12
+        ? Math.max(viewport.top + 12, below)
+        : Math.max(viewport.top + 12, above)
+    }px`;
 
     this.activeLink = link;
     this.panel = panel;
@@ -2386,7 +2628,7 @@ class LinkPreviewController {
     this.view.dom.removeEventListener("pointerout", this.onPointerOut);
     this.view.dom.removeEventListener("focusin", this.onFocusIn);
     this.view.dom.removeEventListener("focusout", this.onFocusOut);
-    window.removeEventListener("resize", this.onGeometryChanged);
+    this.stopObservingViewport();
     window.removeEventListener("scroll", this.onScroll, true);
   }
 }
@@ -2619,7 +2861,6 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-link-preview-body": { padding: "0.35rem 0.55rem" },
   ".cm-skr-list-mark": { color: "var(--skr-accent)" },
   ".cm-skr-task-control": {
-    position: "relative",
     display: "inline-flex",
     verticalAlign: "text-bottom",
     margin: "0 0.15em",
@@ -2637,6 +2878,9 @@ const engineTheme = EditorView.baseTheme({
     border: "1.5px solid var(--skr-border-strong)",
     borderRadius: "3px",
     cursor: "pointer",
+    userSelect: "none",
+  },
+  ".cm-skr-task-control-pressing": {
     userSelect: "none",
   },
   ".cm-skr-task-checkbox:focus-visible, .cm-skr-task-palette:focus-visible": {
@@ -2681,23 +2925,21 @@ const engineTheme = EditorView.baseTheme({
     opacity: "0.68",
   },
   ".cm-skr-task-palette": {
-    position: "absolute",
+    position: "fixed",
     zIndex: "20",
-    top: "calc(100% + 0.35rem)",
-    left: "-0.4rem",
+    top: "0",
+    left: "0",
     boxSizing: "border-box",
     display: "grid",
-    gridTemplateColumns: "repeat(2, minmax(7.5rem, 1fr))",
-    gap: "0.15rem",
+    gridTemplateColumns: "minmax(12rem, 1fr)",
     width: "max-content",
-    maxWidth: "min(22rem, calc(100vw - 2rem))",
-    maxHeight: "15rem",
+    maxWidth: "calc(var(--skr-visual-viewport-width) - 1rem)",
     padding: "0.35rem",
     overflow: "auto",
     color: "var(--skr-text)",
     backgroundColor: "var(--skr-surface-raised)",
     border: "1px solid var(--skr-border)",
-    borderRadius: "0.5rem",
+    borderRadius: "0.375rem",
     boxShadow: "var(--skr-shadow)",
   },
   ".cm-skr-task-palette[hidden]": { display: "none" },
@@ -2706,7 +2948,8 @@ const engineTheme = EditorView.baseTheme({
     alignItems: "center",
     gap: "0.4rem",
     minWidth: "0",
-    padding: "0.28rem 0.42rem",
+    minHeight: "2.75rem",
+    padding: "0.375rem 0.5rem",
     borderRadius: "0.3rem",
     cursor: "pointer",
     transition: "background-color 50ms linear, color 50ms linear",

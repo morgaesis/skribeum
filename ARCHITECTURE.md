@@ -239,17 +239,18 @@ The shell switches to its narrow layout at 60rem (960 CSS pixels). This point
 keeps the 16rem file tree, 15rem outline, 45-character minimum reading measure,
 and specified gutters from competing for the same inline space. At and below
 the breakpoint, permanent side columns become modal overlay sheets, settings
-fills the viewport, and palette surfaces rise from the bottom edge. The editor
-keeps the design-system gutter floor of 1.5rem on each side. A 3.5rem bottom
-action bar provides the primary touch routes while the desktop header remains
-2.5rem high.
+fills the visual viewport, and palette surfaces anchor to its top edge. The
+editor keeps the design-system gutter floor of 1.5rem on each side. A 3rem top
+bar provides Files, the scroll-aware note title, and the overflow sheet as the
+permanent touch routes. The desktop header remains 2.5rem high.
 
-Modal surfaces make the background inert, trap Tab and Shift+Tab, close with
-Escape or a visible Close button, and restore the invoking control. File and
-outline rows expand from their desktop geometry to 44px touch targets in
-sheets. The command registry records each user command's pointer surfaces;
-six ARIA widget navigation commands are explicitly marked as widget-internal,
-and registry coverage rejects an unclassified or unreachable user command.
+Modal surfaces measure against the visual viewport, make the background inert,
+trap Tab and Shift+Tab, close with Escape or a visible Close button, and restore
+the invoking control. File and outline rows expand from their desktop geometry
+to 44px touch targets in sheets. The command registry records each user
+command's pointer surfaces; six ARIA widget navigation commands are explicitly
+marked as widget-internal, and registry coverage rejects an unclassified or
+unreachable user command.
 
 ## Two parsers, one contract
 

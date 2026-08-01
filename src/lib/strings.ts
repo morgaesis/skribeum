@@ -341,6 +341,8 @@ export const STRINGS = {
   navigationBack: "Back",
   navigationForward: "Forward",
   actionsLabel: "Actions",
+  overflowMenuLabel: "More actions",
+  commandPaletteLabel: "Command palette",
   mobileActionsLabel: "Primary actions",
   mobileFiles: "Files",
   mobileSwitcher: "Switch",

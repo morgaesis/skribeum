@@ -22,11 +22,12 @@ edit that lands in the final replacement window can be overwritten.
 `#`, and `?` select commands and settings, tags, and note text. The familiar
 switcher, palette, and search shortcuts open this surface with the matching
 prefix. On viewports up to 60rem wide, the surface anchors to the visual
-viewport above the on-screen keyboard. The bottom action bar opens its aliases
-and the Actions sheet. The file tree and outline appear over the editor instead
-of narrowing it. Modal surfaces keep keyboard focus inside until they close and
-return focus to their opening control. Settings and copy link to note are
-available from Actions.
+viewport above the on-screen keyboard. The top bar contains Files, the note
+title, and an overflow button. The overflow sheet provides the surface aliases,
+settings, note actions, navigation history, and vault opening. The file tree and
+outline appear over the editor instead of narrowing it. Modal surfaces keep
+keyboard focus inside until they close and return focus to their opening
+control. Copy link to note is available from the overflow sheet.
 
 Rendered note-link previews are enabled by default. Hover a resolved note link
 briefly, or focus it and press `P`, to open a preview. Pointer out and `Escape`

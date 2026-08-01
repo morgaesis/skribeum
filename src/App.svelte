@@ -96,7 +96,11 @@ import {
   watchSubscribe,
 } from "./lib/ipc/vault";
 import OutlinePanel from "./lib/OutlinePanel.svelte";
-import { type CommandContext, globalKeydownHandler } from "./lib/registry";
+import {
+  type CommandContext,
+  formatKeybinding,
+  globalKeydownHandler,
+} from "./lib/registry";
 import CanvasView from "./lib/rendering/CanvasView.svelte";
 import {
   type CanvasDocument,
@@ -116,6 +120,7 @@ import {
   isThemeName,
 } from "./lib/themes/theme";
 import UnifiedCommandSurface from "./lib/UnifiedCommandSurface.svelte";
+import { bindVisualViewportCss } from "./lib/visualViewport";
 
 let {
   openVaultDisabledReason = null,
@@ -168,9 +173,10 @@ const macPlatform =
 
 /** The transient surface currently open (a registered overlay view id). */
 let activeOverlay = $state<string | null>(null);
-type SheetId = "file-tree" | "outline" | "actions";
+type SheetId = "file-tree" | "outline" | "overflow";
 let activeSheet = $state<SheetId | null>(null);
 let narrowViewport = $state(false);
+let noteTitleVisible = $state(true);
 let surfaceFocusOrigin: HTMLElement | null = null;
 let outlineOpen = $state(false);
 let outlineEntries = $state<OutlineEntry[]>([]);
@@ -515,6 +521,49 @@ function commandContext(): CommandContext {
 
 const onGlobalKeydown = globalKeydownHandler(registry, commandContext);
 const actionCommands = $derived(registry.pointerCommands("action-menu"));
+const overflowCommands = $derived([
+  {
+    command: registry.command("quick-switcher.open"),
+    label: STRINGS.quickSwitcherLabel,
+  },
+  {
+    command: registry.command("vault-search.open"),
+    label: STRINGS.mobileSearch,
+  },
+  {
+    command: registry.command("palette.open"),
+    label: STRINGS.commandPaletteLabel,
+  },
+]);
+
+function noteDisplayName(path: string): string {
+  const name = path.split("/").at(-1) ?? path;
+  return name.replace(/\.[^.]+$/u, "");
+}
+
+function noteOpensWithHeading(source: string): boolean {
+  const [first = "", second = ""] = source.split(/\r?\n/u, 2);
+  return (
+    /^ {0,3}#{1,6}(?:[\t ]|$)/u.test(first) ||
+    (first.trim().length > 0 && /^ {0,3}(?:=+|-+)[\t ]*$/u.test(second))
+  );
+}
+
+const shellTitle = $derived(
+  note !== null && selectedPath !== null
+    ? noteDisplayName(selectedPath)
+    : STRINGS.appTitle,
+);
+const shellTitleVisible = $derived(note === null || noteTitleVisible);
+
+function formattedCommandKeybinding(
+  command: ReturnType<typeof registry.command>,
+): string | undefined {
+  const binding = command?.keybindings?.[0];
+  return binding === undefined
+    ? undefined
+    : formatKeybinding(binding, macPlatform);
+}
 
 $effect(() => {
   if (narrowViewport && outlineOpen) {
@@ -1031,6 +1080,7 @@ async function openNote(path: string): Promise<boolean> {
       loaded.recoveredChangeSet = recovered;
       pushBanner({ text: STRINGS.noteRecoveredNotice });
     }
+    noteTitleVisible = !noteOpensWithHeading(loaded.text);
     note = loaded;
     missingAddress = null;
     contentView = null;
@@ -1283,6 +1333,7 @@ function pollEndToEndVault() {
 }
 
 onMount(() => {
+  const stopVisualViewportCss = bindVisualViewportCss();
   const narrowQuery = window.matchMedia(
     `(max-width: ${NARROW_BREAKPOINT_REM}rem)`,
   );
@@ -1434,6 +1485,7 @@ onMount(() => {
   }
   const pollTimer = pollEndToEndVault();
   return () => {
+    stopVisualViewportCss();
     narrowQuery.removeEventListener("change", updateNarrowViewport);
     navigation?.dispose();
     navigation = null;
@@ -1457,7 +1509,20 @@ onMount(() => {
   inert={activeSheet !== null || activeOverlay !== null}
 >
   <header class="skr-app-header flex items-center gap-3 border-b px-3">
-    <h1 class="m-0 text-sm font-semibold">{STRINGS.appTitle}</h1>
+    <button
+      type="button"
+      class="skr-phone-files skr-phone-icon-button"
+      disabled={vault === null}
+      data-command-id="file-tree.open"
+      aria-label={STRINGS.mobileFiles}
+      aria-haspopup="dialog"
+      onclick={(event) =>
+        runSurfaceCommand("file-tree.open", event.currentTarget)}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3.75 5.75h6l1.5 2h9v10.5h-16.5z" />
+      </svg>
+    </button>
     <button
       type="button"
       class="skr-control skr-open-vault rounded border px-2 text-sm"
@@ -1487,6 +1552,13 @@ onMount(() => {
         {STRINGS.navigationForward}
       </button>
     </div>
+    <h1
+      class="skr-note-title m-0"
+      class:skr-note-title-hidden={!shellTitleVisible}
+      data-testid="note-title"
+    >
+      {shellTitle}
+    </h1>
     <div class="skr-desktop-actions ml-auto flex items-center gap-1">
       <button
         type="button"
@@ -1520,11 +1592,24 @@ onMount(() => {
         type="button"
         class="skr-control rounded border px-2 text-sm"
         aria-haspopup="dialog"
-        onclick={(event) => openSheet("actions", event.currentTarget)}
+        onclick={(event) => openSheet("overflow", event.currentTarget)}
       >
         {STRINGS.actionsLabel}
       </button>
     </div>
+    <button
+      type="button"
+      class="skr-phone-overflow skr-phone-icon-button"
+      aria-label={STRINGS.overflowMenuLabel}
+      aria-haspopup="dialog"
+      onclick={(event) => openSheet("overflow", event.currentTarget)}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="5" cy="12" r="1.75" />
+        <circle cx="12" cy="12" r="1.75" />
+        <circle cx="19" cy="12" r="1.75" />
+      </svg>
+    </button>
     {#if note?.readOnly || contentView === VIEW_CANVAS}
       <span class="skr-warning rounded px-2 py-0.5 text-xs">{STRINGS.readOnlyBadge}</span>
     {/if}
@@ -1608,6 +1693,7 @@ onMount(() => {
           {onConflict}
           {onWriteError}
           onDocChanged={onEditorDocChanged}
+          onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
           onSaved={() => void refreshTagCatalog()}
           {wikilinkNavigationOptions}
           {tagAffordanceOptions}
@@ -1622,6 +1708,7 @@ onMount(() => {
           {commandContext}
           settings={settingsState.document}
           onDocChanged={onEditorDocChanged}
+          onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
           onSaved={() => void refreshTagCatalog()}
           {wikilinkNavigationOptions}
           {tagAffordanceOptions}
@@ -1641,50 +1728,6 @@ onMount(() => {
       </aside>
     {/if}
   </main>
-  <nav class="skr-mobile-actions" aria-label={STRINGS.mobileActionsLabel}>
-    <button
-      type="button"
-      disabled={vault === null}
-      data-command-id="file-tree.open"
-      aria-haspopup="dialog"
-      onclick={(event) =>
-        runSurfaceCommand("file-tree.open", event.currentTarget)}
-    >
-      {STRINGS.mobileFiles}
-    </button>
-    <button
-      type="button"
-      data-command-id="quick-switcher.open"
-      onclick={(event) =>
-        runSurfaceCommand("quick-switcher.open", event.currentTarget)}
-    >
-      {STRINGS.mobileSwitcher}
-    </button>
-    <button
-      type="button"
-      data-command-id="vault-search.open"
-      onclick={(event) =>
-        runSurfaceCommand("vault-search.open", event.currentTarget)}
-    >
-      {STRINGS.mobileSearch}
-    </button>
-    <button
-      type="button"
-      data-testid="command-palette-entry"
-      data-command-id="palette.open"
-      onclick={(event) =>
-        runSurfaceCommand("palette.open", event.currentTarget)}
-    >
-      {STRINGS.mobileCommands}
-    </button>
-    <button
-      type="button"
-      aria-haspopup="dialog"
-      onclick={(event) => openSheet("actions", event.currentTarget)}
-    >
-      {STRINGS.actionsLabel}
-    </button>
-  </nav>
 </div>
 
 {#if activeSheet === "file-tree" && vault !== null}
@@ -1708,16 +1751,34 @@ onMount(() => {
       touchMode={true}
     />
   </Sheet>
-{:else if activeSheet === "actions"}
-  <Sheet label={STRINGS.actionsLabel} onClose={closeSheet} restoreFocus={false}>
-    <nav class="skr-action-menu" aria-label={STRINGS.actionsLabel}>
+{:else if activeSheet === "overflow"}
+  <Sheet label={STRINGS.overflowMenuLabel} onClose={closeSheet} restoreFocus={false}>
+    <nav class="skr-action-menu" aria-label={STRINGS.overflowMenuLabel}>
+      {#each overflowCommands as item (item.command?.id)}
+        {#if item.command !== undefined}
+          <button
+            type="button"
+            data-command-id={item.command.id}
+            onclick={() =>
+              item.command !== undefined && runActionCommand(item.command.id)}
+          >
+            <span>{item.label}</span>
+            {#if formattedCommandKeybinding(item.command) !== undefined}
+              <kbd>{formattedCommandKeybinding(item.command)}</kbd>
+            {/if}
+          </button>
+        {/if}
+      {/each}
       {#each actionCommands as command (command.id)}
         <button
           type="button"
           data-command-id={command.id}
           onclick={() => runActionCommand(command.id)}
         >
-          {command.title}
+          <span>{command.title}</span>
+          {#if formattedCommandKeybinding(command) !== undefined}
+            <kbd>{formattedCommandKeybinding(command)}</kbd>
+          {/if}
         </button>
       {/each}
       <button

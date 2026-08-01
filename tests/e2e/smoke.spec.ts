@@ -315,6 +315,14 @@ async function editorDocumentText(): Promise<string> {
   );
 }
 
+async function tagCompletionOptionTexts(): Promise<string[]> {
+  return browser.execute(() =>
+    [...document.querySelectorAll(".cm-skr-tag-menu [role=option]")].map(
+      (option) => option.textContent?.trim() ?? "",
+    ),
+  );
+}
+
 /** Places the browser selection at the end of the editor line with `text`. */
 async function placeCursorAtLineEnd(text: string) {
   await browser.execute((lineText: string) => {
@@ -1593,12 +1601,19 @@ describe("skribeum shell", () => {
     await browser.keys(Key.Enter);
     await $(".cm-content").addValue("#");
     await browser.waitUntil(
-      async () => (await $$(".cm-skr-tag-menu [role=option]")).length > 0,
-      { timeout: 10000, timeoutMsg: "recent tag menu did not open" },
+      async () => {
+        const options = await tagCompletionOptionTexts();
+        return (
+          options[0] === "#context/outdoors" &&
+          options.includes("#project/cedar-room")
+        );
+      },
+      {
+        timeout: 10000,
+        timeoutMsg: "recent tag did not reach the first menu position",
+      },
     );
-    const recentlyOrdered = await $$(".cm-skr-tag-menu [role=option]").map(
-      (item) => item.getText(),
-    );
+    const recentlyOrdered = await tagCompletionOptionTexts();
     expect(recentlyOrdered[0]).toBe("#context/outdoors");
     expect(recentlyOrdered).toContain("#project/cedar-room");
     expect(recentlyOrdered.indexOf("#context/outdoors")).toBeLessThan(

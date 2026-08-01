@@ -13,6 +13,7 @@ import {
   vaultTree,
   watchSubscribe,
 } from "../demo/lib/ipc/vault";
+import { defaultTaskStatuses } from "../src/lib/taskStatuses";
 
 describe("browser demo IPC", () => {
   beforeEach(() => {
@@ -103,6 +104,7 @@ describe("browser demo IPC", () => {
       editor_font_size: 16,
       editor_reading_measure: 72,
       search_result_limit: 50,
+      task_statuses: defaultTaskStatuses(),
     });
 
     const settings = {
@@ -111,6 +113,7 @@ describe("browser demo IPC", () => {
       editor_font_size: 18,
       editor_reading_measure: 84,
       search_result_limit: 24,
+      task_statuses: defaultTaskStatuses(),
     };
     await settingsWrite(settings);
     await expect(settingsRead()).resolves.toEqual(settings);
@@ -137,6 +140,7 @@ describe("browser demo IPC", () => {
       editor_font_size: 16,
       editor_reading_measure: 72,
       search_result_limit: 50,
+      task_statuses: defaultTaskStatuses(),
     });
     await expect(
       settingsWrite({
@@ -145,6 +149,7 @@ describe("browser demo IPC", () => {
         editor_font_size: 17,
         editor_reading_measure: 76,
         search_result_limit: 1001,
+        task_statuses: defaultTaskStatuses(),
       }),
     ).rejects.toThrow("search_result_limit");
     await expect(

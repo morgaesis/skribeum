@@ -36,6 +36,7 @@ import {
   VIEW_SETTINGS,
   VIEW_VAULT_SEARCH,
 } from "./lib/features/surfaces";
+import { registerTaskStatusCommands } from "./lib/features/taskCommands";
 import { M0_FIXTURE } from "./lib/fixture";
 import {
   type BannerReason,
@@ -97,7 +98,7 @@ const pendingRecovered = new Map<string, ByteRangeReplace[]>();
 // The registration surface: every command, palette entry, view and
 // keybinding is registered here; this shell only maps view ids to
 // concrete components and provides command capabilities.
-const registry = createAppRegistry();
+const registry = createAppRegistry(DEFAULT_SETTINGS.task_statuses);
 
 const macPlatform =
   typeof navigator !== "undefined" &&
@@ -137,6 +138,7 @@ function applyEditorReadingMeasure(characters: number) {
 // Settings apply optimistically (the font size restart-free via the CSS
 // variable); a failed write reverts and the settings view surfaces it.
 const settingsStore = new SettingsStore((state) => {
+  registerTaskStatusCommands(registry, state.document.task_statuses);
   settingsState = state;
   applyEditorFontSize(state.document.editor_font_size);
   applyEditorReadingMeasure(state.document.editor_reading_measure);
@@ -249,6 +251,7 @@ const onGlobalKeydown = globalKeydownHandler(registry, commandContext);
 const notePaths = $derived(notePathsOf(tree));
 
 const overlayItems = $derived.by((): PickerItem[] => {
+  void settingsState.document.task_statuses;
   switch (activeOverlay) {
     case VIEW_COMMAND_PALETTE:
       return paletteItems(registry, overlayQuery, macPlatform);
@@ -802,6 +805,7 @@ onMount(() => {
           {canvas}
           previews={canvasPreviews}
           {linkContext}
+          taskStatuses={settingsState.document.task_statuses}
         />
       {:else if contentView === VIEW_CANVAS && canvasError !== null}
         <div class="skr-error m-4 rounded border p-3 text-sm" role="alert" data-testid="canvas-error">
@@ -815,6 +819,7 @@ onMount(() => {
           path={selectedPath}
           {linkContext}
           {propertyTypes}
+          taskStatuses={settingsState.document.task_statuses}
           {registry}
           {commandContext}
           {onConflict}
@@ -826,6 +831,7 @@ onMount(() => {
         <Editor
           bind:this={editor}
           doc={M0_FIXTURE}
+          taskStatuses={settingsState.document.task_statuses}
           {registry}
           {commandContext}
           onDocChanged={onEditorDocChanged}

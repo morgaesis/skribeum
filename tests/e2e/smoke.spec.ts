@@ -9,6 +9,7 @@ import {
   CANVAS_FILE_NAME,
   CRLF_NOTE_NAME,
   LF_NOTE_NAME,
+  LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
   RENDERING_NOTE_NAME,
   REVEAL_NOTE_CONTENT,
@@ -81,7 +82,8 @@ async function placeCursorAtLineEnd(text: string) {
         )) {
           marker.remove();
         }
-        return visibleContent.textContent === lineText;
+        const content = visibleContent.textContent ?? "";
+        return content === lineText || content.endsWith(lineText);
       },
     );
     if (line === undefined) {
@@ -891,6 +893,50 @@ describe("skribeum shell", () => {
         timeout: 10000,
         timeoutMsg: "heading marker did not hide after the cursor left",
       },
+    );
+  });
+
+  it("cycles_and_sets_task_statuses_through_the_command_palette", async () => {
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    const checkbox = $(".cm-skr-task-checkbox");
+    await checkbox.waitForExist({ timeout: 15000 });
+    expect(await checkbox.getAttribute("aria-label")).toBe("Unchecked");
+
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>(".cm-skr-task-control")
+        ?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
+    });
+    const listbox = $('[role="listbox"]');
+    await listbox.waitForDisplayed({ timeout: 5000 });
+    expect(await listbox.$$('[role="option"]').length).toBe(38);
+
+    await checkbox.click();
+    await browser.waitUntil(
+      () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [/] Review task"),
+      { timeout: 10000, timeoutMsg: "task click did not persist" },
+    );
+
+    await placeCursorAtLineEnd("Review task");
+    await browser.keys([modifierKey, "p"]);
+    const input = $('[role="combobox"]');
+    await input.waitForExist({ timeout: 10000 });
+    await input.addValue("set task status dropped");
+    await browser.waitUntil(
+      async () => (await $$('[role="option"]').length) === 1,
+      { timeout: 10000 },
+    );
+    expect(await $('[role="option"]').getText()).toContain("Dropped");
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [-] Review task"),
+      { timeout: 10000, timeoutMsg: "task command did not persist" },
+    );
+
+    await $(".cm-skr-task-checkbox").click();
+    await browser.waitUntil(
+      () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME) === LIVE_PREVIEW_NOTE_CONTENT,
+      { timeout: 10000, timeoutMsg: "task source did not restore" },
     );
   });
 

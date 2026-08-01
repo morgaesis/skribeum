@@ -30,7 +30,7 @@ export const CRLF_NOTE_CONTENT = "first\r\nsecond\r\nthird\r\n";
 // arrow-key expectations over the first two rows stay stable.
 export const LIVE_PREVIEW_NOTE_NAME = "z-live-preview.md";
 export const LIVE_PREVIEW_NOTE_CONTENT =
-  "# Sunrise heading\n\nbody text here\n";
+  "# Sunrise heading\n\nbody text here\n\n- [ ] Review task\n";
 
 export const RENDERING_NOTE_NAME = "zz-rendering.md";
 export const RENDERING_NOTE_CONTENT =

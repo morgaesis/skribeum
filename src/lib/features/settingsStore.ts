@@ -8,6 +8,7 @@ import {
   settingsRead,
   settingsWrite,
 } from "../ipc/services";
+import { defaultTaskStatuses, normalizeTaskStatuses } from "../taskStatuses";
 
 export type { SettingsDocument };
 
@@ -17,7 +18,15 @@ export const DEFAULT_SETTINGS: SettingsDocument = {
   editor_font_size: 16,
   editor_reading_measure: 72,
   search_result_limit: 50,
+  task_statuses: defaultTaskStatuses(),
 };
+
+function normalizedDocument(document: SettingsDocument): SettingsDocument {
+  return {
+    ...document,
+    task_statuses: normalizeTaskStatuses(document.task_statuses),
+  };
+}
 
 export type SettingsState = {
   document: SettingsDocument;
@@ -63,7 +72,7 @@ export class SettingsStore {
    */
   async load(): Promise<void> {
     try {
-      const document = await this.io.read();
+      const document = normalizedDocument(await this.io.read());
       this.publish({ document, error: null, loaded: true });
     } catch (error) {
       this.publish({
@@ -81,7 +90,7 @@ export class SettingsStore {
    */
   async update(patch: Partial<SettingsDocument>): Promise<boolean> {
     const previous = this.state.document;
-    const next = { ...previous, ...patch };
+    const next = normalizedDocument({ ...previous, ...patch });
     this.publish({ document: next, error: null, loaded: this.state.loaded });
     try {
       await this.io.write(next);

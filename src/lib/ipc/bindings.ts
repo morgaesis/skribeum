@@ -256,6 +256,39 @@ export type SettingsDoc = {
 	editor_reading_measure: number,
 	/**  Maximum number of results a search query returns. */
 	search_result_limit: number,
+	/**  Ordered task marker vocabulary and click-transition graph. */
+	task_statuses: TaskStatusDoc[],
+};
+
+/**  Semantic task status category over IPC. */
+export type TaskStatusCategory = 
+/**  An open task. */
+"TODO" | 
+/**  Work is underway. */
+"IN_PROGRESS" | 
+/**  Work is intentionally paused. */
+"ON_HOLD" | 
+/**  Work is complete. */
+"DONE" | 
+/**  Work was cancelled. */
+"CANCELLED" | 
+/**  A checkbox-like marker that is not a task. */
+"NON_TASK";
+
+/**  One configured task marker over IPC. */
+export type TaskStatusDoc = {
+	/**  The single source character between brackets. */
+	symbol: string,
+	/**  Human-readable status name. */
+	name: string,
+	/**  Semantic status category. */
+	category: TaskStatusCategory,
+	/**  Short glyph rendered inside the checkbox. */
+	glyph: string,
+	/**  Existing CSS theme custom property used for the status color. */
+	color_token: string,
+	/**  Symbol written by the default click transition. */
+	next_status: string,
 };
 
 /**

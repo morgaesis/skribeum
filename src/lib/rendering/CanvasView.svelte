@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { WikilinkResolutionContext } from "../editor/decorations/wikilinks";
 import { STRINGS } from "../strings";
+import { DEFAULT_TASK_STATUSES, type TaskStatus } from "../taskStatuses";
 import { type CanvasDocument, type CanvasNode, edgePoint } from "./canvas";
 import ReadOnlyNote from "./ReadOnlyNote.svelte";
 
@@ -8,10 +9,12 @@ let {
   canvas,
   previews = {},
   linkContext = null,
+  taskStatuses = DEFAULT_TASK_STATUSES,
 }: {
   canvas: CanvasDocument;
   previews?: Readonly<Record<string, string>>;
   linkContext?: WikilinkResolutionContext | null;
+  taskStatuses?: readonly TaskStatus[];
 } = $props();
 
 let viewport: HTMLElement;
@@ -277,7 +280,12 @@ export function focus() {
       >
         {#if node.type === "text"}
           <div class="canvas-content">
-            <ReadOnlyNote source={node.text} label={nodeLabel(node)} context={contextFor(node)} />
+            <ReadOnlyNote
+              source={node.text}
+              label={nodeLabel(node)}
+              context={contextFor(node)}
+              {taskStatuses}
+            />
           </div>
         {:else}
           <div class="skr-canvas-card-title">{node.file}</div>
@@ -286,6 +294,7 @@ export function focus() {
               source={previews[node.file] ?? STRINGS.canvasFileUnavailable}
               label={nodeLabel(node)}
               context={contextFor(node)}
+              {taskStatuses}
             />
           </div>
         {/if}

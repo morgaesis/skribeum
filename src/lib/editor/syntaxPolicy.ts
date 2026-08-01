@@ -2,13 +2,19 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { bracketMatching, syntaxHighlighting } from "@codemirror/language";
 import type { Extension, Text } from "@codemirror/state";
 import {
+  DEFAULT_TASK_STATUSES,
+  normalizeTaskStatuses,
+  type TaskStatus,
+} from "../taskStatuses";
+import {
   decorationEngine,
   LONG_LINE_DECORATION_LIMIT,
+  taskStatusConfiguration,
   tokenHighlightStyle,
 } from "./decorations/engine";
 import type { WikilinkResolutionContext } from "./decorations/wikilinks";
 import { codeLanguage } from "./markdown/codeLanguages";
-import { obsidianMarkdownExtensions } from "./markdown/obsidian";
+import { obsidianMarkdownExtensionsFor } from "./markdown/obsidian";
 
 type DocumentText = string | Text;
 
@@ -53,17 +59,20 @@ export function editorSyntaxExtensions(doc: DocumentText): Extension[] {
 export function noteRenderingExtensions(
   doc: DocumentText,
   context?: WikilinkResolutionContext,
+  taskStatuses: readonly TaskStatus[] = DEFAULT_TASK_STATUSES,
 ): Extension[] {
   if (hasOverlongLine(doc)) {
     return [];
   }
+  const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
   return [
     markdown({
       base: markdownLanguage,
       codeLanguages: codeLanguage,
-      extensions: obsidianMarkdownExtensions,
+      extensions: obsidianMarkdownExtensionsFor(normalizedTaskStatuses),
     }),
     syntaxHighlighting(tokenHighlightStyle, { fallback: true }),
+    taskStatusConfiguration.of(normalizedTaskStatuses),
     decorationEngine(context),
   ];
 }

@@ -846,6 +846,7 @@ describe("skribeum shell", () => {
         return {
           active: marker.classList.contains("cm-skr-reveal-marker-active"),
           opacity: style.opacity,
+          reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
           transform: style.transform,
           transitionDurations: style.transitionDuration
             .split(",")
@@ -898,7 +899,15 @@ describe("skribeum shell", () => {
     );
     const revealed = await headingMarkerState();
     expect(revealed?.opacity).toBe("1");
-    expect(revealed?.transform).not.toBe(hidden?.transform);
+    if (revealed?.reducedMotion) {
+      expect(revealed.transform).toBe(hidden?.transform);
+      expect(
+        revealed.transitionDurations.every((duration) => duration === 0),
+      ).toBe(true);
+    } else {
+      expect(revealed?.transform).not.toBe(hidden?.transform);
+      expect(revealed?.transitionDurations).toEqual([49, 49]);
+    }
     const followingPositionAfter = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -1100,6 +1109,9 @@ describe("skribeum shell", () => {
         "cm-skr-reveal-motion cm-skr-reveal-source",
         "cm-skr-reveal-motion cm-skr-reveal-rendered",
       ];
+      const prefersReducedMotion = matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
       return classNames.map((className) => {
         const element = document.createElement("span");
         element.className = className;
@@ -1107,6 +1119,7 @@ describe("skribeum shell", () => {
         const style = getComputedStyle(element);
         const measurement = {
           className,
+          prefersReducedMotion,
           transitionMs: style.transitionDuration.split(",").map((part) => {
             const duration = part.trim();
             return duration.endsWith("ms")
@@ -1137,11 +1150,21 @@ describe("skribeum shell", () => {
         expect(measurement.animationTimingFunction).toBe("linear");
       }
     }
-    expect(measurements[0]?.transitionMs).toEqual([49, 49]);
-    expect(measurements[1]?.transitionMs).toEqual([49, 49]);
-    expect(measurements[2]?.transitionMs).toEqual([49, 49]);
-    expect(measurements[1]?.animationMs).toEqual([49]);
-    expect(measurements[2]?.animationMs).toEqual([49]);
+    const expectedDuration = measurements[0]?.prefersReducedMotion ? 0 : 49;
+    expect(measurements[0]?.transitionMs).toEqual([
+      expectedDuration,
+      expectedDuration,
+    ]);
+    expect(measurements[1]?.transitionMs).toEqual([
+      expectedDuration,
+      expectedDuration,
+    ]);
+    expect(measurements[2]?.transitionMs).toEqual([
+      expectedDuration,
+      expectedDuration,
+    ]);
+    expect(measurements[1]?.animationMs).toEqual([expectedDuration]);
+    expect(measurements[2]?.animationMs).toEqual([expectedDuration]);
   });
 
   it("makes_live_preview_motion_instant_under_reduced_motion", async () => {

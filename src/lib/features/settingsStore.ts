@@ -9,21 +9,42 @@ import {
   settingsWrite,
 } from "../ipc/services";
 import { defaultTaskStatuses, normalizeTaskStatuses } from "../taskStatuses";
+import {
+  isDarkPaletteName,
+  isLightPaletteName,
+  isThemeName,
+} from "../themes/theme";
 
 export type { SettingsDocument };
 
 export const DEFAULT_SETTINGS: SettingsDocument = {
   schema_version: 1,
   theme: "system",
+  light_palette: "manuscript",
+  dark_palette: "lamplight",
   editor_font_size: 16,
   editor_reading_measure: 72,
   search_result_limit: 50,
+  link_previews: true,
   task_statuses: defaultTaskStatuses(),
 };
 
 function normalizedDocument(document: SettingsDocument): SettingsDocument {
   return {
     ...document,
+    theme: isThemeName(document.theme)
+      ? document.theme
+      : DEFAULT_SETTINGS.theme,
+    light_palette: isLightPaletteName(document.light_palette)
+      ? document.light_palette
+      : DEFAULT_SETTINGS.light_palette,
+    dark_palette: isDarkPaletteName(document.dark_palette)
+      ? document.dark_palette
+      : DEFAULT_SETTINGS.dark_palette,
+    link_previews:
+      typeof document.link_previews === "boolean"
+        ? document.link_previews
+        : DEFAULT_SETTINGS.link_previews,
     task_statuses: normalizeTaskStatuses(document.task_statuses),
   };
 }

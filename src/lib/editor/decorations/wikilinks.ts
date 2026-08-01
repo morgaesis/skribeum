@@ -64,6 +64,8 @@ export type WikilinkResolutionContext = {
   embedAncestry?: readonly string[];
   /** Current rendered-embed nesting depth. */
   embedDepth?: number;
+  /** Whether note links expose delayed rendered previews. */
+  linkPreviews?: boolean;
 };
 
 export const EMPTY_WIKILINK_CONTEXT: WikilinkResolutionContext = {
@@ -144,4 +146,58 @@ export function resolveWikilinkTarget(
     return { kind: "note", path: byName };
   }
   return { kind: "unresolved" };
+}
+
+/** Resolves a local Markdown-link URL to a canonical preview target. */
+export function resolveMarkdownLinkTarget(
+  rawTarget: string,
+  context: WikilinkResolutionContext,
+): string | null {
+  const unwrapped =
+    rawTarget.startsWith("<") && rawTarget.endsWith(">")
+      ? rawTarget.slice(1, -1)
+      : rawTarget;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(unwrapped);
+  } catch {
+    return null;
+  }
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(decoded) || decoded.startsWith("//")) {
+    return null;
+  }
+  const hash = decoded.indexOf("#");
+  const pathPart = hash === -1 ? decoded : decoded.slice(0, hash);
+  const fragment = hash === -1 ? "" : decoded.slice(hash);
+  if (pathPart.length === 0) {
+    return context.currentPath === null || context.currentPath === undefined
+      ? null
+      : fragment;
+  }
+  if (pathPart.startsWith("/") || pathPart.includes("?")) {
+    return null;
+  }
+  const base = context.currentPath?.split("/").slice(0, -1) ?? [];
+  const segments = [...base];
+  for (const segment of pathPart.split("/")) {
+    if (segment === "." || segment.length === 0) {
+      continue;
+    }
+    if (segment === "..") {
+      if (segments.length === 0) {
+        return null;
+      }
+      segments.pop();
+    } else {
+      segments.push(segment);
+    }
+  }
+  const candidates = [segments.join("/"), pathPart];
+  for (const candidate of candidates) {
+    const resolution = resolveWikilinkTarget(candidate, context);
+    if (resolution.kind === "note") {
+      return `${resolution.path}${fragment}`;
+    }
+  }
+  return null;
 }

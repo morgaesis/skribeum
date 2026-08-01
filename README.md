@@ -4,13 +4,13 @@ A byte-faithful, local-first Markdown editor for Obsidian-compatible vaults.
 Plain `.md` files on disk remain the source of truth; opening and saving a
 file never rewrites bytes outside the edit you made.
 
-Skribeum is in early scaffolding. Nothing here is ready to use; the editor
-currently renders a fixed document while the vault model, test corpus and
-byte-fidelity gates land.
+The desktop application opens Obsidian-compatible vaults, preserves byte-level
+file details outside edited ranges, and provides rendered Markdown editing,
+search, navigation, settings, and JSON Canvas viewing. The browser demo uses a
+seeded vault and can open local folders in browsers with the File System Access
+API, with its storage behavior stated directly above the editor.
 
-Development is agent-driven and fully in the open, including commit history.
-See [CONTRIBUTING](CONTRIBUTING.md) once it lands for how contributions and
-disclosure work.
+Development and commit history are public.
 
 ## License
 

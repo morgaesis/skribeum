@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { changedTextSpan } from "../../src/lib/editor/byteChangeSet";
 import {
   decorationEngine,
+  dispatchWikilinkContext,
   taskStatusConfiguration,
   tokenHighlightStyle,
 } from "../../src/lib/editor/decorations/engine";
@@ -66,6 +67,7 @@ afterEach(() => {
     view.destroy();
   }
   vi.restoreAllMocks();
+  vi.useRealTimers();
   document.body.textContent = "";
 });
 
@@ -350,6 +352,118 @@ describe("rendered decoration DOM", () => {
     const view = mountedView("![[Root]]\n\noutside", undefined, context);
     const notice = view.dom.querySelector('[role="status"]');
     expect(notice?.textContent).toBe("Embed cycle detected");
+  });
+
+  it("renders the embed path after the link hover delay and dismisses on pointer out", async () => {
+    vi.useFakeTimers();
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: "attachments",
+      },
+      currentPath: "Root.md",
+      embedAncestry: ["Root.md"],
+      embedDepth: 0,
+      linkPreviews: true,
+      loadNote: async () => "# Other\n\n**Rendered preview**",
+    };
+    const view = mountedView("See [[Other]].", undefined, context);
+    const link = view.dom.querySelector<HTMLElement>(
+      '[data-preview-target="Other"]',
+    );
+    expect(link?.getAttribute("tabindex")).toBe("0");
+
+    link?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(449);
+    expect(view.dom.querySelector('[data-testid="link-preview"]')).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const preview = view.dom.querySelector('[data-testid="link-preview"]');
+    expect(preview?.getAttribute("role")).toBe("dialog");
+    expect(preview?.textContent).toContain("Rendered preview");
+    expect(preview?.querySelector(".cm-skr-strong")).not.toBeNull();
+    link?.dispatchEvent(
+      new MouseEvent("pointerout", { bubbles: true, relatedTarget: preview }),
+    );
+    expect(view.dom.querySelector('[data-testid="link-preview"]')).toBe(
+      preview,
+    );
+    preview?.dispatchEvent(
+      new MouseEvent("pointerout", { bubbles: true, relatedTarget: view.dom }),
+    );
+    expect(view.dom.querySelector('[data-testid="link-preview"]')).toBeNull();
+  });
+
+  it("opens a focused Markdown note link with P and Escape cancels pending or visible previews", async () => {
+    vi.useFakeTimers();
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: true,
+        attachmentFolderPath: "attachments",
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote: async () => "# Other\n\nPreview body",
+    };
+    const view = mountedView("See [Other](Other.md).", undefined, context);
+    const link = view.dom.querySelector<HTMLElement>(
+      '[data-preview-target="Other.md"]',
+    );
+    expect(link?.getAttribute("role")).toBe("link");
+    link?.focus();
+    link?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    link?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(450);
+    expect(view.dom.querySelector('[data-testid="link-preview"]')).toBeNull();
+
+    link?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "p", bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      view.dom.querySelector('[data-testid="link-preview"]'),
+    ).not.toBeNull();
+    link?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(view.dom.querySelector('[data-testid="link-preview"]')).toBeNull();
+  });
+
+  it("removes preview affordances and closes the panel when disabled", async () => {
+    const enabled: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: "attachments",
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote: async () => "# Other\n\nPreview body",
+    };
+    const view = mountedView("See [[Other]].", undefined, enabled);
+    const link = view.dom.querySelector<HTMLElement>(
+      '[data-preview-target="Other"]',
+    );
+    link?.focus();
+    link?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "p", bubbles: true }),
+    );
+    await Promise.resolve();
+    expect(
+      view.dom.querySelector('[data-testid="link-preview"]'),
+    ).not.toBeNull();
+
+    dispatchWikilinkContext(view, { ...enabled, linkPreviews: false });
+    expect(view.dom.querySelector('[data-testid="link-preview"]')).toBeNull();
+    expect(view.dom.querySelector("[data-preview-target]")).toBeNull();
   });
 
   it("copies exact fenced source without changing layout", async () => {

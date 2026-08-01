@@ -30,8 +30,11 @@ fn missing_file_yields_defaults() {
     assert_eq!(settings, Settings::default());
     assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
     assert_eq!(settings.theme, "system");
+    assert_eq!(settings.light_palette, "manuscript");
+    assert_eq!(settings.dark_palette, "lamplight");
     assert_eq!(settings.editor_font_size, 16);
     assert_eq!(settings.editor_reading_measure, 72);
+    assert!(settings.link_previews);
     assert_eq!(settings.task_statuses, default_task_statuses());
 }
 
@@ -45,9 +48,12 @@ fn write_preserves_unknown_keys() {
         br#"{
             "schema_version": 1,
             "theme": "dark",
+            "light_palette": "studio",
+            "dark_palette": "graphite",
             "editor_font_size": 18,
             "editor_reading_measure": 72,
             "search_result_limit": 25,
+            "link_previews": false,
             "future_feature": {"enabled": true, "levels": [1, 2, 3]},
             "another_unknown": "keep me"
         }"#,
@@ -55,11 +61,17 @@ fn write_preserves_unknown_keys() {
 
     let mut settings = store.read(&fs).expect("read succeeds");
     assert_eq!(settings.theme, "dark");
+    assert_eq!(settings.light_palette, "studio");
+    assert_eq!(settings.dark_palette, "graphite");
     assert_eq!(settings.editor_font_size, 18);
     assert_eq!(settings.editor_reading_measure, 72);
     assert_eq!(settings.search_result_limit, 25);
+    assert!(!settings.link_previews);
 
     settings.theme = "light".to_owned();
+    settings.light_palette = "gazette".to_owned();
+    settings.dark_palette = "signal".to_owned();
+    settings.link_previews = true;
     settings.editor_font_size = 16;
     settings.editor_reading_measure = 76;
     store.write(&fs, &settings).expect("write succeeds");
@@ -69,9 +81,12 @@ fn write_preserves_unknown_keys() {
         .expect("file readable");
     let object: Value = serde_json::from_slice(&bytes).expect("valid JSON");
     assert_eq!(object["theme"], "light");
+    assert_eq!(object["light_palette"], "gazette");
+    assert_eq!(object["dark_palette"], "signal");
     assert_eq!(object["editor_font_size"], 16);
     assert_eq!(object["editor_reading_measure"], 76);
     assert_eq!(object["search_result_limit"], 25);
+    assert_eq!(object["link_previews"], true);
     assert_eq!(object["future_feature"]["enabled"], true);
     assert_eq!(
         object["future_feature"]["levels"],
@@ -118,20 +133,26 @@ fn invalid_stored_values_read_as_defaults() {
         br#"{
             "schema_version": 1,
             "theme": "purple",
+            "light_palette": "sepia",
+            "dark_palette": "midnight",
             "editor_font_size": "large",
             "editor_reading_measure": 44,
-            "search_result_limit": 0
+            "search_result_limit": 0,
+            "link_previews": "sometimes"
         }"#,
     );
     let settings = store.read(&fs).expect("read succeeds");
     let defaults = Settings::default();
     assert_eq!(settings.theme, defaults.theme);
+    assert_eq!(settings.light_palette, defaults.light_palette);
+    assert_eq!(settings.dark_palette, defaults.dark_palette);
     assert_eq!(settings.editor_font_size, defaults.editor_font_size);
     assert_eq!(
         settings.editor_reading_measure,
         defaults.editor_reading_measure
     );
     assert_eq!(settings.search_result_limit, defaults.search_result_limit);
+    assert_eq!(settings.link_previews, defaults.link_previews);
 }
 
 /// Out-of-range values are rejected on write, before anything touches the
@@ -142,6 +163,14 @@ fn invalid_values_are_rejected_on_write() {
     let cases = [
         Settings {
             theme: "purple".to_owned(),
+            ..Settings::default()
+        },
+        Settings {
+            light_palette: "sepia".to_owned(),
+            ..Settings::default()
+        },
+        Settings {
+            dark_palette: "midnight".to_owned(),
             ..Settings::default()
         },
         Settings {

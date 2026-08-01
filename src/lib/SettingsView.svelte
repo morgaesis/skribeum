@@ -3,7 +3,12 @@ import type { SettingsState } from "./features/settingsStore";
 import type { SettingsDocument } from "./ipc/services";
 import { STRINGS } from "./strings";
 import type { TaskStatus, TaskStatusCategory } from "./taskStatuses";
-import { isThemeName, type ThemeName } from "./themes/theme";
+import {
+  type DarkPaletteName,
+  isThemeName,
+  type LightPaletteName,
+  type ThemeName,
+} from "./themes/theme";
 
 let {
   settings,
@@ -17,6 +22,23 @@ let {
 
 let dialogElement = $state<HTMLElement | undefined>();
 let selectedTheme = $state<ThemeName>("system");
+
+const LIGHT_PALETTES: readonly {
+  id: LightPaletteName;
+  label: string;
+}[] = [
+  { id: "manuscript", label: STRINGS.settingsPaletteManuscript },
+  { id: "studio", label: STRINGS.settingsPaletteStudio },
+  { id: "gazette", label: STRINGS.settingsPaletteGazette },
+];
+const DARK_PALETTES: readonly {
+  id: DarkPaletteName;
+  label: string;
+}[] = [
+  { id: "lamplight", label: STRINGS.settingsPaletteLamplight },
+  { id: "graphite", label: STRINGS.settingsPaletteGraphite },
+  { id: "signal", label: STRINGS.settingsPaletteSignal },
+];
 
 const TASK_STATUS_CATEGORIES: readonly TaskStatusCategory[] = [
   "TODO",
@@ -251,6 +273,50 @@ $effect(() => {
         </select>
       </label>
 
+      <fieldset class="skr-palette-fieldset">
+        <legend>{STRINGS.settingsLightPalette}</legend>
+        <div class="skr-palette-options">
+          {#each LIGHT_PALETTES as palette}
+            <button
+              type="button"
+              class="skr-palette-card"
+              class:skr-palette-card-active={settings.document.light_palette === palette.id}
+              aria-pressed={settings.document.light_palette === palette.id}
+              data-testid={`settings-light-palette-${palette.id}`}
+              onclick={() => onUpdate({ light_palette: palette.id })}
+            >
+              <span class="skr-palette-swatch" data-palette={palette.id} aria-hidden="true">
+                <span class="skr-palette-line"></span>
+                <span class="skr-palette-dot"></span>
+              </span>
+              <span>{palette.label}</span>
+            </button>
+          {/each}
+        </div>
+      </fieldset>
+
+      <fieldset class="skr-palette-fieldset">
+        <legend>{STRINGS.settingsDarkPalette}</legend>
+        <div class="skr-palette-options">
+          {#each DARK_PALETTES as palette}
+            <button
+              type="button"
+              class="skr-palette-card"
+              class:skr-palette-card-active={settings.document.dark_palette === palette.id}
+              aria-pressed={settings.document.dark_palette === palette.id}
+              data-testid={`settings-dark-palette-${palette.id}`}
+              onclick={() => onUpdate({ dark_palette: palette.id })}
+            >
+              <span class="skr-palette-swatch" data-palette={palette.id} aria-hidden="true">
+                <span class="skr-palette-line"></span>
+                <span class="skr-palette-dot"></span>
+              </span>
+              <span>{palette.label}</span>
+            </button>
+          {/each}
+        </div>
+      </fieldset>
+
       <label class="flex items-center justify-between gap-3">
         <span>{STRINGS.settingsFontSize}</span>
         <input
@@ -306,6 +372,25 @@ $effect(() => {
             if (value !== null && value >= 1 && value <= 500) {
               onUpdate({ search_result_limit: value });
             }
+          }}
+        />
+      </label>
+
+      <label class="flex items-start justify-between gap-3">
+        <span>
+          <span class="block">{STRINGS.settingsLinkPreviews}</span>
+          <span class="skr-settings-help block text-xs">
+            {STRINGS.settingsLinkPreviewsHint}
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          checked={settings.document.link_previews}
+          data-testid="settings-link-previews"
+          onchange={(event) => {
+            onUpdate({
+              link_previews: (event.currentTarget as HTMLInputElement).checked,
+            });
           }}
         />
       </label>
@@ -465,6 +550,69 @@ $effect(() => {
 </div>
 
 <style>
+  .skr-palette-fieldset {
+    margin: 0;
+    border: 0;
+    padding: 0;
+  }
+
+  .skr-palette-fieldset legend {
+    margin-bottom: 0.375rem;
+  }
+
+  .skr-palette-options {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 7rem));
+    gap: 0.5rem;
+  }
+
+  .skr-palette-card {
+    display: grid;
+    gap: 0.375rem;
+    border: 1px solid var(--skr-border-strong);
+    border-radius: 0.5rem;
+    padding: 0.375rem;
+    color: var(--skr-text);
+    background: var(--skr-surface);
+    cursor: pointer;
+    font-size: 0.75rem;
+    text-align: left;
+  }
+
+  .skr-palette-card-active {
+    border: 2px solid var(--skr-accent);
+    padding: calc(0.375rem - 1px);
+  }
+
+  .skr-palette-swatch {
+    position: relative;
+    display: block;
+    height: 2.5rem;
+    border: 1px solid var(--skr-border-strong, var(--skr-border));
+    border-radius: 0.3rem;
+    background: var(--skr-surface);
+  }
+
+  .skr-palette-line {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    left: 0.75rem;
+    height: 0.2rem;
+    border-radius: 1rem;
+    background: var(--skr-text);
+  }
+
+  .skr-palette-dot {
+    position: absolute;
+    right: 0.75rem;
+    bottom: 0.55rem;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: var(--skr-accent);
+  }
+
   .skr-settings-input {
     border-color: var(--skr-border);
     background: var(--skr-surface);

@@ -15,6 +15,7 @@ import {
 } from "./lib/editor/frontmatter";
 import FileTree from "./lib/FileTree.svelte";
 import { createAppRegistry } from "./lib/features";
+import { ContentRequestGate } from "./lib/features/contentRequestGate";
 import { computeOutline, type OutlineEntry } from "./lib/features/outline";
 import {
   firstMatchText,
@@ -71,7 +72,18 @@ import {
 } from "./lib/rendering/canvas";
 import SettingsView from "./lib/SettingsView.svelte";
 import { STRINGS } from "./lib/strings";
-import { applyTheme, isThemeName } from "./lib/themes/theme";
+import {
+  applyTheme,
+  isDarkPaletteName,
+  isLightPaletteName,
+  isThemeName,
+} from "./lib/themes/theme";
+
+let {
+  openVaultDisabledReason = null,
+}: {
+  openVaultDisabledReason?: string | null;
+} = $props();
 
 let vault = $state<VaultHandle | null>(null);
 let tree = $state<TreeEntry[]>([]);
@@ -89,6 +101,7 @@ let canvas = $state<CanvasDocument | null>(null);
 let canvasPreviews = $state<Record<string, string>>({});
 let canvasError = $state<string | null>(null);
 let canvasViewer = $state<ReturnType<typeof CanvasView> | undefined>();
+const contentRequests = new ContentRequestGate();
 
 let nextBannerId = 0;
 // Journal-recovered deltas for notes that are not open yet, applied as
@@ -144,7 +157,14 @@ const settingsStore = new SettingsStore((state) => {
   applyEditorReadingMeasure(state.document.editor_reading_measure);
   applyTheme(
     isThemeName(state.document.theme) ? state.document.theme : "system",
+    isLightPaletteName(state.document.light_palette)
+      ? state.document.light_palette
+      : "manuscript",
+    isDarkPaletteName(state.document.dark_palette)
+      ? state.document.dark_palette
+      : "lamplight",
   );
+  refreshLinkContext();
 });
 
 function notePathsOf(entries: TreeEntry[]): string[] {
@@ -382,6 +402,7 @@ function refreshLinkContext() {
     currentPath,
     embedAncestry: currentPath === null ? [] : [currentPath],
     embedDepth: 0,
+    linkPreviews: settingsState.document.link_previews,
     ...(activeVault === null
       ? {}
       : {
@@ -414,33 +435,51 @@ async function readObsidianConfig(handle: VaultHandle) {
     readVaultConfigFile(handle, "app.json"),
     readVaultConfigFile(handle, "types.json"),
   ]);
-  obsidianConfig =
-    appJson === null
-      ? DEFAULT_OBSIDIAN_APP_CONFIG
-      : parseObsidianAppConfig(appJson);
-  propertyTypes = typesJson === null ? null : parseObsidianTypes(typesJson);
+  return {
+    config:
+      appJson === null
+        ? DEFAULT_OBSIDIAN_APP_CONFIG
+        : parseObsidianAppConfig(appJson),
+    types: typesJson === null ? null : parseObsidianTypes(typesJson),
+  };
 }
 
 async function openVaultAtPath(path: string) {
   errorText = null;
+  if ((await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
+  const request = contentRequests.next();
   try {
     const handle = await openVault(path);
+    const [nextTree, config] = await Promise.all([
+      vaultTree(handle),
+      readObsidianConfig(handle),
+      watchSubscribe(handle),
+    ]);
+    if (!contentRequests.isCurrent(request)) {
+      return;
+    }
     vault = handle;
-    tree = await vaultTree(handle);
+    tree = nextTree;
     selectedPath = null;
     note = null;
     contentView = null;
     canvas = null;
     canvasError = null;
-    await readObsidianConfig(handle);
+    obsidianConfig = config.config;
+    propertyTypes = config.types;
     refreshLinkContext();
-    await watchSubscribe(handle);
     const harnessNote = (window as Window & { __SKRIBEUM_E2E_NOTE__?: string })
       .__SKRIBEUM_E2E_NOTE__;
     if (typeof harnessNote === "string") {
       await openNote(harnessNote);
     }
   } catch (error) {
+    if (!contentRequests.isCurrent(request)) {
+      return;
+    }
     errorText = describeError(STRINGS.vaultOpenFailed, error);
   }
 }
@@ -454,11 +493,16 @@ async function pickVault() {
 }
 
 async function refreshTree() {
-  if (vault === null) {
+  const currentVault = vault;
+  if (currentVault === null) {
     return;
   }
   try {
-    tree = await vaultTree(vault);
+    const nextTree = await vaultTree(currentVault);
+    if (vault !== currentVault) {
+      return;
+    }
+    tree = nextTree;
     refreshLinkContext();
   } catch (error) {
     errorText = describeError(STRINGS.vaultOpenFailed, error);
@@ -466,12 +510,17 @@ async function refreshTree() {
 }
 
 async function openNote(path: string) {
-  if (vault === null) {
+  const currentVault = vault;
+  if (currentVault === null) {
     return;
   }
+  const request = contentRequests.next();
   errorText = null;
   // Persist pending edits of the current note before switching away.
-  await editor?.flush();
+  if ((await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
   const debugWindow = window as Window & {
     __SKRIBEUM_DEBUG_NOTE_OPEN_MS__?: number;
     __SKRIBEUM_DEBUG_PERF__?: boolean;
@@ -481,7 +530,10 @@ async function openNote(path: string) {
     : undefined;
   delete debugWindow.__SKRIBEUM_DEBUG_NOTE_OPEN_MS__;
   try {
-    const loaded = await readNote(vault, path);
+    const loaded = await readNote(currentVault, path);
+    if (vault !== currentVault || !contentRequests.isCurrent(request)) {
+      return;
+    }
     const recovered = pendingRecovered.get(path);
     if (recovered !== undefined) {
       pendingRecovered.delete(path);
@@ -504,6 +556,9 @@ async function openNote(path: string) {
         performance.now() - debugStart;
     }
   } catch (error) {
+    if (vault !== currentVault || !contentRequests.isCurrent(request)) {
+      return;
+    }
     errorText = describeError(STRINGS.noteReadFailed, error);
   }
 }
@@ -524,8 +579,12 @@ async function openCanvas(path: string) {
   if (currentVault === null) {
     return;
   }
+  const request = contentRequests.next();
   errorText = null;
-  await editor?.flush();
+  if ((await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
   try {
     const parsed = parseCanvas(
       decodeCanvas(await readVaultFile(currentVault, path)),
@@ -542,6 +601,9 @@ async function openCanvas(path: string) {
         }
       }),
     );
+    if (vault !== currentVault || !contentRequests.isCurrent(request)) {
+      return;
+    }
     note = null;
     canvas = parsed;
     canvasPreviews = Object.fromEntries(previews);
@@ -552,6 +614,9 @@ async function openCanvas(path: string) {
     await tick();
     canvasViewer?.focus();
   } catch (error) {
+    if (vault !== currentVault || !contentRequests.isCurrent(request)) {
+      return;
+    }
     note = null;
     canvas = null;
     canvasPreviews = {};
@@ -580,10 +645,22 @@ async function reviewPath(path: string, bannerId: number) {
     return;
   }
   if (path === selectedPath && note !== null && !note.readOnly) {
+    const currentVault = vault;
+    const request = contentRequests.next();
     try {
-      const loaded = await readNote(vault, path);
+      const loaded = await readNote(currentVault, path);
+      if (
+        vault !== currentVault ||
+        selectedPath !== path ||
+        !contentRequests.isCurrent(request)
+      ) {
+        return;
+      }
       editor?.reconcileWith(loaded);
     } catch (error) {
+      if (vault !== currentVault || !contentRequests.isCurrent(request)) {
+        return;
+      }
       errorText = describeError(STRINGS.noteReadFailed, error);
     }
     return;
@@ -766,6 +843,8 @@ onMount(() => {
       type="button"
       class="skr-control rounded border px-2 py-0.5 text-sm"
       onclick={pickVault}
+      disabled={openVaultDisabledReason !== null}
+      title={openVaultDisabledReason ?? undefined}
     >
       {STRINGS.openVault}
     </button>

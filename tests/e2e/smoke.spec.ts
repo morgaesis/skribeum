@@ -2395,14 +2395,15 @@ describe("skribeum shell", () => {
 
   it("cycles_and_sets_task_statuses_through_the_command_palette", async () => {
     await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
-    const taskControl = $(".cm-skr-task-control");
-    const checkbox = taskControl.$(".cm-skr-task-checkbox");
+    let checkbox = $(".cm-skr-task-checkbox");
     await checkbox.waitForExist({ timeout: 15000 });
     expect(await checkbox.getAttribute("aria-label")).toBe("Unchecked");
 
-    await browser.execute(() => {
+    const hoverState = await browser.execute(() => {
       const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
-      if (host === null) return;
+      if (host === null) {
+        return null;
+      }
       const bounds = host.getBoundingClientRect();
       host.dispatchEvent(
         new PointerEvent("pointerenter", {
@@ -2412,15 +2413,46 @@ describe("skribeum shell", () => {
           pointerType: "mouse",
         }),
       );
+      const liveCheckbox = host.querySelector<HTMLElement>(
+        ".cm-skr-task-checkbox",
+      );
+      const listbox = host.querySelector<HTMLElement>('[role="listbox"]');
+      const state = {
+        expanded: liveCheckbox?.getAttribute("aria-expanded"),
+        hidden: listbox?.hidden,
+        optionCount: listbox?.querySelectorAll('[role="option"]').length,
+      };
+      host.dispatchEvent(
+        new PointerEvent("pointerleave", {
+          bubbles: true,
+          clientX: bounds.right + 1,
+          clientY: bounds.bottom + 1,
+          pointerType: "mouse",
+        }),
+      );
+      return state;
     });
-    const listbox = taskControl.$('[role="listbox"]');
-    await listbox.waitForDisplayed({ timeout: 5000 });
-    expect(await listbox.$$('[role="option"]').length).toBe(38);
+    expect(hoverState).toEqual({
+      expanded: "true",
+      hidden: false,
+      optionCount: 38,
+    });
 
+    checkbox = $(".cm-skr-task-checkbox");
     await checkbox.click();
     await browser.waitUntil(
       () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [/] Review task"),
       { timeout: 10000, timeoutMsg: "task click did not persist" },
+    );
+    await $(".skr-app-header").moveTo();
+    await browser.waitUntil(
+      () =>
+        browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(".cm-skr-task-palette"),
+          ].every((palette) => palette.hidden),
+        ),
+      { timeout: 5000, timeoutMsg: "task palette did not close after hover" },
     );
 
     await placeCursorAtLineEnd("Review task");

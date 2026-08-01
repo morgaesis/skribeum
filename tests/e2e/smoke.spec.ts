@@ -69,28 +69,58 @@ async function openNoteFromTree(name: string) {
   await row.click();
 }
 
-async function setViewport(width: number, height: number) {
-  await browser.setWindowSize(width, height);
-  await browser.waitUntil(
-    async () =>
-      browser.execute(
-        (expectedWidth: number, expectedHeight: number) =>
-          window.innerWidth === expectedWidth &&
-          window.innerHeight === expectedHeight,
-        width,
-        height,
-      ),
-    {
-      timeout: 10000,
-      timeoutMsg: `viewport did not become ${width}x${height}`,
-    },
+type ViewportSize = { width: number; height: number };
+
+async function viewportAfterPaint(): Promise<ViewportSize> {
+  return browser.executeAsync<ViewportSize, []>((done) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        done({ width: window.innerWidth, height: window.innerHeight });
+      });
+    });
+  });
+}
+
+async function setNarrowViewport(
+  width: number,
+  height: number,
+): Promise<ViewportSize> {
+  let outerWidth = width;
+  let outerHeight = height;
+  let actual = { width: 0, height: 0 };
+  let previous = actual;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await browser.setWindowSize(outerWidth, outerHeight);
+    actual = await viewportAfterPaint();
+    if (actual.width === width && actual.height === height) return actual;
+    if (
+      attempt > 0 &&
+      actual.width === previous.width &&
+      actual.height === previous.height
+    ) {
+      break;
+    }
+
+    previous = actual;
+    outerWidth += width - actual.width;
+    outerHeight += height - actual.height;
+  }
+
+  // Hosted macOS displays cap native window height below 844 pixels. The
+  // exact requested viewport is exercised when the display permits it; a
+  // capped host still exercises the same width at the smaller phone height.
+  if (actual.width === width && actual.height >= 640) return actual;
+
+  throw new Error(
+    `viewport did not become ${width}x${height}; got ${actual.width}x${actual.height}`,
   );
 }
 
 async function restoreDesktopViewport() {
   await browser.setWindowSize(1100, 750);
   await browser.waitUntil(
-    async () => browser.execute(() => window.innerWidth > 960),
+    async () => (await viewportAfterPaint()).width > 960,
     {
       timeout: 10000,
       timeoutMsg: "viewport did not return above the narrow breakpoint",
@@ -433,7 +463,7 @@ describe("skribeum shell", () => {
         [360, 640],
         [390, 844],
       ] as const) {
-        await setViewport(width, height);
+        await setNarrowViewport(width, height);
         const mobileActions = $('[aria-label="Primary actions"]');
         await mobileActions.waitForDisplayed({ timeout: 10000 });
 

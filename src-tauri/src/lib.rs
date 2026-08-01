@@ -130,10 +130,25 @@ pub fn run() {
             });
             app.manage(ipc::JournalState(journal));
             // Settings live in the OS app-config directory, never in any
-            // vault, with unknown keys preserved on every write.
-            let settings = app.path().app_config_dir().ok().map(|dir| {
-                skribeum_vault::SettingsStore::new(dir.join(skribeum_vault::SETTINGS_FILE_NAME))
-            });
+            // vault, with unknown keys preserved on every write. WebDriver
+            // builds accept an isolated store so concurrent suites cannot
+            // change each other's editor behavior.
+            #[cfg(feature = "webdriver")]
+            let settings_path = std::env::var_os("SKRIBEUM_E2E_SETTINGS")
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    app.path()
+                        .app_config_dir()
+                        .ok()
+                        .map(|dir| dir.join(skribeum_vault::SETTINGS_FILE_NAME))
+                });
+            #[cfg(not(feature = "webdriver"))]
+            let settings_path = app
+                .path()
+                .app_config_dir()
+                .ok()
+                .map(|dir| dir.join(skribeum_vault::SETTINGS_FILE_NAME));
+            let settings = settings_path.map(skribeum_vault::SettingsStore::new);
             app.manage(ipc::SettingsState(settings));
             Ok(())
         })

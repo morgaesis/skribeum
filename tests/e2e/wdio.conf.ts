@@ -38,14 +38,17 @@ const embeddedPort =
 process.env.TAURI_WEBDRIVER_PORT = String(embeddedPort);
 
 async function startDemoServer(): Promise<void> {
+  await buildStaticDemo();
   const port = await availablePort();
   const url = `http://127.0.0.1:${port}/`;
   demoServer = spawn(
     "bun",
     [
-      "run",
-      "demo:dev",
-      "--",
+      "x",
+      "vite",
+      "preview",
+      "--config",
+      "demo/vite.config.ts",
       "--host",
       "127.0.0.1",
       "--port",
@@ -56,6 +59,29 @@ async function startDemoServer(): Promise<void> {
   );
   process.env.SKRIBEUM_E2E_DEMO_URL = url;
   await browserDemoReady(url);
+}
+
+async function buildStaticDemo(): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const build = spawn("bun", ["run", "demo:build"], {
+      cwd: repositoryRoot,
+      stdio: "inherit",
+    });
+    const timeout = setTimeout(() => {
+      build.kill();
+      reject(new Error("static browser demo build timed out"));
+    }, 60_000);
+    build.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    build.once("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve();
+      else
+        reject(new Error(`static browser demo build exited with code ${code}`));
+    });
+  });
 }
 
 async function browserDemoReady(url: string): Promise<void> {

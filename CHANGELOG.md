@@ -16,8 +16,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   input while it is open.
 - Whole-note and section embeds remain mounted when vault link context loads,
   and unresolved content retains its existing visible status treatment.
-- Fenced code resolves the full lazy CodeMirror language registry, including
-  documented names, aliases, and file-extension forms.
+- Fenced code resolves the full lazy CodeMirror language registry, loads
+  language-specific browser chunks on demand, and applies their tokens without
+  reloading the note.
 
 ### Changed
 

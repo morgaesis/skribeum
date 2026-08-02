@@ -5999,7 +5999,42 @@ Promise.all([
         ),
       { timeout: 15000, timeoutMsg: "code sample note did not open" },
     );
-    await browser.pause(1000);
+    await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          const shellLine = [...document.querySelectorAll(".cm-line")].find(
+            (candidate) =>
+              candidate.textContent === "if [ -f package.json ]; then",
+          );
+          const shellTokens = [
+            ...(shellLine?.querySelectorAll("span[class]") ?? []),
+          ].map((span) => span.textContent);
+          const otherSamples = [
+            "def note_title(path: str) -> str:",
+            "note:",
+            "fn note_title(path: &str) -> &str {",
+          ];
+          return (
+            shellTokens.includes("if") &&
+            shellTokens.includes("then") &&
+            otherSamples.every((source) => {
+              const line = [...document.querySelectorAll(".cm-line")].find(
+                (candidate) => candidate.textContent === source,
+              );
+              return [...(line?.querySelectorAll("span[class]") ?? [])].some(
+                (span) =>
+                  [...span.classList].some((name) => !name.startsWith("cm-")),
+              );
+            })
+          );
+        }),
+      {
+        timeout: 5000,
+        interval: 50,
+        timeoutMsg:
+          "static browser demo did not apply lazy language tokens within five seconds",
+      },
+    );
 
     const measurements = await browser.execute<
       Array<{

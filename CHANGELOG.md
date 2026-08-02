@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The unified command surface accepts native typing and contains all keyboard
+  input while it is open.
+- Whole-note and section embeds remain mounted when vault link context loads,
+  and unresolved content retains its existing visible status treatment.
+- Fenced code resolves the full lazy CodeMirror language registry, including
+  documented names, aliases, and file-extension forms.
+
 ### Changed
 
 - Appearance settings use one six-card palette chooser. Choosing a card applies
@@ -38,6 +47,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are available from outline rows and the heading nearest the caret.
 - Every settings row is a searchable command action that opens settings,
   aligns the target row to the pane, and focuses its control.
+- Embedded notes show a theme-derived loading skeleton before content or an
+  unresolved-reference status appears.
+- The browser demo and desktop surface publish a scheme-aware SVG favicon and
+  a matching 180-pixel touch icon.
 - Release notes use a human-focused summary generated from the matching
   changelog section, deterministic structure and grounding checks, a separate
   fabrication and voice judge, one critique-driven rewrite, and a plain

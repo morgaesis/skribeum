@@ -7,6 +7,7 @@ import {
   LanguageSupport,
   StreamLanguage,
 } from "@codemirror/language";
+import { languages } from "@codemirror/language-data";
 
 const fencedCodeLanguages: readonly LanguageDescription[] = [
   LanguageDescription.of({
@@ -68,10 +69,19 @@ const fencedCodeLanguages: readonly LanguageDescription[] = [
 ];
 
 export function codeLanguage(info: string): LanguageDescription | null {
-  const name = info.toLowerCase();
-  return (
-    fencedCodeLanguages.find((description) =>
-      description.alias.includes(name),
-    ) ?? null
-  );
+  const normalized = info.trim().toLowerCase();
+  if (normalized.length === 0) return null;
+  const firstToken = normalized.split(/\s+/u, 1)[0] ?? normalized;
+  for (const name of new Set([normalized, firstToken])) {
+    const match =
+      LanguageDescription.matchLanguageName(fencedCodeLanguages, name, false) ??
+      LanguageDescription.matchLanguageName(languages, name, false) ??
+      languages.find((description) =>
+        description.extensions.some(
+          (extension) => extension.toLowerCase() === name,
+        ),
+      );
+    if (match !== null && match !== undefined) return match;
+  }
+  return null;
 }

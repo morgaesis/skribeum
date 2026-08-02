@@ -22,12 +22,7 @@
 511..547 mark class="cm-skr-wikilink" data-resolved="false"
 513..545 mark class="cm-skr-wikilink-target"
 545..547 hide node=WikilinkMark
-587..588 hide node=EmbedMark
 587..624 widget embed data-target="block-target-note#^remote-anchor" role="group"
-588..590 hide node=WikilinkMark
-588..624 mark class="cm-skr-wikilink" data-resolved="false"
-590..622 mark class="cm-skr-wikilink-target"
-622..624 hide node=WikilinkMark
 645..645 line class="cm-skr-heading cm-skr-heading-2"
 645..648 hide node=HeaderMark
 838..856 widget table-row data-header="true" role="row"

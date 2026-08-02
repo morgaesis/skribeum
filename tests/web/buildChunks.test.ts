@@ -37,9 +37,27 @@ describe("rendering build boundaries", () => {
       [...names].flatMap((name) =>
         Object.keys(byFile.get(name)?.modules ?? {}),
       );
+    const initialMermaidModules = moduleIds(initial).filter((id) =>
+      /node_modules\/mermaid\//.test(id),
+    );
     expect(
-      moduleIds(initial).filter((id) => /node_modules\/mermaid\//.test(id)),
+      initialMermaidModules.filter(
+        (id) =>
+          !/\/dist\/chunks\/mermaid\.core\/chunk-[A-Z0-9]+\.mjs$/.test(id),
+      ),
     ).toEqual([]);
+    const initialMermaidBytes = [...initial].reduce(
+      (total, name) =>
+        total +
+        Object.entries(byFile.get(name)?.modules ?? {}).reduce(
+          (chunkTotal, [id, module]) =>
+            chunkTotal +
+            (/node_modules\/mermaid\//.test(id) ? module.renderedLength : 0),
+          0,
+        ),
+      0,
+    );
+    expect(initialMermaidBytes).toBeLessThan(8_000);
     expect(
       chunks.some((chunk) =>
         Object.keys(chunk.modules).some((id) =>

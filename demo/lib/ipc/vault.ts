@@ -58,6 +58,7 @@ type DemoWindow = Window & {
   showDirectoryPicker?: (options?: {
     mode?: PermissionMode;
   }) => Promise<BrowserDirectoryHandle>;
+  __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
 };
 
 const LOCAL_FOLDER_VAULT = "skribeum-local-folder";
@@ -100,6 +101,12 @@ const vaults = new Map<number, DemoVault>();
 const folderSelections = new Map<string, DemoVault>();
 let status: DemoVaultStatus = { source: "seeded" };
 const statusListeners = new Set<(next: DemoVaultStatus) => void>();
+
+async function waitForTestGate(relPath: string): Promise<void> {
+  if (typeof window !== "undefined") {
+    await (window as DemoWindow).__SKRIBEUM_E2E_NOTE_GATES__?.[relPath];
+  }
+}
 
 /** Restores the seeded in-memory vault for isolated browser tests. */
 export function resetDemoVault(): void {
@@ -556,6 +563,7 @@ export async function readNote(
     return fail("note/not-markdown", STRINGS.demoNoteNotMarkdown, relPath);
   }
   const bytes = cachedFileBytes(vault, relPath).slice();
+  await waitForTestGate(relPath);
   const hasBom =
     bytes.length >= 3 &&
     bytes[0] === 0xef &&
@@ -578,5 +586,6 @@ export async function readVaultFile(
   handle: VaultHandle,
   relPath: string,
 ): Promise<Uint8Array> {
+  await waitForTestGate(relPath);
   return cachedFileBytes(vaultFor(handle), relPath).slice();
 }

@@ -320,7 +320,7 @@ describe("rendered decoration DOM", () => {
       embedAncestry: ["Root.md"],
       embedDepth: 0,
       loadNote: async () =>
-        "# Before\nnot selected\n\n## Details\n**Rendered body**\n\n## Later\nnot selected",
+        "# Before\nnot selected\n\n## Details\n**Rendered body**",
     };
     const view = mountedView(
       "![[Other#Details]]\n\noutside",
@@ -334,6 +334,42 @@ describe("rendered decoration DOM", () => {
     expect(embed.textContent).toContain("Rendered body");
     expect(embed.textContent).not.toContain("not selected");
     expect(embed.querySelector('[contenteditable="false"]')).not.toBeNull();
+  });
+
+  it("keeps embed widgets mounted while link context and content resolve", async () => {
+    let resolveNote: ((source: string) => void) | undefined;
+    const loaded = new Promise<string>((resolve) => {
+      resolveNote = resolve;
+    });
+    const view = mountedView("![[Other]]\n\noutside");
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      embedAncestry: ["Root.md"],
+      embedDepth: 0,
+      loadNote: () => loaded,
+    };
+
+    dispatchWikilinkContext(view, context);
+    const loading = await waitForElement(view.dom, ".cm-skr-embed-loading");
+    expect(loading.getAttribute("role")).toBe("status");
+    expect(loading.getAttribute("aria-label")).toBe("Loading embedded note");
+    expect(loading.querySelectorAll(".cm-skr-embed-skeleton-bar")).toHaveLength(
+      3,
+    );
+
+    resolveNote?.("# Other\n\n**Resolved content**");
+    const rendered = await waitForElement(
+      view.dom,
+      ".cm-skr-embed-body .cm-editor",
+    );
+    expect(rendered.textContent).toContain("Resolved content");
+    expect(view.dom.querySelector(".cm-skr-embed-loading")).toBeNull();
   });
 
   it("shows a visible notice for an embed cycle", () => {

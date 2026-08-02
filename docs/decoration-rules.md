@@ -150,7 +150,6 @@ above. `-` means the row applies to every node of that name.
 | `WikilinkTarget` | `withoutSibling=WikilinkAlias` | `mark cm-skr-wikilink-target` | never |
 | `WikilinkAlias` | `-` | `mark cm-skr-wikilink-alias` | never |
 | `Embed` | `-` | `widget embed` | cursor-inside |
-| `EmbedMark` | `-` | `hide` | cursor-inside |
 | `TableHeader` | `-` | `widget table-row` | cursor-inside |
 | `TableDelimiter` | `parent=Table` | `widget table-separator` | cursor-inside |
 | `TableRow` | `-` | `widget table-row` | cursor-inside |

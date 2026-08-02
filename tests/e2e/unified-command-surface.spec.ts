@@ -70,6 +70,50 @@ beforeEach(async () => {
 });
 
 describe("work package 1 browser behavior", () => {
+  it("accepts native typing and contains keyboard input within the surface", async () => {
+    const editorBefore = await browser.execute(
+      () => document.querySelector(".cm-content")?.textContent ?? "",
+    );
+    await browser.keys([modifierKey, "k"]);
+    const input = await overlayInput();
+    const optionsBefore = await $$('[role="option"]');
+
+    await browser.keys("wikilinks");
+    expect(await input.getValue()).toBe("wikilinks");
+    await browser.waitUntil(
+      async () => (await $$('[role="option"]')).length !== optionsBefore.length,
+      { timeout: 10000, timeoutMsg: "typing did not filter command results" },
+    );
+    const first = $('[role="option"]');
+    expect((await first.getText()).toLocaleLowerCase()).toContain("wikilinks");
+    await browser.keys(Key.ArrowDown);
+    expect(await input.getAttribute("aria-activedescendant")).toBe(
+      "skr-command-option-1",
+    );
+    await browser.keys(Key.ArrowUp);
+    expect(await input.getAttribute("aria-activedescendant")).toBe(
+      "skr-command-option-0",
+    );
+    await browser.keys(Key.Escape);
+    await $('[data-testid="unified-command-surface"]').waitForExist({
+      reverse: true,
+      timeout: 5000,
+    });
+    expect(
+      await browser.execute(
+        () => document.querySelector(".cm-content")?.textContent ?? "",
+      ),
+    ).toBe(editorBefore);
+
+    await browser.keys([modifierKey, "k"]);
+    await browser.keys("wikilinks");
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      async () => (await browser.getUrl()).includes("Features%2Fwikilinks.md"),
+      { timeout: 10000, timeoutMsg: "Enter did not pick the filtered note" },
+    );
+  });
+
   it("routes prefixes and aliases through one result-kind surface", async () => {
     const assertResultKind = async (kind: string) => {
       const list = $(

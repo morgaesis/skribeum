@@ -7,10 +7,10 @@ import { EditorView } from "@codemirror/view";
 import type { WikilinkResolutionContext } from "../../features/navigation";
 import {
   type FollowWikilinkOptions,
-  followWikilinkAt,
+  followLinkAt,
+  linkPositionFromElement,
   resolveWikilinkTarget,
   wikilinkNavigationOptionsFacet,
-  wikilinkPositionFromElement,
 } from "../../features/navigation";
 
 export {
@@ -95,12 +95,12 @@ export function wikilinkPointerNavigation(
   ): { element: HTMLElement; position: number } | undefined => {
     const element =
       target instanceof Element
-        ? target.closest<HTMLElement>(".cm-skr-wikilink")
+        ? target.closest<HTMLElement>(".cm-skr-wikilink, [data-external-url]")
         : null;
     if (element === null || !view.dom.contains(element)) {
       return undefined;
     }
-    const position = wikilinkPositionFromElement(view, element);
+    const position = linkPositionFromElement(view, element);
     return position === null ? undefined : { element, position };
   };
   return [
@@ -121,7 +121,7 @@ export function wikilinkPointerNavigation(
             return false;
           }
           event.preventDefault();
-          const handled = followWikilinkAt(view, candidate.position, options());
+          const handled = followLinkAt(view, candidate.position, options());
           pendingClick = { position: candidate.position, handled };
           return handled;
         },
@@ -150,7 +150,7 @@ export function wikilinkPointerNavigation(
             return false;
           }
           event.preventDefault();
-          return followWikilinkAt(view, candidate.position, options());
+          return followLinkAt(view, candidate.position, options());
         },
       }),
     ),

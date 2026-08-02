@@ -188,6 +188,7 @@ const linkRows: DecorationRule[] = [
     notParent: ["Link", "Image"],
     presentation: { present: "mark", class: "cm-skr-url" },
     reveal: "never",
+    dynamic: "markdown-link-preview",
   },
   {
     node: "LinkTitle",

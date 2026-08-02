@@ -3,6 +3,7 @@
 // pattern as the vault layer, plus the byte-to-character range
 // conversion search highlighting needs.
 
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   commands,
   type SearchHit,
@@ -74,6 +75,11 @@ export async function vaultTreeRefresh(
   handle: VaultHandle,
 ): Promise<TreeEntry[]> {
   return unwrap(await commands.vaultTreeRefresh(handle));
+}
+
+/** Opens an HTTP or HTTPS URL through the desktop system browser. */
+export async function openSystemUrl(url: string): Promise<void> {
+  await openUrl(url);
 }
 
 /**

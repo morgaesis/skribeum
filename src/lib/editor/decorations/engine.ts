@@ -30,6 +30,7 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { tags } from "@lezer/highlight";
+import { externalHttpUrl } from "../../features/navigation";
 import {
   editTableCell,
   escapeTableCellPipes,
@@ -2917,17 +2918,23 @@ function dynamicAttributes(
 ): Record<string, string> | null {
   switch (rule.dynamic) {
     case "markdown-link-preview": {
+      const url = node.name === "URL" ? node : node.getChild("URL");
+      const rawTarget = url === null ? null : doc.sliceString(url.from, url.to);
+      const external = rawTarget === null ? null : externalHttpUrl(rawTarget);
+      if (external !== null) {
+        return {
+          "data-external-url": external,
+          role: "link",
+          tabindex: "0",
+        };
+      }
       if (wikilinks.linkPreviews === false) {
         return {};
       }
-      const url = node.getChild("URL");
       const target =
-        url === null
+        rawTarget === null
           ? null
-          : resolveMarkdownLinkTarget(
-              doc.sliceString(url.from, url.to),
-              wikilinks,
-            );
+          : resolveMarkdownLinkTarget(rawTarget, wikilinks);
       return target === null
         ? {}
         : {
@@ -4442,6 +4449,7 @@ const engineTheme = EditorView.baseTheme({
     textDecoration: "underline",
     textUnderlineOffset: "0.15em",
   },
+  "[data-external-url]": { cursor: "pointer" },
   ".cm-skr-link-label": { color: "var(--skr-link)" },
   ".cm-skr-wikilink": {
     color: "var(--skr-link)",

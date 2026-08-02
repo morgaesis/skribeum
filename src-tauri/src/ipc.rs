@@ -923,7 +923,7 @@ fn watch_subscribe<R: Runtime>(
     journal: State<'_, JournalState>,
     handle: VaultHandle,
 ) -> Result<(), AppError> {
-    let (root, watching, reconciler, search) = {
+    let (root, watching, reconciler, search, clock) = {
         let vaults = registry.lock();
         let open = vaults
             .get(&handle.id)
@@ -933,6 +933,7 @@ fn watch_subscribe<R: Runtime>(
             Arc::clone(&open.watching),
             Arc::clone(&open.reconciler),
             Arc::clone(&open.search),
+            registry.clock,
         )
     };
     if watching.swap(true, Ordering::SeqCst) {
@@ -956,7 +957,6 @@ fn watch_subscribe<R: Runtime>(
     let vault_id = handle.id;
     std::thread::spawn(move || {
         let mut watcher = watcher;
-        let clock = RealClock::default();
         loop {
             let mut delivered_any = false;
             while let Some(event) = watcher.try_next() {

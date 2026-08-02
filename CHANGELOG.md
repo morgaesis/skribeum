@@ -15,6 +15,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Plain HTTP and HTTPS URLs and Markdown links open in the system browser from
+  the desktop application and in a new `noopener` tab from the browser demo.
+- Desktop watcher events use the same monotonic clock as note saves, so genuine
+  external edits ingest after autosave while matching self-write echoes remain
+  suppressed by projection hash and preserve undo and redo history.
 - The unified command surface accepts native typing and contains all keyboard
   input while it is open.
 - Whole-note and section embeds remain mounted when vault link context loads,

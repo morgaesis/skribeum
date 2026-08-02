@@ -2,6 +2,10 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const openUrl = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
+
 import { decorationEngine } from "../../src/lib/editor/decorations/engine";
 import {
   DEFAULT_OBSIDIAN_APP_CONFIG,
@@ -15,10 +19,13 @@ import {
 } from "../../src/lib/features/copyLinks";
 import {
   createNoteNavigator,
+  externalLinkAt,
   type FollowWikilinkOptions,
+  followLinkUnderCursor,
   followWikilinkUnderCursor,
   noteAddressFromUrl,
   noteFragmentPosition,
+  openExternalLink,
   urlForNoteAddress,
 } from "../../src/lib/features/navigation";
 import { commandItems } from "../../src/lib/features/pickers";
@@ -101,6 +108,7 @@ afterEach(() => {
     view.destroy();
   }
   document.body.replaceChildren();
+  openUrl.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -308,6 +316,83 @@ describe("wikilink keyboard navigation", () => {
 
     expect(command?.keybindings).toEqual(["Mod-Enter", "Enter"]);
     expect(item?.keybinding).toBe("Ctrl+Enter");
+  });
+});
+
+describe("external link navigation", () => {
+  it.each([
+    ["plain URL", "Visit https://example.com/plain now", ".cm-skr-url"],
+    [
+      "Markdown link",
+      "Visit [External site](https://example.com/markdown) now",
+      ".cm-skr-link",
+    ],
+  ])("follows a %s through pointer activation", (_label, doc, selector) => {
+    const openExternal = vi.fn();
+    const options = navigationOptions({ openExternal });
+    const view = makePointerView(doc, 0, options);
+    const target = view.dom.querySelector<HTMLElement>(selector);
+    if (target === null) throw new Error(`${selector} decoration missing`);
+
+    const event = pressLink(view, {}, target);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(openExternal).toHaveBeenCalledOnce();
+    expect(openExternal).toHaveBeenCalledWith(
+      doc.includes("markdown")
+        ? "https://example.com/markdown"
+        : "https://example.com/plain",
+    );
+  });
+
+  it.each([
+    ["https://example.com/plain", 10],
+    ["[External](http://example.com/markdown)", 3],
+  ])("follows %s through the follow-link command", (doc, position) => {
+    const openExternal = vi.fn();
+    const options = navigationOptions({ openExternal });
+    const view = makePointerView(doc, position, options);
+    view.dispatch({ selection: { anchor: position } });
+
+    expect(followLinkUnderCursor(view, options)).toBe(true);
+    expect(openExternal).toHaveBeenCalledWith(
+      doc.startsWith("[")
+        ? "http://example.com/markdown"
+        : "https://example.com/plain",
+    );
+  });
+
+  it("recognizes only HTTP and HTTPS source targets", () => {
+    const view = makePointerView(
+      "[web](https://example.com) [file](file:///tmp/note.md)",
+      0,
+      navigationOptions(),
+    );
+    expect(externalLinkAt(view.state, 3)).toBe("https://example.com");
+    expect(externalLinkAt(view.state, 34)).toBeNull();
+  });
+
+  it("invokes the desktop opener with the exact URL without navigating", async () => {
+    openUrl.mockResolvedValueOnce(undefined);
+    const initialLocation = window.location.href;
+
+    await openExternalLink("https://example.com/exact?value=one", "desktop");
+
+    expect(openUrl).toHaveBeenCalledWith("https://example.com/exact?value=one");
+    expect(window.location.href).toBe(initialLocation);
+  });
+
+  it("uses a noopener browser tab outside the desktop runtime", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+
+    await openExternalLink("http://example.com/browser", "browser", window);
+
+    expect(open).toHaveBeenCalledWith(
+      "http://example.com/browser",
+      "_blank",
+      "noopener",
+    );
+    expect(openUrl).not.toHaveBeenCalled();
   });
 });
 

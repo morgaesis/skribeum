@@ -3,5 +3,15 @@
   "identifier": "default",
   "description": "Main window capability. Grows only with allowlisted IPC commands.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "http://*" },
+        { "url": "https://*" }
+      ]
+    }
+  ]
 }

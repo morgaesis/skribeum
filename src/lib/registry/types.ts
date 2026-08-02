@@ -107,8 +107,6 @@ type CommandBase = {
   kind?: "command" | "setting";
   /** Additional searchable text that is not displayed as the title. */
   searchTerms?: readonly string[];
-  /** Explains why the host cannot run this command, or null when available. */
-  unavailableReason?: (context: CommandContext) => string | null;
   /**
    * Listed in the slash menu when present; `keywords` extend fuzzy
    * matching beyond the title.

@@ -12,8 +12,11 @@ export const VIEW_OUTLINE = "view.outline";
 export const VIEW_FILE_TREE = "view.file-tree";
 export const VIEW_CANVAS = "view.canvas";
 
-/** Registers the surface views and their commands. */
-export function registerSurfaces(registry: CommandRegistry): void {
+/** Registers the surface views and host-supported commands. */
+export function registerSurfaces(
+  registry: CommandRegistry,
+  desktop = false,
+): void {
   registry.registerView({
     id: VIEW_COMMAND_SURFACE,
     title: STRINGS.commandSurfaceLabel,
@@ -124,6 +127,7 @@ export function registerSurfaces(registry: CommandRegistry): void {
       return true;
     },
   });
+  if (!desktop) return;
   for (const command of [
     {
       id: "application.zoom-in",
@@ -149,10 +153,6 @@ export function registerSurfaces(registry: CommandRegistry): void {
       title: command.title,
       keybindings: command.keybindings,
       pointer: ["command-palette", "action-menu"],
-      unavailableReason: (context) =>
-        context.changeApplicationZoom === undefined
-          ? STRINGS.applicationZoomDesktopRequired
-          : null,
       run: (context) => context.changeApplicationZoom?.(command.action),
     });
   }

@@ -44,9 +44,8 @@ tooltips.
 
 The desktop application zooms its complete webview with `mod++` and `mod+-`.
 `mod+0` returns to 100 percent. Zoom is stored from 50 to 200 percent in
-10 percent steps and applies to every application window. The browser demo
-lists these commands as unavailable because the browser owns its own zoom
-shortcuts.
+10 percent steps and applies to every application window. Browser builds do
+not register these commands because the browser owns its own zoom shortcuts.
 
 Packaged desktop builds register `.md`, `.markdown`, and `.txt` file handlers.
 Opening a file inside the active vault keeps that vault and selects the file.

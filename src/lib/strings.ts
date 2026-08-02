@@ -6,8 +6,6 @@ export const STRINGS = {
   commandZoomIn: "Zoom in",
   commandZoomOut: "Zoom out",
   commandZoomReset: "Reset zoom",
-  applicationZoomDesktopRequired:
-    "Application zoom requires the desktop application.",
   nativeFileHandlingDesktopRequired:
     "Native file handling requires the desktop application.",
   desktopWindowRequired: "Window control requires the desktop application.",

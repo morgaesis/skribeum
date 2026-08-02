@@ -17,6 +17,7 @@ import {
 } from "../../src/lib/features/pickers";
 import { byteRangesToCharRanges } from "../../src/lib/ipc/services";
 import type { CommandContext } from "../../src/lib/registry";
+import { globalKeydownHandler } from "../../src/lib/registry";
 
 const PATHS = [
   "notes/alpha.md",
@@ -94,17 +95,21 @@ describe("unified command surface modes", () => {
     expect(items[0]?.actionKind).toBe("setting");
   });
 
-  it("lists application zoom as capability-disabled in the browser", () => {
+  it("leaves application zoom unregistered in the browser", () => {
     const registry = createAppRegistry();
-    const context = {} as CommandContext;
-    const items = commandItems(registry, "Zoom", false, context).filter(
-      (item) => item.value.startsWith("application.zoom-"),
+    const items = commandItems(registry, "Zoom", false).filter((item) =>
+      item.value.startsWith("application.zoom-"),
     );
-    expect(items).toHaveLength(3);
-    expect(
-      items.every((item) => item.disabledReason?.includes("desktop")),
-    ).toBe(true);
-    expect(registry.run("application.zoom-in", context)).toBe(false);
+    expect(items).toEqual([]);
+    expect(registry.command("application.zoom-in")).toBeUndefined();
+
+    const event = new KeyboardEvent("keydown", {
+      key: "+",
+      ctrlKey: true,
+      cancelable: true,
+    });
+    globalKeydownHandler(registry, () => ({}) as CommandContext)(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("builds only tag rows in tag mode", () => {

@@ -1,7 +1,7 @@
 import { cursorCharForward, deleteCharBackward } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting } from "@codemirror/language";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { changedTextSpan } from "../../src/lib/editor/byteChangeSet";
@@ -13,6 +13,7 @@ import {
   explicitTableSource,
   focusedRenderedTableCell,
   focusRenderedTableCell,
+  sourceRevealFocusMode,
   taskStatusConfiguration,
   tokenHighlightStyle,
 } from "../../src/lib/editor/decorations/engine";
@@ -80,6 +81,40 @@ afterEach(() => {
 });
 
 describe("rendered decoration DOM", () => {
+  it("keeps an unfocused parked caret from revealing frontmatter", async () => {
+    const source = "---\ntitle: Parked\n---\n\nBody\n";
+    const focusMode = new Compartment();
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: source,
+        selection: { anchor: 0 },
+        extensions: [
+          markdown({
+            base: markdownLanguage,
+            extensions: obsidianMarkdownExtensionsFor(DEFAULT_TASK_STATUSES),
+            codeLanguages: codeLanguage,
+          }),
+          taskStatusConfiguration.of(DEFAULT_TASK_STATUSES),
+          decorationEngine(),
+          focusMode.of(sourceRevealFocusMode(false)),
+        ],
+      }),
+      parent: document.body,
+    });
+    views.push(view);
+
+    expect(
+      view.dom.querySelector('.cm-skr-frontmatter[data-revealed="true"]'),
+    ).toBeNull();
+    view.dispatch({
+      effects: focusMode.reconfigure(sourceRevealFocusMode(true)),
+      selection: { anchor: source.indexOf("Parked") },
+    });
+    await expect(
+      waitForElement(view.dom, '.cm-skr-frontmatter[data-revealed="true"]'),
+    ).resolves.toBeTruthy();
+  });
+
   it("renders every configured status with its glyph and accessible name", () => {
     for (const status of DEFAULT_TASK_STATUSES) {
       const view = mountedView(

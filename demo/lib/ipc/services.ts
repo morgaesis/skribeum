@@ -582,7 +582,7 @@ export async function settingsWrite(doc: SettingsDocument): Promise<void> {
 }
 
 export async function zoomSet(_zoomPercent: number): Promise<number> {
-  throw new Error(STRINGS.applicationZoomDesktopRequired);
+  throw new Error(STRINGS.desktopWindowRequired);
 }
 
 export async function windowReady(_webviewMilliseconds: number): Promise<void> {

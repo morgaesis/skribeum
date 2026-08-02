@@ -638,6 +638,7 @@ async function selectDemoTagCompletionFixture(): Promise<void> {
       if (first === undefined || last === undefined) {
         throw new Error("browser demo tag completion fixture is unavailable");
       }
+      document.querySelector<HTMLElement>(".cm-content")?.focus();
       const range = document.createRange();
       range.setStart(first, 0);
       range.setEnd(last, last.childNodes.length);
@@ -678,7 +679,7 @@ async function placeCursorAtTagCompletionPosition(
       ) {
         throw new Error("tag completion insertion line is unavailable");
       }
-      insertionLine.click();
+      document.querySelector<HTMLElement>(".cm-content")?.focus();
       const range = document.createRange();
       range.selectNodeContents(insertionLine);
       range.collapse(true);
@@ -711,7 +712,7 @@ async function placeCursorAtLineEnd(text: string) {
     if (line === undefined) {
       throw new Error(`no editor line with text ${lineText}`);
     }
-    (line as HTMLElement).click();
+    document.querySelector<HTMLElement>(".cm-content")?.focus();
     const range = document.createRange();
     range.selectNodeContents(line);
     range.collapse(false);
@@ -729,7 +730,7 @@ async function placeCursorAtDocumentEnd() {
     if (line === undefined) {
       throw new Error("editor has no final line");
     }
-    line.click();
+    document.querySelector<HTMLElement>(".cm-content")?.focus();
     const range = document.createRange();
     range.selectNodeContents(line);
     range.collapse(false);
@@ -924,6 +925,7 @@ async function selectEditorText(text: string) {
     if (root === null) {
       throw new Error("editor content missing");
     }
+    (root as HTMLElement).focus();
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (
       let node = walker.nextNode();
@@ -954,6 +956,7 @@ async function placeCursorInsideEditorText(text: string) {
     if (root === null) {
       throw new Error("editor content missing");
     }
+    (root as HTMLElement).focus();
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (
       let node = walker.nextNode();
@@ -982,6 +985,7 @@ async function placeCursorAtEditorTextStart(text: string) {
   await browser.execute((needle: string) => {
     const root = document.querySelector(".cm-content");
     if (root === null) throw new Error("editor content missing");
+    (root as HTMLElement).focus();
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (
       let node = walker.nextNode();
@@ -1013,7 +1017,8 @@ async function clearEditorSelection() {
   }
   await browser.execute(() => {
     const root = document.querySelector(".cm-content");
-    const line = root?.querySelector(".cm-line");
+    if (root instanceof HTMLElement) root.focus();
+    const line = root?.querySelector(".cm-line:not(.cm-skr-frontmatter)");
     const selection = window.getSelection();
     if (line !== null && line !== undefined && selection !== null) {
       const range = document.createRange();
@@ -1027,6 +1032,17 @@ async function clearEditorSelection() {
   await browser.waitUntil(
     async () => !(await $(".cm-skr-selection-toolbar").isExisting()),
     { timeout: 5000 },
+  );
+  await browser.execute(() =>
+    document
+      .querySelector<HTMLElement>('[data-testid="reading-surface"]')
+      ?.focus({ preventScroll: true }),
+  );
+  await browser.execute(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
   );
 }
 
@@ -3130,6 +3146,15 @@ describe("skribeum shell", () => {
       async () => (await editorText()).includes("Navigation source"),
       { timeout: 15000 },
     );
+    const freshSourceState = await capturedHistoryState();
+    expect(freshSourceState?.anchor).toBe(0);
+    expect(freshSourceState?.head).toBe(0);
+    expect(freshSourceState?.propertiesExpanded).toBe(true);
+    expect(
+      await browser.execute(
+        () => document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop,
+      ),
+    ).toBe(0);
 
     const sourceProperties = $(".skr-properties-toggle");
     await sourceProperties.waitForExist({ timeout: 10000 });
@@ -3284,7 +3309,9 @@ describe("skribeum shell", () => {
       readingSurface: true,
       editorFocused: false,
     });
-    expect(await sourceProperties.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      await $(".skr-properties-toggle").getAttribute("aria-expanded"),
+    ).toBe("false");
 
     const forward = $('button[aria-label="Forward"]');
     await forward.waitForEnabled({ timeout: 15000 });

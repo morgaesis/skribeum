@@ -180,7 +180,10 @@ const pendingRecovered = new Map<string, ByteRangeReplace[]>();
 // The registration surface: every command, palette entry, view and
 // keybinding is registered here; this shell only maps view ids to
 // concrete components and provides command capabilities.
-const registry = createAppRegistry(DEFAULT_SETTINGS.task_statuses);
+const registry = createAppRegistry(
+  DEFAULT_SETTINGS.task_statuses,
+  hasDesktopRuntime(),
+);
 
 const macPlatform =
   typeof navigator !== "undefined" &&
@@ -699,12 +702,7 @@ const overlayItems = $derived.by((): PickerItem[] => {
   if (activeOverlay !== VIEW_COMMAND_SURFACE) return [];
   switch (parsedOverlayQuery.mode) {
     case "command":
-      return commandItems(
-        registry,
-        parsedOverlayQuery.query,
-        macPlatform,
-        commandContext(),
-      );
+      return commandItems(registry, parsedOverlayQuery.query, macPlatform);
     case "file":
       return appendBareDiscoveryItems(
         fileItems(
@@ -713,12 +711,7 @@ const overlayItems = $derived.by((): PickerItem[] => {
           selectedPath === null ? [] : [selectedPath],
           parsedOverlayQuery.query,
         ),
-        commandItems(
-          registry,
-          parsedOverlayQuery.query,
-          macPlatform,
-          commandContext(),
-        ),
+        commandItems(registry, parsedOverlayQuery.query, macPlatform),
         tagItems(tagCatalogEntries, parsedOverlayQuery.query),
         parsedOverlayQuery.query,
       );
@@ -1299,6 +1292,7 @@ async function openNoteAddress(
   source: "fresh" | "history" = "fresh",
 ): Promise<boolean> {
   const editorWasFocused = editor?.getView()?.hasFocus === true;
+  if (editorWasFocused || source === "history") focusReadingSurface();
   const opened = await openNote(address.path, restoration);
   if (!opened) {
     if (missingAddress !== null) {
@@ -1993,7 +1987,6 @@ onMount(() => {
         {/if}
       {/each}
       {#each actionCommands as command (command.id)}
-        {@const unavailableReason = registry.unavailableReason(command.id, commandContext())}
         <button
           type="button"
           data-command-id={command.id}
@@ -2003,9 +1996,7 @@ onMount(() => {
           aria-pressed={command.id === TOGGLE_SOURCE_MODE_COMMAND
             ? sourceMode
             : undefined}
-          disabled={unavailableReason !== null ||
-            (command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null)}
-          title={unavailableReason ?? undefined}
+          disabled={command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null}
           onclick={() => runActionCommand(command.id)}
         >
           <span class="skr-action-menu-label">

@@ -134,9 +134,6 @@ export class CommandRegistry {
     if (command === undefined) {
       return false;
     }
-    if (command.unavailableReason?.(context) != null) {
-      return false;
-    }
     const outcome = command.run(context);
     if (outcome === false) {
       return false;
@@ -147,10 +144,5 @@ export class CommandRegistry {
       });
     }
     return true;
-  }
-
-  /** Returns capability-named disabled copy for a command in this host. */
-  unavailableReason(id: string, context: CommandContext): string | null {
-    return this.commandsById.get(id)?.unavailableReason?.(context) ?? null;
   }
 }

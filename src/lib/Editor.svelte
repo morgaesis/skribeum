@@ -18,6 +18,7 @@ import { assertDecorationsInert } from "./editor/decorationGuard";
 import {
   dispatchWikilinkContext,
   focusedRenderedTableCell,
+  sourceRevealFocusMode,
   sourceRevealMode,
 } from "./editor/decorations/engine";
 import {
@@ -136,6 +137,7 @@ let saveChain: Promise<boolean> = Promise.resolve(true);
 const historyCompartment = new Compartment();
 const renderingCompartment = new Compartment();
 const settingsCompartment = new Compartment();
+const sourceRevealFocusCompartment = new Compartment();
 
 const editorAppearance = EditorView.theme({
   ".cm-content": {
@@ -294,14 +296,9 @@ function stateFor(
   restoration: NoteViewState | null = historyViewState,
 ): EditorState {
   const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
-  const initialFrontmatter = parseFrontmatter(content);
-  const initialCursor =
-    initialFrontmatter === null
-      ? 0
-      : Math.min(initialFrontmatter.to + 1, content.length);
   const anchor =
     restoration === null
-      ? initialCursor
+      ? 0
       : characterOffsetForByte(content, restoration.anchor);
   const head =
     restoration === null
@@ -319,6 +316,9 @@ function stateFor(
         : [wikilinkPointerNavigation(wikilinkNavigationOptions)]),
       editorAppearance,
       settingsCompartment.of(settingsExtensions(settings, sourceMode)),
+      sourceRevealFocusCompartment.of(
+        sourceRevealFocusMode(view?.hasFocus ?? false),
+      ),
       bulkTextInput(),
       ...visualViewportTooltips,
       historyCompartment.of(history()),
@@ -331,7 +331,20 @@ function stateFor(
       // accessibility checkers whose focusable-descendant selectors do not
       // recognize contenteditable.
       EditorView.domEventHandlers({
-        blur: () => {
+        focus: (_event, target) => {
+          target.dispatch({
+            effects: sourceRevealFocusCompartment.reconfigure(
+              sourceRevealFocusMode(true),
+            ),
+          });
+          return false;
+        },
+        blur: (_event, target) => {
+          target.dispatch({
+            effects: sourceRevealFocusCompartment.reconfigure(
+              sourceRevealFocusMode(false),
+            ),
+          });
           requestSave();
           return false;
         },
@@ -370,18 +383,8 @@ function replaceEditorState(content: string, locked: boolean): void {
       0,
       target.scrollDOM.scrollTop - target.documentPadding.top,
     );
-    let restoredViewportTop = line.top - restoration.scrollOffset;
-    if (scrollAnchor > 0) {
-      const previousLine = target.lineBlockAt(scrollAnchor - 1);
-      if (
-        previousLine.from !== line.from &&
-        previousLine.top >= restoredViewportTop
-      ) {
-        const devicePixelRatio = Math.max(1, window.devicePixelRatio);
-        restoredViewportTop = previousLine.top + 0.25 / devicePixelRatio;
-      }
-    }
-    target.scrollDOM.scrollTop += restoredViewportTop - viewportTop;
+    const actualOffset = line.top - viewportTop;
+    target.scrollDOM.scrollTop += actualOffset - restoration.scrollOffset;
   };
   requestAnimationFrame(() => {
     correctScrollOffset();
@@ -724,7 +727,11 @@ export function captureHistoryState(): NoteViewState | null {
     view.scrollDOM.scrollTop - view.documentPadding.top,
   );
   let scrollLine = view.lineBlockAtHeight(viewportTop);
-  if (scrollLine.top < viewportTop && scrollLine.to < view.state.doc.length) {
+  const lineOffset = scrollLine.top - viewportTop;
+  const halfPhysicalPixel = 0.5 / Math.max(1, window.devicePixelRatio);
+  const crossesRoundedPixelBoundary =
+    lineOffset < 0 || (lineOffset > 0 && lineOffset < halfPhysicalPixel);
+  if (crossesRoundedPixelBoundary && scrollLine.to < view.state.doc.length) {
     scrollLine = view.lineBlockAt(scrollLine.to + 1);
   }
   return {

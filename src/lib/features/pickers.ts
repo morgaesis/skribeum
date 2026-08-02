@@ -3,7 +3,7 @@
 
 import { fuzzyMatch, segmentByPositions, type TextSegment } from "../fuzzy";
 import { byteRangesToCharRanges, type SearchResult } from "../ipc/services";
-import type { CommandContext, CommandRegistry } from "../registry";
+import type { CommandRegistry } from "../registry";
 import { formatKeybinding } from "../registry";
 import { STRINGS } from "../strings";
 
@@ -29,8 +29,6 @@ export type PickerItem = {
   keybinding?: string;
   /** Prefix hint shown by discovery rows in bare file mode. */
   prefixHint?: ">" | "#";
-  /** Capability-named explanation for a command that cannot run here. */
-  disabledReason?: string;
 };
 
 export type PickerMode = "file" | "command" | "tag" | "text";
@@ -72,7 +70,6 @@ export function commandItems(
   registry: CommandRegistry,
   query: string,
   macPlatform: boolean,
-  context?: CommandContext,
 ): PickerItem[] {
   return registry
     .paletteCommands()
@@ -89,10 +86,6 @@ export function commandItems(
     .map(({ command }) => {
       const binding = command.keybindings?.[0];
       const titleMatch = fuzzyMatch(query, command.title);
-      const unavailableReason =
-        context === undefined
-          ? null
-          : registry.unavailableReason(command.id, context);
       return {
         id: `command:${command.id}`,
         value: command.id,
@@ -104,12 +97,6 @@ export function commandItems(
           command.title,
           titleMatch?.positions ?? [],
         ),
-        ...(unavailableReason === null
-          ? {}
-          : {
-              disabledReason: unavailableReason,
-              detailSegments: plainSegments(unavailableReason),
-            }),
         ...(binding === undefined
           ? {}
           : { keybinding: formatKeybinding(binding, macPlatform) }),

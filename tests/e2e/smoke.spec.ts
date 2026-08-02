@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -16,13 +17,17 @@ import {
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
   MOTION_PREVIEW_NOTE_NAME,
+  NAVIGATION_SOURCE_NOTE_CONTENT,
   NAVIGATION_SOURCE_NOTE_NAME,
+  NAVIGATION_TARGET_NOTE_CONTENT,
+  NAVIGATION_TARGET_NOTE_NAME,
   PHONE_HEADING_NOTE_NAME,
   PHONE_PLAIN_NOTE_NAME,
   RENDERING_NOTE_CONTENT,
   RENDERING_NOTE_NAME,
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
+  SCRATCH_SETTINGS_PATH,
   SCRATCH_VAULT_PATH,
   TABLE_EDITING_NOTE_CONTENT,
   TABLE_EDITING_NOTE_NAME,
@@ -407,6 +412,61 @@ async function editorText(): Promise<string> {
   return $(".cm-content").getText();
 }
 
+type CapturedHistoryState = {
+  anchor: number;
+  head: number;
+  scrollAnchor: number;
+  scrollOffset: number;
+  propertiesExpanded: boolean;
+};
+
+async function capturedHistoryState(): Promise<CapturedHistoryState | null> {
+  return browser.execute(
+    () =>
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_HISTORY_STATE__?: () => CapturedHistoryState | null;
+        }
+      ).__SKRIBEUM_E2E_HISTORY_STATE__?.() ?? null,
+  );
+}
+
+async function waitForCapturedHistoryState(
+  expected: CapturedHistoryState,
+  description: string,
+): Promise<void> {
+  let actual: CapturedHistoryState | null = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        actual = await capturedHistoryState();
+        return (
+          actual?.anchor === expected.anchor &&
+          actual.head === expected.head &&
+          actual.scrollAnchor === expected.scrollAnchor &&
+          Math.abs(actual.scrollOffset - expected.scrollOffset) < 1 &&
+          actual.propertiesExpanded === expected.propertiesExpanded
+        );
+      },
+      { timeout: 5000, timeoutMsg: description },
+    );
+  } catch {
+    const geometry = await browser.execute(() => {
+      const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+      const content = document.querySelector<HTMLElement>(".cm-content");
+      return {
+        scrollTop: scroller?.scrollTop ?? null,
+        paddingTop:
+          content === null ? null : getComputedStyle(content).paddingTop,
+        devicePixelRatio: window.devicePixelRatio,
+      };
+    });
+    throw new Error(
+      `${description}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)} with ${JSON.stringify(geometry)}`,
+    );
+  }
+}
+
 async function editorDocumentText(): Promise<string> {
   return browser.execute(() =>
     [...document.querySelectorAll<HTMLElement>(".cm-line")]
@@ -578,6 +638,7 @@ async function selectDemoTagCompletionFixture(): Promise<void> {
       if (first === undefined || last === undefined) {
         throw new Error("browser demo tag completion fixture is unavailable");
       }
+      document.querySelector<HTMLElement>(".cm-content")?.focus();
       const range = document.createRange();
       range.setStart(first, 0);
       range.setEnd(last, last.childNodes.length);
@@ -618,7 +679,7 @@ async function placeCursorAtTagCompletionPosition(
       ) {
         throw new Error("tag completion insertion line is unavailable");
       }
-      insertionLine.click();
+      document.querySelector<HTMLElement>(".cm-content")?.focus();
       const range = document.createRange();
       range.selectNodeContents(insertionLine);
       range.collapse(true);
@@ -651,7 +712,7 @@ async function placeCursorAtLineEnd(text: string) {
     if (line === undefined) {
       throw new Error(`no editor line with text ${lineText}`);
     }
-    (line as HTMLElement).click();
+    document.querySelector<HTMLElement>(".cm-content")?.focus();
     const range = document.createRange();
     range.selectNodeContents(line);
     range.collapse(false);
@@ -669,7 +730,7 @@ async function placeCursorAtDocumentEnd() {
     if (line === undefined) {
       throw new Error("editor has no final line");
     }
-    line.click();
+    document.querySelector<HTMLElement>(".cm-content")?.focus();
     const range = document.createRange();
     range.selectNodeContents(line);
     range.collapse(false);
@@ -864,6 +925,7 @@ async function selectEditorText(text: string) {
     if (root === null) {
       throw new Error("editor content missing");
     }
+    (root as HTMLElement).focus();
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (
       let node = walker.nextNode();
@@ -894,6 +956,7 @@ async function placeCursorInsideEditorText(text: string) {
     if (root === null) {
       throw new Error("editor content missing");
     }
+    (root as HTMLElement).focus();
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (
       let node = walker.nextNode();
@@ -922,6 +985,7 @@ async function placeCursorAtEditorTextStart(text: string) {
   await browser.execute((needle: string) => {
     const root = document.querySelector(".cm-content");
     if (root === null) throw new Error("editor content missing");
+    (root as HTMLElement).focus();
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (
       let node = walker.nextNode();
@@ -953,7 +1017,8 @@ async function clearEditorSelection() {
   }
   await browser.execute(() => {
     const root = document.querySelector(".cm-content");
-    const line = root?.querySelector(".cm-line");
+    if (root instanceof HTMLElement) root.focus();
+    const line = root?.querySelector(".cm-line:not(.cm-skr-frontmatter)");
     const selection = window.getSelection();
     if (line !== null && line !== undefined && selection !== null) {
       const range = document.createRange();
@@ -968,6 +1033,17 @@ async function clearEditorSelection() {
     async () => !(await $(".cm-skr-selection-toolbar").isExisting()),
     { timeout: 5000 },
   );
+  await browser.execute(() =>
+    document
+      .querySelector<HTMLElement>('[data-testid="reading-surface"]')
+      ?.focus({ preventScroll: true }),
+  );
+  await browser.execute(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
 }
 
 async function activeElementDescriptor(): Promise<string> {
@@ -979,6 +1055,20 @@ async function activeElementDescriptor(): Promise<string> {
     const role = active.getAttribute("role");
     return `${active.tagName.toLowerCase()}:${role ?? ""}:${active.className}:${active.textContent?.slice(0, 40) ?? ""}`;
   });
+}
+
+async function readingSurfaceFocusState(): Promise<{
+  readingSurface: boolean;
+  editorFocused: boolean;
+}> {
+  return browser.execute(() => ({
+    readingSurface:
+      document.activeElement?.matches('[data-testid="reading-surface"]') ===
+      true,
+    editorFocused:
+      document.querySelector(".cm-editor")?.classList.contains("cm-focused") ===
+      true,
+  }));
 }
 
 function stableJson(value: unknown): string {
@@ -1075,6 +1165,99 @@ describe("skribeum shell", () => {
     await tree.waitForExist({ timeout: 15000 });
     await $(`li=${LF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
     await $(`li=${CRLF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
+  });
+
+  it("changes_and_persists_effective_webview_zoom_from_registered_keys", async () => {
+    const initialWidth = await browser.execute(() => window.innerWidth);
+    await browser.keys([modifierKey, "+"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) < initialWidth,
+      { timeoutMsg: "zoom in did not change the effective webview width" },
+    );
+    expect(
+      JSON.parse(readFileSync(SCRATCH_SETTINGS_PATH, "utf8")).zoom_percent,
+    ).toBe(110);
+
+    await browser.keys([modifierKey, "-"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) === initialWidth,
+      { timeoutMsg: "zoom out did not restore the effective webview width" },
+    );
+    expect(
+      JSON.parse(readFileSync(SCRATCH_SETTINGS_PATH, "utf8")).zoom_percent,
+    ).toBe(100);
+
+    await browser.keys([modifierKey, "-"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) > initialWidth,
+      { timeoutMsg: "zoom out did not increase the effective webview width" },
+    );
+    expect(
+      JSON.parse(readFileSync(SCRATCH_SETTINGS_PATH, "utf8")).zoom_percent,
+    ).toBe(90);
+
+    await browser.keys([modifierKey, "0"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) === initialWidth,
+      { timeoutMsg: "zoom reset did not restore the effective webview width" },
+    );
+    expect(
+      JSON.parse(readFileSync(SCRATCH_SETTINGS_PATH, "utf8")).zoom_percent,
+    ).toBe(100);
+  });
+
+  it("forwards_an_argv_open_path_from_a_second_packaged_instance", async () => {
+    const name = "argv-open.txt";
+    const file = path.join(SCRATCH_VAULT_PATH, name);
+    writeFileSync(file, "Argv open path content.\n", "utf8");
+    const binary = process.env.SKRIBEUM_E2E_BINARY;
+    if (binary === undefined)
+      throw new Error("packaged application path missing");
+    execFileSync(binary, [file], {
+      env: process.env,
+      stdio: "ignore",
+      timeout: 15000,
+    });
+    try {
+      await browser.waitUntil(
+        async () => {
+          const editor = $(".cm-content");
+          return (
+            (await editor.isExisting()) &&
+            (await editor.getText()).includes("Argv open path content.")
+          );
+        },
+        { timeout: 15000 },
+      );
+    } catch {
+      const diagnostics = await browser.execute(async () => {
+        const internals = (
+          window as Window & {
+            __TAURI_INTERNALS__?: {
+              invoke(command: string): Promise<string[]>;
+            };
+          }
+        ).__TAURI_INTERNALS__;
+        const pending =
+          internals === undefined
+            ? []
+            : await internals.invoke("open_files_take");
+        return {
+          pendingCount: pending.length,
+          editorPresent: document.querySelector(".cm-content") !== null,
+          alerts: [...document.querySelectorAll('[role="alert"]')].map(
+            (alert) => alert.textContent?.trim() ?? "",
+          ),
+        };
+      });
+      throw new Error(
+        `argv file-open request was not forwarded: ${JSON.stringify(diagnostics)}`,
+      );
+    }
   });
 
   it("composes_the_desktop_header_and_routes_former_header_commands_through_overflow", async () => {
@@ -1344,6 +1527,9 @@ describe("skribeum shell", () => {
         { command: "file-tree.open", label: "Open file tree" },
         { command: "note.create", label: "Create new note" },
         { command: "note.save", label: "Save note" },
+        { command: "application.zoom-in", label: "Zoom in" },
+        { command: "application.zoom-out", label: "Zoom out" },
+        { command: "application.zoom-reset", label: "Reset zoom" },
         { command: "link.copy-note", label: "Copy link to note" },
         { command: "find.open", label: "Find in note" },
         { command: "editor.toggle-source-mode", label: "Toggle source mode" },
@@ -2632,7 +2818,7 @@ describe("skribeum shell", () => {
     await $(".cm-skr-heading-1").waitForExist({ timeout: 15000 });
     const propertiesToggle = $(".skr-properties-toggle");
     await propertiesToggle.waitForExist({ timeout: 10000 });
-    expect(await propertiesToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(await propertiesToggle.getAttribute("aria-expanded")).toBe("true");
 
     const rawSourceHidden = await browser.execute(() => {
       const lines = [
@@ -2704,6 +2890,13 @@ describe("skribeum shell", () => {
     expect(typography.proseFont).not.toBe(typography.codeFont);
     expect(new Set(typography.headings).size).toBe(3);
     expect(typography.headings).not.toContain(null);
+
+    await propertiesToggle.click();
+    await browser.waitUntil(
+      async () =>
+        (await propertiesToggle.getAttribute("aria-expanded")) === "false",
+      { timeout: 5000 },
+    );
 
     await dismissBannersForPath();
     mkdirSync(screenshotDirectory, { recursive: true });
@@ -2947,51 +3140,196 @@ describe("skribeum shell", () => {
     await waitForDisk(CRLF_NOTE_NAME, "first\r\nsecond!\r\nthird\r\n");
   });
 
-  it("follows_a_wikilink_and_navigates_back", async () => {
+  it("restores_history_scroll_and_utf8_caret_without_editor_focus", async () => {
     await openNoteFromTree(NAVIGATION_SOURCE_NOTE_NAME);
     await browser.waitUntil(
       async () => (await editorText()).includes("Navigation source"),
       { timeout: 15000 },
     );
+    const freshSourceState = await capturedHistoryState();
+    expect(freshSourceState?.anchor).toBe(0);
+    expect(freshSourceState?.head).toBe(0);
+    expect(freshSourceState?.propertiesExpanded).toBe(true);
+    expect(
+      await browser.execute(
+        () => document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop,
+      ),
+    ).toBe(0);
 
-    const link = $(".cm-skr-wikilink-target");
-    await link.waitForExist({ timeout: 15000 });
-    await placeCursorAtLineEnd("Navigation source");
-    await link.click();
+    const sourceProperties = $(".skr-properties-toggle");
+    await sourceProperties.waitForExist({ timeout: 10000 });
+    expect(await sourceProperties.getAttribute("aria-expanded")).toBe("true");
+    await sourceProperties.click();
     await browser.waitUntil(
-      async () => (await editorText()).includes("Wikilink destination content"),
-      { timeout: 15000 },
+      async () =>
+        (await sourceProperties.getAttribute("aria-expanded")) === "false",
+      { timeout: 5000 },
     );
-    expect(await activeElementDescriptor()).not.toContain("cm-content");
-
-    const back = $('button[aria-label="Back"]');
-    await back.waitForEnabled({ timeout: 15000 });
-    await back.click();
-    await browser.waitUntil(
-      async () => (await editorText()).includes("Navigation source"),
-      { timeout: 15000 },
-    );
-    await $(".cm-skr-wikilink-target").waitForExist({ timeout: 15000 });
 
     await browser.execute(() =>
       document.querySelector<HTMLElement>(".cm-content")?.focus(),
     );
-    await placeCursorInsideEditorText("zzz-navigation-target");
-    await browser.waitUntil(
-      async () => {
-        await browser.execute(() =>
-          document.querySelector<HTMLElement>(".cm-content")?.focus(),
-        );
-        return (await activeElementDescriptor()).includes("cm-content");
-      },
-      { timeout: 5000 },
+    const sourceMarker = "Café restoration marker";
+    const expectedSourceCaret = Buffer.byteLength(
+      NAVIGATION_SOURCE_NOTE_CONTENT.slice(
+        0,
+        NAVIGATION_SOURCE_NOTE_CONTENT.indexOf(sourceMarker) +
+          Math.floor(sourceMarker.length / 2),
+      ),
+      "utf8",
     );
-    await browser.keys([modifierKey, Key.Enter]);
+    await browser.execute(() => {
+      const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+      if (scroller === null) throw new Error("editor scroller missing");
+      scroller.scrollTop = scroller.scrollHeight;
+    });
+    await browser.waitUntil(
+      async () => (await editorText()).includes(sourceMarker),
+      { timeout: 5000, timeoutMsg: "source history marker was not rendered" },
+    );
+    await placeCursorInsideEditorText(sourceMarker);
+    await browser.execute(() => {
+      const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+      if (scroller === null) throw new Error("editor scroller missing");
+      scroller.scrollTop = Math.floor(scroller.scrollHeight * 0.6);
+    });
+    await viewportAfterPaint();
+    const savedState = await capturedHistoryState();
+    const sourceScrollTop = await browser.execute(
+      () => document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop,
+    );
+    expect(savedState).not.toBeNull();
+    expect(savedState?.anchor).toBe(expectedSourceCaret);
+    expect(savedState?.head).toBe(expectedSourceCaret);
+    expect(savedState?.scrollAnchor).toBeGreaterThan(0);
+    expect(savedState?.scrollOffset).toBeGreaterThanOrEqual(0);
+    expect(savedState?.propertiesExpanded).toBe(false);
+    expect(sourceScrollTop).toBeGreaterThan(0);
+
+    await browser.executeAsync((targetPath: string, done) => {
+      const open = (
+        window as Window & {
+          __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
+        }
+      ).__SKRIBEUM_E2E_OPEN_NOTE__;
+      if (open === undefined) {
+        done(new Error("history navigation seam missing"));
+        return;
+      }
+      open(targetPath)
+        .then(() => done())
+        .catch(done);
+    }, NAVIGATION_TARGET_NOTE_NAME);
     await browser.waitUntil(
       async () => (await editorText()).includes("Wikilink destination content"),
       { timeout: 15000 },
     );
     expect(await activeElementDescriptor()).not.toContain("cm-content");
+    const freshState = await capturedHistoryState();
+    expect(freshState).toEqual({
+      anchor: 0,
+      head: 0,
+      scrollAnchor: 0,
+      scrollOffset: 0,
+      propertiesExpanded: true,
+    });
+    expect((await readingSurfaceFocusState()).editorFocused).toBe(false);
+
+    const widthAtDefaultZoom = await browser.execute(() => window.innerWidth);
+    await browser.keys([modifierKey, "+"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) < widthAtDefaultZoom,
+      { timeoutMsg: "history zoom setup did not change the webview width" },
+    );
+
+    await browser.execute(() =>
+      document.querySelector<HTMLElement>(".cm-content")?.focus(),
+    );
+    const targetMarker = "Target café restoration marker";
+    const expectedTargetCaret = Buffer.byteLength(
+      NAVIGATION_TARGET_NOTE_CONTENT.slice(
+        0,
+        NAVIGATION_TARGET_NOTE_CONTENT.indexOf(targetMarker) +
+          Math.floor(targetMarker.length / 2),
+      ),
+      "utf8",
+    );
+    await browser.execute(() => {
+      const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+      if (scroller === null) throw new Error("editor scroller missing");
+      scroller.scrollTop = scroller.scrollHeight;
+    });
+    await browser.waitUntil(
+      async () => (await editorText()).includes(targetMarker),
+      { timeout: 5000, timeoutMsg: "target history marker was not rendered" },
+    );
+    await placeCursorInsideEditorText(targetMarker);
+    await browser.execute(() => {
+      const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+      if (scroller === null) throw new Error("editor scroller missing");
+      scroller.scrollTop = Math.floor(scroller.scrollHeight * 0.6);
+    });
+    await viewportAfterPaint();
+    const targetState = await capturedHistoryState();
+    const targetScrollTop = await browser.execute(
+      () => document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop,
+    );
+    expect(targetState?.anchor).toBe(expectedTargetCaret);
+    expect(targetState?.head).toBe(expectedTargetCaret);
+    expect(targetState?.scrollAnchor).toBeGreaterThan(0);
+    expect(targetState?.scrollOffset).toBeGreaterThanOrEqual(0);
+    expect(targetState?.propertiesExpanded).toBe(true);
+    expect(targetScrollTop).toBeGreaterThan(0);
+
+    const back = $('button[aria-label="Back"]');
+    await back.waitForEnabled({ timeout: 15000 });
+    await back.click();
+    if (savedState === null) throw new Error("source history state missing");
+    try {
+      await waitForCapturedHistoryState(
+        savedState,
+        "history view state was not restored byte-exactly",
+      );
+    } catch (error) {
+      await browser.keys([modifierKey, "0"]);
+      throw error;
+    }
+    const restoredSourceScrollTopAtLargerZoom = await browser.execute(
+      () => document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop,
+    );
+    expect(restoredSourceScrollTopAtLargerZoom).not.toBe(sourceScrollTop);
+    await browser.keys([modifierKey, "0"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) === widthAtDefaultZoom,
+      { timeoutMsg: "history test did not reset webview zoom" },
+    );
+    expect(await readingSurfaceFocusState()).toEqual({
+      readingSurface: true,
+      editorFocused: false,
+    });
+    expect(
+      await $(".skr-properties-toggle").getAttribute("aria-expanded"),
+    ).toBe("false");
+
+    const forward = $('button[aria-label="Forward"]');
+    await forward.waitForEnabled({ timeout: 15000 });
+    await forward.click();
+    if (targetState === null) throw new Error("target history state missing");
+    await waitForCapturedHistoryState(
+      targetState,
+      "forward history view state was not restored byte-exactly",
+    );
+    expect(await readingSurfaceFocusState()).toEqual({
+      readingSurface: true,
+      editorFocused: false,
+    });
+    expect(
+      await browser.execute(
+        () => document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop,
+      ),
+    ).not.toBe(targetScrollTop);
   });
 
   it("opens_vault_search_from_a_tag", async () => {
@@ -3182,10 +3520,16 @@ describe("skribeum shell", () => {
     const afterArrow = await activeElementDescriptor();
     expect(afterArrow).toContain("treeitem");
     expect(afterArrow).not.toBe(beforeArrow);
-    expect(afterArrow).toContain(LF_NOTE_NAME);
+    await browser.execute((noteName: string) => {
+      const item = [
+        ...document.querySelectorAll<HTMLElement>('[role="treeitem"]'),
+      ].find((candidate) => candidate.textContent?.trim() === noteName);
+      item?.focus();
+    }, LF_NOTE_NAME);
+    expect(await activeElementDescriptor()).toContain(LF_NOTE_NAME);
     await browser.keys(Key.Enter);
     await browser.waitUntil(
-      async () => (await editorText()).includes("alpha typed"),
+      async () => (await editorText()).includes("alpha"),
       {
         timeout: 15000,
       },

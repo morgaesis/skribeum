@@ -72,6 +72,26 @@ impl AppError {
         }
     }
 
+    /// An operating-system file-open path that is missing or unsupported.
+    #[must_use]
+    pub fn open_file_invalid() -> Self {
+        Self {
+            code: "open-file/invalid",
+            message: "the file-open path is missing or unsupported".to_owned(),
+            path: None,
+        }
+    }
+
+    /// A native window operation that failed.
+    #[must_use]
+    pub fn window_failed(message: impl Into<String>) -> Self {
+        Self {
+            code: "window/operation",
+            message: message.into(),
+            path: None,
+        }
+    }
+
     /// Attaches the vault-relative path the failure concerns.
     #[must_use]
     pub fn with_path(mut self, path: &str) -> Self {
@@ -217,6 +237,8 @@ mod tests {
             (SettingsError::Fs(FsError::NoSpace).into(), "fs/no-space"),
             (AppError::settings_unavailable(), "settings/unavailable"),
             (AppError::update_failed("offline"), "update/check"),
+            (AppError::open_file_invalid(), "open-file/invalid"),
+            (AppError::window_failed("window"), "window/operation"),
         ];
         for (error, expected) in cases {
             assert_eq!(error.code, expected);

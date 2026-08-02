@@ -25,7 +25,8 @@ pub use search::{
 };
 pub use settings::{
     SETTINGS_FILE_NAME, SETTINGS_SCHEMA_VERSION, Settings, SettingsError, SettingsStore,
-    TaskStatus, TaskStatusCategory, default_task_statuses,
+    TaskStatus, TaskStatusCategory, ZOOM_PERCENT_RANGE, ZOOM_PERCENT_STEP, default_task_statuses,
+    validate_zoom_percent,
 };
 pub use sim::{
     NetworkProfile, Scheduler, SchedulerOp, SimClock, SimFs, SimKill, install_quiet_kill_hook,

@@ -106,7 +106,7 @@ export function commandItems(
 
 function displayName(path: string): string {
   const name = path.slice(path.lastIndexOf("/") + 1);
-  return name.toLocaleLowerCase().endsWith(".md") ? name.slice(0, -3) : name;
+  return name.replace(/\.(?:md|markdown|txt)$/iu, "");
 }
 
 /** File-mode results grouped as open notes, recent notes, then the vault. */

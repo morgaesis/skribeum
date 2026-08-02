@@ -5,6 +5,7 @@
 
 import {
   commands,
+  type OpenFileTarget,
   type SearchHit,
   type SettingsDoc,
   type TagFrequency,
@@ -62,6 +63,31 @@ export async function settingsPath(): Promise<string> {
 /** Persists the settings document. */
 export async function settingsWrite(doc: SettingsDocument): Promise<void> {
   unwrap(await commands.settingsWrite(doc));
+}
+
+/** Persists and applies one application webview zoom percentage. */
+export async function zoomSet(zoomPercent: number): Promise<number> {
+  return unwrap(await commands.zoomSet(zoomPercent));
+}
+
+/** Starts the platform-specific first-paint warm-up for the hidden window. */
+export async function windowWarmup(): Promise<void> {
+  unwrap(await commands.windowWarmup());
+}
+
+/** Reveals the desktop window after its first committed frontend render. */
+export async function windowReady(webviewMilliseconds: number): Promise<void> {
+  unwrap(await commands.windowReady(webviewMilliseconds));
+}
+
+/** Drains native file-open paths queued by argv or operating-system events. */
+export async function openFilesTake(): Promise<string[]> {
+  return unwrap(await commands.openFilesTake());
+}
+
+/** Resolves a native file path to the vault root and relative note path. */
+export async function fileOpenResolve(path: string): Promise<OpenFileTarget> {
+  return unwrap(await commands.fileOpenResolve(path));
 }
 
 /** Checks the selected signed update manifest. */

@@ -140,6 +140,10 @@ const sourceRevealEnabled = Facet.define<boolean, boolean>({
   combine: (values) => values.at(-1) ?? true,
 });
 
+const sourceRevealFocusEnabled = Facet.define<boolean, boolean>({
+  combine: (values) => values.at(-1) ?? true,
+});
+
 const setTableCellReveal = StateEffect.define<boolean>();
 const tableCellRevealField = StateField.define<boolean>({
   create: () => false,
@@ -314,6 +318,11 @@ export const readOnlyDecorationMode = sourceRevealEnabled.of(false);
 /** Controls whether cursor-sensitive Markdown source markers reveal. */
 export function sourceRevealMode(enabled: boolean): Extension {
   return sourceRevealEnabled.of(enabled);
+}
+
+/** Controls whether the current selection represents focused editing intent. */
+export function sourceRevealFocusMode(enabled: boolean): Extension {
+  return sourceRevealFocusEnabled.of(enabled);
 }
 
 /** Ordered task statuses used by parsing, rendering and task commands. */
@@ -3627,6 +3636,7 @@ function revealSelection(state: EditorState): readonly {
 }[] {
   const main = state.selection.main;
   return state.facet(sourceRevealEnabled) &&
+    state.facet(sourceRevealFocusEnabled) &&
     state.field(tableCellRevealField, false) !== false &&
     main.empty &&
     state.selection.ranges.every((range) => range.empty)

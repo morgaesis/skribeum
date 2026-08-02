@@ -6,6 +6,7 @@ let {
   frontmatter,
   onEditValue,
   noteIdentity = null,
+  expanded = $bindable(false),
 }: {
   frontmatter: Frontmatter;
   /**
@@ -15,18 +16,11 @@ let {
    */
   onEditValue: (from: number, to: number, insert: string) => void;
   noteIdentity?: string | null;
+  /** Controlled expansion state owned by the note view-state record. */
+  expanded?: boolean;
 } = $props();
 
-let expanded = $state(false);
-let expandedIdentity = $state<string | null>(null);
 const panelContentId = "skr-properties-content";
-
-$effect(() => {
-  if (noteIdentity !== expandedIdentity) {
-    expandedIdentity = noteIdentity;
-    expanded = false;
-  }
-});
 
 function commitScalar(entry: FrontmatterEntry, value: string) {
   if (value !== entry.raw) {

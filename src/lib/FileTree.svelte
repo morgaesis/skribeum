@@ -249,6 +249,9 @@ function onKeydown(event: KeyboardEvent) {
       class="absolute right-0 left-0 flex cursor-pointer items-center overflow-hidden rounded px-2 whitespace-nowrap"
       class:opacity-60={row.hidden || (row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas"))}
       style={`top: ${TREE_PADDING + index * rowHeight}px; height: ${rowHeight}px; padding-left: ${0.5 + row.depth}rem`}
+      onfocus={() => {
+        focusIndex = index;
+      }}
       onclick={() => {
         void focusRow(index);
         activate(row);

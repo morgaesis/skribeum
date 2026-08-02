@@ -5,6 +5,7 @@ import {
   Annotation,
   type ChangeSet,
   Compartment,
+  EditorSelection,
   EditorState,
   type Extension,
   Transaction,
@@ -16,6 +17,8 @@ import type { ByteChange } from "./editor/byteChangeSet";
 import { assertDecorationsInert } from "./editor/decorationGuard";
 import {
   dispatchWikilinkContext,
+  focusedRenderedTableCell,
+  sourceRevealFocusMode,
   sourceRevealMode,
 } from "./editor/decorations/engine";
 import {
@@ -35,7 +38,10 @@ import {
   noteSourceExtensions,
 } from "./editor/syntaxPolicy";
 import { findExtension } from "./features/findPanel";
-import type { FollowWikilinkOptions } from "./features/navigation";
+import type {
+  FollowWikilinkOptions,
+  NoteViewState,
+} from "./features/navigation";
 import { selectionToolbar } from "./features/selectionToolbar";
 import {
   DEFAULT_SETTINGS,
@@ -43,11 +49,13 @@ import {
 } from "./features/settingsStore";
 import { slashMenu } from "./features/slashMenu";
 import { tableEditingExtension } from "./features/tableEditing";
+import { tableCellRanges } from "./features/tableOperations";
 import { type TagAffordanceOptions, tagAffordances } from "./features/tags";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
 import PropertiesPanel from "./PropertiesPanel.svelte";
 import { type CommandContext, CommandRegistry, editorKeymap } from "./registry";
+import { NARROW_BREAKPOINT_REM } from "./responsive";
 import { STRINGS } from "./strings";
 import {
   DEFAULT_TASK_STATUSES,
@@ -71,6 +79,7 @@ let {
   commandContext = null,
   settings = DEFAULT_SETTINGS,
   sourceMode = false,
+  historyViewState = null,
   onConflict,
   onWriteError,
   onDocChanged,
@@ -98,6 +107,8 @@ let {
   settings?: SettingsDocument;
   /** Transient whole-note raw Markdown presentation. */
   sourceMode?: boolean;
+  /** Reading state restored for a history traversal, in UTF-8 byte offsets. */
+  historyViewState?: NoteViewState | null;
   onConflict?: () => void;
   onWriteError?: (message: string) => void;
   /** Notified after any document-changing transaction (outline refresh). */
@@ -119,12 +130,14 @@ let session: NoteSession | null = null;
 let removed = false;
 let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let titleVisibilityFrame: number | undefined;
+let restorationGeneration = 0;
 /** Serializes saves so change sets always apply to the base they expect. */
 let saveChain: Promise<boolean> = Promise.resolve(true);
 
 const historyCompartment = new Compartment();
 const renderingCompartment = new Compartment();
 const settingsCompartment = new Compartment();
+const sourceRevealFocusCompartment = new Compartment();
 
 const editorAppearance = EditorView.theme({
   ".cm-content": {
@@ -150,6 +163,15 @@ const editorAppearance = EditorView.theme({
  */
 const FRONTMATTER_SCAN_LIMIT = 16384;
 let frontmatter = $state<Frontmatter | null>(null);
+let propertiesExpanded = $state(defaultPropertiesExpanded());
+
+function defaultPropertiesExpanded(): boolean {
+  return (
+    typeof window === "undefined" ||
+    typeof window.matchMedia !== "function" ||
+    !window.matchMedia(`(max-width: ${NARROW_BREAKPOINT_REM}rem)`).matches
+  );
+}
 
 function renderingExtensions(
   content: string | Parameters<typeof noteRenderingExtensions>[0],
@@ -248,16 +270,43 @@ function registryExtensions(): Extension[] {
   ];
 }
 
-function stateFor(content: string, locked: boolean): EditorState {
+function characterOffsetForByte(content: string, byteOffset: number): number {
+  const target = Math.max(0, Math.floor(byteOffset));
+  let bytes = 0;
+  let characters = 0;
+  for (const character of content) {
+    const nextBytes = bytes + new TextEncoder().encode(character).length;
+    if (nextBytes > target) break;
+    bytes = nextBytes;
+    characters += character.length;
+  }
+  return characters;
+}
+
+function byteOffsetForCharacter(
+  content: string,
+  characterOffset: number,
+): number {
+  return new TextEncoder().encode(content.slice(0, characterOffset)).length;
+}
+
+function stateFor(
+  content: string,
+  locked: boolean,
+  restoration: NoteViewState | null = historyViewState,
+): EditorState {
   const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
-  const initialFrontmatter = parseFrontmatter(content);
-  const initialCursor =
-    initialFrontmatter === null
+  const anchor =
+    restoration === null
       ? 0
-      : Math.min(initialFrontmatter.to + 1, content.length);
+      : characterOffsetForByte(content, restoration.anchor);
+  const head =
+    restoration === null
+      ? anchor
+      : characterOffsetForByte(content, restoration.head);
   return EditorState.create({
     doc: content,
-    selection: { anchor: initialCursor },
+    selection: { anchor, head },
     extensions: [
       renderingCompartment.of(
         renderingExtensions(content, normalizedTaskStatuses),
@@ -267,6 +316,9 @@ function stateFor(content: string, locked: boolean): EditorState {
         : [wikilinkPointerNavigation(wikilinkNavigationOptions)]),
       editorAppearance,
       settingsCompartment.of(settingsExtensions(settings, sourceMode)),
+      sourceRevealFocusCompartment.of(
+        sourceRevealFocusMode(view?.hasFocus ?? false),
+      ),
       bulkTextInput(),
       ...visualViewportTooltips,
       historyCompartment.of(history()),
@@ -279,12 +331,69 @@ function stateFor(content: string, locked: boolean): EditorState {
       // accessibility checkers whose focusable-descendant selectors do not
       // recognize contenteditable.
       EditorView.domEventHandlers({
-        blur: () => {
+        focus: (_event, target) => {
+          target.dispatch({
+            effects: sourceRevealFocusCompartment.reconfigure(
+              sourceRevealFocusMode(true),
+            ),
+          });
+          return false;
+        },
+        blur: (_event, target) => {
+          target.dispatch({
+            effects: sourceRevealFocusCompartment.reconfigure(
+              sourceRevealFocusMode(false),
+            ),
+          });
           requestSave();
           return false;
         },
       }),
     ],
+  });
+}
+
+function replaceEditorState(content: string, locked: boolean): void {
+  const target = view;
+  if (target === undefined) return;
+  const generation = ++restorationGeneration;
+  const restoration = historyViewState;
+  if (restoration !== null) target.dom.style.visibility = "hidden";
+  target.setState(stateFor(content, locked));
+  target.scrollDOM.style.scrollBehavior = "auto";
+  if (restoration === null) {
+    target.dom.style.removeProperty("visibility");
+    target.scrollDOM.scrollTop = 0;
+    return;
+  }
+  const scrollAnchor = characterOffsetForByte(
+    content,
+    restoration.scrollAnchor,
+  );
+  target.dispatch({
+    effects: EditorView.scrollIntoView(scrollAnchor, {
+      y: "start",
+      yMargin: Math.max(0, restoration.scrollOffset),
+    }),
+  });
+  const correctScrollOffset = () => {
+    if (view !== target || restorationGeneration !== generation) return;
+    const line = target.lineBlockAt(scrollAnchor);
+    const viewportTop = Math.max(
+      0,
+      target.scrollDOM.scrollTop - target.documentPadding.top,
+    );
+    const actualOffset = line.top - viewportTop;
+    target.scrollDOM.scrollTop += actualOffset - restoration.scrollOffset;
+  };
+  requestAnimationFrame(() => {
+    correctScrollOffset();
+    requestAnimationFrame(() => {
+      correctScrollOffset();
+      if (view === target && restorationGeneration === generation) {
+        target.dom.style.removeProperty("visibility");
+      }
+    });
   });
 }
 
@@ -592,6 +701,48 @@ export function getView(): EditorView | undefined {
   return view;
 }
 
+/** Captures byte-exact selection offsets and the current reading position. */
+export function captureHistoryState(): NoteViewState | null {
+  if (view === undefined) return null;
+  const content = view.state.doc.toString();
+  let selection = view.state.selection.main;
+  const tableCell = focusedRenderedTableCell(view);
+  if (tableCell !== null) {
+    const table = view.state.sliceDoc(tableCell.tableFrom, tableCell.tableTo);
+    const cell = tableCellRanges(table).find(
+      (candidate) =>
+        candidate.row === tableCell.row &&
+        candidate.column === tableCell.column,
+    );
+    if (cell !== undefined) {
+      const cellEnd = tableCell.tableFrom + cell.to;
+      selection = EditorSelection.range(
+        Math.min(cellEnd, tableCell.tableFrom + cell.from + tableCell.anchor),
+        Math.min(cellEnd, tableCell.tableFrom + cell.from + tableCell.head),
+      );
+    }
+  }
+  const viewportTop = Math.max(
+    0,
+    view.scrollDOM.scrollTop - view.documentPadding.top,
+  );
+  let scrollLine = view.lineBlockAtHeight(viewportTop);
+  const lineOffset = scrollLine.top - viewportTop;
+  const halfPhysicalPixel = 0.5 / Math.max(1, window.devicePixelRatio);
+  const crossesRoundedPixelBoundary =
+    lineOffset < 0 || (lineOffset > 0 && lineOffset < halfPhysicalPixel);
+  if (crossesRoundedPixelBoundary && scrollLine.to < view.state.doc.length) {
+    scrollLine = view.lineBlockAt(scrollLine.to + 1);
+  }
+  return {
+    anchor: byteOffsetForCharacter(content, selection.anchor),
+    head: byteOffsetForCharacter(content, selection.head),
+    scrollAnchor: byteOffsetForCharacter(content, scrollLine.from),
+    scrollOffset: scrollLine.top - viewportTop,
+    propertiesExpanded,
+  };
+}
+
 async function rereadAndReconcile(): Promise<void> {
   if (vault === null || path === null) {
     return;
@@ -608,9 +759,11 @@ async function rereadAndReconcile(): Promise<void> {
 function initializeForNote(current: LoadedNote | null) {
   clearTimeout(idleSaveTimer);
   removed = false;
+  propertiesExpanded =
+    historyViewState?.propertiesExpanded ?? defaultPropertiesExpanded();
   if (current === null) {
     session = null;
-    view?.setState(stateFor(doc, false));
+    replaceEditorState(doc, false);
     applyLinkContext();
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
@@ -619,7 +772,7 @@ function initializeForNote(current: LoadedNote | null) {
   }
   if (current.readOnly) {
     session = null;
-    view?.setState(stateFor(current.text, true));
+    replaceEditorState(current.text, true);
     applyLinkContext();
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
@@ -644,7 +797,7 @@ function initializeForNote(current: LoadedNote | null) {
       onWriteError?.(String(error));
     }
   }
-  view?.setState(stateFor(text, false));
+  replaceEditorState(text, false);
   applyLinkContext();
   refreshFrontmatter();
   scheduleTitleVisibilityRefresh();
@@ -733,6 +886,7 @@ $effect(() => {
       {frontmatter}
       onEditValue={editFrontmatterValue}
       noteIdentity={path}
+      bind:expanded={propertiesExpanded}
     />
   {/if}
   <div

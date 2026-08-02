@@ -139,6 +139,16 @@ leading `#`. Desktop navigation stores the same `{ path, fragment }` address
 objects in an in-app stack, so link resolution, back and forward behavior, and
 fragment selection do not depend on the host surface.
 
+Each history entry also stores the main selection's anchor and head as UTF-8
+byte offsets, the first fully visible line as a UTF-8 byte offset, its pixel
+offset from the viewport, and the properties-panel expansion state. Each pane
+retains at most 100 in-memory entries. Traversal constructs the editor state
+with that selection before paint, restores the content-anchored position
+without animation, resolves the properties panel to its recorded state, and
+keeps focus on the reading surface. A fresh note open stores no restoration,
+starts at the top with the form-factor panel default, and leaves its parked
+caret unfocused.
+
 Paths are NFC-normalized, slash-separated, vault-root-relative values. A path
 is the durable address because vault handles are session-local and notes do
 not carry stable identifiers. Renaming a note therefore changes its address.
@@ -206,7 +216,8 @@ records each value's exact character range, typed inputs (dates, numbers,
 booleans, lists, honoring `.obsidian/types.json`) replace precisely that
 range through a normal editor transaction, and untouched keys are
 byte-preserved through the ordinary change-set save path. The panel starts
-collapsed for each note and identifies the note by its vault path. A shared
+expanded on wide layouts and collapsed on narrow layouts, and identifies the
+note by its vault path. A shared
 title resolver derives reading-surface labels from a non-empty frontmatter
 `title`, a first-line H1, or the trimmed file name, in that order.
 
@@ -291,8 +302,9 @@ heading and block subpaths split off.
 
 ## Files are the source of truth
 
-Notes are plain `.md` files. Opening a vault performs no writes, asserted
-mechanically by the simulator's write counter. Saving rewrites only the
+Editable notes are plain `.md`, `.markdown`, and `.txt` files. Opening a vault
+performs no writes, asserted mechanically by the simulator's write counter.
+Saving rewrites only the
 bytes the edit touched: files are read as bytes, a byte-to-buffer mapping
 layer in `skribeum-core` records each line's original terminator on open
 and re-emits it for untouched lines when buffer edits convert to byte
@@ -382,7 +394,10 @@ slicing text, never by injecting HTML.
 
 `settings.json` lives in the OS app-config directory, never in a vault.
 The document carries a `schema_version` and typed known keys (theme,
-editor font size, search result limit and the ordered `task_statuses` graph).
+editor font size, application `zoom_percent`, search result limit and the
+ordered `task_statuses` graph). Application zoom is an integer from 50 to 200
+in steps of 10. Rust persists it and applies the corresponding 0.5 to 2.0
+webview factor to every application window.
 Each task status has a track and an optional plain-text payload kind. Writes are
 whole-document,
 validated, durable through the crash-safe sequence, and preserve every

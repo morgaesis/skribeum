@@ -14,10 +14,22 @@ export type NoteTitleSource = {
   source: string;
 };
 
+const NOTE_EXTENSION = /\.(?:md|markdown|txt)$/iu;
+
+/** True when a path names an editable plain-text note. */
+export function isNotePath(path: string): boolean {
+  return NOTE_EXTENSION.test(path);
+}
+
+/** Returns a path without its editable-note extension. */
+export function withoutNoteExtension(path: string): string {
+  return path.replace(NOTE_EXTENSION, "");
+}
+
 /** Returns the final path segment without its Markdown extension. */
 export function noteFileName(path: string): string {
   const name = path.split("/").at(-1) ?? path;
-  return name.replace(/\.md$/iu, "");
+  return withoutNoteExtension(name);
 }
 
 function scalarTitle(raw: string): string {

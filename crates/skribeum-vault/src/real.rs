@@ -69,6 +69,26 @@ impl FileSystem for RealFs {
         }
     }
 
+    fn create_private_file(&self, path: &Path, bytes: &[u8]) -> Result<bool, FsError> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = match options.open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+            Err(error) => return Err(map_io(&error)),
+        };
+        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            let _ = std::fs::remove_file(path);
+            return Err(map_io(&error));
+        }
+        Ok(true)
+    }
+
     fn append_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
         let mut file = std::fs::OpenOptions::new()
             .create(true)

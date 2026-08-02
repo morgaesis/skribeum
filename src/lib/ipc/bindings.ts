@@ -79,6 +79,16 @@ export const commands = {
 	 *  written by a newer build survive a round trip through this one.
 	 */
 	settingsWrite: (doc: SettingsDoc) => typedError<null, AppError>(__TAURI_INVOKE("settings_write", { doc })),
+	/**  Persists and applies one webview zoom percentage to every window. */
+	zoomSet: (zoomPercent: number) => typedError<number, AppError>(__TAURI_INVOKE("zoom_set", { zoomPercent })),
+	/**  Gives Linux `WebKit` an offscreen frame in which to commit its first paint. */
+	windowWarmup: () => typedError<null, AppError>(__TAURI_INVOKE("window_warmup")),
+	/**  Applies persisted zoom before revealing the first committed frontend render. */
+	windowReady: (webviewMs: number | null) => typedError<null, AppError>(__TAURI_INVOKE("window_ready", { webviewMs })),
+	/**  Resolves one operating-system open-with path against known vault roots. */
+	fileOpenResolve: (path: string) => typedError<OpenFileTarget, AppError>(__TAURI_INVOKE("file_open_resolve", { path })),
+	/**  Drains operating-system open-with paths queued by argv or open-file events. */
+	openFilesTake: () => typedError<string[], AppError>(__TAURI_INVOKE("open_files_take")),
 	/**
 	 *  Reads a recognized Obsidian configuration file from the vault's
 	 *  `.obsidian` directory, the single sanctioned read path into it. Returns
@@ -94,7 +104,9 @@ export const events = {
 	externalNoteRemove: makeEvent<ExternalNoteRemove>("external-note-remove"),
 	externalNoteUpdate: makeEvent<ExternalNoteUpdate>("external-note-update"),
 	noteRecovered: makeEvent<NoteRecovered>("note-recovered"),
+	openFilesAvailable: makeEvent<OpenFilesAvailable>("open-files-available"),
 	reconciliationBanner: makeEvent<ReconciliationBanner>("reconciliation-banner"),
+	settingsZoomChanged: makeEvent<SettingsZoomChanged>("settings-zoom-changed"),
 	vaultChanged: makeEvent<VaultChanged>("vault-changed"),
 	vaultCollisionsDetected: makeEvent<VaultCollisionsDetected>("vault-collisions-detected"),
 };
@@ -221,6 +233,17 @@ export type NoteRecovered = {
 	projection_hash: string,
 };
 
+/**  Vault and note selected for one operating-system open-with path. */
+export type OpenFileTarget = {
+	/**  Absolute vault root to open or retain. */
+	vault_path: string,
+	/**  Vault-relative note path to select. */
+	note_path: string,
+};
+
+/**  A file-open request is waiting in the Rust-owned queue. */
+export type OpenFilesAvailable = null;
+
 /**
  *  A reconciliation banner: ambiguity the editor must surface; nothing was
  *  applied automatically.
@@ -278,6 +301,8 @@ export type SettingsDoc = {
 	editor_line_height: number,
 	/**  Editor line width in characters. */
 	editor_line_width: number,
+	/**  Application webview zoom as an integer percentage. */
+	zoom_percent: number,
 	/**  Whether line numbers appear beside the editor. */
 	show_line_numbers: boolean,
 	/**  Whether interface animations are enabled. */
@@ -316,6 +341,12 @@ export type SettingsDoc = {
 	update_channel: string,
 	/**  Ordered task marker vocabulary and click-transition graph. */
 	task_statuses: TaskStatusDoc[],
+};
+
+/**  The persisted zoom changed and every application window now uses it. */
+export type SettingsZoomChanged = {
+	/**  Effective webview zoom as an integer percentage. */
+	zoom_percent: number,
 };
 
 /**  One tag in the indexed vault with aggregate usage counts. */
@@ -399,7 +430,7 @@ export type TreeEntry = {
 export type TreeEntryKind =
 /**  A directory. */
 "directory" |
-/**  A markdown note. */
+/**  An editable Markdown or plain-text note. */
 "note" |
 /**  Any other file; listed and typed, never parsed. */
 "file";

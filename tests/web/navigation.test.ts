@@ -17,6 +17,7 @@ import {
   createNoteNavigator,
   type FollowWikilinkOptions,
   followWikilinkUnderCursor,
+  NAVIGATION_HISTORY_LIMIT,
   noteAddressFromUrl,
   noteFragmentPosition,
   urlForNoteAddress,
@@ -378,7 +379,18 @@ describe("note addressing and desktop history", () => {
     const first = { path: "first.md" };
     const second = { path: "folder/second.md", fragment: "Details" };
     const load = vi.fn(async () => {});
-    const navigator = createNoteNavigator({ mode: "desktop", load });
+    let captured = {
+      anchor: 7,
+      head: 11,
+      scrollAnchor: 5,
+      scrollOffset: 8,
+      propertiesExpanded: false,
+    };
+    const navigator = createNoteNavigator({
+      mode: "desktop",
+      load,
+      capture: () => captured,
+    });
 
     await navigator.start(first);
     await navigator.open(second);
@@ -388,8 +400,27 @@ describe("note addressing and desktop history", () => {
       canGoForward: false,
     });
 
+    captured = {
+      anchor: 19,
+      head: 19,
+      scrollAnchor: 17,
+      scrollOffset: 4,
+      propertiesExpanded: true,
+    };
     expect(navigator.back()).toBe(true);
-    await vi.waitFor(() => expect(load).toHaveBeenLastCalledWith(first));
+    await vi.waitFor(() =>
+      expect(load).toHaveBeenLastCalledWith(
+        first,
+        {
+          anchor: 7,
+          head: 11,
+          scrollAnchor: 5,
+          scrollOffset: 8,
+          propertiesExpanded: false,
+        },
+        "history",
+      ),
+    );
     expect(navigator.state()).toMatchObject({
       address: first,
       canGoBack: false,
@@ -397,12 +428,68 @@ describe("note addressing and desktop history", () => {
     });
 
     expect(navigator.forward()).toBe(true);
-    await vi.waitFor(() => expect(load).toHaveBeenLastCalledWith(second));
+    await vi.waitFor(() =>
+      expect(load).toHaveBeenLastCalledWith(
+        second,
+        {
+          anchor: 19,
+          head: 19,
+          scrollAnchor: 17,
+          scrollOffset: 4,
+          propertiesExpanded: true,
+        },
+        "history",
+      ),
+    );
     expect(navigator.state()).toMatchObject({
       address: second,
       canGoBack: true,
       canGoForward: false,
     });
+    navigator.dispose();
+  });
+
+  it("caps desktop history at one hundred entries", async () => {
+    const load = vi.fn(async () => {});
+    const navigator = createNoteNavigator({ mode: "desktop", load });
+    await navigator.start({ path: "0.md" });
+    for (let index = 1; index <= NAVIGATION_HISTORY_LIMIT; index += 1) {
+      await navigator.open({ path: `${index}.md` });
+    }
+
+    let traversed = 0;
+    while (navigator.back()) {
+      traversed += 1;
+    }
+
+    expect(traversed).toBe(NAVIGATION_HISTORY_LIMIT - 1);
+    await vi.waitFor(() =>
+      expect(load).toHaveBeenLastCalledWith({ path: "1.md" }, null, "history"),
+    );
+    expect(navigator.state().address).toEqual({ path: "1.md" });
+    navigator.dispose();
+  });
+
+  it("rolls desktop history back when traversal loading is declined", async () => {
+    const first = { path: "first.md" };
+    const second = { path: "second.md" };
+    let declineFirst = false;
+    const navigator = createNoteNavigator({
+      mode: "desktop",
+      load: async (address) => !(declineFirst && address.path === first.path),
+    });
+
+    await navigator.start(first);
+    await navigator.open(second);
+    declineFirst = true;
+    expect(navigator.back()).toBe(true);
+    await vi.waitFor(() =>
+      expect(navigator.state()).toMatchObject({
+        address: second,
+        canGoBack: true,
+        canGoForward: false,
+      }),
+    );
     navigator.dispose();
   });
 
@@ -427,7 +514,9 @@ describe("note addressing and desktop history", () => {
     );
 
     expect(navigator.back()).toBe(true);
-    await vi.waitFor(() => expect(load).toHaveBeenLastCalledWith(first));
+    await vi.waitFor(() =>
+      expect(load).toHaveBeenLastCalledWith(first, null, "history"),
+    );
     expect(new URL(window.location.href).searchParams.get("note")).toBe(
       "first.md",
     );

@@ -4,7 +4,7 @@
 //! handles and delegate to `skribeum-vault`.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -15,7 +15,7 @@ use skribeum_vault::{
     ReplayOutcome, SearchIndex, Settings, SettingsStore, Vault, VaultPath, is_indexed_path,
 };
 use tauri::ipc::InvokeResponseBody;
-use tauri::{AppHandle, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
 #[cfg(not(feature = "webdriver"))]
 use tauri_plugin_updater::UpdaterExt;
 use tauri_specta::Event;
@@ -35,7 +35,7 @@ pub struct VaultHandle {
 pub enum TreeEntryKind {
     /// A directory.
     Directory,
-    /// A markdown note.
+    /// An editable Markdown or plain-text note.
     Note,
     /// Any other file; listed and typed, never parsed.
     File,
@@ -424,6 +424,8 @@ pub struct SettingsDoc {
     pub editor_line_height: u32,
     /// Editor line width in characters.
     pub editor_line_width: u32,
+    /// Application webview zoom as an integer percentage.
+    pub zoom_percent: u32,
     /// Whether line numbers appear beside the editor.
     pub show_line_numbers: bool,
     /// Whether interface animations are enabled.
@@ -552,7 +554,167 @@ pub struct JournalState(pub Option<Journal>);
 
 /// The settings store, at `settings.json` in the OS app-config directory.
 /// Absent only when that directory could not be resolved.
-pub struct SettingsState(pub Option<SettingsStore>);
+pub struct SettingsState(pub Option<SettingsStore>, pub Mutex<()>);
+
+/// File paths waiting for the frontend to resolve after an open-with request.
+#[derive(Default)]
+pub struct OpenFilesState(pub Mutex<Vec<String>>);
+
+const OPEN_FILE_QUEUE_LIMIT: usize = 128;
+
+/// A file-open request is waiting in the Rust-owned queue.
+#[derive(Debug, Clone, Serialize, specta::Type, Event)]
+pub struct OpenFilesAvailable;
+
+/// The persisted zoom changed and every application window now uses it.
+#[derive(Debug, Clone, Serialize, specta::Type, Event)]
+pub struct SettingsZoomChanged {
+    /// Effective webview zoom as an integer percentage.
+    pub zoom_percent: u32,
+}
+
+/// Vault and note selected for one operating-system open-with path.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct OpenFileTarget {
+    /// Absolute vault root to open or retain.
+    pub vault_path: String,
+    /// Vault-relative note path to select.
+    pub note_path: String,
+}
+
+/// Queues validated native paths and wakes the frontend without placing paths
+/// in event payloads.
+pub(crate) fn queue_open_files<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) {
+    if paths.is_empty() {
+        return;
+    }
+    let state = app.state::<OpenFilesState>();
+    let mut queue = state.0.lock().unwrap_or_else(PoisonError::into_inner);
+    let initial_length = queue.len();
+    for path in paths {
+        if queue.len() >= OPEN_FILE_QUEUE_LIMIT {
+            break;
+        }
+        if !queue.contains(&path) {
+            queue.push(path);
+        }
+    }
+    let changed = queue.len() != initial_length;
+    drop(queue);
+    if changed {
+        let _ = app.emit(OpenFilesAvailable::NAME, OpenFilesAvailable);
+    }
+}
+
+fn settings_to_doc(settings: Settings) -> SettingsDoc {
+    SettingsDoc {
+        schema_version: settings.schema_version,
+        theme: settings.theme,
+        light_palette: settings.light_palette,
+        dark_palette: settings.dark_palette,
+        prose_font: settings.prose_font,
+        code_font: settings.code_font,
+        editor_font_size: settings.editor_font_size,
+        editor_line_height: settings.editor_line_height,
+        editor_line_width: settings.editor_line_width,
+        zoom_percent: settings.zoom_percent,
+        show_line_numbers: settings.show_line_numbers,
+        animations: settings.animations,
+        autosave_delay_ms: settings.autosave_delay_ms,
+        spell_check: settings.spell_check,
+        indent_style: settings.indent_style,
+        indent_width: settings.indent_width,
+        wrap_long_lines: settings.wrap_long_lines,
+        show_invisible_characters: settings.show_invisible_characters,
+        reveal_markdown_syntax: settings.reveal_markdown_syntax,
+        default_note_folder: settings.default_note_folder,
+        attachment_folder_mode: settings.attachment_folder_mode,
+        attachment_folder_path: settings.attachment_folder_path,
+        honor_obsidian_config: settings.honor_obsidian_config,
+        search_result_limit: settings.search_result_limit,
+        link_previews: settings.link_previews,
+        search_note_bodies: settings.search_note_bodies,
+        search_case_sensitive: settings.search_case_sensitive,
+        update_channel: settings.update_channel,
+        task_statuses: settings
+            .task_statuses
+            .into_iter()
+            .map(task_status_from_vault)
+            .collect(),
+    }
+}
+
+fn settings_from_doc(doc: SettingsDoc) -> Settings {
+    Settings {
+        schema_version: doc.schema_version,
+        theme: doc.theme,
+        light_palette: doc.light_palette,
+        dark_palette: doc.dark_palette,
+        prose_font: doc.prose_font,
+        code_font: doc.code_font,
+        editor_font_size: doc.editor_font_size,
+        editor_line_height: doc.editor_line_height,
+        editor_line_width: doc.editor_line_width,
+        zoom_percent: doc.zoom_percent,
+        show_line_numbers: doc.show_line_numbers,
+        animations: doc.animations,
+        autosave_delay_ms: doc.autosave_delay_ms,
+        spell_check: doc.spell_check,
+        indent_style: doc.indent_style,
+        indent_width: doc.indent_width,
+        wrap_long_lines: doc.wrap_long_lines,
+        show_invisible_characters: doc.show_invisible_characters,
+        reveal_markdown_syntax: doc.reveal_markdown_syntax,
+        default_note_folder: doc.default_note_folder,
+        attachment_folder_mode: doc.attachment_folder_mode,
+        attachment_folder_path: doc.attachment_folder_path,
+        honor_obsidian_config: doc.honor_obsidian_config,
+        search_result_limit: doc.search_result_limit,
+        link_previews: doc.link_previews,
+        search_note_bodies: doc.search_note_bodies,
+        search_case_sensitive: doc.search_case_sensitive,
+        update_channel: doc.update_channel,
+        task_statuses: doc
+            .task_statuses
+            .into_iter()
+            .map(task_status_into_vault)
+            .collect(),
+    }
+}
+
+fn set_all_window_zoom<R: Runtime>(app: &AppHandle<R>, zoom_percent: u32) -> Result<(), AppError> {
+    skribeum_vault::validate_zoom_percent(zoom_percent).map_err(AppError::from)?;
+    let factor = f64::from(zoom_percent) / 100.0;
+    let mut first_error = None;
+    for window in app.webview_windows().values() {
+        if let Err(error) = window.set_zoom(factor)
+            && first_error.is_none()
+        {
+            first_error = Some(AppError::window_failed(error.to_string()));
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn change_all_window_zoom<R: Runtime>(
+    app: &AppHandle<R>,
+    previous_percent: u32,
+    zoom_percent: u32,
+) -> Result<(), AppError> {
+    if let Err(error) = set_all_window_zoom(app, zoom_percent) {
+        if let Err(rollback_error) = set_all_window_zoom(app, previous_percent) {
+            return Err(AppError::window_failed(format!(
+                "failed to apply zoom: {}; failed to restore the previous zoom: {}",
+                error.message, rollback_error.message
+            )));
+        }
+        return Err(error);
+    }
+    Ok(())
+}
 
 /// Rebuilds a vault's search index on a background thread. The index reads
 /// notes only; a rebuild never writes inside the vault. The function returns
@@ -1206,40 +1368,7 @@ fn settings_read(settings: State<'_, SettingsState>) -> Result<SettingsDoc, AppE
         .as_ref()
         .ok_or_else(AppError::settings_unavailable)?;
     let doc = store.read(&RealFs).map_err(AppError::from)?;
-    Ok(SettingsDoc {
-        schema_version: doc.schema_version,
-        theme: doc.theme,
-        light_palette: doc.light_palette,
-        dark_palette: doc.dark_palette,
-        prose_font: doc.prose_font,
-        code_font: doc.code_font,
-        editor_font_size: doc.editor_font_size,
-        editor_line_height: doc.editor_line_height,
-        editor_line_width: doc.editor_line_width,
-        show_line_numbers: doc.show_line_numbers,
-        animations: doc.animations,
-        autosave_delay_ms: doc.autosave_delay_ms,
-        spell_check: doc.spell_check,
-        indent_style: doc.indent_style,
-        indent_width: doc.indent_width,
-        wrap_long_lines: doc.wrap_long_lines,
-        show_invisible_characters: doc.show_invisible_characters,
-        reveal_markdown_syntax: doc.reveal_markdown_syntax,
-        default_note_folder: doc.default_note_folder,
-        attachment_folder_mode: doc.attachment_folder_mode,
-        attachment_folder_path: doc.attachment_folder_path,
-        honor_obsidian_config: doc.honor_obsidian_config,
-        search_result_limit: doc.search_result_limit,
-        link_previews: doc.link_previews,
-        search_note_bodies: doc.search_note_bodies,
-        search_case_sensitive: doc.search_case_sensitive,
-        update_channel: doc.update_channel,
-        task_statuses: doc
-            .task_statuses
-            .into_iter()
-            .map(task_status_from_vault)
-            .collect(),
-    })
+    Ok(settings_to_doc(doc))
 }
 
 /// Returns the resolved settings document path for display in the settings
@@ -1265,49 +1394,254 @@ fn settings_path(settings: State<'_, SettingsState>) -> Result<String, AppError>
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
 fn settings_write(settings: State<'_, SettingsState>, doc: SettingsDoc) -> Result<(), AppError> {
+    let _mutation = settings.1.lock().unwrap_or_else(PoisonError::into_inner);
     let store = settings
         .0
         .as_ref()
         .ok_or_else(AppError::settings_unavailable)?;
-    store
-        .write(
-            &RealFs,
-            &Settings {
-                schema_version: doc.schema_version,
-                theme: doc.theme,
-                light_palette: doc.light_palette,
-                dark_palette: doc.dark_palette,
-                prose_font: doc.prose_font,
-                code_font: doc.code_font,
-                editor_font_size: doc.editor_font_size,
-                editor_line_height: doc.editor_line_height,
-                editor_line_width: doc.editor_line_width,
-                show_line_numbers: doc.show_line_numbers,
-                animations: doc.animations,
-                autosave_delay_ms: doc.autosave_delay_ms,
-                spell_check: doc.spell_check,
-                indent_style: doc.indent_style,
-                indent_width: doc.indent_width,
-                wrap_long_lines: doc.wrap_long_lines,
-                show_invisible_characters: doc.show_invisible_characters,
-                reveal_markdown_syntax: doc.reveal_markdown_syntax,
-                default_note_folder: doc.default_note_folder,
-                attachment_folder_mode: doc.attachment_folder_mode,
-                attachment_folder_path: doc.attachment_folder_path,
-                honor_obsidian_config: doc.honor_obsidian_config,
-                search_result_limit: doc.search_result_limit,
-                link_previews: doc.link_previews,
-                search_note_bodies: doc.search_note_bodies,
-                search_case_sensitive: doc.search_case_sensitive,
-                update_channel: doc.update_channel,
-                task_statuses: doc
-                    .task_statuses
-                    .into_iter()
-                    .map(task_status_into_vault)
-                    .collect(),
-            },
-        )
-        .map_err(AppError::from)
+    let mut document = settings_from_doc(doc);
+    document.zoom_percent = store.read(&RealFs).map_err(AppError::from)?.zoom_percent;
+    store.write(&RealFs, &document).map_err(AppError::from)?;
+    Ok(())
+}
+
+/// Persists and applies one webview zoom percentage to every window.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn zoom_set<R: Runtime>(
+    app: AppHandle<R>,
+    settings: State<'_, SettingsState>,
+    zoom_percent: u32,
+) -> Result<u32, AppError> {
+    skribeum_vault::validate_zoom_percent(zoom_percent).map_err(AppError::from)?;
+    let _mutation = settings.1.lock().unwrap_or_else(PoisonError::into_inner);
+    let store = settings
+        .0
+        .as_ref()
+        .ok_or_else(AppError::settings_unavailable)?;
+    let mut document = store.read(&RealFs).map_err(AppError::from)?;
+    let previous_document = document.clone();
+    let previous_percent = document.zoom_percent;
+    change_all_window_zoom(&app, previous_percent, zoom_percent)?;
+    document.zoom_percent = zoom_percent;
+    if let Err(error) = store.write(&RealFs, &document) {
+        if let Err(rollback_error) = set_all_window_zoom(&app, previous_percent) {
+            return Err(AppError::window_failed(format!(
+                "failed to persist zoom: {error}; failed to restore the previous zoom: {}",
+                rollback_error.message
+            )));
+        }
+        return Err(AppError::from(error));
+    }
+    if let Err(error) = app.emit(
+        SettingsZoomChanged::NAME,
+        SettingsZoomChanged { zoom_percent },
+    ) {
+        let persistence_rollback = store.write(&RealFs, &previous_document);
+        let window_rollback = set_all_window_zoom(&app, previous_percent);
+        if let Err(rollback_error) = persistence_rollback {
+            return Err(AppError::window_failed(format!(
+                "failed to publish zoom state: {error}; failed to restore persisted zoom: {rollback_error}"
+            )));
+        }
+        if let Err(rollback_error) = window_rollback {
+            return Err(AppError::window_failed(format!(
+                "failed to publish zoom state: {error}; failed to restore the previous zoom: {}",
+                rollback_error.message
+            )));
+        }
+        return Err(AppError::window_failed(format!(
+            "failed to publish zoom state: {error}"
+        )));
+    }
+    Ok(zoom_percent)
+}
+
+#[cfg(target_os = "linux")]
+fn cancel_window_warmup<R: Runtime>(window: &WebviewWindow<R>) {
+    let _ = window.hide();
+    let _ = window.center();
+    let _ = window.set_skip_taskbar(false);
+}
+
+/// Gives Linux `WebKit` an offscreen frame in which to commit its first paint.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)] // Tauri commands keep one typed result signature across every platform.
+fn window_warmup<R: Runtime>(
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] window: WebviewWindow<R>,
+) -> Result<(), AppError> {
+    #[cfg(target_os = "linux")]
+    {
+        window
+            .set_skip_taskbar(true)
+            .map_err(|error| AppError::window_failed(error.to_string()))?;
+        if let Err(error) = window.set_position(tauri::PhysicalPosition::new(32_000, 32_000)) {
+            cancel_window_warmup(&window);
+            return Err(AppError::window_failed(error.to_string()));
+        }
+        if let Err(error) = window.show() {
+            cancel_window_warmup(&window);
+            return Err(AppError::window_failed(error.to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// Applies persisted zoom before revealing the first committed frontend render.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn window_ready<R: Runtime>(
+    window: WebviewWindow<R>,
+    settings: State<'_, SettingsState>,
+    webview_ms: Option<f64>,
+) -> Result<(), AppError> {
+    let _mutation = settings.1.lock().unwrap_or_else(PoisonError::into_inner);
+    let zoom_percent = match settings.0.as_ref() {
+        Some(store) => match store.read(&RealFs) {
+            Ok(document) => document.zoom_percent,
+            Err(error) => {
+                #[cfg(target_os = "linux")]
+                cancel_window_warmup(&window);
+                return Err(AppError::from(error));
+            }
+        },
+        None => 100,
+    };
+    if let Err(error) = window.set_zoom(f64::from(zoom_percent) / 100.0) {
+        #[cfg(target_os = "linux")]
+        cancel_window_warmup(&window);
+        return Err(AppError::window_failed(error.to_string()));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Err(error) = window.center() {
+            cancel_window_warmup(&window);
+            return Err(AppError::window_failed(error.to_string()));
+        }
+        if let Err(error) = window.set_skip_taskbar(false) {
+            cancel_window_warmup(&window);
+            return Err(AppError::window_failed(error.to_string()));
+        }
+    }
+    if let Err(error) = window.show() {
+        #[cfg(target_os = "linux")]
+        cancel_window_warmup(&window);
+        return Err(AppError::window_failed(error.to_string()));
+    }
+    #[cfg(debug_assertions)]
+    if let Some(process_ms) = crate::cold_start_elapsed_milliseconds() {
+        eprintln!(
+            "SKRIBEUM_COLD_START {{\"event\":\"first-editor-paint\",\"process_ms\":{process_ms},\"webview_ms\":{}}}",
+            webview_ms.unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+fn supported_open_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("md")
+                || extension.eq_ignore_ascii_case("markdown")
+                || extension.eq_ignore_ascii_case("txt")
+        })
+}
+
+fn relative_note_path(path: &Path) -> Result<String, AppError> {
+    let path = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    VaultPath::new(&path).map_err(AppError::from)?;
+    Ok(path)
+}
+
+fn resolve_open_file_target(
+    file: &Path,
+    known_roots: impl IntoIterator<Item = PathBuf>,
+) -> Result<OpenFileTarget, AppError> {
+    let root = known_roots
+        .into_iter()
+        .filter(|root| file.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .unwrap_or_else(|| {
+            file.parent()
+                .expect("a canonical file has a parent")
+                .to_path_buf()
+        });
+    let relative = file
+        .strip_prefix(&root)
+        .map_err(|_| AppError::open_file_invalid())?;
+    Ok(OpenFileTarget {
+        vault_path: root.to_string_lossy().into_owned(),
+        note_path: relative_note_path(relative)?,
+    })
+}
+
+#[cfg(test)]
+mod open_file_tests {
+    use super::resolve_open_file_target;
+
+    #[test]
+    fn known_vaults_win_and_other_files_adopt_their_parent() {
+        let scratch =
+            std::env::temp_dir().join(format!("skribeum-open-target-{}", std::process::id()));
+        let known = scratch.join("known");
+        let nested = known.join("nested");
+        let known_file = nested.join("note.md");
+        let outside = scratch.join("outside");
+        let outside_file = outside.join("plain.txt");
+
+        let target = resolve_open_file_target(&known_file, [known, nested.clone()])
+            .expect("known target resolves");
+        assert_eq!(target.vault_path, nested.to_string_lossy());
+        assert_eq!(target.note_path, "note.md");
+
+        let target = resolve_open_file_target(&outside_file, []).expect("outside target resolves");
+        assert_eq!(target.vault_path, outside.to_string_lossy());
+        assert_eq!(target.note_path, "plain.txt");
+    }
+}
+
+/// Resolves one operating-system open-with path against known vault roots.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn file_open_resolve(
+    registry: State<'_, VaultRegistry>,
+    path: String,
+) -> Result<OpenFileTarget, AppError> {
+    let file = RealFs
+        .canonicalize(&PathBuf::from(path))
+        .map_err(|_| AppError::open_file_invalid())?;
+    if !RealFs
+        .metadata(&file)
+        .is_ok_and(|metadata| !metadata.is_dir)
+        || !supported_open_file(&file)
+    {
+        return Err(AppError::open_file_invalid());
+    }
+
+    let known_roots = registry
+        .lock()
+        .values()
+        .map(|open| open.vault.root().to_path_buf())
+        .collect::<Vec<_>>();
+    resolve_open_file_target(&file, known_roots)
+}
+
+/// Drains operating-system open-with paths queued by argv or open-file events.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)] // Tauri injects State by value, and typed IPC keeps a fallible command shape.
+fn open_files_take(state: State<'_, OpenFilesState>) -> Result<Vec<String>, AppError> {
+    let mut paths = state.0.lock().unwrap_or_else(PoisonError::into_inner);
+    Ok(std::mem::take(&mut *paths))
 }
 
 /// Replays the crash journal for one vault, emitting recovery deltas and
@@ -1492,6 +1826,11 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             settings_read,
             settings_path,
             settings_write,
+            zoom_set::<tauri::Wry>,
+            window_warmup::<tauri::Wry>,
+            window_ready::<tauri::Wry>,
+            file_open_resolve,
+            open_files_take,
             vault_config_read,
         ])
         .events(tauri_specta::collect_events![
@@ -1502,5 +1841,7 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             ExternalNoteRemove,
             BulkDivergenceReview,
             NoteRecovered,
+            OpenFilesAvailable,
+            SettingsZoomChanged,
         ])
 }

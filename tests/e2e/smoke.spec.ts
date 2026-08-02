@@ -71,10 +71,12 @@ const axeSource = readFileSync(
 );
 
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
+const historyModifierKey =
+  process.platform === "darwin" ? Key.Command : Key.Control;
 const redoChord =
   process.platform === "darwin"
-    ? [modifierKey, Key.Shift, "z"]
-    : [modifierKey, "y"];
+    ? [historyModifierKey, Key.Shift, "z"]
+    : [historyModifierKey, "y"];
 const DEMO_TAG_COMPLETION_BOUNDARY = "Tag completion fixture boundary.";
 let demoTagCompletionPrepared = false;
 
@@ -1117,7 +1119,19 @@ async function pressFocusedKey(key: string, shiftKey = false): Promise<void> {
 }
 
 async function pressFocusedChord(keys: string[]): Promise<void> {
-  await browser.keys([...keys, Key.NULL]);
+  await browser.performActions([
+    {
+      type: "key",
+      id: "focused-chord-keyboard",
+      actions: [
+        ...keys.map((key) => ({ type: "keyDown" as const, value: key })),
+        ...[...keys]
+          .reverse()
+          .map((key) => ({ type: "keyUp" as const, value: key })),
+      ],
+    },
+  ]);
+  await browser.releaseActions();
 }
 
 async function expectNoAxeViolations(surface: string) {
@@ -5910,7 +5924,7 @@ describe("skribeum core editing surfaces", () => {
     await browser.pause(1800);
 
     expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
-    await pressFocusedChord([modifierKey, "z"]);
+    await pressFocusedChord([historyModifierKey, "z"]);
     expect((await editorDocumentText()).trimEnd()).toBe(
       DESKTOP_UNDO_NOTE_CONTENT.trimEnd(),
     );
@@ -5952,9 +5966,9 @@ describe("skribeum core editing surfaces", () => {
     await $(".cm-content").addValue("post");
     const postIngest = `${external.trimEnd()}post`;
     expect((await editorDocumentText()).trimEnd()).toBe(postIngest);
-    await pressFocusedChord([modifierKey, "z"]);
+    await pressFocusedChord([historyModifierKey, "z"]);
     expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
-    await pressFocusedChord([modifierKey, "z"]);
+    await pressFocusedChord([historyModifierKey, "z"]);
     expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
     await pressFocusedChord(redoChord);
     expect((await editorDocumentText()).trimEnd()).toBe(postIngest);

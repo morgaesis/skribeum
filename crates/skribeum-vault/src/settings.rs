@@ -492,6 +492,8 @@ pub struct Settings {
     pub dark_palette: String,
     pub prose_font: String,
     pub code_font: String,
+    /// Application webview zoom as an integer percentage.
+    pub zoom_percent: u32,
     pub editor_font_size: u32,
     pub editor_line_height: u32,
     pub editor_line_width: u32,
@@ -527,6 +529,7 @@ impl Default for Settings {
             dark_palette: "lamplight".to_owned(),
             prose_font: "serif".to_owned(),
             code_font: "modern".to_owned(),
+            zoom_percent: 100,
             editor_font_size: 16,
             editor_line_height: 170,
             editor_line_width: 72,
@@ -560,6 +563,10 @@ const LIGHT_PALETTES: &[&str] = &["manuscript", "studio", "gazette"];
 const DARK_PALETTES: &[&str] = &["lamplight", "graphite", "signal"];
 const PROSE_FONTS: &[&str] = &["serif", "sans"];
 const CODE_FONTS: &[&str] = &["modern", "classic"];
+/// Inclusive application zoom range, represented without floating-point drift.
+pub const ZOOM_PERCENT_RANGE: (u32, u32) = (50, 200);
+/// Application zoom increment in percentage points.
+pub const ZOOM_PERCENT_STEP: u32 = 10;
 const FONT_SIZE_RANGE: (u32, u32) = (8, 40);
 const LINE_HEIGHT_RANGE: (u32, u32) = (120, 220);
 const LINE_WIDTH_RANGE: (u32, u32) = (45, 120);
@@ -583,6 +590,7 @@ impl Settings {
         validate_choice("dark_palette", &self.dark_palette, DARK_PALETTES)?;
         validate_choice("prose_font", &self.prose_font, PROSE_FONTS)?;
         validate_choice("code_font", &self.code_font, CODE_FONTS)?;
+        validate_zoom_percent(self.zoom_percent)?;
         validate_range("editor_font_size", self.editor_font_size, FONT_SIZE_RANGE)?;
         validate_range(
             "editor_line_height",
@@ -622,6 +630,22 @@ impl Settings {
             return Err(SettingsError::InvalidValue("task_statuses"));
         }
         Ok(())
+    }
+}
+
+/// Validates an application zoom percentage against its range and step.
+///
+/// # Errors
+///
+/// Returns [`SettingsError::InvalidValue`] unless `value` is an exact
+/// ten-point increment from 50 through 200.
+pub fn validate_zoom_percent(value: u32) -> Result<(), SettingsError> {
+    if (ZOOM_PERCENT_RANGE.0..=ZOOM_PERCENT_RANGE.1).contains(&value)
+        && value.is_multiple_of(ZOOM_PERCENT_STEP)
+    {
+        Ok(())
+    } else {
+        Err(SettingsError::InvalidValue("zoom_percent"))
     }
 }
 
@@ -692,6 +716,9 @@ impl SettingsStore {
             ),
             prose_font: read_choice(&object, "prose_font", PROSE_FONTS, &defaults.prose_font),
             code_font: read_choice(&object, "code_font", CODE_FONTS, &defaults.code_font),
+            zoom_percent: read_in_range(&object, "zoom_percent", ZOOM_PERCENT_RANGE)
+                .filter(|value| value.is_multiple_of(ZOOM_PERCENT_STEP))
+                .unwrap_or(defaults.zoom_percent),
             editor_font_size: read_in_range(&object, "editor_font_size", FONT_SIZE_RANGE)
                 .unwrap_or(defaults.editor_font_size),
             editor_line_height: read_in_range(&object, "editor_line_height", LINE_HEIGHT_RANGE)
@@ -774,6 +801,7 @@ impl SettingsStore {
             ("dark_palette", Value::from(settings.dark_palette.clone())),
             ("prose_font", Value::from(settings.prose_font.clone())),
             ("code_font", Value::from(settings.code_font.clone())),
+            ("zoom_percent", Value::from(settings.zoom_percent)),
             ("editor_font_size", Value::from(settings.editor_font_size)),
             (
                 "editor_line_height",

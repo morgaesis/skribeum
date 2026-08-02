@@ -637,6 +637,26 @@ impl FileSystem for SimFs {
         Ok(true)
     }
 
+    fn create_private_file(&self, path: &Path, bytes: &[u8]) -> Result<bool, FsError> {
+        let mut state = self.lock();
+        if state.read_only {
+            return Err(FsError::ReadOnly);
+        }
+        state.app_write_count += 1;
+        let resolved = state.resolve(path);
+        if state.live.contains_key(&resolved) {
+            return Ok(false);
+        }
+        state.app_op("create_private_file")?;
+        let id = state.allocate_inode(bytes.to_vec(), false);
+        state.live.insert(resolved.clone(), EntryRef::File(id));
+        state.queue_event(WatchEvent::Created(resolved.clone()));
+        state
+            .trace
+            .push(format!("app-create-private {}", resolved.display()));
+        Ok(true)
+    }
+
     fn append_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
         let mut state = self.lock();
         if state.read_only {

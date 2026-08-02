@@ -67,7 +67,7 @@ Each refresh appends the current median and retains the trailing five samples.
 
 ## Cold start
 
-The debug-only instrumentation calibrates the Rust process clock at main entry against the webview clock at page load. After the editor's second animation frame, the webview reports the calibrated process timestamp over a debug event. `scripts/cold-start.ts` launches the built debug binary headlessly with Xvfb and a window manager for 20 independent process starts.
+The debug-only instrumentation starts the Rust process clock at main entry. After Svelte commits the first frontend render, the webview invokes the ready command and Rust reports the elapsed process time together with the webview timestamp. `scripts/cold-start.ts` launches the built debug binary headlessly with Xvfb and a window manager for 20 independent process starts.
 
 The 20-run first-editor-paint sample is:
 

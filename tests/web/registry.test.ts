@@ -153,6 +153,13 @@ describe("keybinding interpretation", () => {
       alt: false,
     });
     expect(parseKeybinding("Mod-,").key).toBe(",");
+    expect(parseKeybinding("Mod--")).toEqual({
+      key: "-",
+      mod: true,
+      ctrl: false,
+      shift: false,
+      alt: false,
+    });
     expect(parseKeybinding("Ctrl-Enter").ctrl).toBe(true);
     expect(() => parseKeybinding("Hyper-x")).toThrow(/unknown modifier/);
   });

@@ -177,11 +177,39 @@ export const TASK_TRACKS_NOTE_CONTENT =
   "# Task track fixture\n\n> [!note] Selection callout\n> Callout body with [a link](target).\n\n- [ ] Editable task\n- [D] Dated item\n- [!] Important item\n- [b] Reference item\n\nselection parking\n";
 
 export const NAVIGATION_SOURCE_NOTE_NAME = "zzz-navigation-source.md";
-export const NAVIGATION_SOURCE_NOTE_CONTENT =
-  "# Navigation source\n\nFollow [[zzz-navigation-target]].\n\n#shared\n";
+export const NAVIGATION_SOURCE_NOTE_CONTENT = [
+  "---",
+  "status: source",
+  "---",
+  "",
+  "# Navigation source",
+  "",
+  "Follow [[zzz-navigation-target]].",
+  "",
+  "#shared",
+  "",
+  ...Array.from(
+    { length: 80 },
+    (_, index) => `Reading position line ${index + 1}.`,
+  ),
+  "Café restoration marker.",
+  "",
+].join("\n");
 export const NAVIGATION_TARGET_NOTE_NAME = "zzz-navigation-target.md";
-export const NAVIGATION_TARGET_NOTE_CONTENT =
-  "# Navigation target\n\nWikilink destination content.\n\n#shared\n";
+export const NAVIGATION_TARGET_NOTE_CONTENT = [
+  "# Navigation target",
+  "",
+  "Wikilink destination content.",
+  "",
+  ...Array.from(
+    { length: 80 },
+    (_, index) => `Target reading position line ${index + 1}.`,
+  ),
+  "Target café restoration marker.",
+  "",
+  "#shared",
+  "",
+].join("\n");
 
 export const CANVAS_FILE_NAME = "zzz-board.canvas";
 export const CANVAS_REFERENCE_NAME = "z-live-preview.md";

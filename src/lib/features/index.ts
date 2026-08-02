@@ -20,9 +20,10 @@ import { registerTaskStatusCommands } from "./taskCommands";
 /** Builds the registry with every built-in feature registered. */
 export function createAppRegistry(
   taskStatuses: readonly TaskStatus[] = DEFAULT_TASK_STATUSES,
+  desktop = false,
 ): CommandRegistry {
   const registry = new CommandRegistry();
-  registerSurfaces(registry);
+  registerSurfaces(registry, desktop);
   registerSettingActions(registry);
   registerCopyLinks(registry);
   registerFind(registry);

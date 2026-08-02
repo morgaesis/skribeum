@@ -24,6 +24,7 @@ const PERSISTED: SettingsDocument = {
   editor_font_size: 18,
   editor_line_height: 180,
   editor_line_width: 84,
+  zoom_percent: 130,
   show_line_numbers: true,
   animations: false,
   autosave_delay_ms: 750,

@@ -1,4 +1,5 @@
 import { applyByteChangeSet } from "../../../src/lib/editor/byteChangeSet";
+import { isNotePath } from "../../../src/lib/noteTitles";
 import { STRINGS } from "../../../src/lib/strings";
 import { DEMO_FILES } from "../vault/seed";
 import type {
@@ -222,7 +223,7 @@ async function collectDirectory(
       );
       continue;
     }
-    const markdown = path.toLocaleLowerCase().endsWith(".md");
+    const markdown = isNotePath(path);
     const config =
       path === ".obsidian/app.json" || path === ".obsidian/types.json";
     if (!markdown && !config) {
@@ -363,7 +364,7 @@ function indexedTree(vault: DemoVault): TreeEntry[] {
     }
     entries.set(path, {
       path,
-      kind: path.toLowerCase().endsWith(".md") ? "note" : "file",
+      kind: isNotePath(path) ? "note" : "file",
       hidden: false,
     });
   }
@@ -400,7 +401,7 @@ export async function noteCreate(
 ): Promise<void> {
   const vault = vaultFor(handle);
   assertRelativePath(relPath);
-  if (!relPath.toLowerCase().endsWith(".md")) {
+  if (!isNotePath(relPath)) {
     return fail("note/not-markdown", STRINGS.demoNoteNotMarkdown, relPath);
   }
   if (vault.files.has(relPath)) {
@@ -559,7 +560,7 @@ export async function readNote(
   relPath: string,
 ): Promise<LoadedNote> {
   const vault = vaultFor(handle);
-  if (!relPath.toLowerCase().endsWith(".md")) {
+  if (!isNotePath(relPath)) {
     return fail("note/not-markdown", STRINGS.demoNoteNotMarkdown, relPath);
   }
   const bytes = cachedFileBytes(vault, relPath).slice();

@@ -24,6 +24,7 @@ fn configured_settings() -> Settings {
         dark_palette: "graphite".to_owned(),
         prose_font: "sans".to_owned(),
         code_font: "classic".to_owned(),
+        zoom_percent: 130,
         editor_font_size: 18,
         editor_line_height: 180,
         editor_line_width: 84,
@@ -134,6 +135,7 @@ fn every_malformed_stored_value_falls_back_safely() {
         "dark_palette": "blue",
         "prose_font": "cursive",
         "code_font": "script",
+        "zoom_percent": 105,
         "editor_font_size": 5,
         "editor_line_height": 119,
         "editor_line_width": 44,
@@ -206,6 +208,9 @@ fn invalid_writes_are_rejected_before_creating_a_file() {
     rejects!(dark_palette, "blue".to_owned());
     rejects!(prose_font, "cursive".to_owned());
     rejects!(code_font, "script".to_owned());
+    rejects!(zoom_percent, 40);
+    rejects!(zoom_percent, 105);
+    rejects!(zoom_percent, 210);
     rejects!(editor_font_size, 5);
     rejects!(editor_line_height, 119);
     rejects!(editor_line_width, 44);
@@ -225,6 +230,22 @@ fn invalid_writes_are_rejected_before_creating_a_file() {
         fs.read(&PathBuf::from("config/settings.json")),
         Err(skribeum_vault::FsError::NotFound)
     );
+}
+
+#[test]
+fn zoom_range_and_step_persist_exactly() {
+    let (fs, store) = store();
+    for zoom_percent in (50..=200).step_by(10) {
+        let settings = Settings {
+            zoom_percent,
+            ..Settings::default()
+        };
+        store.write(&fs, &settings).expect("zoom writes");
+        assert_eq!(
+            store.read(&fs).expect("zoom rereads").zoom_percent,
+            zoom_percent
+        );
+    }
 }
 
 #[test]

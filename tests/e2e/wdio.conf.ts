@@ -137,6 +137,7 @@ const appBinaryPath =
         `skribeum-app${binaryExtension}`,
       )
     : path.resolve(configuredBinary);
+process.env.SKRIBEUM_E2E_BINARY = appBinaryPath;
 
 const capabilities: TauriCapabilities[] = [
   {

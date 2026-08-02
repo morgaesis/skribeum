@@ -377,6 +377,7 @@ describe("browser demo IPC", () => {
       editor_font_size: 16,
       editor_line_height: 170,
       editor_line_width: 72,
+      zoom_percent: 100,
       show_line_numbers: false,
       animations: true,
       autosave_delay_ms: 400,
@@ -408,6 +409,7 @@ describe("browser demo IPC", () => {
       editor_font_size: 18,
       editor_line_height: 180,
       editor_line_width: 84,
+      zoom_percent: 130,
       show_line_numbers: true,
       animations: false,
       autosave_delay_ms: 750,
@@ -448,6 +450,7 @@ describe("browser demo IPC", () => {
         editor_font_size: Number.POSITIVE_INFINITY,
         editor_line_height: 119,
         editor_line_width: 44,
+        zoom_percent: 105,
         show_line_numbers: "yes",
         animations: 1,
         autosave_delay_ms: 99,
@@ -479,6 +482,7 @@ describe("browser demo IPC", () => {
       editor_font_size: 16,
       editor_line_height: 170,
       editor_line_width: 72,
+      zoom_percent: 100,
       show_line_numbers: false,
       animations: true,
       autosave_delay_ms: 400,
@@ -510,6 +514,7 @@ describe("browser demo IPC", () => {
       ["editor_font_size", 5],
       ["editor_line_height", 119],
       ["editor_line_width", 44],
+      ["zoom_percent", 105],
       ["show_line_numbers", "yes"],
       ["animations", 1],
       ["autosave_delay_ms", 99],
@@ -559,6 +564,7 @@ describe("browser demo IPC", () => {
     );
     await expect(settingsRead()).resolves.toMatchObject({
       editor_line_width: 88,
+      zoom_percent: 100,
     });
   });
 

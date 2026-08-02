@@ -20,6 +20,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Desktop watcher events use the same monotonic clock as note saves, so genuine
   external edits ingest after autosave while matching self-write echoes remain
   suppressed by projection hash and preserve undo and redo history.
+- Desktop windows remain hidden until the first frontend frame is painted and
+  use the active theme surface behind the webview during startup.
+- Note history restores UTF-8 caret offsets, content-anchored reading position,
+  and properties-panel state without focusing the editor.
 - The unified command surface accepts native typing and contains all keyboard
   input while it is open.
 - Whole-note and section embeds remain mounted when vault link context loads,
@@ -30,12 +34,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The desktop application handles `.md`, `.markdown`, and `.txt` files from
+  operating-system open-with actions, including requests forwarded from a
+  second launch.
+- Application zoom is available from the command surface and the standard
+  `mod++`, `mod+-`, and `mod+0` shortcuts, with the selected factor persisted.
 - Application and browser icons use the lit Skribeum lamp mark, brand palette,
   and a simplified silhouette at 16 pixels.
 - Rust and JavaScript dependency requirements and lockfiles track their latest
   compatible stable releases, with transitive WebdriverIO serialization moved
   beyond its published security advisories.
-
 - Appearance settings use one six-card palette chooser. Choosing a card applies
   its light or dark appearance, while Match system appearance follows the last
   chosen palette for each mode.

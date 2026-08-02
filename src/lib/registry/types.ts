@@ -54,6 +54,8 @@ export type CommandContext = {
   toggleSourceMode?(): boolean;
   /** Task marker selected when a command surface opened, if any. */
   taskStatusMarkerFrom?: number | null;
+  /** Applies one persisted desktop webview zoom action. */
+  changeApplicationZoom?: (action: "in" | "out" | "reset") => Promise<void>;
   /** An explicit heading supplied by an outline-row pointer action. */
   heading?: string;
 };

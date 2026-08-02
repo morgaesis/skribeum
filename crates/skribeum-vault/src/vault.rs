@@ -34,7 +34,7 @@ pub enum VaultError {
     /// A new note path already exists.
     #[error("note already exists in vault")]
     NoteAlreadyExists,
-    /// The requested path exists in the index but is not a markdown note.
+    /// The requested path exists in the index but is not an editable note.
     #[error("path is not a note")]
     NotANote,
     /// A write was attempted for a note this session never read; the
@@ -95,7 +95,7 @@ pub struct ConflictInfo {
 pub enum EntryKind {
     /// A directory.
     Directory,
-    /// A markdown note (`.md`, case-insensitive).
+    /// An editable Markdown or plain-text note.
     Note,
     /// Any other file. Present in the tree but never parsed or edited.
     File,

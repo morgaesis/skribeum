@@ -3,6 +3,8 @@
 //! lives in `skribeum-core` and `skribeum-vault`.
 
 #[cfg(debug_assertions)]
+use skribeum_vault::{FileSystem, RealFs, write_durable};
+#[cfg(debug_assertions)]
 use std::sync::OnceLock;
 #[cfg(debug_assertions)]
 use std::time::Instant;
@@ -11,6 +13,19 @@ pub mod error;
 pub mod ipc;
 
 pub use ipc::ipc_builder;
+
+/// Removes trailing horizontal whitespace from generated TypeScript bindings.
+pub fn normalize_generated_bindings(generated: &str) -> String {
+    let mut normalized = generated
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if generated.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
+}
 
 #[cfg(debug_assertions)]
 const COLD_START_FIRST_EDITOR_PAINT_EVENT: &str = "skribeum://debug/first-editor-paint";
@@ -46,12 +61,24 @@ pub fn run() {
     // so the export works whatever the process working directory is; CI
     // separately asserts the committed file matches what this generates.
     #[cfg(debug_assertions)]
+    let bindings_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/lib/ipc/bindings.ts");
     specta_builder
-        .export(
-            specta_typescript::Typescript::default(),
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../src/lib/ipc/bindings.ts"),
-        )
+        .export(specta_typescript::Typescript::default(), bindings_path)
         .expect("failed to export TypeScript bindings");
+    #[cfg(debug_assertions)]
+    {
+        let bindings_path = std::path::Path::new(bindings_path);
+        let generated = RealFs
+            .read(bindings_path)
+            .expect("failed to read generated TypeScript bindings");
+        let generated =
+            String::from_utf8(generated).expect("generated TypeScript bindings are not UTF-8");
+        let normalized = normalize_generated_bindings(&generated);
+        if normalized != generated {
+            write_durable(&RealFs, bindings_path, normalized.as_bytes())
+                .expect("failed to normalize generated TypeScript bindings");
+        }
+    }
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

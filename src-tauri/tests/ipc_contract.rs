@@ -36,7 +36,8 @@ fn generate_bindings() -> String {
         .expect("bindings export succeeds");
     let bytes = RealFs.read(&out).expect("exported bindings are readable");
     let _ = RealFs.remove_file(&out);
-    String::from_utf8(bytes).expect("bindings are UTF-8")
+    let generated = String::from_utf8(bytes).expect("bindings are UTF-8");
+    skribeum_app_lib::normalize_generated_bindings(&generated)
 }
 
 /// Command names invoked by the generated bindings, extracted from the

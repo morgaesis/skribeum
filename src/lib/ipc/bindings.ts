@@ -118,16 +118,16 @@ export type AppError = {
 };
 
 /**  Banner reasons over IPC. */
-export type BannerReason = 
+export type BannerReason =
 /**  A stable read shrank past the guard fraction. */
-"size-shrank" | 
+"size-shrank" |
 /**  A previously non-empty note read back empty. */
-"became-empty" | 
+"became-empty" |
 /**
  *  An external edit landed within the settle window of this device's
  *  own last write.
  */
-"edit-within-write-settle" | 
+"edit-within-write-settle" |
 /**
  *  The on-disk file changed between a crash and this start; the crash
  *  journal was not replayed.
@@ -198,11 +198,11 @@ export type NoteContent = {
 };
 
 /**  Encoding classification over IPC. */
-export type NoteEncoding = 
+export type NoteEncoding =
 /**  Valid UTF-8. */
-"utf8" | 
+"utf8" |
 /**  Valid UTF-8 with a byte-order mark, preserved byte-for-byte. */
-"utf8-bom" | 
+"utf8-bom" |
 /**  Not UTF-8; the note is read-only. */
 "non-utf8";
 
@@ -329,17 +329,17 @@ export type TagFrequency = {
 };
 
 /**  Semantic task status category over IPC. */
-export type TaskStatusCategory = 
+export type TaskStatusCategory =
 /**  An open task. */
-"TODO" | 
+"TODO" |
 /**  Work is underway. */
-"IN_PROGRESS" | 
+"IN_PROGRESS" |
 /**  Work is intentionally paused. */
-"ON_HOLD" | 
+"ON_HOLD" |
 /**  Work is complete. */
-"DONE" | 
+"DONE" |
 /**  Work was cancelled. */
-"CANCELLED" | 
+"CANCELLED" |
 /**  A checkbox-like marker that is not a task. */
 "NON_TASK";
 
@@ -364,20 +364,20 @@ export type TaskStatusDoc = {
 };
 
 /**  Optional plain-text payload associated with a task status over IPC. */
-export type TaskStatusPayload = 
+export type TaskStatusPayload =
 /**  An Obsidian Tasks date token. */
-"date" | 
+"date" |
 /**  An importance-level token. */
 "level";
 
 /**  Track that groups a task status by its purpose over IPC. */
-export type TaskStatusTrack = 
+export type TaskStatusTrack =
 /**  Ordinary task state. */
-"task" | 
+"task" |
 /**  A dated task state. */
-"time" | 
+"time" |
 /**  A task importance marker. */
-"importance" | 
+"importance" |
 /**  A user-defined reference marker. */
 "reference";
 
@@ -396,35 +396,35 @@ export type TreeEntry = {
 };
 
 /**  Entry kind over IPC. */
-export type TreeEntryKind = 
+export type TreeEntryKind =
 /**  A directory. */
-"directory" | 
+"directory" |
 /**  A markdown note. */
-"note" | 
+"note" |
 /**  Any other file; listed and typed, never parsed. */
 "file";
 
 /**  Result of checking the selected release channel. */
-export type UpdateCheckDoc = 
+export type UpdateCheckDoc =
 /**  The installed version matches the selected channel manifest. */
-{ kind: "current" } | 
+{ kind: "current" } |
 /**  A signed update is available from the selected channel manifest. */
-{ kind: "available"; 
+{ kind: "available";
 /**  Version announced by the manifest. */
-version: string; 
+version: string;
 /**  Release notes from the manifest, when supplied. */
 notes: string };
 
 /**  Kinds of watched change. */
-export type VaultChangeKind = 
+export type VaultChangeKind =
 /**  A file or directory appeared. */
-"created" | 
+"created" |
 /**  File content changed. */
-"modified" | 
+"modified" |
 /**  A file or directory disappeared. */
-"removed" | 
+"removed" |
 /**  A rename with both endpoints inside the vault. */
-"renamed" | 
+"renamed" |
 /**  Events were lost; the vault must be rescanned. */
 "overflow";
 
@@ -477,15 +477,15 @@ export type VaultHandle = {
  *  the reconciliation UX: it carries the current on-disk projection hash
  *  plus a reconciliation handle, and nothing was overwritten.
  */
-export type WriteResult = 
+export type WriteResult =
 /**  The change set was applied and durably written. */
-{ result: "written"; 
+{ result: "written";
 /**  Projection hash of the new on-disk bytes. */
-projection_hash: string } | 
+projection_hash: string } |
 /**  The on-disk projection no longer matches the expected hash. */
-{ result: "conflict"; 
+{ result: "conflict";
 /**  Current on-disk projection hash; absent when the file is gone. */
-current_projection_hash: string | null; 
+current_projection_hash: string | null;
 /**  Reconciliation handle for the conflict flow. */
 reconciliation: number };
 

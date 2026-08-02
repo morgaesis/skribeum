@@ -1116,6 +1116,10 @@ async function pressFocusedKey(key: string, shiftKey = false): Promise<void> {
   await browser.releaseActions();
 }
 
+async function pressFocusedChord(keys: string[]): Promise<void> {
+  await browser.keys([...keys, Key.NULL]);
+}
+
 async function expectNoAxeViolations(surface: string) {
   const violations = await browser.executeAsync<
     Array<{ id: string; impact: string | null; targets: string[] }>,
@@ -5906,11 +5910,11 @@ describe("skribeum core editing surfaces", () => {
     await browser.pause(1800);
 
     expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
-    await browser.keys([modifierKey, "z"]);
+    await pressFocusedChord([modifierKey, "z"]);
     expect((await editorDocumentText()).trimEnd()).toBe(
       DESKTOP_UNDO_NOTE_CONTENT.trimEnd(),
     );
-    await browser.keys(redoChord);
+    await pressFocusedChord(redoChord);
     expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
   });
 
@@ -5948,11 +5952,11 @@ describe("skribeum core editing surfaces", () => {
     await $(".cm-content").addValue("post");
     const postIngest = `${external.trimEnd()}post`;
     expect((await editorDocumentText()).trimEnd()).toBe(postIngest);
-    await browser.keys([modifierKey, "z"]);
+    await pressFocusedChord([modifierKey, "z"]);
     expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
-    await browser.keys([modifierKey, "z"]);
+    await pressFocusedChord([modifierKey, "z"]);
     expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
-    await browser.keys(redoChord);
+    await pressFocusedChord(redoChord);
     expect((await editorDocumentText()).trimEnd()).toBe(postIngest);
   });
 

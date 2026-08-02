@@ -4,14 +4,10 @@ import { STRINGS } from "./strings";
 
 let {
   frontmatter,
-  rawSourceVisible,
-  onRawSourceVisibleChange,
   onEditValue,
   noteIdentity = null,
 }: {
   frontmatter: Frontmatter;
-  rawSourceVisible: boolean;
-  onRawSourceVisibleChange: (visible: boolean) => void;
   /**
    * Replaces exactly the character range `[from, to)` of the document with
    * `insert`. The panel never touches any other byte; edits flow through
@@ -79,6 +75,9 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
     >
       <span class="skr-properties-chevron" aria-hidden="true"></span>
       <span>{STRINGS.propertiesPanelTitle}</span>
+      {#if noteIdentity !== null}
+        <span class="skr-properties-path">{noteIdentity}</span>
+      {/if}
       <span class="skr-properties-count">{frontmatter.entries.length}</span>
     </button>
   </div>
@@ -90,19 +89,6 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
       aria-hidden={!expanded}
       inert={!expanded}
     >
-      <div class="skr-properties-actions">
-        <button
-          type="button"
-          class="skr-raw-toggle"
-          aria-pressed={rawSourceVisible}
-          onclick={() => onRawSourceVisibleChange(!rawSourceVisible)}
-        >
-          {rawSourceVisible
-            ? STRINGS.propertiesHideRawSource
-            : STRINGS.propertiesShowRawSource}
-        </button>
-      </div>
-
       <dl class="skr-properties-list">
         {#each frontmatter.entries as entry, index (index)}
           <dt>{entry.key}</dt>
@@ -192,7 +178,6 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
   }
 
   .skr-properties-toggle:focus-visible,
-  .skr-raw-toggle:focus-visible,
   input:focus-visible {
     outline: 2px solid var(--skr-focus);
     outline-offset: 2px;
@@ -222,6 +207,17 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
     font-weight: 600;
   }
 
+  .skr-properties-path {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--skr-text-muted);
+    font-family: var(--skr-font-mono);
+    font-size: 0.72rem;
+    font-weight: 400;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .skr-properties-reveal {
     display: grid;
     grid-template-rows: 0fr;
@@ -236,7 +232,6 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
     overflow: hidden;
   }
 
-  .skr-properties-actions,
   .skr-properties-list {
     width: min(
       100%,
@@ -245,29 +240,6 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
     box-sizing: border-box;
     margin-inline: auto;
     padding-inline: var(--skr-gutter);
-  }
-
-  .skr-properties-actions {
-    display: flex;
-    justify-content: flex-end;
-    padding-top: 0.75rem;
-  }
-
-  .skr-raw-toggle {
-    padding: 0.35rem 0.65rem;
-    border: 1px solid var(--skr-border);
-    border-radius: 0.35rem;
-    background: var(--skr-surface);
-    color: var(--skr-text-muted);
-    font: inherit;
-    font-size: 0.75rem;
-    cursor: pointer;
-  }
-
-  .skr-raw-toggle[aria-pressed="true"] {
-    border-color: var(--skr-accent);
-    background: var(--skr-accent-subtle);
-    color: var(--skr-text);
   }
 
   .skr-properties-list {
@@ -329,7 +301,6 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
 
   @media (max-width: 60rem) {
     .skr-properties-toggle,
-    .skr-raw-toggle,
     input {
       min-height: 2.75rem;
     }

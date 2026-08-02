@@ -301,6 +301,76 @@ type TaskMenuEntry =
   | { kind: "status"; status: TaskStatus }
   | { kind: "more"; count: number };
 
+const OPEN_TASK_STATUS_MENU_EVENT = "skribeum:open-task-status-menu";
+
+/** Opens the rendered task menu belonging to a source marker. */
+export function openTaskStatusMenuAtMarker(
+  view: EditorView,
+  markerFrom: number,
+): boolean {
+  let checkbox = view.dom.querySelector<HTMLElement>(
+    `.cm-skr-task-checkbox[data-marker-from="${markerFrom}"]`,
+  );
+  if (checkbox === null) {
+    const statuses = view.state.facet(taskStatusConfiguration);
+    const status = taskStatusBySymbol(
+      statuses,
+      view.state.doc.sliceString(markerFrom, markerFrom + 1),
+    );
+    const coordinates = view.coordsAtPos(markerFrom);
+    if (status === undefined || coordinates === null) {
+      return false;
+    }
+    const transient = new TaskCheckboxWidget(
+      status,
+      statuses,
+      markerFrom,
+      markerFrom + 1,
+    ).toDOM(view);
+    transient.style.position = "fixed";
+    transient.style.left = `${coordinates.left}px`;
+    transient.style.top = `${coordinates.top}px`;
+    transient.style.width = "1px";
+    transient.style.height = `${Math.max(1, coordinates.bottom - coordinates.top)}px`;
+    transient.style.zIndex = "30";
+    checkbox = transient.querySelector<HTMLElement>(".cm-skr-task-checkbox");
+    const palette = transient.querySelector<HTMLElement>(
+      ".cm-skr-task-palette",
+    );
+    if (checkbox === null || palette === null) {
+      return false;
+    }
+    checkbox.style.width = "1px";
+    checkbox.style.height = "100%";
+    checkbox.style.opacity = "0";
+    checkbox.style.pointerEvents = "none";
+    view.dom.append(transient);
+    let opened = false;
+    const observer = new MutationObserver(() => {
+      if (!palette.hidden) {
+        opened = true;
+        return;
+      }
+      if (opened) {
+        observer.disconnect();
+        const restoreEditorFocus = transient.contains(
+          view.dom.ownerDocument.activeElement,
+        );
+        transient.remove();
+        if (restoreEditorFocus) {
+          queueMicrotask(() => view.focus());
+        }
+      }
+    });
+    observer.observe(palette, {
+      attributes: true,
+      attributeFilter: ["hidden"],
+    });
+  }
+  checkbox.dispatchEvent(new CustomEvent(OPEN_TASK_STATUS_MENU_EVENT));
+  return true;
+}
+
 class TaskCheckboxWidget extends WidgetType {
   constructor(
     readonly status: TaskStatus,
@@ -337,6 +407,7 @@ class TaskCheckboxWidget extends WidgetType {
     box.setAttribute("aria-haspopup", "listbox");
     box.setAttribute("aria-expanded", "false");
     box.setAttribute("aria-controls", paletteId);
+    box.dataset.markerFrom = String(this.markerFrom);
     for (const [name, value] of taskCheckboxAttributes(this.status)) {
       box.setAttribute(name, value);
     }
@@ -362,6 +433,8 @@ class TaskCheckboxWidget extends WidgetType {
     let pendingDateStatus: TaskStatus | null = null;
     let paletteAnchor: { x: number; y: number } | null = null;
     let stopObservingViewport: (() => void) | null = null;
+    let deliberateOpen = false;
+    let removeOutsidePress: (() => void) | null = null;
     let press: {
       pointerId: number;
       startX: number;
@@ -431,10 +504,23 @@ class TaskCheckboxWidget extends WidgetType {
       paletteAnchor = null;
       stopObservingViewport?.();
       stopObservingViewport = null;
+      removeOutsidePress?.();
+      removeOutsidePress = null;
+      deliberateOpen = false;
       box.setAttribute("aria-expanded", "false");
       if (returnFocus) {
         box.focus();
       }
+    };
+
+    const focusReplacementCheckbox = () => {
+      queueMicrotask(() => {
+        view.dom
+          .querySelector<HTMLElement>(
+            `.cm-skr-task-checkbox[data-marker-from="${this.markerFrom}"]`,
+          )
+          ?.focus();
+      });
     };
 
     const applyMenuStatus = (status: TaskStatus) => {
@@ -446,6 +532,7 @@ class TaskCheckboxWidget extends WidgetType {
         this.status.symbol,
         status.symbol,
       );
+      focusReplacementCheckbox();
     };
 
     const applyPendingDate = (input: HTMLInputElement) => {
@@ -463,6 +550,7 @@ class TaskCheckboxWidget extends WidgetType {
         status.symbol,
         { kind: "date", value: date },
       );
+      focusReplacementCheckbox();
     };
 
     const showDateFooter = (status: TaskStatus) => {
@@ -538,6 +626,7 @@ class TaskCheckboxWidget extends WidgetType {
         status?.symbol === this.status.symbol ? "true" : "false",
       );
       if (status !== undefined) {
+        option.dataset.taskStatus = status.symbol;
         option.style.setProperty(
           "--skr-task-option-color",
           `var(${status.color_token})`,
@@ -604,13 +693,16 @@ class TaskCheckboxWidget extends WidgetType {
     };
 
     const openPalette = (
-      keyboard: boolean,
+      mode: "hold" | "hover" | "keyboard" | "tap",
       anchor?: { x: number; y: number },
     ) => {
       if (entries.length === 0) {
         buildOptions();
       }
-      activeIndex = keyboard
+      const keyboard = mode === "keyboard";
+      deliberateOpen = mode === "tap";
+      const keyboardOperable = keyboard || deliberateOpen;
+      activeIndex = keyboardOperable
         ? Math.max(
             0,
             entries.findIndex(
@@ -628,14 +720,25 @@ class TaskCheckboxWidget extends WidgetType {
         y: bounds.bottom,
       };
       positionPalette();
-      updateActiveOption(keyboard);
+      updateActiveOption(keyboardOperable);
       stopObservingViewport?.();
       stopObservingViewport = observeVisualViewport(
         positionPalette,
         view.dom.ownerDocument.defaultView ?? window,
       );
-      if (keyboard) {
+      if (keyboard || deliberateOpen) {
         queueMicrotask(() => palette.focus());
+      }
+      if (deliberateOpen) {
+        const ownerDocument = view.dom.ownerDocument;
+        const outsidePress = (event: PointerEvent) => {
+          if (event.target instanceof Node && !host.contains(event.target)) {
+            closePalette(true);
+          }
+        };
+        ownerDocument.addEventListener("pointerdown", outsidePress, true);
+        removeOutsidePress = () =>
+          ownerDocument.removeEventListener("pointerdown", outsidePress, true);
       }
     };
 
@@ -717,7 +820,7 @@ class TaskCheckboxWidget extends WidgetType {
           return;
         }
         state.menuOpen = true;
-        openPalette(false, { x: state.startX, y: state.startY });
+        openPalette("hold", { x: state.startX, y: state.startY });
       }, 500);
     });
     box.addEventListener("pointermove", (event) => {
@@ -790,12 +893,15 @@ class TaskCheckboxWidget extends WidgetType {
       if (event.key === "ArrowDown") {
         event.preventDefault();
         event.stopPropagation();
-        openPalette(true);
+        openPalette("keyboard");
       } else if (event.key === " " || event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
         advance();
       }
+    });
+    box.addEventListener(OPEN_TASK_STATUS_MENU_EVENT, () => {
+      openPalette("tap");
     });
     palette.addEventListener("keydown", (event) => {
       if (event.target instanceof HTMLInputElement) {
@@ -831,12 +937,13 @@ class TaskCheckboxWidget extends WidgetType {
     });
     host.addEventListener("pointerenter", (event) => {
       if (event.pointerType !== "touch" && (event.buttons ?? 0) === 0) {
-        openPalette(false, { x: event.clientX, y: event.clientY });
+        openPalette("hover", { x: event.clientX, y: event.clientY });
       }
     });
     host.addEventListener("pointerleave", () => {
       if (
         press === null &&
+        !deliberateOpen &&
         pendingDateStatus === null &&
         !host.contains(document.activeElement)
       ) {
@@ -845,7 +952,7 @@ class TaskCheckboxWidget extends WidgetType {
     });
     host.addEventListener("focusout", () => {
       queueMicrotask(() => {
-        if (!host.contains(document.activeElement)) {
+        if (!deliberateOpen && !host.contains(document.activeElement)) {
           closePalette(false);
         }
       });

@@ -112,4 +112,16 @@ export function registerSurfaces(registry: CommandRegistry): void {
       context.requestSave();
     },
   });
+  registry.register({
+    id: "vault.open",
+    title: STRINGS.openVault,
+    pointer: ["command-palette", "overflow-menu"],
+    run: (context) => {
+      if (context.openVault === undefined) {
+        return false;
+      }
+      void context.openVault();
+      return true;
+    },
+  });
 }

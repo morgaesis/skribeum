@@ -14,6 +14,9 @@ import {
 import type { WikilinkResolutionContext } from "../../src/lib/editor/decorations/wikilinks";
 import { codeLanguage } from "../../src/lib/editor/markdown/codeLanguages";
 import { obsidianMarkdownExtensionsFor } from "../../src/lib/editor/markdown/obsidian";
+import { createAppRegistry } from "../../src/lib/features";
+import { TASK_STATUS_MENU_COMMAND } from "../../src/lib/features/taskCommands";
+import type { CommandContext } from "../../src/lib/registry";
 import {
   DEFAULT_TASK_STATUSES,
   type TaskStatus,
@@ -260,6 +263,56 @@ describe("rendered decoration DOM", () => {
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
     );
     expect(view.state.doc.toString()).toBe("- [/] task\n\noutside");
+  });
+
+  it("opens the grouped menu in unheld tap mode through the registered command", async () => {
+    const source = "- [ ] task\n\noutside";
+    const view = mountedView(source, source.indexOf("outside"));
+    const context: CommandContext = {
+      view,
+      openNote: () => Promise.resolve(),
+      openView: () => {},
+      openCommandSurface: () => {},
+      toggleView: () => {},
+      closeSurfaces: () => {},
+      requestSave: () => {},
+      notePaths: () => [],
+      recentNotePaths: () => [],
+      navigateBack: () => false,
+      navigateForward: () => false,
+      followLink: () => false,
+    };
+    const registry = createAppRegistry();
+    const checkbox = view.dom.querySelector<HTMLElement>(
+      ".cm-skr-task-checkbox",
+    );
+    checkbox?.focus();
+
+    expect(registry.run(TASK_STATUS_MENU_COMMAND, context)).toBe(true);
+    await Promise.resolve();
+    const listbox = view.dom.querySelector<HTMLElement>(".cm-skr-task-palette");
+    expect(listbox?.hidden).toBe(false);
+    expect(document.activeElement).toBe(listbox);
+    expect(listbox?.getAttribute("aria-activedescendant")).not.toBeNull();
+    expect(view.state.doc.toString()).toBe(source);
+
+    document.body.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true }),
+    );
+    expect(listbox?.hidden).toBe(true);
+    expect(document.activeElement).toBe(checkbox);
+    expect(view.state.doc.toString()).toBe(source);
+
+    expect(registry.run(TASK_STATUS_MENU_COMMAND, context)).toBe(true);
+    await Promise.resolve();
+
+    const cancelled = [
+      ...(listbox?.querySelectorAll<HTMLElement>("[role=option]") ?? []),
+    ].find((option) => option.textContent?.includes("Cancelled"));
+    cancelled?.click();
+    await Promise.resolve();
+    expect(view.state.doc.toString()).toBe("- [-] task\n\noutside");
+    expect(document.activeElement?.classList).toContain("cm-skr-task-checkbox");
   });
 
   it("keeps heading marker geometry stable while cursor visibility changes", async () => {

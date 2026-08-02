@@ -30,7 +30,7 @@ export function registerFormatting(registry: CommandRegistry): void {
       id: "format.code",
       title: STRINGS.formatCode,
       marker: "code",
-      keybindings: ["Mod-e"],
+      keybindings: ["Mod-Shift-c"],
     },
     {
       id: "format.strikethrough",

@@ -1036,6 +1036,127 @@ describe("skribeum shell", () => {
     await $(`li=${CRLF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
   });
 
+  it("composes_the_desktop_header_and_routes_former_header_commands_through_overflow", async () => {
+    await restoreDesktopViewport();
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("A room for reading"),
+      { timeout: 15000, timeoutMsg: "visual note did not open" },
+    );
+
+    const header = await browser.execute(() => {
+      const root = document.querySelector<HTMLElement>(".skr-app-header");
+      if (root === null) return null;
+      return {
+        regions: [...root.children].map((child) => child.className),
+        buttons: [...root.querySelectorAll<HTMLButtonElement>("button")]
+          .filter((button) => {
+            const bounds = button.getBoundingClientRect();
+            return (
+              getComputedStyle(button).display !== "none" && bounds.width > 0
+            );
+          })
+          .map((button) => ({
+            ariaLabel: button.getAttribute("aria-label"),
+            label: button.textContent?.trim() ?? "",
+          })),
+      };
+    });
+    expect(header?.regions).toEqual([
+      "skr-header-leading",
+      "skr-note-title-region",
+      "skr-header-trailing",
+    ]);
+    expect(header?.buttons.map((button) => button.label)).toEqual(["", "", ""]);
+    expect(header?.buttons.map((button) => button.ariaLabel)).toEqual([
+      "Back",
+      "Forward",
+      "More actions",
+    ]);
+    expect(await $("[data-testid=note-title]").getText()).toBe(
+      "A room for reading",
+    );
+    expect(await horizontalViewportEscapes()).toEqual([]);
+
+    const routes = [
+      ["quick-switcher.open", ""],
+      ["vault-search.open", "?"],
+      ["palette.open", ">"],
+    ] as const;
+    for (const [command, query] of routes) {
+      await $('button[aria-label="More actions"]').click();
+      const menu = $('[data-testid="overlay-sheet"]');
+      await menu.waitForDisplayed({ timeout: 10000 });
+      expect(await menu.getAttribute("data-sheet-variant")).toBe("anchored");
+      expect(await horizontalViewportEscapes()).toEqual([]);
+      await menu.$(`[data-command-id="${command}"]`).click();
+      const input = $('[role="combobox"]');
+      await input.waitForDisplayed({ timeout: 10000 });
+      expect(await input.getValue()).toBe(query);
+      await browser.keys(Key.Escape);
+      await input.waitForExist({ reverse: true, timeout: 10000 });
+    }
+  });
+
+  it("round_trips_source_mode_with_display_title_and_path_identity", async () => {
+    const original = noteOnDisk(VISUAL_NOTE_NAME);
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await $(".skr-properties-toggle").waitForExist({ timeout: 10000 });
+    expect(await $("[data-testid=note-title]").getText()).toBe(
+      "A room for reading",
+    );
+    expect(await $(".skr-properties-path").getText()).toBe(VISUAL_NOTE_NAME);
+    expect(await $("[data-testid=source-mode-chip]").isExisting()).toBe(false);
+
+    await browser.keys([modifierKey, "e"]);
+    const chip = $("[data-testid=source-mode-chip]");
+    await chip.waitForDisplayed({ timeout: 10000 });
+    expect(await chip.getText()).toBe("Source");
+    expect(await $(".skr-properties").isExisting()).toBe(false);
+    await browser.waitUntil(
+      async () => (await editorDocumentText()) === VISUAL_NOTE_CONTENT,
+      {
+        timeout: 10000,
+        timeoutMsg: "source mode did not expose the exact note text",
+      },
+    );
+    const sourcePresentation = await browser.execute(() => {
+      const editor = document.querySelector<HTMLElement>(".editor");
+      const content = document.querySelector<HTMLElement>(".cm-content");
+      return {
+        sourceClass: editor?.classList.contains("skr-source-mode") ?? false,
+        fontFamily:
+          content === null ? "" : getComputedStyle(content).fontFamily,
+        monoToken: getComputedStyle(document.documentElement)
+          .getPropertyValue("--skr-font-mono")
+          .trim(),
+        taskWidgets: document.querySelectorAll(".cm-skr-task-checkbox").length,
+      };
+    });
+    expect(sourcePresentation.sourceClass).toBe(true);
+    expect(sourcePresentation.fontFamily).toContain(
+      sourcePresentation.monoToken.split(",")[0]?.replaceAll('"', "") ?? "",
+    );
+    expect(sourcePresentation.taskWidgets).toBe(0);
+
+    await $('button[aria-label="More actions"]').click();
+    const menu = $('[data-testid="overlay-sheet"]');
+    await menu.waitForDisplayed({ timeout: 10000 });
+    expect(
+      await menu
+        .$('[data-command-id="editor.toggle-source-mode"]')
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    await browser.keys(Key.Escape);
+    await menu.waitForExist({ reverse: true, timeout: 10000 });
+
+    await browser.keys([modifierKey, "e"]);
+    await chip.waitForExist({ reverse: true, timeout: 10000 });
+    await $(".skr-properties").waitForExist({ timeout: 10000 });
+    await $(".cm-skr-table-row").waitForExist({ timeout: 10000 });
+    expect(noteOnDisk(VISUAL_NOTE_NAME)).toBe(original);
+  });
+
   it("provides_the_phone_shell_overflow_and_scroll_aware_title", async () => {
     await openNoteFromTree(PHONE_HEADING_NOTE_NAME);
     await browser.waitUntil(
@@ -1106,12 +1227,16 @@ describe("skribeum shell", () => {
         ),
       ).toBeLessThanOrEqual(1);
       expect(shell?.visibleRegions).toHaveLength(3);
-      expect(shell?.visibleRegions[0]?.className).toContain("skr-phone-files");
+      expect(shell?.visibleRegions[0]?.className).toContain(
+        "skr-header-leading",
+      );
       expect(shell?.visibleRegions[0]?.width).toBe(44);
       expect(shell?.visibleRegions[0]?.height).toBe(44);
-      expect(shell?.visibleRegions[1]?.className).toContain("skr-note-title");
+      expect(shell?.visibleRegions[1]?.className).toContain(
+        "skr-note-title-region",
+      );
       expect(shell?.visibleRegions[2]?.className).toContain(
-        "skr-phone-overflow",
+        "skr-header-trailing",
       );
       expect(shell?.visibleRegions[2]?.width).toBe(44);
       expect(shell?.visibleRegions[2]?.height).toBe(44);
@@ -1127,6 +1252,7 @@ describe("skribeum shell", () => {
         timeout: 5000,
         timeoutMsg: "heading-led title was visible at the top",
       });
+      expect(await $$(".skr-note-title-region h2")).toHaveLength(0);
       await browser.execute(() => {
         const scroller = document.querySelector<HTMLElement>(".cm-scroller");
         if (scroller !== null) {
@@ -1138,7 +1264,8 @@ describe("skribeum shell", () => {
         timeout: 5000,
         timeoutMsg: "title did not appear past the heading",
       });
-      expect(await title.getText()).toBe("z-phone-heading");
+      expect(await title.getText()).toBe("Phone heading");
+      expect(await $$(".skr-note-title-region h2")).toHaveLength(1);
       await browser.execute(() => {
         const scroller = document.querySelector<HTMLElement>(".cm-scroller");
         if (scroller !== null) {
@@ -1178,9 +1305,10 @@ describe("skribeum shell", () => {
         { command: "note.save", label: "Save note" },
         { command: "link.copy-note", label: "Copy link to note" },
         { command: "find.open", label: "Find in note" },
+        { command: "editor.toggle-source-mode", label: "Toggle source mode" },
         { command: "navigation.back", label: "Navigate back" },
         { command: "navigation.forward", label: "Navigate forward" },
-        { command: null, label: "Open vault" },
+        { command: "vault.open", label: "Open vault" },
       ]);
       for (const target of await overflowSheet.$$("button:not(:disabled)")) {
         const size = await target.getSize();
@@ -1221,6 +1349,9 @@ describe("skribeum shell", () => {
           "find.open",
           "navigation.back",
           "navigation.forward",
+          "editor.toggle-source-mode",
+          "task.set-status",
+          "vault.open",
         ]),
       );
       await browser.keys(Key.Escape);
@@ -1792,21 +1923,8 @@ describe("skribeum shell", () => {
         path.join(screenshotDirectory, `after-frontmatter-${theme}.png`),
       );
 
-      const rawToggle = $(".skr-raw-toggle");
-      await rawToggle.click();
-      await browser.waitUntil(
-        () =>
-          browser.execute(() =>
-            [
-              ...document.querySelectorAll<HTMLElement>(
-                ".cm-line.cm-skr-frontmatter",
-              ),
-            ].some((line) => getComputedStyle(line).display !== "none"),
-          ),
-        { timeout: 5000 },
-      );
+      expect(await $(".skr-raw-toggle").isExisting()).toBe(false);
       expect(noteOnDisk(VISUAL_NOTE_NAME)).toBe(originalBytes);
-      await rawToggle.click();
       await propertiesToggle.click();
       await browser.waitUntil(
         async () =>
@@ -2025,7 +2143,7 @@ describe("skribeum shell", () => {
     );
     expect(await activeElementDescriptor()).not.toContain("cm-content");
 
-    const back = $("button=Back");
+    const back = $('button[aria-label="Back"]');
     await back.waitForEnabled({ timeout: 15000 });
     await back.click();
     await browser.waitUntil(
@@ -2194,16 +2312,14 @@ describe("skribeum shell", () => {
 
   it("keyboard_reaches_every_surface_in_order_without_traps", async () => {
     // Focus order is DOM order: no element carries a positive tabindex, so
-    // the traversal order is header action, banners when present, tree,
+    // the traversal order is header overflow, banners when present, tree,
     // editor.
     const tabOrderSound = await browser.execute(() => {
       const positive = [...document.querySelectorAll("[tabindex]")].some(
         (element) => Number(element.getAttribute("tabindex")) > 0,
       );
       const surfaces = [
-        document.querySelector(
-          'header [data-command-id="quick-switcher.open"]',
-        ),
+        document.querySelector('header button[aria-label="More actions"]'),
         document.querySelector('[role="tree"]'),
         document.querySelector(".cm-content"),
       ];
@@ -2227,12 +2343,10 @@ describe("skribeum shell", () => {
     });
     expect(tabOrderSound).toBe(true);
 
-    // The header action is keyboard-focusable.
+    // The header overflow is keyboard-focusable.
     await browser.execute(() => {
       document
-        .querySelector<HTMLElement>(
-          'header [data-command-id="quick-switcher.open"]',
-        )
+        .querySelector<HTMLElement>('header button[aria-label="More actions"]')
         ?.focus();
     });
     expect(await activeElementDescriptor()).toContain("button");
@@ -2509,6 +2623,122 @@ describe("skribeum shell", () => {
       () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME) === LIVE_PREVIEW_NOTE_CONTENT,
       { timeout: 10000, timeoutMsg: "task source did not restore" },
     );
+  });
+
+  it("opens_task_status_by_contextual_overflow_row_and_applies_by_tap", async () => {
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    await $(".cm-skr-task-checkbox").waitForExist({ timeout: 15000 });
+
+    await placeCursorAtLineEnd("Review task");
+    await $('button[aria-label="More actions"]').click();
+    let menu = $('[data-testid="overlay-sheet"]');
+    await menu.waitForDisplayed({ timeout: 10000 });
+    expect(
+      await menu.$('[data-command-id="task.set-status"]').isDisplayed(),
+    ).toBe(true);
+    await browser.keys(Key.Escape);
+
+    await browser.keys([modifierKey, "e"]);
+    await $('[data-testid="source-mode-chip"]').waitForDisplayed({
+      timeout: 10000,
+    });
+    await $('button[aria-label="More actions"]').click();
+    menu = $('[data-testid="overlay-sheet"]');
+    await menu.waitForDisplayed({ timeout: 10000 });
+    const sourceTaskRoute = menu.$('[data-command-id="task.set-status"]');
+    await sourceTaskRoute.waitForDisplayed({ timeout: 10000 });
+    await sourceTaskRoute.click();
+    const sourceListbox = $(".cm-skr-task-palette");
+    await sourceListbox.waitForDisplayed({ timeout: 10000 });
+    expect(await $('[data-testid="source-mode-chip"]').isDisplayed()).toBe(
+      true,
+    );
+    await browser.keys(Key.Escape);
+    await browser.keys([modifierKey, "e"]);
+    await $(".cm-skr-task-checkbox").waitForExist({ timeout: 10000 });
+
+    await placeCursorAtLineEnd("body text here");
+    await $('button[aria-label="More actions"]').click();
+    menu = $('[data-testid="overlay-sheet"]');
+    await menu.waitForDisplayed({ timeout: 10000 });
+    expect(
+      await menu.$('[data-command-id="task.set-status"]').isExisting(),
+    ).toBe(false);
+    await browser.keys(Key.Escape);
+    await menu.waitForExist({ reverse: true, timeout: 10000 });
+
+    await browser.execute(() => {
+      document.querySelector<HTMLElement>(".cm-skr-task-checkbox")?.focus();
+    });
+    await $('button[aria-label="More actions"]').click();
+    menu = $('[data-testid="overlay-sheet"]');
+    await menu.waitForDisplayed({ timeout: 10000 });
+    expect(
+      await menu.$('[data-command-id="task.set-status"]').isDisplayed(),
+    ).toBe(true);
+    const taskRoute = menu.$('[data-command-id="task.set-status"]');
+    await taskRoute.waitForDisplayed({ timeout: 10000 });
+    await taskRoute.click();
+    const listbox = $(".cm-skr-task-palette");
+    await listbox.waitForDisplayed({ timeout: 10000 });
+    await browser.pause(100);
+    expect(await listbox.isDisplayed()).toBe(true);
+    expect(noteOnDisk(LIVE_PREVIEW_NOTE_NAME)).toBe(LIVE_PREVIEW_NOTE_CONTENT);
+    await browser.execute(() => {
+      document
+        .querySelector(".skr-note-title-region")
+        ?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    await listbox.waitForDisplayed({ reverse: true, timeout: 10000 });
+    expect(noteOnDisk(LIVE_PREVIEW_NOTE_NAME)).toBe(LIVE_PREVIEW_NOTE_CONTENT);
+
+    await $('button[aria-label="More actions"]').click();
+    menu = $('[data-testid="overlay-sheet"]');
+    await menu.waitForDisplayed({ timeout: 10000 });
+    await menu.$('[data-command-id="task.set-status"]').click();
+    await listbox.waitForDisplayed({ timeout: 10000 });
+    await browser.keys(Key.Escape);
+    await listbox.waitForDisplayed({ reverse: true, timeout: 10000 });
+    expect(noteOnDisk(LIVE_PREVIEW_NOTE_NAME)).toBe(LIVE_PREVIEW_NOTE_CONTENT);
+
+    await browser.keys([modifierKey, "p"]);
+    const commandInput = $('[role="combobox"]');
+    await commandInput.waitForDisplayed({ timeout: 10000 });
+    await commandInput.addValue("task set status");
+    await browser.waitUntil(
+      async () =>
+        (await $('[role="option"][aria-selected="true"]').getText()).includes(
+          "Task: set status",
+        ),
+      { timeout: 10000, timeoutMsg: "task status route was not selected" },
+    );
+    await browser.keys(Key.Enter);
+    await listbox.waitForDisplayed({ timeout: 10000 });
+    expect(
+      await browser.execute(() =>
+        document.activeElement?.classList.contains("cm-skr-task-palette"),
+      ),
+    ).toBe(true);
+    await browser.keys(Key.Escape);
+    await listbox.waitForDisplayed({ reverse: true, timeout: 10000 });
+
+    await $('button[aria-label="More actions"]').click();
+    menu = $('[data-testid="overlay-sheet"]');
+    await menu.waitForDisplayed({ timeout: 10000 });
+    await menu.$('[data-command-id="task.set-status"]').click();
+    await listbox.waitForDisplayed({ timeout: 10000 });
+    const cancelledStatus = $(
+      '.cm-skr-task-palette [role=option][data-task-status="-"]',
+    );
+    await cancelledStatus.waitForDisplayed({ timeout: 10000 });
+    expect(await cancelledStatus.getText()).toContain("Cancelled");
+    await cancelledStatus.click();
+    await browser.waitUntil(
+      () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [-] Review task"),
+      { timeout: 10000, timeoutMsg: "task status tap did not persist" },
+    );
+    await $(".cm-skr-task-checkbox").click();
+    await waitForDisk(LIVE_PREVIEW_NOTE_NAME, LIVE_PREVIEW_NOTE_CONTENT);
   });
 
   it("supports_the_task_status_hold_drag_release_gesture", async () => {
@@ -4508,7 +4738,7 @@ describe("skribeum core editing surfaces", () => {
     await browser.execute(() => {
       localStorage.removeItem("skribeum.demo.settings");
     });
-    await browser.refresh();
+    await browser.url(browserDemoUrl());
     await $(".demo-shell").waitForExist({ timeout: 15000 });
     await browser.waitUntil(
       async () => new URL(await browser.getUrl()).searchParams.has("note"),

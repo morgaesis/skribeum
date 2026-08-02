@@ -16,6 +16,12 @@ matching region wins. Every table row is evaluated against that one region,
 so moving the cursor selects a new region and restores decorations in the
 previous one.
 
+Whole-note source mode omits this decoration engine while retaining Markdown
+parsing and syntax highlighting. Every source character then remains in the
+CodeMirror text DOM, the properties panel is absent, and the Syntax reveal
+setting has no presentation replacement to modify. Leaving source mode restores
+this table with the setting and editor state unchanged.
+
 Frontmatter follows the same rule as other source-backed constructs. Its
 properties panel is the primary presentation while the cursor is elsewhere.
 Entering any line in the frontmatter block reveals the complete source block

@@ -14,6 +14,10 @@ const folderAccessSupported = localFolderAccessSupported();
 const unsupportedReason = folderAccessSupported
   ? null
   : "This browser does not support local folder access.";
+const initialEmptyVaultDemo =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).has("empty-vault");
+let emptyVaultDemo = $state(initialEmptyVaultDemo);
 const storageMessage = $derived.by(() => {
   if (sourceStatus.source === "folder") {
     const skipped =
@@ -35,10 +39,26 @@ onMount(() => subscribeDemoVaultStatus((next) => (sourceStatus = next)));
 if (typeof window !== "undefined") {
   const demoWindow = window as Window & {
     __SKRIBEUM_E2E_NOTE__?: string;
+    __SKRIBEUM_E2E_SHOW_EMPTY_VAULT__?: () => void;
+    __SKRIBEUM_E2E_VAULT_PICKER_CALLS__?: number;
     __SKRIBEUM_E2E_VAULT__?: string;
   };
-  demoWindow.__SKRIBEUM_E2E_VAULT__ = "skribeum-demo";
-  demoWindow.__SKRIBEUM_E2E_NOTE__ = DEMO_INITIAL_NOTE;
+  const configureDemoVault = (empty: boolean) => {
+    if (empty) {
+      delete demoWindow.__SKRIBEUM_E2E_VAULT__;
+      delete demoWindow.__SKRIBEUM_E2E_NOTE__;
+      demoWindow.__SKRIBEUM_E2E_VAULT_PICKER_CALLS__ = 0;
+    } else {
+      delete demoWindow.__SKRIBEUM_E2E_VAULT_PICKER_CALLS__;
+      demoWindow.__SKRIBEUM_E2E_VAULT__ = "skribeum-demo";
+      demoWindow.__SKRIBEUM_E2E_NOTE__ = DEMO_INITIAL_NOTE;
+    }
+  };
+  configureDemoVault(initialEmptyVaultDemo);
+  demoWindow.__SKRIBEUM_E2E_SHOW_EMPTY_VAULT__ = () => {
+    configureDemoVault(true);
+    emptyVaultDemo = true;
+  };
 }
 </script>
 
@@ -73,10 +93,12 @@ if (typeof window !== "undefined") {
     </aside>
   {/if}
   <div class="demo-app">
-    <Skribeum
-      openVaultDisabledReason={unsupportedReason}
-      navigationSurface="browser"
-    />
+    {#key emptyVaultDemo}
+      <Skribeum
+        openVaultDisabledReason={emptyVaultDemo ? null : unsupportedReason}
+        navigationSurface="browser"
+      />
+    {/key}
   </div>
 </div>
 

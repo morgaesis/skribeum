@@ -90,8 +90,35 @@ select {
 }
 
 .skr-app-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
   flex: none;
   height: 2.5rem;
+  padding-inline: 0.25rem;
+}
+
+.skr-header-leading,
+.skr-header-trailing,
+.skr-history,
+.skr-note-title-region {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.skr-history {
+  gap: 0.125rem;
+}
+
+.skr-header-trailing {
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.skr-note-title-region {
+  gap: 0.5rem;
 }
 
 .skr-note-title {
@@ -111,9 +138,60 @@ select {
   opacity: 0;
 }
 
-.skr-phone-files,
-.skr-phone-overflow {
+.skr-header-icon-button.skr-phone-files {
   display: none;
+}
+
+.skr-header-icon-button {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  min-height: 2rem;
+  place-items: center;
+  border: 0;
+  border-radius: 0.25rem;
+  padding: 0;
+  background: transparent;
+  color: var(--skr-text-muted);
+}
+
+.skr-header-icon-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.skr-header-icon-button svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+}
+
+.skr-header-overflow svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.skr-source-chip {
+  flex: none;
+  border-radius: 0.25rem;
+  padding: 0.25rem 0.375rem;
+  background: var(--skr-surface-subtle);
+  color: var(--skr-text-muted);
+  font-family: var(--skr-font-mono);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.skr-empty-vault {
+  display: grid;
+  height: 100%;
+  place-items: center;
+  background: var(--skr-surface);
 }
 
 .skr-shell {
@@ -141,6 +219,27 @@ select {
   padding: 0.625rem 0.75rem;
   background: transparent;
   text-align: start;
+}
+
+.skr-action-menu button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.skr-action-menu-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.skr-action-menu-check {
+  display: inline-block;
+  width: 1rem;
+  flex: none;
+  color: var(--skr-text-muted);
+  font-family: var(--skr-font-mono);
+  text-align: center;
 }
 
 .skr-action-menu kbd {
@@ -420,46 +519,34 @@ html body .settings-dialog {
     padding: env(safe-area-inset-top) 0.125rem 0;
   }
 
-  .skr-note-title {
+  .skr-note-title-region {
+    justify-content: center;
     padding-inline: 0.5rem;
     text-align: center;
   }
 
-  .skr-phone-files,
-  .skr-phone-overflow {
+  .skr-header-icon-button.skr-phone-files {
     display: grid;
   }
 
-  .skr-phone-icon-button {
-    place-items: center;
+  .skr-phone-files,
+  .skr-header-overflow {
     width: 2.75rem;
     height: 2.75rem;
-    border: 0;
-    padding: 0;
-    background: transparent;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
   }
 
-  .skr-phone-icon-button svg {
+  .skr-phone-files svg,
+  .skr-header-overflow svg {
     width: 1.25rem;
     height: 1.25rem;
-    fill: none;
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    stroke-width: 1.75;
   }
 
-  .skr-phone-overflow svg {
-    fill: currentColor;
-    stroke: none;
-  }
-
-  .skr-open-vault,
-  .skr-desktop-actions,
   .skr-desktop-sidebar,
   .skr-desktop-outline,
   .skr-history,
-  .skr-app-header > .skr-warning {
+  .skr-read-only-badge {
     display: none;
   }
 

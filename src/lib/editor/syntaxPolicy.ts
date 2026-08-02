@@ -76,3 +76,26 @@ export function noteRenderingExtensions(
     decorationEngine(context),
   ];
 }
+
+/**
+ * Markdown parsing and token colour without reading-presentation decorations.
+ * The live document remains unchanged while every source character renders.
+ */
+export function noteSourceExtensions(
+  doc: DocumentText,
+  taskStatuses: readonly TaskStatus[] = DEFAULT_TASK_STATUSES,
+): Extension[] {
+  if (hasOverlongLine(doc)) {
+    return [];
+  }
+  const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
+  return [
+    markdown({
+      base: markdownLanguage,
+      codeLanguages: codeLanguage,
+      extensions: obsidianMarkdownExtensionsFor(normalizedTaskStatuses),
+    }),
+    syntaxHighlighting(tokenHighlightStyle, { fallback: true }),
+    taskStatusConfiguration.of(normalizedTaskStatuses),
+  ];
+}

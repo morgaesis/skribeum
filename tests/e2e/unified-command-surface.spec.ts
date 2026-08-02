@@ -58,18 +58,81 @@ beforeEach(async () => {
   const target = new URL(demoUrl);
   testRun += 1;
   target.searchParams.set("test-run", String(testRun));
+  target.searchParams.set("note", "quickstart.md");
   await browser.url(target.href);
   await $(".demo-shell").waitForExist({ timeout: 15000 });
   await browser.waitUntil(
-    async () => new URL(await browser.getUrl()).searchParams.has("note"),
-    { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
+    async () => (await $(".cm-content").getText()).includes("Quickstart"),
+    {
+      timeout: 15000,
+      timeoutMsg: "browser demo target did not open",
+    },
   );
-  const editor = $(".cm-content");
-  await editor.waitForDisplayed({ timeout: 15000 });
-  await editor.click();
+  await $(".cm-content").click();
 });
 
 describe("work package 1 browser behavior", () => {
+  it("centers the empty-vault action and keeps it in overflow", async () => {
+    await browser.execute(() =>
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_SHOW_EMPTY_VAULT__?: () => void;
+        }
+      ).__SKRIBEUM_E2E_SHOW_EMPTY_VAULT__?.(),
+    );
+
+    const openVault = $('.skr-empty-vault [data-command-id="vault.open"]');
+    await openVault.waitForDisplayed({ timeout: 15000 });
+    expect(await openVault.getText()).toBe("Open vault");
+    const centered = await browser.execute(() => {
+      const button = document.querySelector<HTMLElement>(
+        '.skr-empty-vault [data-command-id="vault.open"]',
+      );
+      if (button === null) return null;
+      const bounds = button.getBoundingClientRect();
+      return {
+        horizontal: bounds.left + bounds.width / 2,
+        vertical: bounds.top + bounds.height / 2,
+        viewport: window.innerWidth / 2,
+        readingArea: (() => {
+          const area = button
+            .closest(".skr-empty-vault")
+            ?.getBoundingClientRect();
+          return area === undefined ? null : area.top + area.height / 2;
+        })(),
+        headings: [...document.querySelectorAll("h1, h2")].map(
+          (heading) => heading.textContent?.trim() ?? "",
+        ),
+      };
+    });
+    expect(
+      Math.abs((centered?.horizontal ?? 0) - (centered?.viewport ?? 1)),
+    ).toBeLessThan(2);
+    expect(
+      Math.abs((centered?.vertical ?? 0) - (centered?.readingArea ?? 1)),
+    ).toBeLessThan(2);
+    expect(centered?.headings).toEqual(["Skribeum"]);
+
+    await $('button[aria-label="More actions"]').click();
+    const overflowOpenVault = $(
+      '[data-testid="overlay-sheet"] [data-command-id="vault.open"]',
+    );
+    await overflowOpenVault.waitForExist({ timeout: 10000 });
+    await overflowOpenVault.click();
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          () =>
+            (
+              window as Window & {
+                __SKRIBEUM_E2E_VAULT_PICKER_CALLS__?: number;
+              }
+            ).__SKRIBEUM_E2E_VAULT_PICKER_CALLS__ === 1,
+        ),
+      { timeout: 5000, timeoutMsg: "overflow did not invoke the vault picker" },
+    );
+  });
+
   it("accepts native typing and contains keyboard input within the surface", async () => {
     const editorBefore = await browser.execute(
       () => document.querySelector(".cm-content")?.textContent ?? "",

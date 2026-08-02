@@ -52,6 +52,7 @@ import {
   type SettingsState,
   SettingsStore,
 } from "./lib/features/settingsStore";
+import { TOGGLE_SOURCE_MODE_COMMAND } from "./lib/features/sourceMode";
 import {
   VIEW_CANVAS,
   VIEW_COMMAND_SURFACE,
@@ -63,7 +64,11 @@ import {
   type TagAffordanceOptions,
   type TagCatalogEntry,
 } from "./lib/features/tags";
-import { registerTaskStatusCommands } from "./lib/features/taskCommands";
+import {
+  registerTaskStatusCommands,
+  TASK_STATUS_MENU_COMMAND,
+  taskStatusMarkerForContext,
+} from "./lib/features/taskCommands";
 import {
   checkForUpdate,
   hasDesktopRuntime,
@@ -95,6 +100,7 @@ import {
   vaultTree,
   watchSubscribe,
 } from "./lib/ipc/vault";
+import { resolveNoteTitle } from "./lib/noteTitles";
 import OutlinePanel from "./lib/OutlinePanel.svelte";
 import {
   type CommandContext,
@@ -177,7 +183,11 @@ type SheetId = "file-tree" | "outline" | "overflow";
 let activeSheet = $state<SheetId | null>(null);
 let narrowViewport = $state(false);
 let noteTitleVisible = $state(true);
+let currentNoteSource = $state("");
+let sourceMode = $state(false);
 let surfaceFocusOrigin: HTMLElement | null = null;
+let taskStatusSurfaceMarker = $state<number | null>(null);
+let overflowContextPrepared = false;
 let outlineOpen = $state(false);
 let outlineEntries = $state<OutlineEntry[]>([]);
 /** The live query of the open picker overlay. */
@@ -316,6 +326,7 @@ function scheduleOutlineRefresh() {
 }
 
 function openOverlay(id: string, initialQuery = "") {
+  taskStatusSurfaceMarker = currentTaskStatusMarker();
   if (
     surfaceFocusOrigin === null &&
     document.activeElement instanceof HTMLElement
@@ -346,6 +357,10 @@ function openSetting(id: string) {
 }
 
 function openSheet(id: SheetId, origin?: HTMLElement) {
+  if (id === "overflow" && !overflowContextPrepared) {
+    prepareOverflowContext();
+  }
+  overflowContextPrepared = false;
   if (
     surfaceFocusOrigin === null &&
     (origin !== undefined || document.activeElement instanceof HTMLElement)
@@ -365,6 +380,8 @@ function runSurfaceCommand(id: string, origin: HTMLElement) {
 
 function closeSheet() {
   activeSheet = null;
+  taskStatusSurfaceMarker = null;
+  overflowContextPrepared = false;
   restoreSurfaceFocus();
 }
 
@@ -463,6 +480,7 @@ function commandContext(): CommandContext {
     view: editor?.getView() ?? null,
     openNote: (path) => navigateToNote(path),
     createNote: createNewNote,
+    openVault: () => pickVault(),
     openView: (id) => {
       if (id === VIEW_OUTLINE) {
         refreshOutline();
@@ -516,11 +534,20 @@ function commandContext(): CommandContext {
     followLink: followLinkUnderCursor,
     copyNoteLink,
     copyHeadingLink,
+    toggleSourceMode: () => {
+      if (note === null) {
+        return false;
+      }
+      sourceMode = !sourceMode;
+      return true;
+    },
+    taskStatusMarkerFrom: taskStatusSurfaceMarker,
   };
 }
 
 const onGlobalKeydown = globalKeydownHandler(registry, commandContext);
 const actionCommands = $derived(registry.pointerCommands("action-menu"));
+const vaultOpenCommand = registry.command("vault.open");
 const overflowCommands = $derived([
   {
     command: registry.command("quick-switcher.open"),
@@ -536,11 +563,6 @@ const overflowCommands = $derived([
   },
 ]);
 
-function noteDisplayName(path: string): string {
-  const name = path.split("/").at(-1) ?? path;
-  return name.replace(/\.[^.]+$/u, "");
-}
-
 function noteOpensWithHeading(source: string): boolean {
   const [first = "", second = ""] = source.split(/\r?\n/u, 2);
   return (
@@ -551,10 +573,34 @@ function noteOpensWithHeading(source: string): boolean {
 
 const shellTitle = $derived(
   note !== null && selectedPath !== null
-    ? noteDisplayName(selectedPath)
+    ? resolveNoteTitle({ path: selectedPath, source: currentNoteSource })
+        .displayTitle
     : STRINGS.appTitle,
 );
 const shellTitleVisible = $derived(note === null || noteTitleVisible);
+
+function currentTaskStatusMarker(
+  focusTarget: EventTarget | null = document.activeElement,
+): number | null {
+  const view = editor?.getView();
+  return view === undefined
+    ? null
+    : taskStatusMarkerForContext(view, focusTarget);
+}
+
+function prepareOverflowContext(
+  focusTarget: EventTarget | null = document.activeElement,
+) {
+  taskStatusSurfaceMarker = currentTaskStatusMarker(focusTarget);
+  overflowContextPrepared = true;
+}
+
+function contextualOverflowCommands() {
+  const taskCommand = registry.command(TASK_STATUS_MENU_COMMAND);
+  return taskCommand !== undefined && taskStatusSurfaceMarker !== null
+    ? [taskCommand]
+    : [];
+}
 
 function formattedCommandKeybinding(
   command: ReturnType<typeof registry.command>,
@@ -574,9 +620,15 @@ $effect(() => {
 });
 
 function runActionCommand(id: string) {
+  const context = commandContext();
   activeSheet = null;
+  taskStatusSurfaceMarker = null;
   void tick().then(() => {
-    registry.run(id, commandContext());
+    const handled = registry.run(id, context);
+    if (handled && id === TASK_STATUS_MENU_COMMAND) {
+      surfaceFocusOrigin = null;
+      return;
+    }
     if (activeOverlay === null && activeSheet === null) {
       restoreSurfaceFocus();
     }
@@ -710,9 +762,15 @@ function onOverlayPick(item: PickerItem) {
     // consumed it. Restoring focus first can reconcile a browser selection
     // change before the command reads the CodeMirror state.
     activeOverlay = null;
-    const handled = registry.run(item.value, commandContext());
+    const context = commandContext();
+    taskStatusSurfaceMarker = null;
+    const handled = registry.run(item.value, context);
     if (activeOverlay === null && activeSheet === null) {
-      if (handled && item.value === "navigation.follow-link") {
+      if (
+        handled &&
+        (item.value === "navigation.follow-link" ||
+          item.value === TASK_STATUS_MENU_COMMAND)
+      ) {
         surfaceFocusOrigin = null;
       } else {
         restoreSurfaceFocus();
@@ -818,7 +876,10 @@ function copyOutlineHeading(heading: string) {
   });
 }
 
-function onEditorDocChanged() {
+function onEditorDocChanged(source: string, path: string | null) {
+  if (path === selectedPath) {
+    currentNoteSource = source;
+  }
   if (outlineOpen) {
     scheduleOutlineRefresh();
   }
@@ -991,6 +1052,8 @@ async function openVaultAtPath(path: string) {
     tree = nextTree;
     selectedPath = null;
     note = null;
+    currentNoteSource = "";
+    sourceMode = false;
     missingAddress = null;
     contentView = null;
     canvas = null;
@@ -1081,6 +1144,8 @@ async function openNote(path: string): Promise<boolean> {
       pushBanner({ text: STRINGS.noteRecoveredNotice });
     }
     noteTitleVisible = !noteOpensWithHeading(loaded.text);
+    currentNoteSource = loaded.text;
+    sourceMode = false;
     note = loaded;
     missingAddress = null;
     contentView = null;
@@ -1104,6 +1169,8 @@ async function openNote(path: string): Promise<boolean> {
     }
     if (isMissingNoteError(error)) {
       note = null;
+      currentNoteSource = "";
+      sourceMode = false;
       contentView = null;
       canvas = null;
       canvasError = null;
@@ -1233,6 +1300,8 @@ async function openCanvas(path: string) {
       return;
     }
     note = null;
+    currentNoteSource = "";
+    sourceMode = false;
     canvas = parsed;
     canvasPreviews = Object.fromEntries(previews);
     canvasError = null;
@@ -1246,6 +1315,8 @@ async function openCanvas(path: string) {
       return;
     }
     note = null;
+    currentNoteSource = "";
+    sourceMode = false;
     canvas = null;
     canvasPreviews = {};
     canvasError = `${STRINGS.canvasParseFailed}: ${String(error)}`;
@@ -1508,111 +1579,90 @@ onMount(() => {
   class="skr-shell flex h-screen flex-col overflow-hidden"
   inert={activeSheet !== null || activeOverlay !== null}
 >
-  <header class="skr-app-header flex items-center gap-3 border-b px-3">
-    <button
-      type="button"
-      class="skr-phone-files skr-phone-icon-button"
-      disabled={vault === null}
-      data-command-id="file-tree.open"
-      aria-label={STRINGS.mobileFiles}
-      aria-haspopup="dialog"
-      onclick={(event) =>
-        runSurfaceCommand("file-tree.open", event.currentTarget)}
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M3.75 5.75h6l1.5 2h9v10.5h-16.5z" />
-      </svg>
-    </button>
-    <button
-      type="button"
-      class="skr-control skr-open-vault rounded border px-2 text-sm"
-      onclick={pickVault}
-      disabled={openVaultDisabledReason !== null}
-      title={openVaultDisabledReason ?? undefined}
-    >
-      {STRINGS.openVault}
-    </button>
-    <div class="skr-history flex items-center gap-1" aria-label={STRINGS.navigationHistoryLabel}>
+  <header class="skr-app-header border-b">
+    <div class="skr-header-leading">
+      <h1 class="sr-only">{STRINGS.appTitle}</h1>
       <button
         type="button"
-        class="skr-control rounded border px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-        disabled={!navigationState.canGoBack}
-        data-command-id="navigation.back"
-        onclick={() => registry.run("navigation.back", commandContext())}
-      >
-        {STRINGS.navigationBack}
-      </button>
-      <button
-        type="button"
-        class="skr-control rounded border px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-        disabled={!navigationState.canGoForward}
-        data-command-id="navigation.forward"
-        onclick={() => registry.run("navigation.forward", commandContext())}
-      >
-        {STRINGS.navigationForward}
-      </button>
-    </div>
-    <h1
-      class="skr-note-title m-0"
-      class:skr-note-title-hidden={!shellTitleVisible}
-      data-testid="note-title"
-    >
-      {shellTitle}
-    </h1>
-    <div class="skr-desktop-actions ml-auto flex items-center gap-1">
-      <button
-        type="button"
-        class="skr-control rounded border px-2 text-sm"
-        data-command-id="quick-switcher.open"
-        onclick={(event) =>
-          runSurfaceCommand("quick-switcher.open", event.currentTarget)}
-      >
-        {STRINGS.quickSwitcherLabel}
-      </button>
-      <button
-        type="button"
-        class="skr-control rounded border px-2 text-sm"
-        data-command-id="vault-search.open"
-        onclick={(event) =>
-          runSurfaceCommand("vault-search.open", event.currentTarget)}
-      >
-        {STRINGS.mobileSearch}
-      </button>
-      <button
-        type="button"
-        class="skr-control rounded border px-2 text-sm"
-        data-testid="command-palette-entry-desktop"
-        data-command-id="palette.open"
-        onclick={(event) =>
-          runSurfaceCommand("palette.open", event.currentTarget)}
-      >
-        {STRINGS.mobileCommands}
-      </button>
-      <button
-        type="button"
-        class="skr-control rounded border px-2 text-sm"
+        class="skr-phone-files skr-header-icon-button"
+        disabled={vault === null}
+        data-command-id="file-tree.open"
+        aria-label={STRINGS.mobileFiles}
         aria-haspopup="dialog"
+        onclick={(event) =>
+          runSurfaceCommand("file-tree.open", event.currentTarget)}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3.75 5.75h6l1.5 2h9v10.5h-16.5z" />
+        </svg>
+      </button>
+      <nav class="skr-history" aria-label={STRINGS.navigationHistoryLabel}>
+        <button
+          type="button"
+          class="skr-header-icon-button"
+          disabled={!navigationState.canGoBack}
+          data-command-id="navigation.back"
+          aria-label={STRINGS.navigationBack}
+          onclick={() => registry.run("navigation.back", commandContext())}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m14.5 6-6 6 6 6" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="skr-header-icon-button"
+          disabled={!navigationState.canGoForward}
+          data-command-id="navigation.forward"
+          aria-label={STRINGS.navigationForward}
+          onclick={() => registry.run("navigation.forward", commandContext())}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m9.5 6 6 6-6 6" />
+          </svg>
+        </button>
+      </nav>
+    </div>
+    <div class="skr-note-title-region">
+      <span
+        class="skr-note-title m-0"
+        class:skr-note-title-hidden={!shellTitleVisible}
+        aria-hidden="true"
+        data-testid="note-title"
+      >
+        {shellTitle}
+      </span>
+      {#if shellTitleVisible && note !== null}
+        <h2 class="sr-only">{shellTitle}</h2>
+      {/if}
+      {#if sourceMode}
+        <span class="skr-source-chip" data-testid="source-mode-chip">
+          {STRINGS.sourceModeBadge}
+        </span>
+      {/if}
+    </div>
+    <div class="skr-header-trailing">
+      {#if note?.readOnly || contentView === VIEW_CANVAS}
+        <span class="skr-warning skr-read-only-badge rounded px-2 py-0.5 text-xs">
+          {STRINGS.readOnlyBadge}
+        </span>
+      {/if}
+      <button
+        type="button"
+        class="skr-header-overflow skr-header-icon-button"
+        aria-label={STRINGS.overflowMenuLabel}
+        aria-haspopup="dialog"
+        onpointerdown={() => prepareOverflowContext()}
+        onfocus={(event) => prepareOverflowContext(event.relatedTarget)}
         onclick={(event) => openSheet("overflow", event.currentTarget)}
       >
-        {STRINGS.actionsLabel}
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="5" cy="12" r="1.75" />
+          <circle cx="12" cy="12" r="1.75" />
+          <circle cx="19" cy="12" r="1.75" />
+        </svg>
       </button>
     </div>
-    <button
-      type="button"
-      class="skr-phone-overflow skr-phone-icon-button"
-      aria-label={STRINGS.overflowMenuLabel}
-      aria-haspopup="dialog"
-      onclick={(event) => openSheet("overflow", event.currentTarget)}
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="5" cy="12" r="1.75" />
-        <circle cx="12" cy="12" r="1.75" />
-        <circle cx="19" cy="12" r="1.75" />
-      </svg>
-    </button>
-    {#if note?.readOnly || contentView === VIEW_CANVAS}
-      <span class="skr-warning rounded px-2 py-0.5 text-xs">{STRINGS.readOnlyBadge}</span>
-    {/if}
   </header>
 
   {#if collisionGroups.length > 0}
@@ -1690,6 +1740,7 @@ onMount(() => {
           {registry}
           {commandContext}
           settings={settingsState.document}
+          {sourceMode}
           {onConflict}
           {onWriteError}
           onDocChanged={onEditorDocChanged}
@@ -1698,7 +1749,7 @@ onMount(() => {
           {wikilinkNavigationOptions}
           {tagAffordanceOptions}
         />
-      {:else}
+      {:else if vault !== null}
         <!-- The scaffold fixture stays as the empty-state view. -->
         <Editor
           bind:this={editor}
@@ -1713,9 +1764,20 @@ onMount(() => {
           {wikilinkNavigationOptions}
           {tagAffordanceOptions}
         />
-        {#if vault === null}
+      {:else}
+        <div class="skr-empty-vault">
+          <button
+            type="button"
+            class="skr-control rounded border px-3 py-2"
+            disabled={openVaultDisabledReason !== null}
+            title={openVaultDisabledReason ?? undefined}
+            data-command-id="vault.open"
+            onclick={() => registry.run("vault.open", commandContext())}
+          >
+            {STRINGS.openVault}
+          </button>
           <p class="sr-only">{STRINGS.emptyStateHint}</p>
-        {/if}
+        </div>
       {/if}
     </section>
     {#if outlineOpen}
@@ -1752,7 +1814,12 @@ onMount(() => {
     />
   </Sheet>
 {:else if activeSheet === "overflow"}
-  <Sheet label={STRINGS.overflowMenuLabel} onClose={closeSheet} restoreFocus={false}>
+  <Sheet
+    label={STRINGS.overflowMenuLabel}
+    onClose={closeSheet}
+    restoreFocus={false}
+    variant={narrowViewport ? "sheet" : "anchored"}
+  >
     <nav class="skr-action-menu" aria-label={STRINGS.overflowMenuLabel}>
       {#each overflowCommands as item (item.command?.id)}
         {#if item.command !== undefined}
@@ -1773,25 +1840,48 @@ onMount(() => {
         <button
           type="button"
           data-command-id={command.id}
+          data-checked={command.id === TOGGLE_SOURCE_MODE_COMMAND
+            ? String(sourceMode)
+            : undefined}
+          aria-pressed={command.id === TOGGLE_SOURCE_MODE_COMMAND
+            ? sourceMode
+            : undefined}
+          disabled={command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null}
           onclick={() => runActionCommand(command.id)}
         >
-          <span>{command.title}</span>
+          <span class="skr-action-menu-label">
+            {#if command.id === TOGGLE_SOURCE_MODE_COMMAND}
+              <span class="skr-action-menu-check" aria-hidden="true">
+                {sourceMode ? "✓" : ""}
+              </span>
+            {/if}
+            <span>{command.title}</span>
+          </span>
           {#if formattedCommandKeybinding(command) !== undefined}
             <kbd>{formattedCommandKeybinding(command)}</kbd>
           {/if}
         </button>
       {/each}
-      <button
-        type="button"
-        disabled={openVaultDisabledReason !== null}
-        title={openVaultDisabledReason ?? undefined}
-        onclick={() => {
-          closeSheet();
-          void pickVault();
-        }}
-      >
-        {STRINGS.openVault}
-      </button>
+      {#each contextualOverflowCommands() as command (command.id)}
+        <button
+          type="button"
+          data-command-id={command.id}
+          onclick={() => runActionCommand(command.id)}
+        >
+          <span>{command.title}</span>
+        </button>
+      {/each}
+      {#if vaultOpenCommand !== undefined}
+        <button
+          type="button"
+          data-command-id={vaultOpenCommand.id}
+          disabled={openVaultDisabledReason !== null}
+          title={openVaultDisabledReason ?? undefined}
+          onclick={() => runActionCommand(vaultOpenCommand.id)}
+        >
+          <span>{vaultOpenCommand.title}</span>
+        </button>
+      {/if}
     </nav>
   </Sheet>
 {/if}

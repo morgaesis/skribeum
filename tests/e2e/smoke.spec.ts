@@ -24,6 +24,8 @@ import {
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
   SCRATCH_VAULT_PATH,
+  TABLE_EDITING_NOTE_CONTENT,
+  TABLE_EDITING_NOTE_NAME,
   TABLE_GEOMETRY_NOTE_CONTENT,
   TAG_COMPLETION_FINAL_LINE,
   TAG_COMPLETION_MIDDLE_LINE,
@@ -87,6 +89,16 @@ async function waitForDisk(name: string, expected: string) {
       timeoutMsg: `expected ${name} on disk to become ${JSON.stringify(expected)}, got ${JSON.stringify(noteOnDisk(name))}`,
     },
   );
+}
+
+async function dismissBannersForPath(name?: string) {
+  await browser.pause(250);
+  for (const banner of await $$('aside[role="alert"]')) {
+    if (name === undefined || (await banner.getText()).includes(name)) {
+      const controls = await banner.$$("button");
+      await controls.at(-1)?.click();
+    }
+  }
 }
 
 async function openNoteFromTree(name: string) {
@@ -963,18 +975,24 @@ function stableJson(value: unknown): string {
   });
 }
 
-async function dispatchFocusedKey(key: string): Promise<boolean> {
-  return browser.execute((nextKey: string) => {
-    const active = document.activeElement;
-    if (!(active instanceof HTMLElement)) return false;
-    const event = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: nextKey,
-    });
-    active.dispatchEvent(event);
-    return event.defaultPrevented;
-  }, key);
+async function pressFocusedKey(key: string, shiftKey = false): Promise<void> {
+  if (!shiftKey) {
+    await browser.keys(key);
+    return;
+  }
+  await browser.performActions([
+    {
+      type: "key",
+      id: "focused-keyboard",
+      actions: [
+        { type: "keyDown", value: Key.Shift },
+        { type: "keyDown", value: key },
+        { type: "keyUp", value: key },
+        { type: "keyUp", value: Key.Shift },
+      ],
+    },
+  ]);
+  await browser.releaseActions();
 }
 
 async function expectNoAxeViolations(surface: string) {
@@ -1691,6 +1709,769 @@ describe("skribeum shell", () => {
     }
   });
 
+  it("edits_rendered_table_cells_with_one_caret_and_exact_source_bytes", async () => {
+    await openNoteFromTree(TABLE_EDITING_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await $$(".cm-skr-table-grid")).length === 2,
+      { timeout: 15000, timeoutMsg: "table editing fixture did not render" },
+    );
+
+    const original = TABLE_EDITING_NOTE_CONTENT;
+    try {
+      const grids = await $$(".cm-skr-table-grid");
+      expect(await grids[0]?.getAttribute("role")).toBe("grid");
+      expect(await grids[0]?.getAttribute("aria-rowcount")).toBe("3");
+      expect(await grids[0]?.getAttribute("aria-colcount")).toBe("2");
+      expect(await grids[1]?.getAttribute("aria-rowcount")).toBe("31");
+      expect(await grids[1]?.getAttribute("aria-colcount")).toBe("2");
+      const firstRows = await grids[0]?.$$(":scope > [role='row']");
+      expect(firstRows).toHaveLength(3);
+      for (const [index, row] of (firstRows ?? []).entries()) {
+        expect(await row.getAttribute("aria-rowindex")).toBe(String(index + 1));
+      }
+      const headerCells = await firstRows?.[0]?.$$("[role='columnheader']");
+      expect(headerCells).toHaveLength(2);
+      const bodyCells = await grids[0]?.$$("[role='gridcell']");
+      expect(bodyCells).toHaveLength(4);
+      for (const [index, cell] of (headerCells ?? []).entries()) {
+        expect(await cell.getAttribute("aria-colindex")).toBe(
+          String(index + 1),
+        );
+        expect(await cell.getAttribute("aria-selected")).toBe("false");
+      }
+      for (const cell of bodyCells ?? []) {
+        expect(await cell.getAttribute("aria-selected")).toBe("false");
+      }
+      const firstBodyCell = grids[0]?.$(
+        '.cm-skr-table-cell[data-row="1"][data-column="0"]',
+      );
+      expect(await firstBodyCell?.getAttribute("role")).toBe("gridcell");
+      const clickPoint = await browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(
+          '.cm-skr-table-cell[data-row="1"][data-column="0"] .cm-content',
+        );
+        const walker = document.createTreeWalker(
+          content ?? document.body,
+          NodeFilter.SHOW_TEXT,
+        );
+        const text = walker.nextNode();
+        if (
+          content === null ||
+          text === null ||
+          (text.textContent ?? "") === ""
+        ) {
+          throw new Error("editable table cell text is missing");
+        }
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, 1);
+        const rect = range.getBoundingClientRect();
+        return {
+          x: Math.floor(rect.left + 1),
+          y: Math.round(rect.top + rect.height / 2),
+        };
+      });
+      await browser.performActions([
+        {
+          type: "pointer",
+          id: "table-cell-pointer",
+          parameters: { pointerType: "mouse" },
+          actions: [
+            {
+              type: "pointerMove",
+              duration: 0,
+              origin: "viewport",
+              x: clickPoint.x,
+              y: clickPoint.y,
+            },
+            { type: "pointerDown", button: 0 },
+            { type: "pointerUp", button: 0 },
+          ],
+        },
+      ]);
+      await browser.releaseActions();
+      await browser.waitUntil(
+        async () =>
+          (await firstBodyCell?.getAttribute("data-editing")) === "true",
+        { timeout: 10000, timeoutMsg: "table cell did not acquire its caret" },
+      );
+      expect(
+        await browser.execute(
+          () =>
+            document.activeElement?.classList.contains("cm-content") ?? false,
+        ),
+      ).toBe(true);
+      await browser.waitUntil(
+        () =>
+          browser.execute(() => {
+            const selection = getSelection();
+            const active = document.activeElement;
+            return (
+              active?.classList.contains("cm-content") === true &&
+              selection?.isCollapsed === true &&
+              selection.anchorNode !== null &&
+              active.contains(selection.anchorNode)
+            );
+          }),
+        { timeout: 10000 },
+      );
+      const insertFocusedText = async (text: string) => {
+        await $('.cm-skr-table-cell[data-editing="true"] .cm-content').addValue(
+          text,
+        );
+      };
+      await insertFocusedText("Z");
+      const endPoint = await browser.execute(() => {
+        const cell = document.querySelector<HTMLElement>(
+          '.cm-skr-table-cell[data-editing="true"]',
+        );
+        if (cell === null) {
+          throw new Error("editable table cell is missing");
+        }
+        const rect = cell.getBoundingClientRect();
+        return {
+          x: Math.floor(rect.right - 2),
+          y: Math.round(rect.top + rect.height / 2),
+        };
+      });
+      await browser.performActions([
+        {
+          type: "pointer",
+          id: "table-cell-end-pointer",
+          parameters: { pointerType: "mouse" },
+          actions: [
+            {
+              type: "pointerMove",
+              duration: 0,
+              origin: "viewport",
+              x: endPoint.x,
+              y: endPoint.y,
+            },
+            { type: "pointerDown", button: 0 },
+            { type: "pointerUp", button: 0 },
+          ],
+        },
+      ]);
+      await browser.releaseActions();
+
+      const initialTemplate = await browser.execute(
+        () =>
+          getComputedStyle(
+            document.querySelector<HTMLElement>(
+              ".cm-skr-table-row",
+            ) as HTMLElement,
+          ).gridTemplateColumns,
+      );
+      const templates: string[][] = [];
+      for (const character of [..."longer|"]) {
+        await insertFocusedText(character);
+        await viewportAfterPaint();
+        templates.push(
+          await browser.execute(() => {
+            const grid = document.querySelector(".cm-skr-table-grid");
+            return [
+              ...(grid?.querySelectorAll<HTMLElement>(".cm-skr-table-row") ??
+                []),
+            ].map((row) => getComputedStyle(row).gridTemplateColumns);
+          }),
+        );
+      }
+
+      const edited = original.replace("| café   |", "| Zcafélonger\\|   |");
+      await browser.keys([modifierKey, "p"]);
+      const sourceSurface = $('[data-testid="unified-command-surface"]');
+      await sourceSurface.waitForDisplayed({ timeout: 10000 });
+      await sourceSurface.$('[role="combobox"]').addValue("table edit source");
+      await browser.keys(Key.Enter);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 1,
+        { timeout: 10000 },
+      );
+      expect(await editorText()).toContain("Zcafélonger\\|");
+      await browser.keys(Key.Escape);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 2,
+        { timeout: 10000 },
+      );
+      await browser.keys([modifierKey, "s"]);
+      await waitForDisk(TABLE_EDITING_NOTE_NAME, edited);
+      for (const sample of templates) {
+        expect(new Set(sample).size).toBe(1);
+      }
+      expect(
+        templates.slice(0, 3).every((sample) => sample[0] === initialTemplate),
+      ).toBe(true);
+      for (let index = 3; index < templates.length; index += 1) {
+        expect(templates[index]?.[0]).not.toBe(templates[index - 1]?.[0]);
+      }
+      const oneCaret = await browser.execute(() => {
+        const parent = document.querySelector<HTMLElement>(
+          '[data-table-cell-active="true"]',
+        );
+        const cell = document.querySelector<HTMLElement>(
+          '.cm-skr-table-cell[data-editing="true"]',
+        );
+        return {
+          parentParked:
+            parent?.getAttribute("data-table-cell-active") === "true",
+          editing: cell?.dataset.editing ?? null,
+          selected: cell?.getAttribute("aria-selected") ?? null,
+          hostCaretHidden:
+            parent === null ||
+            [
+              ...parent.querySelectorAll<HTMLElement>(
+                ":scope > .cm-scroller > .cm-cursorLayer .cm-cursor",
+              ),
+            ].every((caret) => getComputedStyle(caret).display === "none"),
+          tabStops: [
+            ...document.querySelectorAll<HTMLElement>(
+              '.cm-skr-table-grid [tabindex="0"]',
+            ),
+          ].filter((element) => element.tabIndex === 0).length,
+        };
+      });
+      expect(oneCaret).toEqual({
+        parentParked: true,
+        editing: "true",
+        selected: "true",
+        hostCaretHidden: true,
+        tabStops: 1,
+      });
+
+      const travelEdge = await browser.execute(() => {
+        const cell = document.querySelector<HTMLElement>(
+          '.cm-skr-table-cell[data-editing="true"]',
+        );
+        if (cell === null) {
+          throw new Error("editable table cell is missing");
+        }
+        const rect = cell.getBoundingClientRect();
+        return {
+          x: Math.floor(rect.right - 2),
+          y: Math.round(rect.top + rect.height / 2),
+        };
+      });
+      await browser.performActions([
+        {
+          type: "pointer",
+          id: "table-travel-edge-pointer",
+          parameters: { pointerType: "mouse" },
+          actions: [
+            {
+              type: "pointerMove",
+              duration: 0,
+              origin: "viewport",
+              x: travelEdge.x,
+              y: travelEdge.y,
+            },
+            { type: "pointerDown", button: 0 },
+            { type: "pointerUp", button: 0 },
+          ],
+        },
+      ]);
+      await browser.releaseActions();
+      await pressFocusedKey("ArrowRight");
+      expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-column",
+        ),
+      ).toBe("1");
+      await pressFocusedKey("Tab");
+      expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-row",
+        ),
+      ).toBe("2");
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-column",
+        ),
+      ).toBe("0");
+      await pressFocusedKey("Tab", true);
+      expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-row",
+        ),
+      ).toBe("1");
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-column",
+        ),
+      ).toBe("1");
+
+      await browser.keys([modifierKey, "p"]);
+      const commandSurface = $('[data-testid="unified-command-surface"]');
+      await commandSurface.waitForDisplayed({ timeout: 10000 });
+      const commandInput = commandSurface.$('[role="combobox"]');
+      await commandInput.addValue("table edit source");
+      await browser.keys(Key.Enter);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 1,
+        { timeout: 10000 },
+      );
+      expect(await editorText()).toContain("| :--- | ---: |");
+      await browser.keys(Key.Escape);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 2,
+        { timeout: 10000 },
+      );
+      expect(await $(".cm-skr-table-grid").getAttribute("role")).toBe("grid");
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-row",
+        ),
+      ).toBe("1");
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-column",
+        ),
+      ).toBe("1");
+
+      await browser.keys(Key.Escape);
+      await browser.keys([modifierKey, "e"]);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 0,
+        { timeout: 10000 },
+      );
+      expect(await editorText()).toContain("| :--- | ---: |");
+      expect(await editorText()).toContain("| --- | --- |");
+      await browser.keys([modifierKey, "e"]);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 2,
+        { timeout: 10000 },
+      );
+      expect(await editorText()).not.toContain("| :--- | ---: |");
+      await placeCursorAtLineEnd("Large table follows.");
+      await pressFocusedKey("ArrowDown");
+      expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
+      expect(await $$('.cm-skr-table-cell[data-editing="true"]')).toHaveLength(
+        0,
+      );
+      await pressFocusedKey("ArrowDown");
+      expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-row",
+        ),
+      ).toBe("0");
+      for (let row = 1; row <= 30; row += 1) {
+        await pressFocusedKey("ArrowDown");
+        expect(
+          await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+            "data-row",
+          ),
+        ).toBe(String(row));
+      }
+      await pressFocusedKey("ArrowDown");
+      expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
+      expect(await $$('.cm-skr-table-cell[data-editing="true"]')).toHaveLength(
+        0,
+      );
+      await pressFocusedKey("ArrowUp");
+      expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-row",
+        ),
+      ).toBe("30");
+      await browser.keys(Key.Escape);
+      expect(await $$(".cm-skr-table-grid")).toHaveLength(2);
+      expect(await editorText()).not.toContain("| --- | --- |");
+
+      const renderedTables = await $$(".cm-skr-table-grid");
+      await renderedTables[0]
+        ?.$('.cm-skr-table-cell[data-row="2"][data-column="1"]')
+        .click();
+      await pressFocusedKey("Tab");
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-row",
+        ),
+      ).toBe("3");
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-column",
+        ),
+      ).toBe("0");
+      const tabGrown = edited.replace("| Ada | 10 |", "| Ada | 10 |\n| | |");
+      await browser.keys([modifierKey, "s"]);
+      await waitForDisk(TABLE_EDITING_NOTE_NAME, tabGrown);
+
+      await pressFocusedKey("Enter");
+      expect(
+        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
+          "data-row",
+        ),
+      ).toBe("4");
+      const enterGrown = tabGrown.replace(
+        "| Ada | 10 |\n| | |",
+        "| Ada | 10 |\n| | |\n| | |",
+      );
+      await browser.keys([modifierKey, "s"]);
+      await waitForDisk(TABLE_EDITING_NOTE_NAME, enterGrown);
+    } finally {
+      await openNoteFromTree(VISUAL_NOTE_NAME);
+      writeFileSync(
+        path.join(SCRATCH_VAULT_PATH, TABLE_EDITING_NOTE_NAME),
+        original,
+      );
+      await waitForDisk(TABLE_EDITING_NOTE_NAME, original);
+      await dismissBannersForPath(TABLE_EDITING_NOTE_NAME);
+    }
+  });
+
+  it("runs_rendered_table_structure_commands_by_keyboard_and_pointer", async () => {
+    const original = TABLE_EDITING_NOTE_CONTENT;
+    const firstTable = [
+      "| Name  | Score |",
+      "| :--- | ---: |",
+      "| café   | keep  |",
+      "| Ada | 10 |",
+    ].join("\n");
+    const tableRect = (cell = false) =>
+      browser.execute((selectCell: boolean) => {
+        const element = document.querySelector<HTMLElement>(
+          selectCell
+            ? '.cm-skr-table-grid .cm-skr-table-cell[data-row="1"][data-column="0"]'
+            : ".cm-skr-table-grid",
+        );
+        if (element === null) {
+          throw new Error("editable table surface is missing");
+        }
+        const rect = element.getBoundingClientRect();
+        return {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        };
+      }, cell);
+    const resetAndOpen = async () => {
+      await openNoteFromTree(VISUAL_NOTE_NAME);
+      writeFileSync(
+        path.join(SCRATCH_VAULT_PATH, TABLE_EDITING_NOTE_NAME),
+        original,
+      );
+      await waitForDisk(TABLE_EDITING_NOTE_NAME, original);
+      await dismissBannersForPath(TABLE_EDITING_NOTE_NAME);
+      await openNoteFromTree(TABLE_EDITING_NOTE_NAME);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 2,
+        { timeout: 15000 },
+      );
+    };
+    const focusBodyCell = async () => {
+      const tables = await $$(".cm-skr-table-grid");
+      await tables[0]
+        ?.$('.cm-skr-table-cell[data-row="1"][data-column="0"] .cm-content')
+        .click();
+      await $('.cm-skr-table-cell[data-editing="true"]').waitForExist({
+        timeout: 10000,
+      });
+    };
+    const runCommand = async (query: string, id: string) => {
+      await browser.keys([modifierKey, "p"]);
+      const surface = $('[data-testid="unified-command-surface"]');
+      await surface.waitForDisplayed({ timeout: 10000 });
+      await surface.$('[role="combobox"]').addValue(query);
+      await surface
+        .$(`[role="option"][data-command-id="${id}"]`)
+        .waitForDisplayed({ timeout: 10000 });
+      await browser.keys(Key.Enter);
+      await surface.waitForExist({ reverse: true, timeout: 10000 });
+    };
+    const runPointerCommand = async (id: string) => {
+      await $('button[aria-label="More actions"]').click();
+      const menu = $('nav[aria-label="More actions"]');
+      await menu.waitForDisplayed({ timeout: 10000 });
+      const command = menu.$(`button[data-command-id="${id}"]`);
+      await command.waitForDisplayed({ timeout: 10000 });
+      await command.click();
+      await menu.waitForExist({ reverse: true, timeout: 10000 });
+    };
+    const cases = [
+      {
+        id: "table.row.insert-above",
+        query: "table insert row above",
+        table: [
+          "| Name  | Score |",
+          "| :--- | ---: |",
+          "| | |",
+          "| café   | keep  |",
+          "| Ada | 10 |",
+        ].join("\n"),
+      },
+      {
+        id: "table.row.insert-below",
+        query: "table insert row below",
+        table: [
+          "| Name  | Score |",
+          "| :--- | ---: |",
+          "| café   | keep  |",
+          "| | |",
+          "| Ada | 10 |",
+        ].join("\n"),
+      },
+      {
+        id: "table.column.insert-before",
+        query: "table insert column left",
+        table: [
+          "| | Name  | Score |",
+          "| --- | :--- | ---: |",
+          "| | café   | keep  |",
+          "| | Ada | 10 |",
+        ].join("\n"),
+      },
+      {
+        id: "table.column.insert-after",
+        query: "table insert column right",
+        table: [
+          "| Name  | | Score |",
+          "| :--- | --- | ---: |",
+          "| café   | | keep  |",
+          "| Ada | | 10 |",
+        ].join("\n"),
+      },
+      {
+        id: "table.row.delete",
+        query: "table delete row",
+        table: ["| Name  | Score |", "| :--- | ---: |", "| Ada | 10 |"].join(
+          "\n",
+        ),
+      },
+      {
+        id: "table.column.delete",
+        query: "table delete column",
+        table: ["| Score |", "| ---: |", "| keep  |", "| 10 |"].join("\n"),
+      },
+    ] as const;
+
+    try {
+      for (const entry of cases) {
+        await resetAndOpen();
+        await focusBodyCell();
+        await runCommand(entry.query, entry.id);
+        const expected = original.replace(firstTable, entry.table);
+        await browser.keys([modifierKey, "s"]);
+        await waitForDisk(TABLE_EDITING_NOTE_NAME, expected);
+        expect(await $$(".cm-skr-table-grid")).toHaveLength(2);
+        expect(await editorText()).not.toContain("| :--- | ---: |");
+      }
+
+      for (const entry of cases) {
+        await resetAndOpen();
+        await focusBodyCell();
+        await runPointerCommand(entry.id);
+        const expected = original.replace(firstTable, entry.table);
+        await browser.keys([modifierKey, "s"]);
+        await waitForDisk(TABLE_EDITING_NOTE_NAME, expected);
+        expect(await $$(".cm-skr-table-grid")).toHaveLength(2);
+        expect(await editorText()).not.toContain("| :--- | ---: |");
+      }
+
+      await resetAndOpen();
+      await focusBodyCell();
+      await runPointerCommand("table.edit-source");
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 1,
+        { timeout: 10000 },
+      );
+      expect(await editorText()).toContain("| :--- | ---: |");
+      await browser.keys(Key.Escape);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 2,
+        { timeout: 10000 },
+      );
+
+      await resetAndOpen();
+      const before = await tableRect();
+      const rowStrip = $('[aria-label="Append table row"]');
+      await rowStrip.moveTo();
+      await viewportAfterPaint();
+      const afterRowHover = await tableRect();
+      for (const key of ["x", "y", "width", "height"] as const) {
+        expect(Math.abs(afterRowHover[key] - before[key])).toBeLessThanOrEqual(
+          1,
+        );
+      }
+      await rowStrip.click();
+      const rowExpected = original.replace(firstTable, `${firstTable}\n| | |`);
+      await browser.keys([modifierKey, "s"]);
+      await waitForDisk(TABLE_EDITING_NOTE_NAME, rowExpected);
+
+      await resetAndOpen();
+      const columnBefore = await tableRect();
+      const columnStrip = $('[aria-label="Append table column"]');
+      await columnStrip.moveTo();
+      await viewportAfterPaint();
+      const afterColumnHover = await tableRect();
+      for (const key of ["x", "y", "width", "height"] as const) {
+        expect(
+          Math.abs(afterColumnHover[key] - columnBefore[key]),
+        ).toBeLessThanOrEqual(1);
+      }
+      await columnStrip.click();
+      const columnExpected = original.replace(
+        firstTable,
+        [
+          "| Name  | Score | |",
+          "| :--- | ---: | --- |",
+          "| café   | keep  | |",
+          "| Ada | 10 | |",
+        ].join("\n"),
+      );
+      await browser.keys([modifierKey, "s"]);
+      await waitForDisk(TABLE_EDITING_NOTE_NAME, columnExpected);
+
+      await resetAndOpen();
+      await focusBodyCell();
+      const selectionEdge = await browser.execute(() => {
+        const cell = document.querySelector<HTMLElement>(
+          '.cm-skr-table-cell[data-editing="true"]',
+        );
+        if (cell === null) {
+          throw new Error("editable table cell is missing");
+        }
+        const rect = cell.getBoundingClientRect();
+        return {
+          x: Math.floor(rect.right - 2),
+          y: Math.round(rect.top + rect.height / 2),
+        };
+      });
+      await browser.performActions([
+        {
+          type: "pointer",
+          id: "table-selection-edge-pointer",
+          parameters: { pointerType: "mouse" },
+          actions: [
+            {
+              type: "pointerMove",
+              duration: 0,
+              origin: "viewport",
+              x: selectionEdge.x,
+              y: selectionEdge.y,
+            },
+            { type: "pointerDown", button: 0 },
+            { type: "pointerUp", button: 0 },
+          ],
+        },
+      ]);
+      await browser.releaseActions();
+      await pressFocusedKey("End");
+      expect(
+        await browser.execute(() => {
+          const content = document.querySelector<HTMLElement>(
+            '.cm-skr-table-cell[data-editing="true"] .cm-content',
+          );
+          const selection = window.getSelection();
+          const beforeCaret = document.createRange();
+          if (
+            content !== null &&
+            selection?.focusNode !== null &&
+            content.contains(selection?.focusNode ?? null)
+          ) {
+            beforeCaret.selectNodeContents(content);
+            beforeCaret.setEnd(
+              selection?.focusNode ?? content,
+              selection?.focusOffset ?? 0,
+            );
+          }
+          return {
+            focused: content?.contains(document.activeElement) ?? false,
+            atEnd:
+              selection !== null &&
+              content !== null &&
+              selection.isCollapsed &&
+              selection.focusNode !== null &&
+              content.contains(selection.focusNode) &&
+              beforeCaret.toString().length === content.textContent?.length,
+          };
+        }),
+      ).toEqual({ focused: true, atEnd: true });
+      await pressFocusedKey("ArrowRight", true);
+      await $(".cm-skr-table-selected").waitForExist({ timeout: 10000 });
+      expect(
+        await browser.execute(() => {
+          const copied = new Map<string, string>();
+          const clipboardData = {
+            clearData: Map.prototype.clear.bind(copied),
+            getData: Map.prototype.get.bind(copied),
+            setData: Map.prototype.set.bind(copied),
+          };
+          const event = new Event("copy", {
+            bubbles: true,
+            cancelable: true,
+          });
+          Object.defineProperty(event, "clipboardData", {
+            value: clipboardData,
+          });
+          document.activeElement?.dispatchEvent(event);
+          return copied.get("text/plain") ?? null;
+        }),
+      ).toBe(firstTable);
+      await browser.keys(Key.Backspace);
+      const deletedExpected = original.replace(firstTable, "");
+      await browser.keys([modifierKey, "s"]);
+      await waitForDisk(TABLE_EDITING_NOTE_NAME, deletedExpected);
+      expect(await $$(".cm-skr-table-grid")).toHaveLength(1);
+
+      await resetAndOpen();
+      const dragCellRect = await tableRect(true);
+      await $(
+        '.cm-skr-table-grid .cm-skr-table-cell[data-row="1"][data-column="0"]',
+      ).dragAndDrop(
+        {
+          x: -Math.round(dragCellRect.width / 2 + 8),
+          y: -Math.round(dragCellRect.height / 2 + 8),
+        },
+        { duration: 240 },
+      );
+      await $(".cm-skr-table-selected").waitForExist({ timeout: 10000 });
+      expect(await $$('.cm-skr-table-cell[data-editing="true"]')).toHaveLength(
+        0,
+      );
+      expect(await $$(".cm-skr-table-grid")).toHaveLength(2);
+      expect(await editorText()).not.toContain("| :--- | ---: |");
+      expect(
+        await browser.execute(() => {
+          const copied = new Map<string, string>();
+          const clipboardData = {
+            clearData: Map.prototype.clear.bind(copied),
+            getData: Map.prototype.get.bind(copied),
+            setData: Map.prototype.set.bind(copied),
+          };
+          const event = new Event("copy", {
+            bubbles: true,
+            cancelable: true,
+          });
+          Object.defineProperty(event, "clipboardData", {
+            value: clipboardData,
+          });
+          document.activeElement?.dispatchEvent(event);
+          return copied.get("text/plain") ?? null;
+        }),
+      ).toBe(firstTable);
+      await browser.keys(Key.Delete);
+      await browser.keys([modifierKey, "s"]);
+      await waitForDisk(
+        TABLE_EDITING_NOTE_NAME,
+        original.replace(firstTable, ""),
+      );
+      expect(await $$(".cm-skr-table-grid")).toHaveLength(1);
+    } finally {
+      await openNoteFromTree(VISUAL_NOTE_NAME);
+      writeFileSync(
+        path.join(SCRATCH_VAULT_PATH, TABLE_EDITING_NOTE_NAME),
+        original,
+      );
+      await waitForDisk(TABLE_EDITING_NOTE_NAME, original);
+      await dismissBannersForPath(TABLE_EDITING_NOTE_NAME);
+    }
+  });
+
   it("keeps_major_narrow_surfaces_inside_the_viewport", async () => {
     const surfaces: Array<{
       surface: string;
@@ -1888,6 +2669,7 @@ describe("skribeum shell", () => {
     expect(new Set(typography.headings).size).toBe(3);
     expect(typography.headings).not.toContain(null);
 
+    await dismissBannersForPath();
     mkdirSync(screenshotDirectory, { recursive: true });
     for (const theme of ["light", "dark"] as const) {
       await clearEditorSelection();
@@ -1898,6 +2680,7 @@ describe("skribeum shell", () => {
       });
       expect(caretColor).not.toBe("");
       expect(caretColor).not.toBe("rgba(0, 0, 0, 0)");
+      await dismissBannersForPath();
       await browser.saveScreenshot(
         path.join(screenshotDirectory, `after-editor-${theme}.png`),
       );
@@ -1919,6 +2702,7 @@ describe("skribeum shell", () => {
       });
       expect(revealDuration).toBeLessThan(200);
       await browser.pause(180);
+      await dismissBannersForPath();
       await browser.saveScreenshot(
         path.join(screenshotDirectory, `after-frontmatter-${theme}.png`),
       );
@@ -1934,6 +2718,7 @@ describe("skribeum shell", () => {
 
       await selectEditorText("Patient typography");
       await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 5000 });
+      await dismissBannersForPath();
       await browser.saveScreenshot(
         path.join(screenshotDirectory, `after-toolbar-${theme}.png`),
       );
@@ -3814,7 +4599,7 @@ describe("skribeum core editing surfaces", () => {
         .querySelector<HTMLElement>('[data-testid="settings-jump"]')
         ?.focus();
     });
-    expect(await dispatchFocusedKey("Enter")).toBe(true);
+    await pressFocusedKey("Enter");
     const jumpMenu = $('[data-testid="settings-jump-menu"]');
     await jumpMenu.waitForDisplayed({ timeout: 5000 });
     const menuTrap = await browser.execute(() => {
@@ -3844,8 +4629,8 @@ describe("skribeum core editing surfaces", () => {
         )
         ?.focus();
     });
-    expect(await dispatchFocusedKey("ArrowDown")).toBe(true);
-    expect(await dispatchFocusedKey("Enter")).toBe(true);
+    await pressFocusedKey("ArrowDown");
+    await pressFocusedKey("Enter");
     await jumpMenu.waitForExist({ reverse: true, timeout: 5000 });
     expect(
       await browser.execute(() => {

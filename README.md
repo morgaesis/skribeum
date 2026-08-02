@@ -49,6 +49,24 @@ the monospace face. A Source chip in the title region is the mode indicator.
 The Syntax reveal setting remains independent and controls caret-based marker
 reveal only in the normal reading presentation.
 
+## Tables
+
+Tables remain rendered while the document caret moves through the note. Click
+a cell to place the caret at that text position and edit inside the grid. Arrow
+keys cross cell and row boundaries, Tab and Shift+Tab move between cells, Enter
+moves down the current column, and Escape returns to the document after the
+table. Tab from the final cell and Enter from the final row append a padded row.
+Typing a pipe stores its Markdown-safe `\|` form without changing any other
+cell, delimiter, alignment marker, or existing padding.
+
+The command surface and More actions menu contain row and column insertion and
+deletion commands for the focused cell, plus `Table: edit source`. Pointer
+insertion strips at the bottom and right edges append a row or column.
+Extending a cell selection past its boundary selects the complete table, so
+copy preserves the exact Markdown source and Delete or Backspace removes the
+block. `Table: edit source` and `mod+e` are the deliberate routes to
+pipe-delimited source.
+
 ## Tasks
 
 Task markers belong to Task, Time, Importance, or Reference tracks. A short tap

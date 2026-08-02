@@ -6,10 +6,19 @@ all-features = true
 
 [advisories]
 yanked = "deny"
-# The gtk3 and unic advisory groups flag transitive dependencies of the Tauri
-# ecosystem itself; only direct workspace dependencies are held to the
-# unmaintained standard.
+# The gtk3 and unic advisory groups flag unmaintained transitive dependencies
+# of the Tauri ecosystem itself. Only direct workspace dependencies are held
+# to the unmaintained standard.
 unmaintained = "workspace"
+# Unsound advisories fail regardless of whether the affected crate is direct
+# or transitive. Vulnerability advisories fail at every dependency depth by
+# cargo-deny's default policy.
+unsound = "all"
+ignore = [
+  { id = "RUSTSEC-2024-0429", reason = "Tauri 2.11.5's Linux GTK 3 stack requires the glib 0.18 family" },
+]
+# An exception that no longer matches the resolved graph must be removed.
+unused-ignored-advisory = "deny"
 
 [licenses]
 # MPL-2.0 is required by cssparser, dtoa-short, and option-ext, all transitive

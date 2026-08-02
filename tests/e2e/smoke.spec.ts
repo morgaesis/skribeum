@@ -17,6 +17,8 @@ import {
   LIVE_PREVIEW_NOTE_NAME,
   MOTION_PREVIEW_NOTE_NAME,
   NAVIGATION_SOURCE_NOTE_NAME,
+  PHONE_HEADING_NOTE_NAME,
+  PHONE_PLAIN_NOTE_NAME,
   RENDERING_NOTE_CONTENT,
   RENDERING_NOTE_NAME,
   REVEAL_NOTE_CONTENT,
@@ -147,6 +149,89 @@ async function restoreDesktopViewport() {
       timeout: 10000,
       timeoutMsg: "viewport did not return above the narrow breakpoint",
     },
+  );
+}
+
+async function setSimulatedVisualViewport(
+  height: number,
+  offsetTop = 0,
+): Promise<void> {
+  await browser.execute(
+    ({ nextHeight, nextOffsetTop }) => {
+      type TestViewportWindow = Window & {
+        __SKRIBEUM_NATIVE_VISUAL_VIEWPORT__?: PropertyDescriptor;
+        __SKRIBEUM_TEST_VISUAL_VIEWPORT__?: EventTarget & {
+          height: number;
+          offsetLeft: number;
+          offsetTop: number;
+          width: number;
+        };
+      };
+      const target = window as TestViewportWindow;
+      if (target.__SKRIBEUM_TEST_VISUAL_VIEWPORT__ === undefined) {
+        target.__SKRIBEUM_NATIVE_VISUAL_VIEWPORT__ =
+          Object.getOwnPropertyDescriptor(window, "visualViewport");
+        const viewport =
+          new EventTarget() as TestViewportWindow["__SKRIBEUM_TEST_VISUAL_VIEWPORT__"];
+        if (viewport === undefined) {
+          throw new Error("visual viewport test double was not created");
+        }
+        Object.assign(viewport, {
+          height: nextHeight,
+          offsetLeft: 0,
+          offsetTop: nextOffsetTop,
+          width: window.innerWidth,
+        });
+        target.__SKRIBEUM_TEST_VISUAL_VIEWPORT__ = viewport;
+        Object.defineProperty(window, "visualViewport", {
+          configurable: true,
+          value: viewport,
+        });
+      }
+      const viewport = target.__SKRIBEUM_TEST_VISUAL_VIEWPORT__;
+      if (viewport === undefined) {
+        throw new Error("visual viewport test double is unavailable");
+      }
+      viewport.height = nextHeight;
+      viewport.offsetTop = nextOffsetTop;
+      viewport.width = window.innerWidth;
+      viewport.dispatchEvent(new Event("resize"));
+      viewport.dispatchEvent(new Event("scroll"));
+      window.dispatchEvent(new Event("resize"));
+    },
+    { nextHeight: height, nextOffsetTop: offsetTop },
+  );
+  await viewportAfterPaint();
+}
+
+async function restoreVisualViewport(): Promise<void> {
+  await browser.execute(() => {
+    type TestViewportWindow = Window & {
+      __SKRIBEUM_NATIVE_VISUAL_VIEWPORT__?: PropertyDescriptor;
+      __SKRIBEUM_TEST_VISUAL_VIEWPORT__?: EventTarget;
+    };
+    const target = window as TestViewportWindow;
+    const descriptor = target.__SKRIBEUM_NATIVE_VISUAL_VIEWPORT__;
+    if (descriptor === undefined) {
+      delete (window as Window & { visualViewport?: VisualViewport })
+        .visualViewport;
+    } else {
+      Object.defineProperty(window, "visualViewport", descriptor);
+    }
+    delete target.__SKRIBEUM_NATIVE_VISUAL_VIEWPORT__;
+    delete target.__SKRIBEUM_TEST_VISUAL_VIEWPORT__;
+    window.dispatchEvent(new Event("resize"));
+  });
+  await viewportAfterPaint();
+}
+
+async function noteTitleOpacity(): Promise<string> {
+  return browser.execute(
+    () =>
+      getComputedStyle(
+        document.querySelector<HTMLElement>('[data-testid="note-title"]') ??
+          document.documentElement,
+      ).opacity,
   );
 }
 
@@ -920,157 +1005,339 @@ describe("skribeum shell", () => {
     await $(`li=${CRLF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
   });
 
-  it("reaches_primary_surfaces_by_pointer_at_narrow_viewports", async () => {
+  it("provides_the_phone_shell_overflow_and_scroll_aware_title", async () => {
+    await openNoteFromTree(PHONE_HEADING_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Phone heading"),
+      { timeout: 15000, timeoutMsg: "heading-led phone note did not open" },
+    );
+
     try {
-      for (const [width, height] of [
-        [360, 640],
-        [390, 844],
-      ] as const) {
-        await setViewportSize(width, height);
-        const mobileActions = $('[aria-label="Primary actions"]');
-        await mobileActions.waitForDisplayed({ timeout: 10000 });
+      await setViewportSize(390, 844);
+      const filesButton = $('button[aria-label="Files"]');
+      const overflowButton = $('button[aria-label="More actions"]');
+      const title = $('[data-testid="note-title"]');
+      await filesButton.waitForDisplayed({ timeout: 10000 });
+      await overflowButton.waitForDisplayed({ timeout: 10000 });
 
-        const layout = await browser.execute(() => {
-          const editor = document.querySelector<HTMLElement>(".cm-content");
-          const pane = document.querySelector<HTMLElement>("main > section");
-          const sidebar = document.querySelector<HTMLElement>(
-            ".skr-desktop-sidebar",
-          );
-          if (editor === null || pane === null || sidebar === null) {
-            return null;
-          }
-          const style = getComputedStyle(editor);
-          return {
-            paneWidth: pane.getBoundingClientRect().width,
-            contentWidth: editor.getBoundingClientRect().width,
-            readingWidth:
-              editor.getBoundingClientRect().width -
-              Number.parseFloat(style.paddingLeft) -
-              Number.parseFloat(style.paddingRight),
-            sidebarDisplay: getComputedStyle(sidebar).display,
-            overflow: document.documentElement.scrollWidth > window.innerWidth,
-          };
-        });
-        expect(layout).not.toBeNull();
-        expect(layout?.sidebarDisplay).toBe("none");
-        expect(layout?.paneWidth).toBeGreaterThanOrEqual(width - 1);
-        expect(layout?.readingWidth).toBeGreaterThanOrEqual(
-          (layout?.contentWidth ?? 0) - 49,
-        );
-        expect(layout?.overflow).toBe(false);
-
-        const launchTargets = await browser.execute(() =>
-          [
-            ...document.querySelectorAll<HTMLElement>(
-              '[aria-label="Primary actions"] button:not(:disabled)',
-            ),
-          ].map((element) => {
-            const rect = element.getBoundingClientRect();
-            return { width: rect.width, height: rect.height };
-          }),
-        );
-        expect(launchTargets.length).toBeGreaterThanOrEqual(4);
-        for (const target of launchTargets) {
-          expect(target.width).toBeGreaterThanOrEqual(44);
-          expect(target.height).toBeGreaterThanOrEqual(44);
+      const shell = await browser.execute(() => {
+        const header = document.querySelector<HTMLElement>(".skr-app-header");
+        const pane = document.querySelector<HTMLElement>("main > section");
+        const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+        const editor = document.querySelector<HTMLElement>(".cm-content");
+        if (
+          header === null ||
+          pane === null ||
+          scroller === null ||
+          editor === null
+        ) {
+          return null;
         }
+        const editorStyle = getComputedStyle(editor);
+        const visibleRegions = [...header.children]
+          .filter((child): child is HTMLElement => child instanceof HTMLElement)
+          .filter((child) => {
+            const style = getComputedStyle(child);
+            const bounds = child.getBoundingClientRect();
+            return (
+              style.display !== "none" && bounds.width > 0 && bounds.height > 0
+            );
+          })
+          .map((child) => {
+            const bounds = child.getBoundingClientRect();
+            return {
+              className: child.className,
+              height: bounds.height,
+              width: bounds.width,
+            };
+          });
+        return {
+          bottomBarExists:
+            document.querySelector(".skr-mobile-actions") !== null,
+          headerHeight: header.getBoundingClientRect().height,
+          paneWidth: pane.getBoundingClientRect().width,
+          scrollbarWidth: scroller.offsetWidth - scroller.clientWidth,
+          readingWidth:
+            editor.getBoundingClientRect().width -
+            Number.parseFloat(editorStyle.paddingLeft) -
+            Number.parseFloat(editorStyle.paddingRight),
+          visibleRegions,
+        };
+      });
+      expect(shell).not.toBeNull();
+      expect(shell?.bottomBarExists).toBe(false);
+      expect(shell?.headerHeight).toBe(48);
+      expect(shell?.paneWidth).toBeGreaterThanOrEqual(389);
+      expect(
+        Math.abs(
+          (shell?.readingWidth ?? 0) -
+            ((shell?.paneWidth ?? 0) - (shell?.scrollbarWidth ?? 0) - 48),
+        ),
+      ).toBeLessThanOrEqual(1);
+      expect(shell?.visibleRegions).toHaveLength(3);
+      expect(shell?.visibleRegions[0]?.className).toContain("skr-phone-files");
+      expect(shell?.visibleRegions[0]?.width).toBe(44);
+      expect(shell?.visibleRegions[0]?.height).toBe(44);
+      expect(shell?.visibleRegions[1]?.className).toContain("skr-note-title");
+      expect(shell?.visibleRegions[2]?.className).toContain(
+        "skr-phone-overflow",
+      );
+      expect(shell?.visibleRegions[2]?.width).toBe(44);
+      expect(shell?.visibleRegions[2]?.height).toBe(44);
 
-        const actionsButton = mobileActions.$("button=Actions");
-        await actionsButton.click();
-        const actionsSheet = $('[data-testid="overlay-sheet"]');
-        await actionsSheet.waitForDisplayed({ timeout: 10000 });
-        const paneWidthWithSheet = await browser.execute(
-          () =>
-            document
-              .querySelector<HTMLElement>("main > section")
-              ?.getBoundingClientRect().width ?? 0,
-        );
-        expect(paneWidthWithSheet).toBe(layout?.paneWidth);
-        const sheetTargets = await browser.execute(() =>
-          [
-            ...document.querySelectorAll<HTMLElement>(
-              '[data-testid="overlay-sheet"] button:not(:disabled)',
-            ),
-          ].map((element) => {
-            const rect = element.getBoundingClientRect();
-            return { width: rect.width, height: rect.height };
-          }),
-        );
-        for (const target of sheetTargets) {
-          expect(target.width).toBeGreaterThanOrEqual(44);
-          expect(target.height).toBeGreaterThanOrEqual(44);
+      await browser.execute(() => {
+        const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+        if (scroller !== null) {
+          scroller.scrollTop = 0;
+          scroller.dispatchEvent(new Event("scroll"));
         }
+      });
+      await browser.waitUntil(async () => (await noteTitleOpacity()) === "0", {
+        timeout: 5000,
+        timeoutMsg: "heading-led title was visible at the top",
+      });
+      await browser.execute(() => {
+        const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+        if (scroller !== null) {
+          scroller.scrollTop = 320;
+          scroller.dispatchEvent(new Event("scroll"));
+        }
+      });
+      await browser.waitUntil(async () => (await noteTitleOpacity()) === "1", {
+        timeout: 5000,
+        timeoutMsg: "title did not appear past the heading",
+      });
+      expect(await title.getText()).toBe("z-phone-heading");
+      await browser.execute(() => {
+        const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+        if (scroller !== null) {
+          scroller.scrollTop = 0;
+          scroller.dispatchEvent(new Event("scroll"));
+        }
+      });
+      await browser.waitUntil(async () => (await noteTitleOpacity()) === "0", {
+        timeout: 5000,
+        timeoutMsg: "title did not hide above the threshold",
+      });
 
-        await actionsSheet.$("button=Open settings").click();
-        const settings = $('[data-testid="settings-view"]');
-        await settings.waitForDisplayed({ timeout: 10000 });
-        await settings.$('button[aria-label="Close"]').click();
-        await settings.waitForExist({ reverse: true, timeout: 10000 });
-        await browser.waitUntil(
-          () =>
-            browser.execute(
-              () => document.activeElement?.textContent?.trim() === "Actions",
-            ),
-          {
-            timeout: 10000,
-            timeoutMsg: "settings did not restore focus to the Actions button",
-          },
-        );
-
-        await mobileActions.$("button=Actions").click();
-        const saveActionsSheet = $('[data-testid="overlay-sheet"]');
-        await saveActionsSheet.waitForDisplayed({ timeout: 10000 });
-        await saveActionsSheet.$("button=Save note").click();
-        await saveActionsSheet.waitForExist({
-          reverse: true,
-          timeout: 10000,
-        });
-        await browser.waitUntil(
-          () =>
-            browser.execute(
-              () => document.activeElement?.textContent?.trim() === "Actions",
-            ),
-          {
-            timeout: 10000,
-            timeoutMsg: "Actions did not restore focus after saving",
-          },
-        );
-
-        await mobileActions.$("button=Search").click();
-        const searchInput = $('[role="combobox"]');
-        await searchInput.waitForDisplayed({ timeout: 10000 });
-        await searchInput.setValue("?third");
-        const searchResult = $('[role="option"]');
-        await searchResult.waitForDisplayed({ timeout: 10000 });
-        await searchResult.click();
-        await browser.waitUntil(
-          async () => (await editorText()).includes("third"),
-          { timeout: 15000 },
-        );
-
-        const filesButton = mobileActions.$("button=Files");
-        await filesButton.click();
-        const filesSheet = $('[data-testid="overlay-sheet"]');
-        await filesSheet.waitForDisplayed({ timeout: 10000 });
-        await filesSheet.$(`li=${VISUAL_NOTE_NAME}`).click();
-        await filesSheet.waitForExist({ reverse: true, timeout: 10000 });
-        await browser.waitUntil(
-          async () => (await editorText()).includes("A room for reading"),
-          { timeout: 15000 },
-        );
-        const properties = $(".skr-properties-toggle");
-        expect(await properties.getAttribute("aria-expanded")).toBe("false");
-        expect(
-          await browser.execute(() =>
-            [
-              ...document.querySelectorAll<HTMLElement>(
-                ".cm-line.cm-skr-frontmatter",
-              ),
-            ].every((line) => getComputedStyle(line).display === "none"),
+      await overflowButton.click();
+      const overflowSheet = $('[data-testid="overlay-sheet"]');
+      await overflowSheet.waitForDisplayed({ timeout: 10000 });
+      const overflowRows = await browser.execute(() =>
+        [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            ".skr-action-menu > button",
           ),
-        ).toBe(true);
+        ].map((button) => ({
+          command: button.dataset.commandId ?? null,
+          label:
+            button.querySelector("span")?.textContent?.trim() ??
+            button.textContent?.trim() ??
+            "",
+        })),
+      );
+      expect(overflowRows).toEqual([
+        { command: "quick-switcher.open", label: "Quick switcher" },
+        { command: "vault-search.open", label: "Search" },
+        { command: "palette.open", label: "Command palette" },
+        { command: "settings.open", label: "Open settings" },
+        { command: "outline.toggle", label: "Toggle outline" },
+        { command: "file-tree.open", label: "Open file tree" },
+        { command: "note.create", label: "Create new note" },
+        { command: "note.save", label: "Save note" },
+        { command: "link.copy-note", label: "Copy link to note" },
+        { command: "find.open", label: "Find in note" },
+        { command: "navigation.back", label: "Navigate back" },
+        { command: "navigation.forward", label: "Navigate forward" },
+        { command: null, label: "Open vault" },
+      ]);
+      for (const target of await overflowSheet.$$("button:not(:disabled)")) {
+        const size = await target.getSize();
+        expect(size.height).toBeGreaterThanOrEqual(44);
       }
+
+      await overflowSheet.$('[data-command-id="palette.open"]').click();
+      const commandSurface = $('[data-testid="unified-command-surface"]');
+      await commandSurface.waitForDisplayed({ timeout: 10000 });
+      const commandInput = commandSurface.$('[role="combobox"]');
+      expect(await commandInput.getValue()).toBe(">");
+      expect(await commandInput.getAttribute("data-search-mode")).toBe(
+        "command",
+      );
+      const paletteRows = await browser.execute(() =>
+        [
+          ...document.querySelectorAll<HTMLElement>(
+            '[data-testid="unified-command-surface"] [role="option"][data-command-id]',
+          ),
+        ].map((option) => ({
+          commandId: option.dataset.commandId ?? "",
+          height: option.getBoundingClientRect().height,
+        })),
+      );
+      const paletteCommandIds = paletteRows.map((row) => row.commandId);
+      expect(paletteCommandIds.length).toBeGreaterThan(50);
+      expect(new Set(paletteCommandIds).size).toBe(paletteCommandIds.length);
+      for (const row of paletteRows) {
+        expect(row.height).toBeGreaterThanOrEqual(44);
+      }
+      expect(paletteCommandIds).toEqual(
+        expect.arrayContaining([
+          "settings.open",
+          "outline.toggle",
+          "file-tree.open",
+          "note.create",
+          "note.save",
+          "find.open",
+          "navigation.back",
+          "navigation.forward",
+        ]),
+      );
+      await browser.keys(Key.Escape);
+      await commandSurface.waitForExist({ reverse: true, timeout: 10000 });
+
+      await filesButton.click();
+      const filesSheet = $('[data-testid="overlay-sheet"]');
+      await filesSheet.waitForDisplayed({ timeout: 10000 });
+      await filesSheet.$(`li=${PHONE_PLAIN_NOTE_NAME}`).click();
+      await browser.waitUntil(
+        async () =>
+          (await editorText()).includes("without an in-document heading"),
+        { timeout: 15000, timeoutMsg: "plain phone note did not open" },
+      );
+      expect(await title.getText()).toBe("z-phone-plain");
+      await browser.waitUntil(async () => (await noteTitleOpacity()) === "1", {
+        timeout: 5000,
+        timeoutMsg: "plain-note title did not finish appearing",
+      });
+      await browser.execute(() => {
+        const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+        if (scroller !== null) {
+          scroller.scrollTop = scroller.scrollHeight;
+          scroller.dispatchEvent(new Event("scroll"));
+        }
+      });
+      expect(await noteTitleOpacity()).toBe("1");
+      await browser.execute(() => {
+        const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+        if (scroller !== null) {
+          scroller.scrollTop = 0;
+          scroller.dispatchEvent(new Event("scroll"));
+        }
+      });
     } finally {
+      await restoreDesktopViewport();
+    }
+  });
+
+  it("routes_phone_overflow_search_to_the_unified_surface", async () => {
+    try {
+      await setViewportSize(390, 844);
+      const overflowButton = $('button[aria-label="More actions"]');
+      await overflowButton.waitForDisplayed({ timeout: 10000 });
+      await overflowButton.click();
+      const overflowSheet = $('[data-testid="overlay-sheet"]');
+      await overflowSheet.waitForDisplayed({ timeout: 10000 });
+      await overflowSheet.$('[data-command-id="vault-search.open"]').click();
+      const commandSurface = $('[data-testid="unified-command-surface"]');
+      await commandSurface.waitForDisplayed({ timeout: 10000 });
+      const input = commandSurface.$('[role="combobox"]');
+      expect(await input.getValue()).toBe("?");
+      expect(await input.getAttribute("data-search-mode")).toBe("text");
+      await browser.keys(Key.Escape);
+      await commandSurface.waitForExist({ reverse: true, timeout: 10000 });
+    } finally {
+      await restoreDesktopViewport();
+    }
+  });
+
+  it("clamps_keyboard_surfaces_to_the_visual_viewport", async () => {
+    await prepareTagCompletionTarget();
+    try {
+      await setViewportSize(390, 844);
+      // Headless browsers do not summon an on-screen keyboard, so this
+      // visualViewport reduction reproduces the usable phone area it removes.
+      await setSimulatedVisualViewport(360);
+      const overflowButton = $('button[aria-label="More actions"]');
+      await overflowButton.click();
+      const overflowSheet = $('[data-testid="overlay-sheet"]');
+      await overflowSheet.waitForDisplayed({ timeout: 10000 });
+      await overflowSheet.$('[data-command-id="quick-switcher.open"]').click();
+      const picker = $('[data-testid="unified-command-surface"]');
+      await picker.waitForDisplayed({ timeout: 10000 });
+      let bounds = await browser.execute(() => {
+        const dialog = document.querySelector<HTMLElement>(
+          '[data-testid="unified-command-surface"] .command-surface-dialog',
+        );
+        const viewport = window.visualViewport;
+        if (dialog === null || viewport === null) return null;
+        const rect = dialog.getBoundingClientRect();
+        return {
+          bottom: rect.bottom,
+          top: rect.top,
+          viewportBottom: viewport.offsetTop + viewport.height,
+          viewportTop: viewport.offsetTop,
+        };
+      });
+      expect(bounds).not.toBeNull();
+      expect(bounds?.top).toBe(bounds?.viewportTop);
+      expect(bounds?.bottom).toBeLessThanOrEqual(bounds?.viewportBottom ?? 0);
+
+      await setSimulatedVisualViewport(280, 64);
+      bounds = await browser.execute(() => {
+        const dialog = document.querySelector<HTMLElement>(
+          '[data-testid="unified-command-surface"] .command-surface-dialog',
+        );
+        const viewport = window.visualViewport;
+        if (dialog === null || viewport === null) return null;
+        const rect = dialog.getBoundingClientRect();
+        return {
+          bottom: rect.bottom,
+          top: rect.top,
+          viewportBottom: viewport.offsetTop + viewport.height,
+          viewportTop: viewport.offsetTop,
+        };
+      });
+      expect(bounds?.top).toBe(64);
+      expect(bounds?.bottom).toBeLessThanOrEqual(344);
+      await browser.keys(Key.Escape);
+      await picker.waitForExist({ reverse: true, timeout: 10000 });
+
+      await setSimulatedVisualViewport(500);
+      await typeTagCompletionQuery("final");
+      const caretBottom = await browser.execute(() => {
+        const caret = document.querySelector<HTMLElement>(".cm-cursor-primary");
+        return caret?.getBoundingClientRect().bottom ?? 140;
+      });
+      await setSimulatedVisualViewport(Math.ceil(caretBottom + 24));
+      const tagGeometry = await browser.execute(() => {
+        const menu = document.querySelector<HTMLElement>(".cm-skr-tag-menu");
+        const viewport = window.visualViewport;
+        if (menu === null || viewport === null) return null;
+        const rect = menu.getBoundingClientRect();
+        return {
+          above: menu.classList.contains("cm-tooltip-above"),
+          bottom: rect.bottom,
+          top: rect.top,
+          viewportBottom: viewport.offsetTop + viewport.height,
+          viewportTop: viewport.offsetTop,
+        };
+      });
+      expect(tagGeometry).not.toBeNull();
+      expect(tagGeometry?.above).toBe(true);
+      expect(tagGeometry?.top).toBeGreaterThanOrEqual(
+        tagGeometry?.viewportTop ?? 0,
+      );
+      expect(tagGeometry?.bottom).toBeLessThanOrEqual(
+        tagGeometry?.viewportBottom ?? 0,
+      );
+      await browser.keys(Key.Escape);
+      await browser.keys([modifierKey, "s"]);
+      await waitForDisk(
+        TAG_COMPLETION_TARGET_NOTE_NAME,
+        TAG_COMPLETION_TARGET_NOTE_CONTENT,
+      );
+    } finally {
+      await restoreVisualViewport();
       await restoreDesktopViewport();
     }
   });
@@ -1271,10 +1538,16 @@ describe("skribeum shell", () => {
     try {
       await prepareTableGeometryNote();
       await setViewportSize(390, 844);
-      const mobileActions = $('[aria-label="Primary actions"]');
-      await mobileActions.waitForDisplayed({ timeout: 10000 });
+      const filesButton = $('button[aria-label="Files"]');
+      const overflowButton = $('button[aria-label="More actions"]');
+      await filesButton.waitForDisplayed({ timeout: 10000 });
+      await overflowButton.waitForDisplayed({ timeout: 10000 });
+      surfaces.push({
+        surface: "phone chrome",
+        escapes: await horizontalViewportEscapes(),
+      });
 
-      await mobileActions.$("button=Files").click();
+      await filesButton.click();
       let sheet = $('[data-testid="overlay-sheet"]');
       await sheet.waitForDisplayed({ timeout: 10000 });
       await sheet.$(`li=${RENDERING_NOTE_NAME}`).click();
@@ -1292,15 +1565,15 @@ describe("skribeum shell", () => {
         escapes: await horizontalViewportEscapes(),
       });
 
-      await mobileActions.$("button=Actions").click();
+      await overflowButton.click();
       sheet = $('[data-testid="overlay-sheet"]');
       await sheet.waitForDisplayed({ timeout: 10000 });
       surfaces.push({
-        surface: "actions sheet",
+        surface: "overflow sheet",
         escapes: await horizontalViewportEscapes(),
       });
 
-      await sheet.$("button=Open settings").click();
+      await sheet.$('[data-command-id="settings.open"]').click();
       const settings = $('[data-testid="settings-view"]');
       await settings.waitForDisplayed({ timeout: 10000 });
       surfaces.push({
@@ -1310,7 +1583,10 @@ describe("skribeum shell", () => {
       await settings.$('button[aria-label="Close"]').click();
       await settings.waitForExist({ reverse: true, timeout: 10000 });
 
-      await mobileActions.$("button=Search").click();
+      await overflowButton.click();
+      sheet = $('[data-testid="overlay-sheet"]');
+      await sheet.waitForDisplayed({ timeout: 10000 });
+      await sheet.$('[data-command-id="vault-search.open"]').click();
       const search = $('[role="combobox"]');
       await search.waitForDisplayed({ timeout: 10000 });
       surfaces.push({
@@ -1320,7 +1596,7 @@ describe("skribeum shell", () => {
       await browser.keys(Key.Escape);
       await search.waitForExist({ reverse: true, timeout: 10000 });
 
-      await mobileActions.$("button=Files").click();
+      await filesButton.click();
       sheet = $('[data-testid="overlay-sheet"]');
       await sheet.waitForDisplayed({ timeout: 10000 });
       surfaces.push({
@@ -1344,8 +1620,9 @@ describe("skribeum shell", () => {
     }
 
     expect(surfaces.map(({ surface }) => surface)).toEqual([
+      "phone chrome",
       "table-heavy note",
-      "actions sheet",
+      "overflow sheet",
       "settings",
       "vault search",
       "file tree sheet",
@@ -1893,7 +2170,9 @@ describe("skribeum shell", () => {
         (element) => Number(element.getAttribute("tabindex")) > 0,
       );
       const surfaces = [
-        document.querySelector("header button"),
+        document.querySelector(
+          'header [data-command-id="quick-switcher.open"]',
+        ),
         document.querySelector('[role="tree"]'),
         document.querySelector(".cm-content"),
       ];
@@ -1919,7 +2198,11 @@ describe("skribeum shell", () => {
 
     // The header action is keyboard-focusable.
     await browser.execute(() => {
-      document.querySelector<HTMLElement>("header button")?.focus();
+      document
+        .querySelector<HTMLElement>(
+          'header [data-command-id="quick-switcher.open"]',
+        )
+        ?.focus();
     });
     expect(await activeElementDescriptor()).toContain("button");
 
@@ -2114,23 +2397,64 @@ describe("skribeum shell", () => {
 
   it("cycles_and_sets_task_statuses_through_the_command_palette", async () => {
     await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
-    const checkbox = $(".cm-skr-task-checkbox");
+    let checkbox = $(".cm-skr-task-checkbox");
     await checkbox.waitForExist({ timeout: 15000 });
     expect(await checkbox.getAttribute("aria-label")).toBe("Unchecked");
 
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>(".cm-skr-task-control")
-        ?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
+    const hoverState = await browser.execute(() => {
+      const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
+      if (host === null) {
+        return null;
+      }
+      const bounds = host.getBoundingClientRect();
+      host.dispatchEvent(
+        new PointerEvent("pointerenter", {
+          bubbles: true,
+          clientX: bounds.left + bounds.width / 2,
+          clientY: bounds.top + bounds.height / 2,
+          pointerType: "mouse",
+        }),
+      );
+      const liveCheckbox = host.querySelector<HTMLElement>(
+        ".cm-skr-task-checkbox",
+      );
+      const listbox = host.querySelector<HTMLElement>('[role="listbox"]');
+      const state = {
+        expanded: liveCheckbox?.getAttribute("aria-expanded"),
+        hidden: listbox?.hidden,
+        optionCount: listbox?.querySelectorAll('[role="option"]').length,
+      };
+      host.dispatchEvent(
+        new PointerEvent("pointerleave", {
+          bubbles: true,
+          clientX: bounds.right + 1,
+          clientY: bounds.bottom + 1,
+          pointerType: "mouse",
+        }),
+      );
+      return state;
     });
-    const listbox = $('[role="listbox"]');
-    await listbox.waitForDisplayed({ timeout: 5000 });
-    expect(await listbox.$$('[role="option"]').length).toBe(38);
+    expect(hoverState).toEqual({
+      expanded: "true",
+      hidden: false,
+      optionCount: 38,
+    });
 
+    checkbox = $(".cm-skr-task-checkbox");
     await checkbox.click();
     await browser.waitUntil(
       () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [/] Review task"),
       { timeout: 10000, timeoutMsg: "task click did not persist" },
+    );
+    await $(".skr-app-header").moveTo();
+    await browser.waitUntil(
+      () =>
+        browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(".cm-skr-task-palette"),
+          ].every((palette) => palette.hidden),
+        ),
+      { timeout: 5000, timeoutMsg: "task palette did not close after hover" },
     );
 
     await placeCursorAtLineEnd("Review task");
@@ -2154,6 +2478,139 @@ describe("skribeum shell", () => {
       () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME) === LIVE_PREVIEW_NOTE_CONTENT,
       { timeout: 10000, timeoutMsg: "task source did not restore" },
     );
+  });
+
+  it("supports_the_task_status_hold_drag_release_gesture", async () => {
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    const checkbox = $(".cm-skr-task-checkbox");
+    await checkbox.waitForExist({ timeout: 15000 });
+    type TaskGestureObservation = {
+      activeOption: string | null;
+      menuGap: boolean;
+      menuOpened: boolean;
+      noOptionUnderPress: boolean;
+    };
+    const taskGesture = (
+      outcome: "advance" | "cancel" | "dropped",
+    ): Promise<TaskGestureObservation> =>
+      browser.executeAsync<
+        TaskGestureObservation,
+        ["advance" | "cancel" | "dropped"]
+      >((requestedOutcome, done) => {
+        const box = document.querySelector<HTMLElement>(
+          ".cm-skr-task-checkbox",
+        );
+        if (box === null) {
+          throw new Error("task checkbox is unavailable");
+        }
+        const bounds = box.getBoundingClientRect();
+        const pressPoint = {
+          x: Math.round(bounds.left + bounds.width / 2),
+          y: Math.round(bounds.top + bounds.height / 2),
+        };
+        const pointerId = 41;
+        const dispatch = (type: string, x: number, y: number) => {
+          box.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              button: 0,
+              buttons: type === "pointerup" ? 0 : 1,
+              cancelable: true,
+              clientX: x,
+              clientY: y,
+              isPrimary: true,
+              pointerId,
+              pointerType: "touch",
+            }),
+          );
+        };
+        dispatch("pointerdown", pressPoint.x, pressPoint.y);
+        const delay = requestedOutcome === "advance" ? 150 : 550;
+        window.setTimeout(() => {
+          const menu = document.querySelector<HTMLElement>(
+            ".cm-skr-task-palette",
+          );
+          if (requestedOutcome === "advance") {
+            dispatch("pointerup", pressPoint.x, pressPoint.y);
+            done({
+              activeOption: null,
+              menuGap: true,
+              menuOpened: menu !== null && !menu.hidden,
+              noOptionUnderPress: true,
+            });
+            return;
+          }
+          if (menu === null || menu.hidden) {
+            done({
+              activeOption: null,
+              menuGap: false,
+              menuOpened: false,
+              noOptionUnderPress: false,
+            });
+            return;
+          }
+          const menuBounds = menu.getBoundingClientRect();
+          const optionAtPress = document
+            .elementFromPoint(pressPoint.x, pressPoint.y)
+            ?.closest(".cm-skr-task-option");
+          const dropped = [
+            ...menu.querySelectorAll<HTMLElement>('[role="option"]'),
+          ].find((candidate) => candidate.textContent?.includes("Dropped"));
+          const target =
+            requestedOutcome === "dropped" && dropped !== undefined
+              ? dropped.getBoundingClientRect()
+              : null;
+          const targetPoint =
+            target === null
+              ? pressPoint
+              : {
+                  x: Math.round(target.left + target.width / 2),
+                  y: Math.round(target.top + target.height / 2),
+                };
+          dispatch("pointermove", targetPoint.x, targetPoint.y);
+          const activeOption = menu.getAttribute("aria-activedescendant");
+          dispatch("pointerup", targetPoint.x, targetPoint.y);
+          done({
+            activeOption,
+            menuGap:
+              menuBounds.bottom <= pressPoint.y - 12 ||
+              menuBounds.top >= pressPoint.y + 12,
+            menuOpened: true,
+            noOptionUnderPress: optionAtPress === null,
+          });
+        }, delay);
+      }, outcome);
+
+    const shortPress = await taskGesture("advance");
+    expect(shortPress.menuOpened).toBe(false);
+    await browser.waitUntil(
+      () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [/] Review task"),
+      { timeout: 10000, timeoutMsg: "short task press did not advance" },
+    );
+    await $(".cm-skr-task-checkbox").click();
+    await $(".cm-skr-task-checkbox").click();
+    await waitForDisk(LIVE_PREVIEW_NOTE_NAME, LIVE_PREVIEW_NOTE_CONTENT);
+    const droppedGesture = await taskGesture("dropped");
+    expect(droppedGesture.menuOpened).toBe(true);
+    expect(droppedGesture.noOptionUnderPress).toBe(true);
+    expect(droppedGesture.menuGap).toBe(true);
+    expect(droppedGesture.activeOption).toContain("option-3");
+    await browser.waitUntil(
+      () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [-] Review task"),
+      { timeout: 10000, timeoutMsg: "task drag release did not apply Dropped" },
+    );
+
+    await $(".cm-skr-task-checkbox").click();
+    await waitForDisk(LIVE_PREVIEW_NOTE_NAME, LIVE_PREVIEW_NOTE_CONTENT);
+    const cancelledGesture = await taskGesture("cancel");
+    expect(cancelledGesture.menuOpened).toBe(true);
+    expect(cancelledGesture.activeOption).toBeNull();
+    await $(".cm-skr-task-palette").waitForDisplayed({
+      reverse: true,
+      timeout: 5000,
+    });
+    await browser.pause(700);
+    expect(noteOnDisk(LIVE_PREVIEW_NOTE_NAME)).toBe(LIVE_PREVIEW_NOTE_CONTENT);
   });
 
   it("maps_callout_clicks_to_one_source_reveal_region", async () => {
@@ -3726,6 +4183,9 @@ describe("skribeum core editing surfaces", () => {
     await browser.refresh();
     await $(".demo-shell").waitForExist({ timeout: 15000 });
 
+    const editor = $(".cm-content");
+    await editor.waitForDisplayed({ timeout: 15000 });
+    await editor.click();
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });

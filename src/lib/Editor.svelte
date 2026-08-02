@@ -50,6 +50,7 @@ import {
   normalizeTaskStatuses,
   type TaskStatus,
 } from "./taskStatuses";
+import { visualViewportTooltips } from "./visualViewport";
 
 // registry-exempt keydown: indentation is editor input behavior controlled
 // by the current indentation settings, not an application command.
@@ -68,6 +69,7 @@ let {
   onConflict,
   onWriteError,
   onDocChanged,
+  onTitleVisibilityChange,
   onSaved,
   wikilinkNavigationOptions,
   tagAffordanceOptions,
@@ -93,6 +95,8 @@ let {
   onWriteError?: (message: string) => void;
   /** Notified after any document-changing transaction (outline refresh). */
   onDocChanged?: () => void;
+  /** Reports whether the shell title should be visible for this document. */
+  onTitleVisibilityChange?: (visible: boolean) => void;
   /** Notified after pending edits are written and indexed. */
   onSaved?: () => void;
   /** Supplies the shared navigator capabilities for pointer activation. */
@@ -107,6 +111,7 @@ let session: NoteSession | null = null;
 /** Set when the open note disappeared from disk; saving pauses. */
 let removed = false;
 let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
+let titleVisibilityFrame: number | undefined;
 /** Serializes saves so change sets always apply to the base they expect. */
 let saveChain: Promise<boolean> = Promise.resolve(true);
 
@@ -253,6 +258,7 @@ function stateFor(content: string, locked: boolean): EditorState {
       editorAppearance,
       settingsCompartment.of(settingsExtensions(settings)),
       bulkTextInput(),
+      ...visualViewportTooltips,
       historyCompartment.of(history()),
       ...registryExtensions(),
       EditorState.readOnly.of(locked),
@@ -317,6 +323,7 @@ function dispatchTransactions(
   }
   if (transactions.some((transaction) => transaction.docChanged)) {
     refreshFrontmatter();
+    scheduleTitleVisibilityRefresh();
     onDocChanged?.();
   } else if (treeGrewInBackground(target)) {
     // Background parsing advanced without a document change. Consumers of
@@ -324,6 +331,57 @@ function dispatchTransactions(
     // stays truncated at the initial parse slice until the first edit.
     onDocChanged?.();
   }
+}
+
+const HEADING_NODE = /^(?:ATXHeading[1-6]|SetextHeading[12])$/u;
+
+function leadingHeadingEnd(target: EditorView): number | null {
+  let end: number | null = null;
+  syntaxTree(target.state).iterate({
+    from: 0,
+    to: Math.min(target.state.doc.length, 4096),
+    enter: (node) => {
+      if (node.from === 0 && HEADING_NODE.test(node.name)) {
+        end = node.to;
+        return false;
+      }
+      return end === null;
+    },
+  });
+  return end;
+}
+
+function refreshTitleVisibility(): void {
+  const target = view;
+  if (target === undefined || onTitleVisibilityChange === undefined) {
+    return;
+  }
+  const headingEnd = leadingHeadingEnd(target);
+  if (headingEnd === null) {
+    onTitleVisibilityChange(true);
+    return;
+  }
+  const header = document.querySelector<HTMLElement>(".skr-app-header");
+  const headingBounds = target.coordsAtPos(headingEnd, -1);
+  if (header === null) {
+    onTitleVisibilityChange(false);
+  } else if (headingBounds === null) {
+    onTitleVisibilityChange(target.scrollDOM.scrollTop > 0);
+  } else {
+    onTitleVisibilityChange(
+      headingBounds.bottom <= header.getBoundingClientRect().bottom,
+    );
+  }
+}
+
+function scheduleTitleVisibilityRefresh(): void {
+  if (titleVisibilityFrame !== undefined) {
+    cancelAnimationFrame(titleVisibilityFrame);
+  }
+  titleVisibilityFrame = requestAnimationFrame(() => {
+    titleVisibilityFrame = undefined;
+    refreshTitleVisibility();
+  });
 }
 
 let lastSeenTreeLength = 0;
@@ -541,6 +599,7 @@ function initializeForNote(current: LoadedNote | null) {
     view?.setState(stateFor(doc, false));
     applyLinkContext();
     refreshFrontmatter();
+    scheduleTitleVisibilityRefresh();
     return;
   }
   if (current.readOnly) {
@@ -548,6 +607,7 @@ function initializeForNote(current: LoadedNote | null) {
     view?.setState(stateFor(current.text, true));
     applyLinkContext();
     refreshFrontmatter();
+    scheduleTitleVisibilityRefresh();
     return;
   }
   session = new NoteSession(current.bytes, current.meta.projection_hash);
@@ -571,6 +631,7 @@ function initializeForNote(current: LoadedNote | null) {
   view?.setState(stateFor(text, false));
   applyLinkContext();
   refreshFrontmatter();
+  scheduleTitleVisibilityRefresh();
 }
 
 onMount(() => {
@@ -579,9 +640,19 @@ onMount(() => {
     parent: host,
     dispatchTransactions,
   });
+  view.scrollDOM.addEventListener("scroll", scheduleTitleVisibilityRefresh);
+  window.addEventListener("resize", scheduleTitleVisibilityRefresh);
   initializeForNote(note);
   return () => {
     clearTimeout(idleSaveTimer);
+    if (titleVisibilityFrame !== undefined) {
+      cancelAnimationFrame(titleVisibilityFrame);
+    }
+    view?.scrollDOM.removeEventListener(
+      "scroll",
+      scheduleTitleVisibilityRefresh,
+    );
+    window.removeEventListener("resize", scheduleTitleVisibilityRefresh);
     view?.destroy();
   };
 });

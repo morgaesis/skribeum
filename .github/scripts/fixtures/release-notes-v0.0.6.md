@@ -50,9 +50,9 @@
 - Packaged-browser regression coverage for tag completion verifies Enter and
   Control+Enter acceptance, arrow-key selection, Escape cleanup, saved source,
   and recent-tag ordering.
-- A responsive bottom action bar and Actions sheet provide pointer and touch
-  routes to files, search, the quick switcher, outline, command palette,
-  settings, note actions, and navigation history.
+- A responsive overflow sheet provides pointer and touch routes to files,
+  search, the quick switcher, outline, command palette, settings, note actions,
+  navigation history, and vault opening.
 - Command registrations declare pointer surfaces or an explicit widget-only
   audience, with runtime and test coverage for every registered user command.
 - Registered link-following and tag-search commands, clickable tag search

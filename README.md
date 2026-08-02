@@ -18,17 +18,18 @@ audit. Use it only with files that are backed up and versioned.
 `mod+k` opens one command surface. Enter a note or file name directly, or start
 the query with `>` for commands and individual settings, `#` for tags, or `?`
 for note text. `mod+o`, `mod+p`, `mod+shift+p`, and `mod+shift+f` open the same
-surface in their familiar modes. The application bar exposes these aliases and
-an Actions menu for the file tree, outline, in-note find, settings, note
-creation, saving, copy-link actions, and navigation history.
+surface in their familiar modes. On wide viewports, the application bar exposes
+these aliases and an Actions menu for the file tree, outline, in-note find,
+settings, note creation, saving, copy-link actions, and navigation history.
 
 At 60rem (960 CSS pixels) and narrower, the file tree and outline leave the
-editor column and open as modal bottom sheets. A one-hand action bar stays at
-the bottom of the viewport with 44px or larger targets for Files, Switch,
-Search, Commands, and Actions. The editor retains 24px inline gutters, which
-leaves 312px for prose on a 360px viewport and 342px on a 390px viewport.
-Properties remain collapsed above the note, and raw frontmatter remains hidden
-until explicitly requested.
+editor column and open as modal bottom sheets. The permanent top bar contains
+a Files button, the current note title, and an overflow button. The overflow
+sheet provides the quick switcher, search, command palette, settings, outline,
+file tree, note creation, saving, in-note find, navigation history, and vault
+opening. The editor retains 24px inline gutters, which leaves 312px for prose
+on a 360px viewport and 342px on a 390px viewport. Properties remain collapsed
+above the note, and raw frontmatter remains hidden until explicitly requested.
 
 Every visible control accepts pointer, touch, and keyboard activation. Tab and
 Shift+Tab stay inside an open modal sheet, Escape closes it, and focus returns

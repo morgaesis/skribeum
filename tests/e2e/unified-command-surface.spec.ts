@@ -64,6 +64,9 @@ beforeEach(async () => {
     async () => new URL(await browser.getUrl()).searchParams.has("note"),
     { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
   );
+  const editor = $(".cm-content");
+  await editor.waitForDisplayed({ timeout: 15000 });
+  await editor.click();
 });
 
 describe("work package 1 browser behavior", () => {

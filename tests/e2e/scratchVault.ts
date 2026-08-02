@@ -36,6 +36,28 @@ export const LIVE_PREVIEW_NOTE_NAME = "z-live-preview.md";
 export const LIVE_PREVIEW_NOTE_CONTENT =
   "# Sunrise heading\n\nbody text here\n\n- [ ] Review task\n";
 
+export const PHONE_HEADING_NOTE_NAME = "z-phone-heading.md";
+export const PHONE_HEADING_NOTE_CONTENT = [
+  "# Phone heading",
+  "",
+  ...Array.from(
+    { length: 48 },
+    (_, index) => `Heading-led note paragraph ${index + 1}.`,
+  ),
+  "",
+].join("\n");
+
+export const PHONE_PLAIN_NOTE_NAME = "z-phone-plain.md";
+export const PHONE_PLAIN_NOTE_CONTENT = [
+  "Phone note without an in-document heading.",
+  "",
+  ...Array.from(
+    { length: 48 },
+    (_, index) => `Plain note paragraph ${index + 1}.`,
+  ),
+  "",
+].join("\n");
+
 export const MOTION_PREVIEW_NOTE_NAME = "zy-motion-preview.md";
 export const MOTION_PREVIEW_NOTE_CONTENT =
   "# Motion heading\n\n[short link](https://example.com/path)\n\n![[missing-note]]\n\n> [!note]+ Deliberate callout\n> callout body\n\nafter motion constructs\n";
@@ -185,6 +207,14 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, LIVE_PREVIEW_NOTE_NAME),
     LIVE_PREVIEW_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, PHONE_HEADING_NOTE_NAME),
+    PHONE_HEADING_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, PHONE_PLAIN_NOTE_NAME),
+    PHONE_PLAIN_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, MOTION_PREVIEW_NOTE_NAME),

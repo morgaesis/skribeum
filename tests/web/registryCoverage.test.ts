@@ -174,6 +174,7 @@ describe("registration coverage (criterion 1)", () => {
     const visibleCommands = new Set([
       ...registry.paletteCommands().map((command) => command.id),
       ...registry.pointerCommands("action-menu").map((command) => command.id),
+      ...registry.pointerCommands("overflow-menu").map((command) => command.id),
       "palette.open",
       "file-tree.open",
       "quick-switcher.open",
@@ -206,6 +207,9 @@ describe("registration coverage (criterion 1)", () => {
       "table.cell.next",
       "table.cell.previous",
     ]);
+    expect(
+      registry.pointerCommands("overflow-menu").map((command) => command.id),
+    ).toEqual(["palette.open", "quick-switcher.open", "vault-search.open"]);
     expect(
       registry.pointerCommands("editor-tag").map((command) => command.id),
     ).toEqual(["tag.search-under-cursor"]);

@@ -220,11 +220,14 @@ settings document and inside retained status entries survive writes.
 The settings surface edits every field, preserves graph validity while symbols
 are remapped or removed, and provides controls for adding and reordering rows.
 
-Clicking the checkbox writes `next_status`. The default primary cycle is
-Unchecked to Half Done to Regular to Unchecked. Pointer hover opens the full
-status listbox. With the checkbox focused, Arrow Down opens the same listbox,
-the arrow keys move through options, Enter or Space selects, and Escape
-dismisses it.
+Tapping the checkbox writes `next_status`. The default primary cycle is
+Unchecked to Half Done to Regular to Unchecked. Holding a press within 8 CSS
+pixels for 500ms opens the full status listbox with every option clear of the
+finger. Dragging updates `aria-activedescendant`, releasing over an option
+selects it, and releasing outside cancels the gesture. Pointer hover also opens
+the listbox. With the checkbox focused, Arrow Down opens the same listbox, the
+arrow keys move through options, Enter or Space selects, and Escape dismisses
+it.
 
 The six categories remain visually distinct from the configured glyph and
 color. TODO uses the strong unfilled border, IN_PROGRESS uses a tinted active

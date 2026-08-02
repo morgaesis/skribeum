@@ -21,6 +21,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shortcuts open the same surface with their corresponding mode preloaded.
 - Selection toolbar buttons expose registry-derived command titles and
   keybindings after hover intent or immediately on keyboard focus.
+- Narrow viewports use a three-region top bar for Files, the scroll-aware note
+  title, and an overflow sheet containing every shell command available to
+  touch. The editor occupies the remaining note area.
+- Transient surfaces clamp to the visual viewport when an on-screen keyboard
+  changes the usable area. Narrow command surfaces anchor at the top, and tag
+  completion prefers space below the caret before flipping above it.
+- Task status controls advance on a short tap and expose the complete listbox
+  after a 500ms stationary press. A continuous drag highlights and selects a
+  status, while release outside cancels the gesture.
 
 ### Added
 
@@ -92,9 +101,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Packaged-browser regression coverage for tag completion verifies Enter and
   Control+Enter acceptance, arrow-key selection, Escape cleanup, saved source,
   and recent-tag ordering.
-- A responsive bottom action bar and Actions sheet provide pointer and touch
-  routes to files, search, the quick switcher, outline, command palette,
-  settings, note actions, and navigation history.
+- A responsive overflow sheet provides pointer and touch routes to files,
+  search, the quick switcher, outline, command palette, settings, note actions,
+  navigation history, and vault opening.
 - Command registrations declare pointer surfaces or an explicit widget-only
   audience, with runtime and test coverage for every registered user command.
 - Registered link-following and tag-search commands, clickable tag search

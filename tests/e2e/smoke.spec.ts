@@ -71,6 +71,10 @@ const axeSource = readFileSync(
 );
 
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
+const redoChord =
+  process.platform === "darwin"
+    ? [modifierKey, Key.Shift, "z"]
+    : [modifierKey, "y"];
 const DEMO_TAG_COMPLETION_BOUNDARY = "Tag completion fixture boundary.";
 let demoTagCompletionPrepared = false;
 
@@ -5906,7 +5910,7 @@ describe("skribeum core editing surfaces", () => {
     expect((await editorDocumentText()).trimEnd()).toBe(
       DESKTOP_UNDO_NOTE_CONTENT.trimEnd(),
     );
-    await browser.keys([modifierKey, "y"]);
+    await browser.keys(redoChord);
     expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
   });
 
@@ -5948,7 +5952,7 @@ describe("skribeum core editing surfaces", () => {
     expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
     await browser.keys([modifierKey, "z"]);
     expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
-    await browser.keys([modifierKey, "y"]);
+    await browser.keys(redoChord);
     expect((await editorDocumentText()).trimEnd()).toBe(postIngest);
   });
 

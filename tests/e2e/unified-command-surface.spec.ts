@@ -73,13 +73,13 @@ beforeEach(async () => {
 
 describe("work package 1 browser behavior", () => {
   it("centers the empty-vault action and keeps it in overflow", async () => {
-    const demoUrl = process.env.SKRIBEUM_E2E_DEMO_URL;
-    if (demoUrl === undefined)
-      throw new Error("browser demo URL is unavailable");
-    const target = new URL(demoUrl);
-    target.searchParams.set("empty-vault", "1");
-    await browser.url(target.href);
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await browser.execute(() =>
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_SHOW_EMPTY_VAULT__?: () => void;
+        }
+      ).__SKRIBEUM_E2E_SHOW_EMPTY_VAULT__?.(),
+    );
 
     const openVault = $('.skr-empty-vault [data-command-id="vault.open"]');
     await openVault.waitForDisplayed({ timeout: 15000 });

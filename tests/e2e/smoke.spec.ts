@@ -5772,6 +5772,8 @@ describe("skribeum core editing surfaces", () => {
         iconType: string | null;
         svgRoot: string;
         svgStyle: string;
+        svgSymbols: string[];
+        themeColors: Array<{ color: string | null; media: string | null }>;
         appleSize: [number, number];
       },
       []
@@ -5793,6 +5795,11 @@ Promise.all([
     iconType: icon.getAttribute('type'),
     svgRoot: parsed.documentElement.localName,
     svgStyle: parsed.querySelector('style')?.textContent ?? '',
+    svgSymbols: [...parsed.querySelectorAll('symbol')].map((symbol) => symbol.id),
+    themeColors: [...document.querySelectorAll('meta[name="theme-color"]')].map((meta) => ({
+      color: meta.getAttribute('content'),
+      media: meta.getAttribute('media'),
+    })),
     appleSize,
   });
 }).catch((error) => done({ error: String(error) }));
@@ -5800,10 +5807,16 @@ Promise.all([
     expect(metadata.iconType).toBe("image/svg+xml");
     expect(metadata.svgRoot).toBe("svg");
     expect(metadata.svgStyle).toContain("prefers-color-scheme: dark");
-    expect(metadata.svgStyle).toContain("#fffdf8");
-    expect(metadata.svgStyle).toContain("#2a2418");
-    expect(metadata.svgStyle).toContain("#1d1815");
-    expect(metadata.svgStyle).toContain("#ece4d5");
+    expect(metadata.svgStyle).toContain("max-width: 16px");
+    expect(metadata.svgStyle).toContain("#F5F2E9");
+    expect(metadata.svgStyle).toContain("#1E4D3B");
+    expect(metadata.svgStyle).toContain("#14251D");
+    expect(metadata.svgStyle).toContain("#7FBF9E");
+    expect(metadata.svgSymbols).toEqual(["lamp-full", "lamp-small"]);
+    expect(metadata.themeColors).toEqual([
+      { color: "#F5F2E9", media: "(prefers-color-scheme: light)" },
+      { color: "#14251D", media: "(prefers-color-scheme: dark)" },
+    ]);
     expect(metadata.appleSize).toEqual([180, 180]);
   });
 

@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 64" role="img" aria-labelledby="title description">
+  <title id="title">Skribeum lamp mark</title>
+  <desc id="description">Full and simplified lit desk lamp marks on Paper tiles.</desc>
   <defs>
     <radialGradient id="lamp-glow" cx="50%" cy="0%" r="72%" fx="50%" fy="0%">
       <stop offset="0" stop-color="#F6E7A8" stop-opacity="0.9" />
@@ -23,21 +25,12 @@
     </symbol>
   </defs>
   <style>
-    .surface { fill: #F5F2E9; }
+    .tile { fill: #F5F2E9; }
     .lamp-shade { fill: #1E4D3B; }
     .lamp-body { fill: #14251D; }
-    .small-mark { display: none; }
-    @media (prefers-color-scheme: dark) {
-      .surface { fill: #14251D; }
-      .lamp-shade { fill: #7FBF9E; }
-      .lamp-body { fill: #F5F2E9; }
-    }
-    @media (max-width: 16px), (max-height: 16px) {
-      .full-mark { display: none; }
-      .small-mark { display: inline; }
-    }
   </style>
-  <rect class="surface" width="64" height="64" rx="15" />
-  <use class="full-mark" href="#lamp-full" width="64" height="64" />
-  <use class="small-mark" href="#lamp-small" width="64" height="64" />
+  <rect class="tile" width="64" height="64" rx="15" />
+  <use href="#lamp-full" width="64" height="64" />
+  <rect class="tile" x="64" width="64" height="64" rx="15" />
+  <use href="#lamp-small" x="64" width="64" height="64" />
 </svg>

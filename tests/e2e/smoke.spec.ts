@@ -4250,14 +4250,24 @@ describe("skribeum core editing surfaces", () => {
     await browser.url(browserDemoUrl());
     await $(".demo-shell").waitForExist({ timeout: 15000 });
     await browser.execute(() => {
-      (
-        window as Window & {
-          __SKRIBEUM_E2E_NOTE_DELAYS__?: Record<string, number>;
-        }
-      ).__SKRIBEUM_E2E_NOTE_DELAYS__ = {
-        "Examples/Work/decision-log.md": 2000,
-        "Examples/Personal/garden-log.md": 2000,
+      type GateWindow = Window & {
+        __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
+        __SKRIBEUM_E2E_NOTE_RELEASES__?: Record<string, () => void>;
       };
+      const target = window as GateWindow;
+      const paths = [
+        "Examples/Work/decision-log.md",
+        "Examples/Personal/garden-log.md",
+      ];
+      const gates: Record<string, Promise<void>> = {};
+      const releases: Record<string, () => void> = {};
+      target.__SKRIBEUM_E2E_NOTE_GATES__ = gates;
+      target.__SKRIBEUM_E2E_NOTE_RELEASES__ = releases;
+      for (const path of paths) {
+        gates[path] = new Promise((resolve) => {
+          releases[path] = resolve;
+        });
+      }
     });
     await browser.execute(() => {
       const url = new URL(window.location.href);
@@ -4269,7 +4279,7 @@ describe("skribeum core editing surfaces", () => {
     });
 
     const skeleton = $(".cm-skr-embed-loading");
-    await skeleton.waitForExist({ timeout: 3000 });
+    await skeleton.waitForExist({ timeout: 10000 });
     expect(await $$(".cm-skr-embed").length).toBe(2);
     expect(await $$(".cm-skr-embed-skeleton-bar").length).toBe(6);
     const motion = await browser.execute(() => {
@@ -4291,6 +4301,20 @@ describe("skribeum core editing surfaces", () => {
         : null;
     });
     expect(staticMotion).toBe("none");
+    await browser.execute(() => {
+      type GateWindow = Window & {
+        __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
+        __SKRIBEUM_E2E_NOTE_RELEASES__?: Record<string, () => void>;
+      };
+      const target = window as GateWindow;
+      for (const release of Object.values(
+        target.__SKRIBEUM_E2E_NOTE_RELEASES__ ?? {},
+      )) {
+        release();
+      }
+      delete target.__SKRIBEUM_E2E_NOTE_GATES__;
+      delete target.__SKRIBEUM_E2E_NOTE_RELEASES__;
+    });
 
     await browser.waitUntil(
       async () => (await $$(".cm-skr-embed-loading")).length === 0,

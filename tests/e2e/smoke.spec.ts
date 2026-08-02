@@ -4181,11 +4181,35 @@ describe("skribeum core editing surfaces", () => {
       async () => new URL(await browser.getUrl()).searchParams.has("note"),
       { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
     );
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          () =>
+            !(
+              document.querySelector(".cm-content")?.textContent ?? ""
+            ).includes("scaffold fixture"),
+        ),
+      { timeout: 15000, timeoutMsg: "browser demo note content did not load" },
+    );
     await browser.execute(() => {
       localStorage.removeItem("skribeum.demo.settings");
     });
     await browser.refresh();
     await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await browser.waitUntil(
+      async () => new URL(await browser.getUrl()).searchParams.has("note"),
+      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
+    );
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          () =>
+            !(
+              document.querySelector(".cm-content")?.textContent ?? ""
+            ).includes("scaffold fixture"),
+        ),
+      { timeout: 15000, timeoutMsg: "browser demo note content did not load" },
+    );
 
     const editor = $(".cm-content");
     await editor.waitForDisplayed({ timeout: 15000 });
@@ -4251,8 +4275,24 @@ describe("skribeum core editing surfaces", () => {
   });
 
   it("browser_demo_renders_embed_skeletons_and_resolved_content", async () => {
-    await browser.url(browserDemoUrl());
+    const fixtureUrl = new URL(browserDemoUrl());
+    fixtureUrl.searchParams.set("embed-start", Date.now().toString());
+    await browser.url(fixtureUrl.href);
     await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await browser.waitUntil(
+      async () => new URL(await browser.getUrl()).searchParams.has("note"),
+      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
+    );
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          () =>
+            !(
+              document.querySelector(".cm-content")?.textContent ?? ""
+            ).includes("scaffold fixture"),
+        ),
+      { timeout: 15000, timeoutMsg: "browser demo note content did not load" },
+    );
     await browser.execute(() => {
       const paths = [
         "Examples/Work/decision-log.md",

@@ -15,8 +15,7 @@ export type WidgetName =
   | "math-inline"
   | "math-block"
   | "mermaid-diagram"
-  | "table-row"
-  | "table-separator"
+  | "table"
   | "embed"
   | "code-copy"
   | "callout-icon";
@@ -240,20 +239,9 @@ const wikilinkRows: DecorationRule[] = [
 
 const tableRows: DecorationRule[] = [
   {
-    node: "TableHeader",
-    presentation: { present: "widget", widget: "table-row" },
-    reveal: "cursor-inside",
-  },
-  {
-    node: "TableDelimiter",
-    parent: ["Table"],
-    presentation: { present: "widget", widget: "table-separator" },
-    reveal: "cursor-inside",
-  },
-  {
-    node: "TableRow",
-    presentation: { present: "widget", widget: "table-row" },
-    reveal: "cursor-inside",
+    node: "Table",
+    presentation: { present: "widget", widget: "table" },
+    reveal: "never",
   },
 ];
 

@@ -25,7 +25,5 @@
 587..624 widget embed data-target="block-target-note#^remote-anchor" role="group"
 645..645 line class="cm-skr-heading cm-skr-heading-2"
 645..648 hide node=HeaderMark
-838..856 widget table-row data-header="true" role="row"
-857..875 widget table-separator aria-hidden="true"
-876..891 widget table-row data-header="false" role="row"
+838..891 widget table aria-rowcount="2" role="grid"
 893..906 mark class="cm-skr-block-id"

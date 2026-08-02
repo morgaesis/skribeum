@@ -108,12 +108,28 @@ becomes instant.
 
 ## Table geometry and overflow
 
-CodeMirror represents each Markdown table row as a separate block replacement.
-The decoration engine derives one column template from every source row in the
-enclosing `Table` node and gives that same template to each rendered row. The
+CodeMirror represents a Markdown `Table` as one block replacement containing
+an ARIA grid. Each cell contains a nested single-line editor backed by that
+cell's trimmed source span. Focusing a cell parks the parent selection at the
+table boundary, hides the parent caret, and gives the nested editor the only
+visible caret. A nested edit dispatches one parent-document change over that
+cell span; unedited pipes, padding, alignment markers, rows, and neighboring
+cells retain their exact source bytes. A typed pipe is stored as `\|`.
+
+The table replacement never follows ordinary cursor reveal. Pointer placement
+or keyboard entry focuses a rendered cell, while the registered table-source
+command temporarily removes the replacement for that table. Whole-note source
+mode omits the decoration engine and exposes every table in the same way as
+other Markdown source.
+
+The replacement derives one column template from every source row in the
+complete table block and gives that template to every rendered row. The
 template uses bounded fractional weights based on the longest source cell in
 each column, so header typography and row content cannot produce independent
 track boundaries.
+Each cell write updates the persistent replacement in place, preserving cell
+editor identity while applying the same recomputed geometry to every row
+before the next paint.
 
 Tables remain inside the editor's reading column at every viewport width. Cell
 content wraps within the shared tracks when the source-derived proportions need
@@ -158,9 +174,7 @@ above. `-` means the row applies to every node of that name.
 | `WikilinkTarget` | `withoutSibling=WikilinkAlias` | `mark cm-skr-wikilink-target` | never |
 | `WikilinkAlias` | `-` | `mark cm-skr-wikilink-alias` | never |
 | `Embed` | `-` | `widget embed` | cursor-inside |
-| `TableHeader` | `-` | `widget table-row` | cursor-inside |
-| `TableDelimiter` | `parent=Table` | `widget table-separator` | cursor-inside |
-| `TableRow` | `-` | `widget table-row` | cursor-inside |
+| `Table` | `-` | `widget table` | never |
 | `ListMark` | `-` | `mark cm-skr-list-mark` | never |
 | `Task` | `-` | `mark cm-skr-task` | never |
 | `TaskMarker` | `-` | `widget task-checkbox` | cursor-inside |

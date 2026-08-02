@@ -245,6 +245,9 @@ describe("registration coverage (criterion 1)", () => {
       "slash.close",
       "table.cell.next",
       "table.cell.previous",
+      "table.cell.enter-down",
+      "table.cell.enter-up",
+      "table.source.close",
     ]);
     expect(
       registry.pointerCommands("overflow-menu").map((command) => command.id),
@@ -253,6 +256,13 @@ describe("registration coverage (criterion 1)", () => {
       "quick-switcher.open",
       "vault-search.open",
       "vault.open",
+      "table.row.insert-above",
+      "table.row.insert-below",
+      "table.column.insert-before",
+      "table.column.insert-after",
+      "table.row.delete",
+      "table.column.delete",
+      "table.edit-source",
       "task.set-status",
     ]);
     expect(

@@ -4,7 +4,10 @@ import { onMount, tick } from "svelte";
 import tauriConfig from "../src-tauri/tauri.conf.json";
 import Banners, { type BannerItem } from "./lib/Banners.svelte";
 import Editor from "./lib/Editor.svelte";
-import { currentWikilinkContext } from "./lib/editor/decorations/engine";
+import {
+  currentWikilinkContext,
+  focusedRenderedTableCell,
+} from "./lib/editor/decorations/engine";
 import {
   DEFAULT_OBSIDIAN_APP_CONFIG,
   EMPTY_WIKILINK_CONTEXT,
@@ -193,6 +196,7 @@ let currentNoteSource = $state("");
 let sourceMode = $state(false);
 let surfaceFocusOrigin: HTMLElement | null = null;
 let taskStatusSurfaceMarker = $state<number | null>(null);
+let tableCellSurfaceActive = $state(false);
 let overflowContextPrepared = false;
 let outlineOpen = $state(false);
 let outlineEntries = $state<OutlineEntry[]>([]);
@@ -387,6 +391,7 @@ function runSurfaceCommand(id: string, origin: HTMLElement) {
 function closeSheet() {
   activeSheet = null;
   taskStatusSurfaceMarker = null;
+  tableCellSurfaceActive = false;
   overflowContextPrepared = false;
   restoreSurfaceFocus();
 }
@@ -617,15 +622,32 @@ function currentTaskStatusMarker(
 function prepareOverflowContext(
   focusTarget: EventTarget | null = document.activeElement,
 ) {
+  if (
+    surfaceFocusOrigin === null &&
+    focusTarget instanceof HTMLElement &&
+    focusTarget.isConnected
+  ) {
+    surfaceFocusOrigin = focusTarget;
+  }
   taskStatusSurfaceMarker = currentTaskStatusMarker(focusTarget);
+  const view = editor?.getView();
+  tableCellSurfaceActive =
+    view !== undefined && focusedRenderedTableCell(view) !== null;
   overflowContextPrepared = true;
 }
 
 function contextualOverflowCommands() {
   const taskCommand = registry.command(TASK_STATUS_MENU_COMMAND);
-  return taskCommand !== undefined && taskStatusSurfaceMarker !== null
-    ? [taskCommand]
-    : [];
+  return [
+    ...(taskCommand !== undefined && taskStatusSurfaceMarker !== null
+      ? [taskCommand]
+      : []),
+    ...(tableCellSurfaceActive
+      ? registry
+          .pointerCommands("overflow-menu")
+          .filter((command) => command.id.startsWith("table."))
+      : []),
+  ];
 }
 
 function formattedCommandKeybinding(
@@ -649,9 +671,13 @@ function runActionCommand(id: string) {
   const context = commandContext();
   activeSheet = null;
   taskStatusSurfaceMarker = null;
+  tableCellSurfaceActive = false;
   void tick().then(() => {
     const handled = registry.run(id, context);
-    if (handled && id === TASK_STATUS_MENU_COMMAND) {
+    if (
+      handled &&
+      (id === TASK_STATUS_MENU_COMMAND || id === "table.edit-source")
+    ) {
       surfaceFocusOrigin = null;
       return;
     }
@@ -800,8 +826,14 @@ function onOverlayPick(item: PickerItem) {
     activeOverlay = null;
     const context = commandContext();
     taskStatusSurfaceMarker = null;
+    tableCellSurfaceActive = false;
     const handled = registry.run(item.value, context);
     if (activeOverlay === null && activeSheet === null) {
+      if (handled && item.value === "table.edit-source") {
+        surfaceFocusOrigin = null;
+        void tick().then(() => editor?.getView()?.focus());
+        return;
+      }
       if (
         handled &&
         (item.value === "navigation.follow-link" ||

@@ -138,6 +138,30 @@ export const TABLE_GEOMETRY_NOTE_CONTENT = [
   "",
 ].join("\n");
 
+export const TABLE_EDITING_NOTE_NAME = "zzzz-table-editing.md";
+export const TABLE_EDITING_NOTE_CONTENT = [
+  "# Table cell editing",
+  "",
+  "Before editable table.",
+  "",
+  "| Name  | Score |",
+  "| :--- | ---: |",
+  "| café   | keep  |",
+  "| Ada | 10 |",
+  "",
+  "Large table follows.",
+  "",
+  "| Row | Value |",
+  "| --- | --- |",
+  ...Array.from(
+    { length: 30 },
+    (_, index) => `| row ${index + 1} | value ${index + 1} |`,
+  ),
+  "",
+  "After large table.",
+  "",
+].join("\n");
+
 export const REVEAL_NOTE_NAME = "zzzz-reveal.md";
 export const REVEAL_NOTE_CONTENT =
   "# Reveal interactions\n\n> [!tip] Linked callout\n> First body line.\n> Read [inside link](inside-target).\n\n[Outside link](outside-target)\n\ncursor parking\n";
@@ -251,6 +275,10 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),
     RENDERING_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TABLE_EDITING_NOTE_NAME),
+    TABLE_EDITING_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, TASK_TRACKS_NOTE_NAME),

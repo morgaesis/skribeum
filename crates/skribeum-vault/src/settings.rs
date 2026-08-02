@@ -87,15 +87,17 @@ pub struct TaskStatus {
     pub payload: Option<TaskStatusPayload>,
 }
 
-const DEFAULT_TASK_STATUS_ROWS: &[(
-    &str,
+type DefaultTaskStatusRow = (
+    &'static str,
     TaskStatusCategory,
-    &str,
-    &str,
-    &str,
+    &'static str,
+    &'static str,
+    &'static str,
     TaskStatusTrack,
     Option<TaskStatusPayload>,
-)] = &[
+);
+
+const DEFAULT_TASK_STATUS_ROWS: &[DefaultTaskStatusRow] = &[
     (
         " ",
         TaskStatusCategory::Todo,

@@ -116,6 +116,11 @@ pub trait FileSystem: Send + Sync {
     /// already occupies the path and never truncates that entry.
     fn create_new_file(&self, path: &Path) -> Result<bool, FsError>;
 
+    /// Atomically creates a new file containing `bytes`, restricted to the
+    /// current user where the platform exposes Unix permission modes. Returns
+    /// `false` when an entry already occupies the path.
+    fn create_private_file(&self, path: &Path, bytes: &[u8]) -> Result<bool, FsError>;
+
     /// Appends `bytes` to `path`, creating the file when missing. Used by
     /// the crash journal; a failure may leave a partial trailing record,
     /// which replay tolerates by ignoring an unparsable tail.

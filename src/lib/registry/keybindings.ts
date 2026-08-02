@@ -27,11 +27,14 @@ export type ParsedKeybinding = {
 /** Parses `"Mod-Shift-p"` syntax. The last segment is the key itself. */
 export function parseKeybinding(binding: string): ParsedKeybinding {
   const segments = binding.split("-");
-  const key = segments[segments.length - 1] ?? "";
+  const terminalHyphen = binding.endsWith("--");
+  const key = terminalHyphen ? "-" : (segments[segments.length - 1] ?? "");
   if (key === "") {
     throw new Error(`empty keybinding ${JSON.stringify(binding)}`);
   }
-  const modifiers = segments.slice(0, -1);
+  const modifiers = terminalHyphen
+    ? binding.slice(0, -2).split("-")
+    : segments.slice(0, -1);
   for (const modifier of modifiers) {
     if (
       modifier !== "Mod" &&

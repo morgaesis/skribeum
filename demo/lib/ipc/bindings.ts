@@ -3,7 +3,9 @@ import type {
   ExternalNoteRemove,
   ExternalNoteUpdate,
   NoteRecovered,
+  OpenFilesAvailable,
   ReconciliationBanner,
+  SettingsZoomChanged,
   VaultChanged,
   VaultCollisionsDetected,
 } from "../../../src/lib/ipc/bindings";
@@ -13,6 +15,7 @@ export type {
   BannerReason,
   ByteRangeReplace,
   NoteContent,
+  OpenFileTarget,
   SearchHit,
   SettingsDoc,
   TagFrequency,
@@ -44,7 +47,9 @@ export const events = {
   externalNoteRemove: inertEvent<ExternalNoteRemove>(),
   externalNoteUpdate: inertEvent<ExternalNoteUpdate>(),
   noteRecovered: inertEvent<NoteRecovered>(),
+  openFilesAvailable: inertEvent<OpenFilesAvailable>(),
   reconciliationBanner: inertEvent<ReconciliationBanner>(),
+  settingsZoomChanged: inertEvent<SettingsZoomChanged>(),
   vaultChanged: inertEvent<VaultChanged>(),
   vaultCollisionsDetected: inertEvent<VaultCollisionsDetected>(),
 };

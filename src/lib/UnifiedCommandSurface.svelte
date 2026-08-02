@@ -81,7 +81,7 @@ function onInput(event: Event & { currentTarget: HTMLInputElement }) {
 
 function pickActive() {
   const item = items[active];
-  if (item !== undefined) onPick(item);
+  if (item !== undefined && item.disabledReason === undefined) onPick(item);
 }
 
 // registry-exempt keydown: ARIA combobox pattern internal navigation
@@ -202,7 +202,8 @@ onDestroy(() => {
           data-action-kind={item.actionKind}
           data-command-id={item.commandId}
           aria-selected={index === active}
-          onclick={() => onPick(item)}
+          aria-disabled={item.disabledReason !== undefined}
+          onclick={() => item.disabledReason === undefined && onPick(item)}
           onmousemove={() => {
             active = index;
           }}

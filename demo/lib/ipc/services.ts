@@ -1,4 +1,5 @@
 import { parseFrontmatter } from "../../../src/lib/editor/frontmatter";
+import { noteFileName } from "../../../src/lib/noteTitles";
 import { STRINGS } from "../../../src/lib/strings";
 import {
   defaultTaskStatuses,
@@ -6,6 +7,7 @@ import {
   validateTaskStatusDocuments,
 } from "../../../src/lib/taskStatuses";
 import type {
+  OpenFileTarget,
   SearchHit,
   SettingsDoc,
   TagFrequency,
@@ -29,6 +31,7 @@ const DEFAULT_SETTINGS: SettingsDocument = {
   editor_font_size: 16,
   editor_line_height: 170,
   editor_line_width: 72,
+  zoom_percent: 100,
   show_line_numbers: false,
   animations: true,
   autosave_delay_ms: 400,
@@ -161,8 +164,7 @@ export async function searchQuery(
       if (matches.length === 0) {
         continue;
       }
-      const title =
-        entry.path.split("/").at(-1)?.replace(/\.md$/i, "") ?? entry.path;
+      const title = noteFileName(entry.path);
       results.push({
         path: entry.path,
         title,
@@ -190,7 +192,7 @@ export async function searchQuery(
     }
     const path = entry.path;
     const text = (await readNote(handle, path)).text;
-    const title = path.split("/").at(-1)?.replace(/\.md$/i, "") ?? path;
+    const title = noteFileName(path);
     const source = searchNoteBodies ? `${title}\n${text}` : title;
     const searchable = caseSensitive ? source : source.toLocaleLowerCase();
     const matches = terms
@@ -363,6 +365,11 @@ function normalizeSettings(value: unknown): SettingsDocument {
       : integerInRange(candidate.editor_reading_measure, LINE_WIDTH_RANGE)
         ? candidate.editor_reading_measure
         : DEFAULT_SETTINGS.editor_line_width,
+    zoom_percent:
+      integerInRange(candidate.zoom_percent, [50, 200]) &&
+      candidate.zoom_percent % 10 === 0
+        ? candidate.zoom_percent
+        : DEFAULT_SETTINGS.zoom_percent,
     show_line_numbers:
       typeof candidate.show_line_numbers === "boolean"
         ? candidate.show_line_numbers
@@ -461,6 +468,8 @@ function validateSettings(doc: SettingsDocument): void {
     LINE_HEIGHT_RANGE,
   );
   validateRange("editor_line_width", doc.editor_line_width, LINE_WIDTH_RANGE);
+  validateRange("zoom_percent", doc.zoom_percent, [50, 200]);
+  if (doc.zoom_percent % 10 !== 0) throw new Error("zoom_percent");
   validateBoolean("show_line_numbers", doc.show_line_numbers);
   validateBoolean("animations", doc.animations);
   validateRange(
@@ -570,6 +579,22 @@ export async function settingsWrite(doc: SettingsDocument): Promise<void> {
     SETTINGS_KEY,
     JSON.stringify({ ...preserved, ...doc }),
   );
+}
+
+export async function zoomSet(_zoomPercent: number): Promise<number> {
+  throw new Error(STRINGS.applicationZoomDesktopRequired);
+}
+
+export async function windowReady(_webviewMilliseconds: number): Promise<void> {
+  throw new Error(STRINGS.desktopWindowRequired);
+}
+
+export async function openFilesTake(): Promise<string[]> {
+  return [];
+}
+
+export async function fileOpenResolve(_path: string): Promise<OpenFileTarget> {
+  throw new Error(STRINGS.nativeFileHandlingDesktopRequired);
 }
 
 export async function vaultTreeRefresh(

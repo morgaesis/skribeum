@@ -1,8 +1,8 @@
 # Skribeum
 
 A byte-faithful, local-first Markdown editor for Obsidian-compatible vaults.
-Plain `.md` files on disk remain the source of truth; opening and saving a
-file never rewrites bytes outside the edit you made.
+Plain `.md`, `.markdown`, and `.txt` files on disk remain the source of truth;
+opening and saving a file never rewrites bytes outside the edit you made.
 
 The desktop application opens Obsidian-compatible vaults, preserves byte-level
 file details outside edited ranges, and provides rendered Markdown editing,
@@ -41,6 +41,22 @@ to the control that opened it. On narrow viewports, the command surface anchors
 above the on-screen keyboard and scrolls its results internally. Keyboard
 shortcuts remain visible beside command results and in selection toolbar
 tooltips.
+
+The desktop application zooms its complete webview with `mod++` and `mod+-`.
+`mod+0` returns to 100 percent. Zoom is stored from 50 to 200 percent in
+10 percent steps and applies to every application window. The browser demo
+lists these commands as unavailable because the browser owns its own zoom
+shortcuts.
+
+Packaged desktop builds register `.md`, `.markdown`, and `.txt` file handlers.
+Opening a file inside the active vault keeps that vault and selects the file.
+Opening a file outside the active vault opens its containing folder through
+the normal vault-opening flow, then selects the file. Later open-with requests
+are forwarded to the running application.
+
+Back and forward restore each note's exact UTF-8 caret offsets and scroll
+position without moving keyboard focus into the editor. A newly opened note
+starts at the top with its caret parked and the reading surface focused.
 
 `mod+e` toggles the active note between reading presentation and its complete
 Markdown source. Source mode keeps syntax colouring but shows frontmatter,

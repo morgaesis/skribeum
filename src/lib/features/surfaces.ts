@@ -124,4 +124,36 @@ export function registerSurfaces(registry: CommandRegistry): void {
       return true;
     },
   });
+  for (const command of [
+    {
+      id: "application.zoom-in",
+      title: STRINGS.commandZoomIn,
+      keybindings: ["Mod-+", "Mod-Shift-+", "Mod-="],
+      action: "in" as const,
+    },
+    {
+      id: "application.zoom-out",
+      title: STRINGS.commandZoomOut,
+      keybindings: ["Mod--"],
+      action: "out" as const,
+    },
+    {
+      id: "application.zoom-reset",
+      title: STRINGS.commandZoomReset,
+      keybindings: ["Mod-0"],
+      action: "reset" as const,
+    },
+  ]) {
+    registry.register({
+      id: command.id,
+      title: command.title,
+      keybindings: command.keybindings,
+      pointer: ["command-palette", "action-menu"],
+      unavailableReason: (context) =>
+        context.changeApplicationZoom === undefined
+          ? STRINGS.applicationZoomDesktopRequired
+          : null,
+      run: (context) => context.changeApplicationZoom?.(command.action),
+    });
+  }
 }

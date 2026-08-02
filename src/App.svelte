@@ -30,6 +30,7 @@ import {
   type NavigationState,
   type NoteAddress,
   type NoteNavigator,
+  type NoteViewState,
   noteFragmentPosition,
 } from "./lib/features/navigation";
 import {
@@ -83,11 +84,14 @@ import {
   type VaultHandle,
 } from "./lib/ipc/bindings";
 import {
+  fileOpenResolve,
+  openFilesTake,
   type SearchResult,
   searchQuery,
   settingsPath,
   tagCatalog,
   vaultTreeRefresh,
+  zoomSet,
 } from "./lib/ipc/services";
 import {
   IpcError,
@@ -137,6 +141,7 @@ let {
 } = $props();
 
 let vault = $state<VaultHandle | null>(null);
+let activeVaultPath = $state<string | null>(null);
 let tree = $state<TreeEntry[]>([]);
 let selectedPath = $state<string | null>(null);
 let note = $state<LoadedNote | null>(null);
@@ -162,6 +167,7 @@ let navigationState = $state<NavigationState>({
   canGoForward: false,
 });
 let navigation: NoteNavigator | null = null;
+let historyViewState = $state<NoteViewState | null>(null);
 
 let nextBannerId = 0;
 // Journal-recovered deltas for notes that are not open yet, applied as
@@ -542,7 +548,27 @@ function commandContext(): CommandContext {
       return true;
     },
     taskStatusMarkerFrom: taskStatusSurfaceMarker,
+    ...(hasDesktopRuntime()
+      ? { changeApplicationZoom: applyApplicationZoom }
+      : {}),
   };
+}
+
+let applicationZoomQueue = Promise.resolve();
+function applyApplicationZoom(action: "in" | "out" | "reset"): Promise<void> {
+  applicationZoomQueue = applicationZoomQueue
+    .catch(() => {})
+    .then(async () => {
+      await settingsStore.load();
+      const current = settingsStore.snapshot.document.zoom_percent;
+      const requested =
+        action === "reset"
+          ? 100
+          : Math.max(50, Math.min(200, current + (action === "in" ? 10 : -10)));
+      const zoomPercent = await zoomSet(requested);
+      settingsStore.applyExternal({ zoom_percent: zoomPercent });
+    });
+  return applicationZoomQueue;
 }
 
 const onGlobalKeydown = globalKeydownHandler(registry, commandContext);
@@ -647,7 +673,12 @@ const overlayItems = $derived.by((): PickerItem[] => {
   if (activeOverlay !== VIEW_COMMAND_SURFACE) return [];
   switch (parsedOverlayQuery.mode) {
     case "command":
-      return commandItems(registry, parsedOverlayQuery.query, macPlatform);
+      return commandItems(
+        registry,
+        parsedOverlayQuery.query,
+        macPlatform,
+        commandContext(),
+      );
     case "file":
       return appendBareDiscoveryItems(
         fileItems(
@@ -656,7 +687,12 @@ const overlayItems = $derived.by((): PickerItem[] => {
           selectedPath === null ? [] : [selectedPath],
           parsedOverlayQuery.query,
         ),
-        commandItems(registry, parsedOverlayQuery.query, macPlatform),
+        commandItems(
+          registry,
+          parsedOverlayQuery.query,
+          macPlatform,
+          commandContext(),
+        ),
         tagItems(tagCatalogEntries, parsedOverlayQuery.query),
         parsedOverlayQuery.query,
       );
@@ -1029,7 +1065,7 @@ async function readOptionalVaultConfigFile(
   }
 }
 
-async function openVaultAtPath(path: string) {
+async function openVaultAtPath(path: string, initialNote?: string) {
   errorText = null;
   tagCatalogGeneration += 1;
   if ((await editor?.flush()) === false) {
@@ -1049,6 +1085,7 @@ async function openVaultAtPath(path: string) {
       return;
     }
     vault = handle;
+    activeVaultPath = path;
     tree = nextTree;
     selectedPath = null;
     note = null;
@@ -1066,7 +1103,9 @@ async function openVaultAtPath(path: string) {
     const harnessNote = (window as Window & { __SKRIBEUM_E2E_NOTE__?: string })
       .__SKRIBEUM_E2E_NOTE__;
     const addressed = navigation?.state().address ?? null;
-    if (addressed !== null) {
+    if (initialNote !== undefined) {
+      await navigation?.reset({ path: initialNote });
+    } else if (addressed !== null) {
       await navigation?.start(addressed);
     } else if (typeof harnessNote === "string") {
       await navigation?.start({ path: harnessNote });
@@ -1077,6 +1116,40 @@ async function openVaultAtPath(path: string) {
     }
     errorText = describeError(STRINGS.vaultOpenFailed, error);
   }
+}
+
+function comparableNativePath(path: string): string {
+  const normalized = path.replace(/[\\/]+$/u, "");
+  return /Win/u.test(navigator.platform)
+    ? normalized.toLocaleLowerCase()
+    : normalized;
+}
+
+async function handleNativeOpen(path: string): Promise<void> {
+  try {
+    const target = await fileOpenResolve(path);
+    if (
+      vault !== null &&
+      activeVaultPath !== null &&
+      comparableNativePath(activeVaultPath) ===
+        comparableNativePath(target.vault_path)
+    ) {
+      await navigateToNote(target.note_path);
+    } else {
+      await openVaultAtPath(target.vault_path, target.note_path);
+    }
+  } catch {
+    errorText = STRINGS.fileOpenFailed;
+  }
+}
+
+let nativeOpenQueue = Promise.resolve();
+function drainNativeOpenFiles(): void {
+  nativeOpenQueue = nativeOpenQueue
+    .catch(() => {})
+    .then(async () => {
+      for (const path of await openFilesTake()) await handleNativeOpen(path);
+    });
 }
 
 async function pickVault() {
@@ -1112,7 +1185,11 @@ function isMissingNoteError(error: unknown): boolean {
   );
 }
 
-async function openNote(path: string): Promise<boolean> {
+async function openNote(
+  path: string,
+  restoration: NoteViewState | null = null,
+): Promise<boolean> {
+  historyViewState = restoration;
   const currentVault = vault;
   if (currentVault === null) {
     return false;
@@ -1183,21 +1260,35 @@ async function openNote(path: string): Promise<boolean> {
   }
 }
 
-async function openNoteAddress(address: NoteAddress): Promise<void> {
-  const opened = await openNote(address.path);
+async function openNoteAddress(
+  address: NoteAddress,
+  restoration: NoteViewState | null = null,
+  source: "fresh" | "history" = "fresh",
+): Promise<boolean> {
+  focusReadingSurface();
+  const opened = await openNote(address.path, restoration);
   if (!opened) {
     if (missingAddress !== null) {
       missingAddress = address;
+      focusReadingSurface();
+      return true;
     }
-    return;
+    return false;
+  }
+  if (source === "history") {
+    await tick();
+    focusReadingSurface();
+    requestAnimationFrame(() => focusReadingSurface());
+    return true;
   }
   if (address.fragment === undefined) {
-    return;
+    focusReadingSurface();
+    return true;
   }
   await tick();
   const view = editor?.getView();
   if (view === undefined) {
-    return;
+    return false;
   }
   const position = noteFragmentPosition(view.state, address.fragment);
   if (position !== null) {
@@ -1207,11 +1298,13 @@ async function openNoteAddress(address: NoteAddress): Promise<void> {
       userEvent: "select",
     });
   }
+  focusReadingSurface();
+  return true;
 }
 
-function navigateToNote(path: string, fragment?: string): Promise<void> {
+async function navigateToNote(path: string, fragment?: string): Promise<void> {
   const address = fragment === undefined ? { path } : { path, fragment };
-  return navigation?.open(address) ?? openNoteAddress(address);
+  await (navigation?.open(address) ?? openNoteAddress(address));
 }
 
 function wikilinkNavigationOptions(): FollowWikilinkOptions {
@@ -1394,6 +1487,14 @@ function pollEndToEndVault() {
     const path = (window as { __SKRIBEUM_E2E_VAULT__?: string })
       .__SKRIBEUM_E2E_VAULT__;
     if (typeof path === "string" && vault === null) {
+      const target = window as Window & {
+        __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
+        __SKRIBEUM_E2E_HISTORY_STATE__?: () => NoteViewState | null;
+      };
+      target.__SKRIBEUM_E2E_OPEN_NOTE__ = (notePath) =>
+        navigateToNote(notePath);
+      target.__SKRIBEUM_E2E_HISTORY_STATE__ = () =>
+        editor?.captureHistoryState() ?? null;
       clearInterval(timer);
       void openVaultAtPath(path);
     } else if (attempts > 50 || vault !== null) {
@@ -1417,6 +1518,7 @@ onMount(() => {
     mode: navigationSurface,
     browserWindow: window,
     load: openNoteAddress,
+    capture: () => editor?.captureHistoryState() ?? null,
     changed: (state) => {
       navigationState = state;
     },
@@ -1425,15 +1527,26 @@ onMount(() => {
   const debugWindow = window as Window & {
     __SKRIBEUM_DEBUG_OPEN_NOTE__?: (path: string) => Promise<void>;
     __SKRIBEUM_DEBUG_PERF__?: boolean;
+    __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
+    __SKRIBEUM_E2E_HISTORY_STATE__?: () => NoteViewState | null;
+    __SKRIBEUM_E2E_VAULT__?: string;
   };
   if (debugWindow.__SKRIBEUM_DEBUG_PERF__ === true) {
     debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__ = async (path) => {
       await openNote(path);
     };
   }
+  if (typeof debugWindow.__SKRIBEUM_E2E_VAULT__ === "string") {
+    debugWindow.__SKRIBEUM_E2E_OPEN_NOTE__ = (path) => navigateToNote(path);
+    debugWindow.__SKRIBEUM_E2E_HISTORY_STATE__ = () =>
+      editor?.captureHistoryState() ?? null;
+  }
   const unlisteners = [
     events.vaultCollisionsDetected.listen((event) => {
       collisionGroups = event.payload.groups;
+    }),
+    events.openFilesAvailable.listen(() => {
+      drainNativeOpenFiles();
     }),
     // Raw watcher events refresh the tree; content reconciliation for open
     // notes arrives through the typed events below, never through raw
@@ -1543,8 +1656,14 @@ onMount(() => {
         },
       ];
     }),
+    events.settingsZoomChanged.listen((event) => {
+      settingsStore.applyExternal({
+        zoom_percent: event.payload.zoom_percent,
+      });
+    }),
   ];
   void settingsStore.load();
+  if (hasDesktopRuntime()) drainNativeOpenFiles();
   if (hasDesktopRuntime()) {
     void settingsPath()
       .then((path) => {
@@ -1561,6 +1680,8 @@ onMount(() => {
     navigation?.dispose();
     navigation = null;
     delete debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__;
+    delete debugWindow.__SKRIBEUM_E2E_OPEN_NOTE__;
+    delete debugWindow.__SKRIBEUM_E2E_HISTORY_STATE__;
     clearInterval(pollTimer);
     cancelOutlineRefresh?.();
     for (const unlisten of unlisteners) {
@@ -1693,6 +1814,7 @@ onMount(() => {
       class="min-w-0 flex-1"
       bind:this={contentHost}
       tabindex="-1"
+      data-testid="reading-surface"
     >
       {#if contentView === VIEW_CANVAS && canvas !== null}
         <CanvasView
@@ -1741,6 +1863,7 @@ onMount(() => {
           {commandContext}
           settings={settingsState.document}
           {sourceMode}
+          {historyViewState}
           {onConflict}
           {onWriteError}
           onDocChanged={onEditorDocChanged}
@@ -1837,6 +1960,7 @@ onMount(() => {
         {/if}
       {/each}
       {#each actionCommands as command (command.id)}
+        {@const unavailableReason = registry.unavailableReason(command.id, commandContext())}
         <button
           type="button"
           data-command-id={command.id}
@@ -1846,7 +1970,9 @@ onMount(() => {
           aria-pressed={command.id === TOGGLE_SOURCE_MODE_COMMAND
             ? sourceMode
             : undefined}
-          disabled={command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null}
+          disabled={unavailableReason !== null ||
+            (command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null)}
+          title={unavailableReason ?? undefined}
           onclick={() => runActionCommand(command.id)}
         >
           <span class="skr-action-menu-label">

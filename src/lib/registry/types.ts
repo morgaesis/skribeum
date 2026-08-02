@@ -54,6 +54,8 @@ export type CommandContext = {
   toggleSourceMode?(): boolean;
   /** Task marker selected when a command surface opened, if any. */
   taskStatusMarkerFrom?: number | null;
+  /** Applies one persisted desktop webview zoom action. */
+  changeApplicationZoom?: (action: "in" | "out" | "reset") => Promise<void>;
   /** An explicit heading supplied by an outline-row pointer action. */
   heading?: string;
 };
@@ -105,6 +107,8 @@ type CommandBase = {
   kind?: "command" | "setting";
   /** Additional searchable text that is not displayed as the title. */
   searchTerms?: readonly string[];
+  /** Explains why the host cannot run this command, or null when available. */
+  unavailableReason?: (context: CommandContext) => string | null;
   /**
    * Listed in the slash menu when present; `keywords` extend fuzzy
    * matching beyond the title.

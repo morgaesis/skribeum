@@ -378,7 +378,12 @@ describe("note addressing and desktop history", () => {
     const first = { path: "first.md" };
     const second = { path: "folder/second.md", fragment: "Details" };
     const load = vi.fn(async () => {});
-    const navigator = createNoteNavigator({ mode: "desktop", load });
+    let captured = { anchor: 7, head: 11, scrollTop: 320 };
+    const navigator = createNoteNavigator({
+      mode: "desktop",
+      load,
+      capture: () => captured,
+    });
 
     await navigator.start(first);
     await navigator.open(second);
@@ -388,8 +393,15 @@ describe("note addressing and desktop history", () => {
       canGoForward: false,
     });
 
+    captured = { anchor: 19, head: 19, scrollTop: 640 };
     expect(navigator.back()).toBe(true);
-    await vi.waitFor(() => expect(load).toHaveBeenLastCalledWith(first));
+    await vi.waitFor(() =>
+      expect(load).toHaveBeenLastCalledWith(
+        first,
+        { anchor: 7, head: 11, scrollTop: 320 },
+        "history",
+      ),
+    );
     expect(navigator.state()).toMatchObject({
       address: first,
       canGoBack: false,
@@ -397,12 +409,41 @@ describe("note addressing and desktop history", () => {
     });
 
     expect(navigator.forward()).toBe(true);
-    await vi.waitFor(() => expect(load).toHaveBeenLastCalledWith(second));
+    await vi.waitFor(() =>
+      expect(load).toHaveBeenLastCalledWith(
+        second,
+        { anchor: 19, head: 19, scrollTop: 640 },
+        "history",
+      ),
+    );
     expect(navigator.state()).toMatchObject({
       address: second,
       canGoBack: true,
       canGoForward: false,
     });
+    navigator.dispose();
+  });
+
+  it("rolls desktop history back when traversal loading is declined", async () => {
+    const first = { path: "first.md" };
+    const second = { path: "second.md" };
+    let declineFirst = false;
+    const navigator = createNoteNavigator({
+      mode: "desktop",
+      load: async (address) => !(declineFirst && address.path === first.path),
+    });
+
+    await navigator.start(first);
+    await navigator.open(second);
+    declineFirst = true;
+    expect(navigator.back()).toBe(true);
+    await vi.waitFor(() =>
+      expect(navigator.state()).toMatchObject({
+        address: second,
+        canGoBack: true,
+        canGoForward: false,
+      }),
+    );
     navigator.dispose();
   });
 
@@ -427,7 +468,9 @@ describe("note addressing and desktop history", () => {
     );
 
     expect(navigator.back()).toBe(true);
-    await vi.waitFor(() => expect(load).toHaveBeenLastCalledWith(first));
+    await vi.waitFor(() =>
+      expect(load).toHaveBeenLastCalledWith(first, null, "history"),
+    );
     expect(new URL(window.location.href).searchParams.get("note")).toBe(
       "first.md",
     );

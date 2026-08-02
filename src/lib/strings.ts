@@ -3,6 +3,14 @@
 export const STRINGS = {
   appTitle: "Skribeum",
   openVault: "Open vault",
+  commandZoomIn: "Zoom in",
+  commandZoomOut: "Zoom out",
+  commandZoomReset: "Reset zoom",
+  applicationZoomDesktopRequired:
+    "Application zoom requires the desktop application.",
+  nativeFileHandlingDesktopRequired:
+    "Native file handling requires the desktop application.",
+  desktopWindowRequired: "Window control requires the desktop application.",
   vaultTreeLabel: "Vault files",
   emptyStateHint: "No vault is open. Use “Open vault” to browse one read-only.",
   readOnlyBadge: "read-only",
@@ -12,6 +20,7 @@ export const STRINGS = {
   collisionBanner:
     "Some file names in this vault collide by letter case or Unicode form and may be merged by other filesystems:",
   vaultOpenFailed: "Opening the vault failed",
+  fileOpenFailed: "Opening the file failed",
   noteReadFailed: "Reading the note failed",
   noteNotFoundTitle: "Note not found",
   noteNotFoundPrefix: "No note exists at this vault-relative path:",

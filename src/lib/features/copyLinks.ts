@@ -1,10 +1,11 @@
+import { withoutNoteExtension } from "../noteTitles";
 import type { CommandRegistry } from "../registry";
 import { STRINGS } from "../strings";
 import type { NoteAddress, WikilinkResolutionContext } from "./navigation";
 import { urlForNoteAddress } from "./navigation";
 
 function withoutMarkdownExtension(path: string): string {
-  return path.toLocaleLowerCase().endsWith(".md") ? path.slice(0, -3) : path;
+  return withoutNoteExtension(path);
 }
 
 function directory(path: string): string {

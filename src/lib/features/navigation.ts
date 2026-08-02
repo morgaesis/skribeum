@@ -8,6 +8,7 @@ import { syntaxTree } from "@codemirror/language";
 import { type EditorState, Facet } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import { isNotePath, withoutNoteExtension } from "../noteTitles";
 import type { CommandRegistry } from "../registry";
 import { STRINGS } from "../strings";
 
@@ -150,8 +151,8 @@ function exactWikilinkMatch(path: string, target: string): boolean {
   return (
     path === target ||
     (!targetHasExtension(target) &&
-      path.endsWith(".md") &&
-      path.slice(0, -3) === target)
+      isNotePath(path) &&
+      withoutNoteExtension(path) === target)
   );
 }
 
@@ -163,8 +164,8 @@ function suffixWikilinkMatch(path: string, target: string): boolean {
   return (
     tailMatches(path) ||
     (!targetHasExtension(target) &&
-      path.endsWith(".md") &&
-      tailMatches(path.slice(0, -3)))
+      isNotePath(path) &&
+      tailMatches(withoutNoteExtension(path)))
   );
 }
 
@@ -293,9 +294,7 @@ export function noteAddressFromUrl(url: URL): NoteAddress | null {
   if (rawPath === null) {
     return null;
   }
-  const notePath = rawPath.toLowerCase().endsWith(".md")
-    ? rawPath
-    : `${rawPath}.md`;
+  const notePath = isNotePath(rawPath) ? rawPath : `${rawPath}.md`;
   const path = normalizeNotePath(notePath);
   if (path === null) {
     return null;
@@ -318,12 +317,22 @@ export function urlForNoteAddress(address: NoteAddress, current: URL): URL {
   return url;
 }
 
-type HistoryListener = (address: NoteAddress) => void;
+/** Reading state stored with one navigation history entry. Offsets are UTF-8 bytes. */
+export type NoteViewState = {
+  anchor: number;
+  head: number;
+  scrollTop: number;
+};
+
+type HistoryEntry = { address: NoteAddress; viewState: NoteViewState | null };
+type HistoryListener = (entry: HistoryEntry, rollback: () => void) => void;
 
 interface NavigationHistory {
   current(): NoteAddress | null;
-  replace(address: NoteAddress): void;
-  push(address: NoteAddress): void;
+  replace(address: NoteAddress, viewState?: NoteViewState | null): void;
+  push(address: NoteAddress, viewState?: NoteViewState | null): void;
+  updateViewState(viewState: NoteViewState | null): void;
+  reset(address: NoteAddress): void;
   back(): boolean;
   forward(): boolean;
   canGoBack(): boolean;
@@ -332,34 +341,51 @@ interface NavigationHistory {
 }
 
 class MemoryNavigationHistory implements NavigationHistory {
-  private entries: NoteAddress[] = [];
+  private entries: HistoryEntry[] = [];
   private index = -1;
   private listener: HistoryListener | null = null;
 
   current(): NoteAddress | null {
-    return this.entries[this.index] ?? null;
+    return this.entries[this.index]?.address ?? null;
   }
 
-  replace(address: NoteAddress): void {
+  replace(address: NoteAddress, viewState: NoteViewState | null = null): void {
     if (this.index < 0) {
-      this.entries = [address];
+      this.entries = [{ address, viewState }];
       this.index = 0;
     } else {
-      this.entries[this.index] = address;
+      this.entries[this.index] = { address, viewState };
     }
   }
 
-  push(address: NoteAddress): void {
-    this.entries = [...this.entries.slice(0, this.index + 1), address];
+  push(address: NoteAddress, viewState: NoteViewState | null = null): void {
+    this.entries = [
+      ...this.entries.slice(0, this.index + 1),
+      { address, viewState },
+    ];
     this.index = this.entries.length - 1;
+  }
+
+  updateViewState(viewState: NoteViewState | null): void {
+    const entry = this.entries[this.index];
+    if (entry !== undefined) this.entries[this.index] = { ...entry, viewState };
+  }
+
+  reset(address: NoteAddress): void {
+    this.entries = [{ address, viewState: null }];
+    this.index = 0;
   }
 
   back(): boolean {
     if (this.index <= 0) {
       return false;
     }
+    const previousIndex = this.index;
     this.index -= 1;
-    this.listener?.(this.entries[this.index] as NoteAddress);
+    const traversedIndex = this.index;
+    this.listener?.(this.entries[this.index] as HistoryEntry, () => {
+      if (this.index === traversedIndex) this.index = previousIndex;
+    });
     return true;
   }
 
@@ -367,8 +393,12 @@ class MemoryNavigationHistory implements NavigationHistory {
     if (this.index >= this.entries.length - 1) {
       return false;
     }
+    const previousIndex = this.index;
     this.index += 1;
-    this.listener?.(this.entries[this.index] as NoteAddress);
+    const traversedIndex = this.index;
+    this.listener?.(this.entries[this.index] as HistoryEntry, () => {
+      if (this.index === traversedIndex) this.index = previousIndex;
+    });
     return true;
   }
 
@@ -391,11 +421,27 @@ class MemoryNavigationHistory implements NavigationHistory {
 }
 
 const BROWSER_HISTORY_KEY = "skribeumNavigationIndex";
+const BROWSER_VIEW_STATE_KEY = "skribeumNoteViewState";
+
+function storedViewState(value: unknown): NoteViewState | null {
+  if (typeof value !== "object" || value === null) return null;
+  const state = value as Record<string, unknown>;
+  return typeof state.anchor === "number" &&
+    typeof state.head === "number" &&
+    typeof state.scrollTop === "number"
+    ? {
+        anchor: state.anchor,
+        head: state.head,
+        scrollTop: state.scrollTop,
+      }
+    : null;
+}
 
 class BrowserNavigationHistory implements NavigationHistory {
   private index = 0;
   private maximumIndex = 0;
   private listener: HistoryListener | null = null;
+  private rollbackTarget: number | null = null;
 
   constructor(private readonly browserWindow: Window) {
     const state = browserWindow.history.state as Record<string, unknown> | null;
@@ -416,7 +462,7 @@ class BrowserNavigationHistory implements NavigationHistory {
     return noteAddressFromUrl(new URL(this.browserWindow.location.href));
   }
 
-  replace(address: NoteAddress): void {
+  replace(address: NoteAddress, viewState: NoteViewState | null = null): void {
     const url = urlForNoteAddress(
       address,
       new URL(this.browserWindow.location.href),
@@ -425,13 +471,14 @@ class BrowserNavigationHistory implements NavigationHistory {
       {
         ...(this.browserWindow.history.state ?? {}),
         [BROWSER_HISTORY_KEY]: this.index,
+        [BROWSER_VIEW_STATE_KEY]: viewState,
       },
       "",
       url,
     );
   }
 
-  push(address: NoteAddress): void {
+  push(address: NoteAddress, viewState: NoteViewState | null = null): void {
     this.index += 1;
     this.maximumIndex = this.index;
     const url = urlForNoteAddress(
@@ -442,10 +489,29 @@ class BrowserNavigationHistory implements NavigationHistory {
       {
         ...(this.browserWindow.history.state ?? {}),
         [BROWSER_HISTORY_KEY]: this.index,
+        [BROWSER_VIEW_STATE_KEY]: viewState,
       },
       "",
       url,
     );
+  }
+
+  updateViewState(viewState: NoteViewState | null): void {
+    this.browserWindow.history.replaceState(
+      {
+        ...(this.browserWindow.history.state ?? {}),
+        [BROWSER_HISTORY_KEY]: this.index,
+        [BROWSER_VIEW_STATE_KEY]: viewState,
+      },
+      "",
+      this.browserWindow.location.href,
+    );
+  }
+
+  reset(address: NoteAddress): void {
+    this.index = 0;
+    this.maximumIndex = 0;
+    this.replace(address);
   }
 
   back(): boolean {
@@ -477,12 +543,28 @@ class BrowserNavigationHistory implements NavigationHistory {
     const onPopState = (event: PopStateEvent) => {
       const state = event.state as Record<string, unknown> | null;
       const stored = state?.[BROWSER_HISTORY_KEY];
+      const previousIndex = this.index;
       if (typeof stored === "number" && Number.isInteger(stored)) {
         this.index = stored;
       }
+      if (this.rollbackTarget === this.index) {
+        this.rollbackTarget = null;
+        return;
+      }
       const address = this.current();
       if (address !== null) {
-        this.listener?.(address);
+        const traversedIndex = this.index;
+        this.listener?.(
+          {
+            address,
+            viewState: storedViewState(state?.[BROWSER_VIEW_STATE_KEY]),
+          },
+          () => {
+            if (this.index !== traversedIndex) return;
+            this.rollbackTarget = previousIndex;
+            this.browserWindow.history.go(previousIndex - traversedIndex);
+          },
+        );
       }
     };
     this.browserWindow.addEventListener("popstate", onPopState);
@@ -500,6 +582,7 @@ export type NavigationMode = "browser" | "desktop";
 export type NoteNavigator = {
   start(fallback: NoteAddress | null): Promise<void>;
   open(address: NoteAddress): Promise<void>;
+  reset(address: NoteAddress): Promise<void>;
   back(): boolean;
   forward(): boolean;
   state(): NavigationState;
@@ -515,7 +598,12 @@ export type NavigationState = {
 /** Builds the shared navigation controller over the selected history adapter. */
 export function createNoteNavigator(options: {
   mode: NavigationMode;
-  load(address: NoteAddress): Promise<void>;
+  load(
+    address: NoteAddress,
+    restoration: NoteViewState | null,
+    source: "fresh" | "history",
+  ): Promise<unknown>;
+  capture?: () => NoteViewState | null;
   browserWindow?: Window;
   changed?: (state: NavigationState) => void;
 }): NoteNavigator {
@@ -523,23 +611,31 @@ export function createNoteNavigator(options: {
     options.mode === "browser"
       ? new BrowserNavigationHistory(options.browserWindow ?? window)
       : new MemoryNavigationHistory();
-  let queue = Promise.resolve();
+  let queue = Promise.resolve(true);
   const state = (): NavigationState => ({
     address: history.current(),
     canGoBack: history.canGoBack(),
     canGoForward: history.canGoForward(),
   });
-  const enqueue = (address: NoteAddress) => {
+  const enqueue = (
+    address: NoteAddress,
+    restoration: NoteViewState | null,
+    source: "fresh" | "history",
+  ) => {
     queue = queue
-      .catch(() => {})
-      .then(() => options.load(address))
-      .finally(() => {
-        options.changed?.(state());
-      });
+      .catch(() => false)
+      .then(
+        async () =>
+          (await options.load(address, restoration, source)) !== false,
+      )
+      .catch(() => false);
     return queue;
   };
-  const unsubscribe = history.subscribe((address) => {
-    void enqueue(address);
+  const unsubscribe = history.subscribe((entry, rollback) => {
+    void enqueue(entry.address, entry.viewState, "history").then((loaded) => {
+      if (!loaded) rollback();
+      options.changed?.(state());
+    });
   });
   return {
     async start(fallback) {
@@ -549,17 +645,36 @@ export function createNoteNavigator(options: {
         return;
       }
       history.replace(address);
-      await enqueue(address);
+      await enqueue(address, null, "fresh");
+      options.changed?.(state());
     },
     async open(address) {
-      await enqueue(address);
-      if (!sameAddress(history.current(), address)) {
+      history.updateViewState(options.capture?.() ?? null);
+      const loaded = await enqueue(address, null, "fresh");
+      if (!loaded) {
+        options.changed?.(state());
+        return;
+      }
+      if (sameAddress(history.current(), address)) {
+        history.replace(address, null);
+      } else {
         history.push(address);
       }
       options.changed?.(state());
     },
-    back: () => history.back(),
-    forward: () => history.forward(),
+    async reset(address) {
+      history.reset(address);
+      await enqueue(address, null, "fresh");
+      options.changed?.(state());
+    },
+    back: () => {
+      history.updateViewState(options.capture?.() ?? null);
+      return history.back();
+    },
+    forward: () => {
+      history.updateViewState(options.capture?.() ?? null);
+      return history.forward();
+    },
     state,
     dispose: unsubscribe,
   };
@@ -689,7 +804,7 @@ export function followWikilinkTarget(
 ): boolean {
   const resolution = resolveWikilinkTarget(target, options.context);
   if (resolution.kind === "note") {
-    if (!resolution.path.toLowerCase().endsWith(".md")) {
+    if (!isNotePath(resolution.path)) {
       options.unresolved(STRINGS.wikilinkTargetNotNote);
       return true;
     }
@@ -713,7 +828,11 @@ export function followWikilinkTarget(
   }
   options.unresolved(STRINGS.wikilinkUnresolvedReason);
   const candidate = resolution.candidate;
-  if (candidate?.path.toLowerCase().endsWith(".md")) {
+  if (
+    candidate !== null &&
+    candidate !== undefined &&
+    isNotePath(candidate.path)
+  ) {
     void options.navigate(candidate);
   }
   return true;

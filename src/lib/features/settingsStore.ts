@@ -30,6 +30,7 @@ export const DEFAULT_SETTINGS: SettingsDocument = {
   editor_font_size: 16,
   editor_line_height: 170,
   editor_line_width: 72,
+  zoom_percent: 100,
   show_line_numbers: false,
   animations: true,
   autosave_delay_ms: 400,
@@ -63,6 +64,13 @@ function normalizedDocument(document: SettingsDocument): SettingsDocument {
     dark_palette: isDarkPaletteName(document.dark_palette)
       ? document.dark_palette
       : DEFAULT_SETTINGS.dark_palette,
+    zoom_percent:
+      Number.isInteger(document.zoom_percent) &&
+      document.zoom_percent >= 50 &&
+      document.zoom_percent <= 200 &&
+      document.zoom_percent % 10 === 0
+        ? document.zoom_percent
+        : DEFAULT_SETTINGS.zoom_percent,
     link_previews:
       typeof document.link_previews === "boolean"
         ? document.link_previews
@@ -108,6 +116,19 @@ export class SettingsStore {
 
   get snapshot(): SettingsState {
     return this.state;
+  }
+
+  /** Applies a document fragment already persisted by the native runtime. */
+  applyExternal(patch: Partial<SettingsDocument>): void {
+    const document = normalizedDocument({ ...this.state.document, ...patch });
+    this.revision += 1;
+    this.persistedDocument = document;
+    this.publish({
+      document,
+      error: null,
+      errorSetting: null,
+      loaded: this.state.loaded,
+    });
   }
 
   private publish(state: SettingsState): void {

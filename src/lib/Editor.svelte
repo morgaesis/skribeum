@@ -35,7 +35,10 @@ import {
   noteSourceExtensions,
 } from "./editor/syntaxPolicy";
 import { findExtension } from "./features/findPanel";
-import type { FollowWikilinkOptions } from "./features/navigation";
+import type {
+  FollowWikilinkOptions,
+  NoteViewState,
+} from "./features/navigation";
 import { selectionToolbar } from "./features/selectionToolbar";
 import {
   DEFAULT_SETTINGS,
@@ -70,6 +73,7 @@ let {
   commandContext = null,
   settings = DEFAULT_SETTINGS,
   sourceMode = false,
+  historyViewState = null,
   onConflict,
   onWriteError,
   onDocChanged,
@@ -97,6 +101,8 @@ let {
   settings?: SettingsDocument;
   /** Transient whole-note raw Markdown presentation. */
   sourceMode?: boolean;
+  /** Reading state restored for a history traversal, in UTF-8 byte offsets. */
+  historyViewState?: NoteViewState | null;
   onConflict?: () => void;
   onWriteError?: (message: string) => void;
   /** Notified after any document-changing transaction (outline refresh). */
@@ -244,16 +250,48 @@ function registryExtensions(): Extension[] {
   ];
 }
 
-function stateFor(content: string, locked: boolean): EditorState {
+function characterOffsetForByte(content: string, byteOffset: number): number {
+  const target = Math.max(0, Math.floor(byteOffset));
+  let bytes = 0;
+  let characters = 0;
+  for (const character of content) {
+    const nextBytes = bytes + new TextEncoder().encode(character).length;
+    if (nextBytes > target) break;
+    bytes = nextBytes;
+    characters += character.length;
+  }
+  return characters;
+}
+
+function byteOffsetForCharacter(
+  content: string,
+  characterOffset: number,
+): number {
+  return new TextEncoder().encode(content.slice(0, characterOffset)).length;
+}
+
+function stateFor(
+  content: string,
+  locked: boolean,
+  restoration: NoteViewState | null = historyViewState,
+): EditorState {
   const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
   const initialFrontmatter = parseFrontmatter(content);
   const initialCursor =
     initialFrontmatter === null
       ? 0
       : Math.min(initialFrontmatter.to + 1, content.length);
+  const anchor =
+    restoration === null
+      ? initialCursor
+      : characterOffsetForByte(content, restoration.anchor);
+  const head =
+    restoration === null
+      ? anchor
+      : characterOffsetForByte(content, restoration.head);
   return EditorState.create({
     doc: content,
-    selection: { anchor: initialCursor },
+    selection: { anchor, head },
     extensions: [
       renderingCompartment.of(
         renderingExtensions(content, normalizedTaskStatuses),
@@ -281,6 +319,19 @@ function stateFor(content: string, locked: boolean): EditorState {
         },
       }),
     ],
+  });
+}
+
+function replaceEditorState(content: string, locked: boolean): void {
+  const target = view;
+  if (target === undefined) return;
+  target.setState(stateFor(content, locked));
+  const scrollTop = historyViewState?.scrollTop ?? 0;
+  target.scrollDOM.style.scrollBehavior = "auto";
+  target.scrollDOM.scrollTop = scrollTop;
+  requestAnimationFrame(() => {
+    if (view === target) target.scrollDOM.scrollTop = scrollTop;
+    target.scrollDOM.style.removeProperty("scroll-behavior");
   });
 }
 
@@ -588,6 +639,18 @@ export function getView(): EditorView | undefined {
   return view;
 }
 
+/** Captures byte-exact selection offsets and the current reading position. */
+export function captureHistoryState(): NoteViewState | null {
+  if (view === undefined) return null;
+  const content = view.state.doc.toString();
+  const selection = view.state.selection.main;
+  return {
+    anchor: byteOffsetForCharacter(content, selection.anchor),
+    head: byteOffsetForCharacter(content, selection.head),
+    scrollTop: view.scrollDOM.scrollTop,
+  };
+}
+
 async function rereadAndReconcile(): Promise<void> {
   if (vault === null || path === null) {
     return;
@@ -606,7 +669,7 @@ function initializeForNote(current: LoadedNote | null) {
   removed = false;
   if (current === null) {
     session = null;
-    view?.setState(stateFor(doc, false));
+    replaceEditorState(doc, false);
     applyLinkContext();
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
@@ -615,7 +678,7 @@ function initializeForNote(current: LoadedNote | null) {
   }
   if (current.readOnly) {
     session = null;
-    view?.setState(stateFor(current.text, true));
+    replaceEditorState(current.text, true);
     applyLinkContext();
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
@@ -640,7 +703,7 @@ function initializeForNote(current: LoadedNote | null) {
       onWriteError?.(String(error));
     }
   }
-  view?.setState(stateFor(text, false));
+  replaceEditorState(text, false);
   applyLinkContext();
   refreshFrontmatter();
   scheduleTitleVisibilityRefresh();

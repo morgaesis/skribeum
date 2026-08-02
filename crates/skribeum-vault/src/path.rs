@@ -113,12 +113,16 @@ impl VaultPath {
         self.0.rsplit('/').next().unwrap_or(&self.0)
     }
 
-    /// Whether the path names a markdown note, by case-insensitive `.md`
-    /// extension.
+    /// Whether the path names an editable Markdown or plain-text note.
     #[must_use]
     pub fn is_note(&self) -> bool {
         let name = self.file_name();
-        name.len() > 3 && name[name.len() - 3..].eq_ignore_ascii_case(".md")
+        [".md", ".markdown", ".txt"].iter().any(|extension| {
+            name.len() > extension.len()
+                && name
+                    .get(name.len() - extension.len()..)
+                    .is_some_and(|suffix| suffix.eq_ignore_ascii_case(extension))
+        })
     }
 
     /// Case-folded key used for collision detection on case-insensitive
@@ -228,8 +232,10 @@ mod tests {
     fn note_detection_is_case_insensitive() {
         assert!(VaultPath::new("a/b.md").expect("valid").is_note());
         assert!(VaultPath::new("a/b.MD").expect("valid").is_note());
-        assert!(!VaultPath::new("a/b.txt").expect("valid").is_note());
+        assert!(VaultPath::new("a/b.markdown").expect("valid").is_note());
+        assert!(VaultPath::new("a/b.TXT").expect("valid").is_note());
         assert!(!VaultPath::new(".md").expect("valid").is_note());
+        assert!(!VaultPath::new("a/b.rtf").expect("valid").is_note());
     }
 
     #[test]

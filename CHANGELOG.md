@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Desktop windows remain hidden until the first frontend frame is painted and
+  use the active theme surface behind the webview during startup.
+- Note history restores UTF-8 caret offsets and scroll position without
+  focusing the editor.
 - The unified command surface accepts native typing and contains all keyboard
   input while it is open.
 - Whole-note and section embeds remain mounted when vault link context loads,
@@ -17,6 +21,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The desktop application handles `.md`, `.markdown`, and `.txt` files from
+  operating-system open-with actions, including requests forwarded from a
+  second launch.
+- Application zoom is available from the command surface and the standard
+  `mod++`, `mod+-`, and `mod+0` shortcuts, with the selected factor persisted.
 - Appearance settings use one six-card palette chooser. Choosing a card applies
   its light or dark appearance, while Match system appearance follows the last
   chosen palette for each mode.

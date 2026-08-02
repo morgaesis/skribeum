@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -16,6 +17,7 @@ import {
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
   MOTION_PREVIEW_NOTE_NAME,
+  NAVIGATION_SOURCE_NOTE_CONTENT,
   NAVIGATION_SOURCE_NOTE_NAME,
   PHONE_HEADING_NOTE_NAME,
   PHONE_PLAIN_NOTE_NAME,
@@ -946,6 +948,20 @@ async function activeElementDescriptor(): Promise<string> {
   });
 }
 
+async function readingSurfaceFocusState(): Promise<{
+  readingSurface: boolean;
+  editorFocused: boolean;
+}> {
+  return browser.execute(() => ({
+    readingSurface:
+      document.activeElement?.matches('[data-testid="reading-surface"]') ===
+      true,
+    editorFocused:
+      document.querySelector(".cm-editor")?.classList.contains("cm-focused") ===
+      true,
+  }));
+}
+
 function stableJson(value: unknown): string {
   return JSON.stringify(value, (_key, nestedValue: unknown) => {
     if (
@@ -1034,6 +1050,70 @@ describe("skribeum shell", () => {
     await tree.waitForExist({ timeout: 15000 });
     await $(`li=${LF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
     await $(`li=${CRLF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
+  });
+
+  it("changes_and_persists_effective_webview_zoom_from_registered_keys", async () => {
+    const initialWidth = await browser.execute(() => window.innerWidth);
+    await browser.keys([modifierKey, "+"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) < initialWidth,
+      { timeoutMsg: "zoom in did not change the effective webview width" },
+    );
+    expect(
+      JSON.parse(readFileSync(SCRATCH_SETTINGS_PATH, "utf8")).zoom_percent,
+    ).toBe(110);
+
+    await browser.keys([modifierKey, "-"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) === initialWidth,
+      { timeoutMsg: "zoom out did not restore the effective webview width" },
+    );
+    expect(
+      JSON.parse(readFileSync(SCRATCH_SETTINGS_PATH, "utf8")).zoom_percent,
+    ).toBe(100);
+
+    await browser.keys([modifierKey, "-"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) > initialWidth,
+      { timeoutMsg: "zoom out did not increase the effective webview width" },
+    );
+    expect(
+      JSON.parse(readFileSync(SCRATCH_SETTINGS_PATH, "utf8")).zoom_percent,
+    ).toBe(90);
+
+    await browser.keys([modifierKey, "0"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) === initialWidth,
+      { timeoutMsg: "zoom reset did not restore the effective webview width" },
+    );
+    expect(
+      JSON.parse(readFileSync(SCRATCH_SETTINGS_PATH, "utf8")).zoom_percent,
+    ).toBe(100);
+  });
+
+  it("forwards_an_argv_open_path_from_a_second_packaged_instance", async () => {
+    const name = "argv-open.txt";
+    const file = path.join(SCRATCH_VAULT_PATH, name);
+    writeFileSync(file, "Argv open path content.\n", "utf8");
+    const binary = process.env.SKRIBEUM_E2E_BINARY;
+    if (binary === undefined)
+      throw new Error("packaged application path missing");
+    execFileSync(binary, [file], {
+      env: process.env,
+      stdio: "ignore",
+      timeout: 15000,
+    });
+    await browser.waitUntil(
+      async () => (await editorText()).includes("Argv open path content."),
+      {
+        timeout: 15000,
+        timeoutMsg: "argv file-open request was not forwarded",
+      },
+    );
   });
 
   it("composes_the_desktop_header_and_routes_former_header_commands_through_overflow", async () => {
@@ -2126,22 +2206,95 @@ describe("skribeum shell", () => {
     await waitForDisk(CRLF_NOTE_NAME, "first\r\nsecond!\r\nthird\r\n");
   });
 
-  it("follows_a_wikilink_and_navigates_back", async () => {
+  it("restores_history_scroll_and_utf8_caret_without_editor_focus", async () => {
     await openNoteFromTree(NAVIGATION_SOURCE_NOTE_NAME);
     await browser.waitUntil(
       async () => (await editorText()).includes("Navigation source"),
       { timeout: 15000 },
     );
 
-    const link = $(".cm-skr-wikilink-target");
-    await link.waitForExist({ timeout: 15000 });
-    await placeCursorAtLineEnd("Navigation source");
-    await link.click();
+    await browser.execute(() =>
+      document.querySelector<HTMLElement>(".cm-content")?.focus(),
+    );
+    await placeCursorInsideEditorText("Café restoration marker");
+    await browser.execute(() => {
+      const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+      if (scroller === null) throw new Error("editor scroller missing");
+      scroller.scrollTop = Math.floor(scroller.scrollHeight * 0.6);
+    });
+    const savedState = await browser.execute(() => {
+      const target = window as Window & {
+        __SKRIBEUM_E2E_HISTORY_STATE__?: () => {
+          anchor: number;
+          head: number;
+          scrollTop: number;
+        } | null;
+      };
+      return target.__SKRIBEUM_E2E_HISTORY_STATE__?.() ?? null;
+    });
+    expect(savedState).not.toBeNull();
+    expect(savedState?.anchor).toBeGreaterThan(
+      NAVIGATION_SOURCE_NOTE_CONTENT.indexOf("Café"),
+    );
+    expect(savedState?.scrollTop).toBeGreaterThan(0);
+
+    await browser.executeAsync((targetPath: string, done) => {
+      const open = (
+        window as Window & {
+          __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
+        }
+      ).__SKRIBEUM_E2E_OPEN_NOTE__;
+      if (open === undefined) {
+        done(new Error("history navigation seam missing"));
+        return;
+      }
+      open(targetPath)
+        .then(() => done())
+        .catch(done);
+    }, "zzz-navigation-target.md");
     await browser.waitUntil(
       async () => (await editorText()).includes("Wikilink destination content"),
       { timeout: 15000 },
     );
     expect(await activeElementDescriptor()).not.toContain("cm-content");
+    const freshState = await browser.execute(() =>
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_HISTORY_STATE__?: () => {
+            anchor: number;
+            head: number;
+            scrollTop: number;
+          } | null;
+        }
+      ).__SKRIBEUM_E2E_HISTORY_STATE__?.(),
+    );
+    expect(freshState).toEqual({ anchor: 0, head: 0, scrollTop: 0 });
+    expect(await readingSurfaceFocusState()).toEqual({
+      readingSurface: true,
+      editorFocused: false,
+    });
+
+    await browser.execute(() =>
+      document.querySelector<HTMLElement>(".cm-content")?.focus(),
+    );
+    await placeCursorInsideEditorText("Target café restoration marker");
+    await browser.execute(() => {
+      const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+      if (scroller === null) throw new Error("editor scroller missing");
+      scroller.scrollTop = Math.floor(scroller.scrollHeight * 0.6);
+    });
+    const targetState = await browser.execute(() =>
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_HISTORY_STATE__?: () => {
+            anchor: number;
+            head: number;
+            scrollTop: number;
+          } | null;
+        }
+      ).__SKRIBEUM_E2E_HISTORY_STATE__?.(),
+    );
+    expect(targetState?.scrollTop).toBeGreaterThan(0);
 
     const back = $('button[aria-label="Back"]');
     await back.waitForEnabled({ timeout: 15000 });
@@ -2151,26 +2304,50 @@ describe("skribeum shell", () => {
       { timeout: 15000 },
     );
     await $(".cm-skr-wikilink-target").waitForExist({ timeout: 15000 });
-
-    await browser.execute(() =>
-      document.querySelector<HTMLElement>(".cm-content")?.focus(),
-    );
-    await placeCursorInsideEditorText("zzz-navigation-target");
     await browser.waitUntil(
-      async () => {
-        await browser.execute(() =>
-          document.querySelector<HTMLElement>(".cm-content")?.focus(),
-        );
-        return (await activeElementDescriptor()).includes("cm-content");
+      async () =>
+        JSON.stringify(
+          await browser.execute(() =>
+            (
+              window as Window & {
+                __SKRIBEUM_E2E_HISTORY_STATE__?: () => unknown;
+              }
+            ).__SKRIBEUM_E2E_HISTORY_STATE__?.(),
+          ),
+        ) === JSON.stringify(savedState),
+      {
+        timeout: 5000,
+        timeoutMsg: "history view state was not restored byte-exactly",
       },
-      { timeout: 5000 },
     );
-    await browser.keys([modifierKey, Key.Enter]);
+    expect(await readingSurfaceFocusState()).toEqual({
+      readingSurface: true,
+      editorFocused: false,
+    });
+
+    const forward = $('button[aria-label="Forward"]');
+    await forward.waitForEnabled({ timeout: 15000 });
+    await forward.click();
     await browser.waitUntil(
-      async () => (await editorText()).includes("Wikilink destination content"),
-      { timeout: 15000 },
+      async () =>
+        JSON.stringify(
+          await browser.execute(() =>
+            (
+              window as Window & {
+                __SKRIBEUM_E2E_HISTORY_STATE__?: () => unknown;
+              }
+            ).__SKRIBEUM_E2E_HISTORY_STATE__?.(),
+          ),
+        ) === JSON.stringify(targetState),
+      {
+        timeout: 5000,
+        timeoutMsg: "forward history view state was not restored byte-exactly",
+      },
     );
-    expect(await activeElementDescriptor()).not.toContain("cm-content");
+    expect(await readingSurfaceFocusState()).toEqual({
+      readingSurface: true,
+      editorFocused: false,
+    });
   });
 
   it("opens_vault_search_from_a_tag", async () => {

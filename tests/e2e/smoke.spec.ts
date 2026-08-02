@@ -516,6 +516,23 @@ function browserDemoUrl(): string {
   return demoUrl;
 }
 
+async function waitForBrowserDemoNote(): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(".cm-content");
+        const text = content?.textContent ?? "";
+        return (
+          content !== null &&
+          content.getClientRects().length > 0 &&
+          text.trim().length > 0 &&
+          !text.includes("scaffold fixture")
+        );
+      }),
+    { timeout: 30000, timeoutMsg: "browser demo note content did not load" },
+  );
+}
+
 async function demoTagCompletionTargetText(): Promise<string | null> {
   const text = await editorDocumentText();
   const start = text.lastIndexOf(TAG_COMPLETION_MIDDLE_LINE);
@@ -928,6 +945,12 @@ async function placeCursorAtEditorTextStart(text: string) {
 }
 
 async function clearEditorSelection() {
+  if (await $(".cm-skr-selection-toolbar").isExisting()) {
+    await browser.execute(() =>
+      document.querySelector<HTMLElement>(".cm-content")?.focus(),
+    );
+    await browser.keys(Key.Escape);
+  }
   await browser.execute(() => {
     const root = document.querySelector(".cm-content");
     const line = root?.querySelector(".cm-line");
@@ -2142,9 +2165,12 @@ describe("skribeum shell", () => {
           throw new Error("editable table surface is missing");
         }
         const rect = element.getBoundingClientRect();
+        const scroller = element.closest<HTMLElement>(".cm-scroller");
         return {
           x: rect.x,
           y: rect.y,
+          documentX: rect.x + window.scrollX + (scroller?.scrollLeft ?? 0),
+          documentY: rect.y + window.scrollY + (scroller?.scrollTop ?? 0),
           width: rect.width,
           height: rect.height,
         };
@@ -2292,7 +2318,12 @@ describe("skribeum shell", () => {
       await rowStrip.moveTo();
       await viewportAfterPaint();
       const afterRowHover = await tableRect();
-      for (const key of ["x", "y", "width", "height"] as const) {
+      for (const key of [
+        "documentX",
+        "documentY",
+        "width",
+        "height",
+      ] as const) {
         expect(Math.abs(afterRowHover[key] - before[key])).toBeLessThanOrEqual(
           1,
         );
@@ -2308,7 +2339,12 @@ describe("skribeum shell", () => {
       await columnStrip.moveTo();
       await viewportAfterPaint();
       const afterColumnHover = await tableRect();
-      for (const key of ["x", "y", "width", "height"] as const) {
+      for (const key of [
+        "documentX",
+        "documentY",
+        "width",
+        "height",
+      ] as const) {
         expect(
           Math.abs(afterColumnHover[key] - columnBefore[key]),
         ).toBeLessThanOrEqual(1);
@@ -5510,16 +5546,7 @@ describe("skribeum core editing surfaces", () => {
       async () => new URL(await browser.getUrl()).searchParams.has("note"),
       { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
     );
-    await browser.waitUntil(
-      () =>
-        browser.execute(
-          () =>
-            !(
-              document.querySelector(".cm-content")?.textContent ?? ""
-            ).includes("scaffold fixture"),
-        ),
-      { timeout: 15000, timeoutMsg: "browser demo note content did not load" },
-    );
+    await waitForBrowserDemoNote();
     await browser.execute(() => {
       localStorage.removeItem("skribeum.demo.settings");
     });
@@ -5529,16 +5556,7 @@ describe("skribeum core editing surfaces", () => {
       async () => new URL(await browser.getUrl()).searchParams.has("note"),
       { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
     );
-    await browser.waitUntil(
-      () =>
-        browser.execute(
-          () =>
-            !(
-              document.querySelector(".cm-content")?.textContent ?? ""
-            ).includes("scaffold fixture"),
-        ),
-      { timeout: 15000, timeoutMsg: "browser demo note content did not load" },
-    );
+    await waitForBrowserDemoNote();
 
     const editor = $(".cm-content");
     await editor.waitForDisplayed({ timeout: 15000 });
@@ -5612,16 +5630,7 @@ describe("skribeum core editing surfaces", () => {
       async () => new URL(await browser.getUrl()).searchParams.has("note"),
       { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
     );
-    await browser.waitUntil(
-      () =>
-        browser.execute(
-          () =>
-            !(
-              document.querySelector(".cm-content")?.textContent ?? ""
-            ).includes("scaffold fixture"),
-        ),
-      { timeout: 15000, timeoutMsg: "browser demo note content did not load" },
-    );
+    await waitForBrowserDemoNote();
     await browser.execute(() => {
       type GateWindow = Window & {
         __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;

@@ -3927,6 +3927,9 @@ describe("skribeum core editing surfaces", () => {
     await browser.refresh();
     await $(".demo-shell").waitForExist({ timeout: 15000 });
 
+    const editor = $(".cm-content");
+    await editor.waitForDisplayed({ timeout: 15000 });
+    await editor.click();
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });

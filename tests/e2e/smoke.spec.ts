@@ -431,11 +431,10 @@ async function verifyTagCompletionAcceptance(harness: TagCompletionHarness) {
     for (const chord of [[Key.Enter], [Key.Ctrl, Key.Enter]]) {
       await harness.prepare();
       await typeTagCompletionQuery(position);
-      expect(
-        await $$(".cm-skr-tag-menu [role=option]").map((item) =>
-          item.getText(),
-        ),
-      ).toEqual(["#project/cedar-room", "#context/outdoors"]);
+      expect(await tagCompletionOptionTexts()).toEqual([
+        "#project/cedar-room",
+        "#context/outdoors",
+      ]);
 
       await browser.keys(chord);
       await $(".cm-skr-tag-menu").waitForExist({
@@ -781,14 +780,18 @@ async function calloutVisualIdentity() {
 }
 
 async function selectSettingsChoice(selector: string, label: string) {
-  let button = $(selector);
+  const button = $(selector);
   await button.waitForClickable({ timeout: 10000 });
   await button.click();
   await browser.waitUntil(
-    async () => {
-      button = $(selector);
-      return (await button.getAttribute("aria-checked")) === "true";
-    },
+    () =>
+      browser.execute(
+        (targetSelector) =>
+          document
+            .querySelector(targetSelector)
+            ?.getAttribute("aria-checked") === "true",
+        selector,
+      ),
     { timeout: 10000, timeoutMsg: `${label} did not become active` },
   );
 }
@@ -4313,6 +4316,14 @@ describe("skribeum core editing surfaces", () => {
         });
       }
     });
+    const staleSettings = $('[data-testid="settings-view"]');
+    if (await staleSettings.isExisting()) {
+      await browser.keys(Key.Escape);
+      await staleSettings.waitForExist({ reverse: true, timeout: 5000 });
+    }
+    const commandEditor = $(".cm-content");
+    await commandEditor.waitForDisplayed({ timeout: 15000 });
+    await commandEditor.click();
     await browser.keys([modifierKey, "k"]);
     const commandInput = await overlayInput();
     await browser.keys("embeds");

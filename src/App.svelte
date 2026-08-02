@@ -1166,6 +1166,7 @@ async function handleNativeOpen(path: string): Promise<void> {
       comparableNativePath(activeVaultPath) ===
         comparableNativePath(target.vault_path)
     ) {
+      await refreshTreeIndex();
       await navigateToNote(target.note_path);
     } else {
       await openVaultAtPath(target.vault_path, target.note_path);
@@ -1221,7 +1222,6 @@ async function openNote(
   path: string,
   restoration: NoteViewState | null = null,
 ): Promise<boolean> {
-  historyViewState = restoration;
   const currentVault = vault;
   if (currentVault === null) {
     return false;
@@ -1233,6 +1233,7 @@ async function openNote(
     errorText = STRINGS.contentSwitchUnsaved;
     return false;
   }
+  historyViewState = restoration;
   const debugWindow = window as Window & {
     __SKRIBEUM_DEBUG_NOTE_OPEN_MS__?: number;
     __SKRIBEUM_DEBUG_PERF__?: boolean;
@@ -1297,12 +1298,12 @@ async function openNoteAddress(
   restoration: NoteViewState | null = null,
   source: "fresh" | "history" = "fresh",
 ): Promise<boolean> {
-  focusReadingSurface();
+  const editorWasFocused = editor?.getView()?.hasFocus === true;
   const opened = await openNote(address.path, restoration);
   if (!opened) {
     if (missingAddress !== null) {
       missingAddress = address;
-      focusReadingSurface();
+      if (source === "history") focusReadingSurface();
       return true;
     }
     return false;
@@ -1314,7 +1315,7 @@ async function openNoteAddress(
     return true;
   }
   if (address.fragment === undefined) {
-    focusReadingSurface();
+    if (editorWasFocused) focusReadingSurface();
     return true;
   }
   await tick();

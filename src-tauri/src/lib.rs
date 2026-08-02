@@ -7,12 +7,15 @@ use skribeum_vault::write_durable;
 use skribeum_vault::{FileSystem, RealFs};
 use std::collections::hash_map::RandomState;
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 #[cfg(debug_assertions)]
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 #[cfg(debug_assertions)]
 use std::time::Instant;
 use tauri::Manager;
@@ -38,24 +41,41 @@ pub fn normalize_generated_bindings(generated: &str) -> String {
 #[cfg(debug_assertions)]
 static COLD_START_MAIN_ENTRY: OnceLock<Instant> = OnceLock::new();
 
-const INSTANCE_MESSAGE_LIMIT: u64 = 1024 * 1024;
+const INSTANCE_MESSAGE_LIMIT: usize = 1024 * 1024;
 const INSTANCE_PATH_LIMIT: usize = 32;
 const INSTANCE_MESSAGE_MAGIC: &str = "skribeum-open-files-v1";
-const INSTANCE_ACKNOWLEDGEMENT: &[u8] = b"skribeum-open-files-accepted";
 const INSTANCE_PORT_CANDIDATES: u16 = 32;
 const INSTANCE_CAPABILITY_FILE: &str = "instance-capability";
 const INSTANCE_CAPABILITY_LENGTH: usize = 64;
+const INSTANCE_IO_DEADLINE: std::time::Duration = std::time::Duration::from_secs(1);
+const INSTANCE_HANDSHAKE_LIMIT: usize = 8;
 
 #[derive(serde::Serialize, serde::Deserialize)]
-struct InstanceMessage {
+struct InstanceHello {
     magic: String,
-    capability: String,
+    nonce: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct InstanceProof {
+    proof: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct InstancePayload {
     paths: Vec<String>,
+    proof: String,
 }
 
 enum InstanceClaim {
-    Primary(TcpListener),
+    Primary,
     Forwarded,
+    Unavailable(String),
+}
+
+enum ForwardAttempt {
+    Forwarded,
+    NotOurs,
 }
 
 fn supported_open_file(path: &Path) -> bool {
@@ -94,7 +114,8 @@ fn new_instance_capability() -> String {
                 .unwrap_or_default()
                 .as_nanos(),
         );
-        capability.push_str(&format!("{:016x}", hasher.finish()));
+        write!(&mut capability, "{:016x}", hasher.finish())
+            .expect("writing to a String cannot fail");
     }
     capability
 }
@@ -141,11 +162,12 @@ fn instance_capability(path: &Path) -> String {
 }
 
 fn instance_capability_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("SKRIBEUM_E2E_SETTINGS")
-        .map(PathBuf::from)
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-    {
-        return path.join(INSTANCE_CAPABILITY_FILE);
+    if let Some(path) = std::env::var_os("SKRIBEUM_E2E_SETTINGS").map(PathBuf::from) {
+        let settings_name = path
+            .file_name()
+            .unwrap_or_else(|| OsStr::new("settings"))
+            .to_string_lossy();
+        return path.with_file_name(format!("{settings_name}.{INSTANCE_CAPABILITY_FILE}"));
     }
     #[cfg(target_os = "linux")]
     let directory = std::env::var_os("XDG_CONFIG_HOME")
@@ -176,6 +198,134 @@ fn capabilities_match(actual: &str, expected: &str) -> bool {
             == 0
 }
 
+fn decode_capability(capability: &str) -> Option<[u8; 32]> {
+    if !valid_instance_capability(capability) {
+        return None;
+    }
+    let mut decoded = [0_u8; 32];
+    for (index, byte) in decoded.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&capability[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(decoded)
+}
+
+#[allow(
+    deprecated,
+    reason = "SipHash-2-4 provides the dependency-free local IPC MAC"
+)]
+fn instance_mac(capability: &str, domain: &str, parts: &[&[u8]]) -> Option<String> {
+    let key = decode_capability(capability)?;
+    let mut proof = String::with_capacity(INSTANCE_CAPABILITY_LENGTH);
+    for round in 0..4_usize {
+        let first = round * 8;
+        let second = ((round + 2) % 4) * 8;
+        let key0 = u64::from_le_bytes(key[first..first + 8].try_into().ok()?);
+        let key1 = u64::from_le_bytes(key[second..second + 8].try_into().ok()?);
+        let mut hasher = std::hash::SipHasher::new_with_keys(key0, key1);
+        hasher.write_u64(u64::try_from(round).ok()?);
+        hasher.write_usize(domain.len());
+        hasher.write(domain.as_bytes());
+        for part in parts {
+            hasher.write_usize(part.len());
+            hasher.write(part);
+        }
+        write!(&mut proof, "{:016x}", hasher.finish()).expect("writing to a String cannot fail");
+    }
+    Some(proof)
+}
+
+fn write_instance_line<T: serde::Serialize>(
+    stream: &mut TcpStream,
+    value: &T,
+    deadline: std::time::Instant,
+) -> std::io::Result<()> {
+    let mut bytes = serde_json::to_vec(value).map_err(std::io::Error::other)?;
+    bytes.push(b'\n');
+    if bytes.len() > INSTANCE_MESSAGE_LIMIT {
+        return Err(std::io::Error::other("instance message exceeds size limit"));
+    }
+    let mut written = 0;
+    while written < bytes.len() {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "deadline elapsed"))?;
+        stream.set_write_timeout(Some(remaining))?;
+        let count = stream.write(&bytes[written..])?;
+        if count == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "instance connection closed while writing",
+            ));
+        }
+        written += count;
+    }
+    Ok(())
+}
+
+fn read_instance_line<T: serde::de::DeserializeOwned>(
+    stream: &mut TcpStream,
+    deadline: std::time::Instant,
+) -> std::io::Result<T> {
+    let mut bytes = Vec::new();
+    loop {
+        if bytes.len() >= INSTANCE_MESSAGE_LIMIT {
+            return Err(std::io::Error::other("instance message exceeds size limit"));
+        }
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "deadline elapsed"))?;
+        stream.set_read_timeout(Some(remaining))?;
+        let mut byte = [0_u8; 1];
+        stream.read_exact(&mut byte)?;
+        if byte[0] == b'\n' {
+            break;
+        }
+        bytes.push(byte[0]);
+    }
+    serde_json::from_slice(&bytes).map_err(std::io::Error::other)
+}
+
+fn authenticated_instance_payload(
+    stream: &mut TcpStream,
+    capability: &str,
+) -> std::io::Result<Vec<String>> {
+    let deadline = std::time::Instant::now() + INSTANCE_IO_DEADLINE;
+    let hello: InstanceHello = read_instance_line(stream, deadline)?;
+    if hello.magic != INSTANCE_MESSAGE_MAGIC || !valid_instance_capability(&hello.nonce) {
+        return Err(std::io::Error::other("invalid instance handshake"));
+    }
+    let server_proof = instance_mac(capability, "server", &[hello.nonce.as_bytes()])
+        .ok_or_else(|| std::io::Error::other("invalid instance capability"))?;
+    write_instance_line(
+        stream,
+        &InstanceProof {
+            proof: server_proof,
+        },
+        deadline,
+    )?;
+    let payload: InstancePayload = read_instance_line(stream, deadline)?;
+    let encoded_paths = serde_json::to_vec(&payload.paths).map_err(std::io::Error::other)?;
+    let expected = instance_mac(
+        capability,
+        "client",
+        &[hello.nonce.as_bytes(), &encoded_paths],
+    )
+    .ok_or_else(|| std::io::Error::other("invalid instance capability"))?;
+    if !capabilities_match(&payload.proof, &expected) {
+        return Err(std::io::Error::other("invalid instance proof"));
+    }
+    let acknowledgement = instance_mac(capability, "accepted", &[hello.nonce.as_bytes()])
+        .ok_or_else(|| std::io::Error::other("invalid instance capability"))?;
+    write_instance_line(
+        stream,
+        &InstanceProof {
+            proof: acknowledgement,
+        },
+        deadline,
+    )?;
+    Ok(payload.paths)
+}
+
 fn instance_port(capability: &str) -> u16 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in capability.bytes() {
@@ -185,70 +335,137 @@ fn instance_port(capability: &str) -> u16 {
     49_152 + u16::try_from(hash % 16_384).expect("port offset fits in u16")
 }
 
-fn claim_instance(paths: &[String], capability: &str) -> InstanceClaim {
+fn forward_to_instance(
+    address: SocketAddrV4,
+    paths: &[String],
+    capability: &str,
+) -> std::io::Result<ForwardAttempt> {
+    let Ok(mut stream) = TcpStream::connect_timeout(&address.into(), INSTANCE_IO_DEADLINE) else {
+        return Ok(ForwardAttempt::NotOurs);
+    };
+    let deadline = std::time::Instant::now() + INSTANCE_IO_DEADLINE;
+    let nonce = new_instance_capability();
+    let hello = InstanceHello {
+        magic: INSTANCE_MESSAGE_MAGIC.to_owned(),
+        nonce: nonce.clone(),
+    };
+    if write_instance_line(&mut stream, &hello, deadline).is_err() {
+        return Ok(ForwardAttempt::NotOurs);
+    }
+    let Ok(server_proof) = read_instance_line::<InstanceProof>(&mut stream, deadline) else {
+        return Ok(ForwardAttempt::NotOurs);
+    };
+    let expected_server_proof = instance_mac(capability, "server", &[nonce.as_bytes()])
+        .ok_or_else(|| std::io::Error::other("invalid instance capability"))?;
+    if !capabilities_match(&server_proof.proof, &expected_server_proof) {
+        return Ok(ForwardAttempt::NotOurs);
+    }
+    let encoded_paths = serde_json::to_vec(paths).map_err(std::io::Error::other)?;
+    let client_proof = instance_mac(capability, "client", &[nonce.as_bytes(), &encoded_paths])
+        .ok_or_else(|| std::io::Error::other("invalid instance capability"))?;
+    let payload = InstancePayload {
+        paths: paths.to_vec(),
+        proof: client_proof,
+    };
+    write_instance_line(&mut stream, &payload, deadline)?;
+    let acknowledgement = read_instance_line::<InstanceProof>(&mut stream, deadline)?;
+    let expected_acknowledgement = instance_mac(capability, "accepted", &[nonce.as_bytes()])
+        .ok_or_else(|| std::io::Error::other("invalid instance capability"))?;
+    if !capabilities_match(&acknowledgement.proof, &expected_acknowledgement) {
+        return Err(std::io::Error::other(
+            "invalid application instance acknowledgement",
+        ));
+    }
+    let _ = stream.shutdown(Shutdown::Both);
+    Ok(ForwardAttempt::Forwarded)
+}
+
+fn claim_instance(
+    paths: &[String],
+    capability: &str,
+    sender: &Sender<Vec<String>>,
+) -> InstanceClaim {
     let base_port = instance_port(capability);
     for offset in 0..INSTANCE_PORT_CANDIDATES {
         let port = 49_152 + (base_port - 49_152 + offset) % 16_384;
         let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
         if let Ok(listener) = TcpListener::bind(address) {
-            return InstanceClaim::Primary(listener);
+            listen_for_open_files(listener, capability.to_owned(), sender.clone());
+            return InstanceClaim::Primary;
         }
-        let Ok(mut stream) = TcpStream::connect(address) else {
-            continue;
-        };
-        let timeout = Some(std::time::Duration::from_secs(1));
-        let _ = stream.set_read_timeout(timeout);
-        let _ = stream.set_write_timeout(timeout);
-        let message = InstanceMessage {
-            magic: INSTANCE_MESSAGE_MAGIC.to_owned(),
-            capability: capability.to_owned(),
-            paths: paths.to_vec(),
-        };
-        if serde_json::to_writer(&mut stream, &message).is_err()
-            || stream.shutdown(Shutdown::Write).is_err()
-        {
-            continue;
+        let mut last_error = None;
+        for _ in 0..3 {
+            match forward_to_instance(address, paths, capability) {
+                Ok(ForwardAttempt::Forwarded) => return InstanceClaim::Forwarded,
+                Ok(ForwardAttempt::NotOurs) => {
+                    last_error = None;
+                    break;
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+            }
         }
-        let mut acknowledgement = vec![0; INSTANCE_ACKNOWLEDGEMENT.len()];
-        if stream.read_exact(&mut acknowledgement).is_ok()
-            && acknowledgement == INSTANCE_ACKNOWLEDGEMENT
-        {
-            return InstanceClaim::Forwarded;
+        if let Some(error) = last_error {
+            return InstanceClaim::Unavailable(error.to_string());
         }
     }
     panic!("failed to claim an application instance port");
 }
 
-fn listen_for_open_files<R: tauri::Runtime>(
-    listener: TcpListener,
-    capability: String,
+fn listen_for_open_files(listener: TcpListener, capability: String, sender: Sender<Vec<String>>) {
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(0);
+    std::thread::spawn(move || {
+        let active_handshakes = std::sync::Arc::new(AtomicUsize::new(0));
+        let _ = ready_sender.send(());
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            if active_handshakes
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |active| {
+                    (active < INSTANCE_HANDSHAKE_LIMIT).then_some(active + 1)
+                })
+                .is_err()
+            {
+                let _ = stream.shutdown(Shutdown::Both);
+                continue;
+            }
+            let capability = capability.clone();
+            let sender = sender.clone();
+            let active_handshakes = std::sync::Arc::clone(&active_handshakes);
+            std::thread::spawn(move || {
+                if let Ok(paths) = authenticated_instance_payload(&mut stream, &capability) {
+                    let paths = canonical_open_paths(paths.into_iter().map(OsString::from));
+                    let _ = sender.send(paths);
+                }
+                active_handshakes.fetch_sub(1, Ordering::Relaxed);
+            });
+        }
+    });
+    ready_receiver
+        .recv()
+        .expect("application instance listener failed to start");
+}
+
+fn dispatch_open_files<R: tauri::Runtime>(
+    receiver: Receiver<Vec<String>>,
     app: tauri::AppHandle<R>,
 ) {
     std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { continue };
-            let timeout = Some(std::time::Duration::from_secs(1));
-            let _ = stream.set_read_timeout(timeout);
-            let _ = stream.set_write_timeout(timeout);
-            let Ok(message) = serde_json::from_reader::<_, InstanceMessage>(
-                (&mut stream).take(INSTANCE_MESSAGE_LIMIT),
-            ) else {
-                continue;
-            };
-            if message.magic != INSTANCE_MESSAGE_MAGIC
-                || !capabilities_match(&message.capability, &capability)
-            {
+        for paths in receiver {
+            if paths.is_empty() {
                 continue;
             }
-            let paths = canonical_open_paths(message.paths.into_iter().map(OsString::from));
-            ipc::queue_open_files(&app, paths);
-            let _ = stream.write_all(INSTANCE_ACKNOWLEDGEMENT);
-            if let Some(window) = app.get_webview_window("main")
-                && window.is_visible().unwrap_or(false)
-            {
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            let app_for_event = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                ipc::queue_open_files(&app_for_event, paths);
+                if let Some(window) = app_for_event.get_webview_window("main")
+                    && window.is_visible().unwrap_or(false)
+                {
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            });
         }
     });
 }
@@ -274,14 +491,18 @@ pub(crate) fn cold_start_elapsed_milliseconds() -> Option<u128> {
 /// Panics if the Tauri runtime fails to initialize; there is no meaningful
 /// recovery path before a window exists.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[allow(clippy::too_many_lines)] // Application setup is one Tauri lifecycle.
 pub fn run() {
     let initial_open_paths = canonical_open_paths(std::env::args_os().skip(1));
     let capability = instance_capability(&instance_capability_path());
-    let InstanceClaim::Primary(instance_listener) =
-        claim_instance(&initial_open_paths, &capability)
-    else {
-        return;
-    };
+    let (open_files_sender, open_files_receiver) = mpsc::channel();
+    match claim_instance(&initial_open_paths, &capability, &open_files_sender) {
+        InstanceClaim::Primary => {}
+        InstanceClaim::Forwarded => return,
+        InstanceClaim::Unavailable(message) => {
+            panic!("application instance endpoint unavailable: {message}")
+        }
+    }
     let specta_builder = ipc_builder();
 
     // In development, keep the committed TypeScript bindings current on
@@ -333,11 +554,7 @@ pub fn run() {
     let builder = builder.on_page_load(|webview, _payload| {
         #[cfg(debug_assertions)]
         {
-            if let Some(process_ms) = cold_start_elapsed_milliseconds() {
-                let _ = webview.eval(format!(
-                    "window.__SKRIBEUM_DEBUG_COLD_START_CALIBRATION__ = {{ processMs: {process_ms}, webviewMs: performance.now() }}; window.__SKRIBEUM_DEBUG_COLD_START__ = true;"
-                ));
-            }
+            let _ = webview.eval("window.__SKRIBEUM_DEBUG_COLD_START__ = true;");
         }
 
         #[cfg(any(debug_assertions, feature = "webdriver"))]
@@ -363,8 +580,8 @@ pub fn run() {
     let app = builder
         .setup(move |app| {
             specta_builder.mount_events(app);
-            listen_for_open_files(instance_listener, capability, app.handle().clone());
             ipc::queue_open_files(app.handle(), initial_open_paths);
+            dispatch_open_files(open_files_receiver, app.handle().clone());
             // The crash journal is enabled by default; it lives in the OS
             // app-data directory, never inside any vault.
             let journal = app.path().app_data_dir().ok().map(|dir| {
@@ -391,11 +608,21 @@ pub fn run() {
                 .ok()
                 .map(|dir| dir.join(skribeum_vault::SETTINGS_FILE_NAME));
             let settings = settings_path.map(skribeum_vault::SettingsStore::new);
+            let persisted_theme = settings
+                .as_ref()
+                .and_then(|store| store.read(&RealFs).ok())
+                .map(|document| document.theme);
             app.manage(ipc::SettingsState(settings, std::sync::Mutex::new(())));
             if let Some(window) = app.get_webview_window("main") {
-                let background = match window.theme() {
-                    Ok(tauri::Theme::Dark) => tauri::window::Color(22, 18, 16, 255),
-                    _ => tauri::window::Color(246, 242, 234, 255),
+                let dark = match persisted_theme.as_deref() {
+                    Some("dark") => true,
+                    Some("light") => false,
+                    _ => matches!(window.theme(), Ok(tauri::Theme::Dark)),
+                };
+                let background = if dark {
+                    tauri::window::Color(22, 18, 16, 255)
+                } else {
+                    tauri::window::Color(246, 242, 234, 255)
                 };
                 window
                     .set_background_color(Some(background))
@@ -449,5 +676,38 @@ mod tests {
                 && association["mimeType"] == "text/plain"
                 && association["role"] == "Editor"
         }));
+    }
+
+    #[test]
+    fn startup_window_is_hidden_over_the_light_theme_surface() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("Tauri configuration parses");
+        let window = &config["app"]["windows"][0];
+        assert_eq!(window["visible"], false);
+        assert_eq!(window["backgroundColor"], "#f6f2ea");
+    }
+
+    #[test]
+    fn instance_handshake_authenticates_without_sending_the_capability() {
+        let capability = "0123456789abcdef".repeat(4);
+        let nonce = "fedcba9876543210".repeat(4);
+        let hello = serde_json::to_string(&InstanceHello {
+            magic: INSTANCE_MESSAGE_MAGIC.to_owned(),
+            nonce: nonce.clone(),
+        })
+        .expect("hello serializes");
+        assert!(!hello.contains(&capability));
+
+        let server = instance_mac(&capability, "server", &[nonce.as_bytes()])
+            .expect("valid capability produces a MAC");
+        let client = instance_mac(&capability, "client", &[nonce.as_bytes()])
+            .expect("valid capability produces a MAC");
+        assert_ne!(server, client);
+        assert_eq!(server.len(), INSTANCE_CAPABILITY_LENGTH);
+        assert_ne!(
+            server,
+            instance_mac(&capability, "server", &[b"different nonce"])
+                .expect("valid capability produces a MAC")
+        );
     }
 }

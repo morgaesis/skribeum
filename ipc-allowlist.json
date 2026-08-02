@@ -17,6 +17,7 @@
     "settings_write",
     "vault_config_read",
     "zoom_set",
+    "window_warmup",
     "window_ready",
     "file_open_resolve",
     "open_files_take"
@@ -34,7 +35,8 @@
     "vault_config_read": "Contract addition per design decision 100: read-only access to the recognized Obsidian configuration files (app.json, types.json) in the vault's .obsidian directory, the single sanctioned read path into an otherwise excluded directory; absent or malformed files degrade to defaults.",
     "vault_file_read": "Read-only access to indexed regular files for registered render-only views. The command never creates note editing, reconciliation, or search-index state.",
     "zoom_set": "Validates, persists, and applies one application zoom percentage to every webview window.",
-    "window_ready": "Applies persisted zoom and reveals a hidden window after the frontend reports its first painted frame.",
+    "window_warmup": "Lets Linux WebKit commit an offscreen frame without exposing the startup window.",
+    "window_ready": "Applies persisted zoom and reveals a hidden or warmed window after the frontend reports its first painted frame.",
     "file_open_resolve": "Resolves an operating-system file-open path to a known vault or the file's containing folder.",
     "open_files_take": "Drains file-open paths queued by argv, second-instance forwarding, or native open-file events."
   }

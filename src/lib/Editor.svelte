@@ -5,6 +5,7 @@ import {
   Annotation,
   type ChangeSet,
   Compartment,
+  EditorSelection,
   EditorState,
   type Extension,
   Transaction,
@@ -16,6 +17,7 @@ import type { ByteChange } from "./editor/byteChangeSet";
 import { assertDecorationsInert } from "./editor/decorationGuard";
 import {
   dispatchWikilinkContext,
+  focusedRenderedTableCell,
   sourceRevealMode,
 } from "./editor/decorations/engine";
 import {
@@ -46,11 +48,13 @@ import {
 } from "./features/settingsStore";
 import { slashMenu } from "./features/slashMenu";
 import { tableEditingExtension } from "./features/tableEditing";
+import { tableCellRanges } from "./features/tableOperations";
 import { type TagAffordanceOptions, tagAffordances } from "./features/tags";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
 import PropertiesPanel from "./PropertiesPanel.svelte";
 import { type CommandContext, CommandRegistry, editorKeymap } from "./registry";
+import { NARROW_BREAKPOINT_REM } from "./responsive";
 import { STRINGS } from "./strings";
 import {
   DEFAULT_TASK_STATUSES,
@@ -125,6 +129,7 @@ let session: NoteSession | null = null;
 let removed = false;
 let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let titleVisibilityFrame: number | undefined;
+let restorationGeneration = 0;
 /** Serializes saves so change sets always apply to the base they expect. */
 let saveChain: Promise<boolean> = Promise.resolve(true);
 
@@ -156,6 +161,15 @@ const editorAppearance = EditorView.theme({
  */
 const FRONTMATTER_SCAN_LIMIT = 16384;
 let frontmatter = $state<Frontmatter | null>(null);
+let propertiesExpanded = $state(defaultPropertiesExpanded());
+
+function defaultPropertiesExpanded(): boolean {
+  return (
+    typeof window === "undefined" ||
+    typeof window.matchMedia !== "function" ||
+    !window.matchMedia(`(max-width: ${NARROW_BREAKPOINT_REM}rem)`).matches
+  );
+}
 
 function renderingExtensions(
   content: string | Parameters<typeof noteRenderingExtensions>[0],
@@ -329,13 +343,44 @@ function stateFor(
 function replaceEditorState(content: string, locked: boolean): void {
   const target = view;
   if (target === undefined) return;
+  const generation = ++restorationGeneration;
+  const restoration = historyViewState;
+  if (restoration !== null) target.dom.style.visibility = "hidden";
   target.setState(stateFor(content, locked));
-  const scrollTop = historyViewState?.scrollTop ?? 0;
   target.scrollDOM.style.scrollBehavior = "auto";
-  target.scrollDOM.scrollTop = scrollTop;
+  if (restoration === null) {
+    target.dom.style.removeProperty("visibility");
+    target.scrollDOM.scrollTop = 0;
+    return;
+  }
+  const scrollAnchor = characterOffsetForByte(
+    content,
+    restoration.scrollAnchor,
+  );
+  target.dispatch({
+    effects: EditorView.scrollIntoView(scrollAnchor, {
+      y: "start",
+      yMargin: Math.max(0, restoration.scrollOffset),
+    }),
+  });
+  const correctScrollOffset = () => {
+    if (view !== target || restorationGeneration !== generation) return;
+    const line = target.lineBlockAt(scrollAnchor);
+    const viewportTop = Math.max(
+      0,
+      target.scrollDOM.scrollTop - target.documentPadding.top,
+    );
+    const actualOffset = line.top - viewportTop;
+    target.scrollDOM.scrollTop += actualOffset - restoration.scrollOffset;
+  };
   requestAnimationFrame(() => {
-    if (view === target) target.scrollDOM.scrollTop = scrollTop;
-    target.scrollDOM.style.removeProperty("scroll-behavior");
+    correctScrollOffset();
+    requestAnimationFrame(() => {
+      correctScrollOffset();
+      if (view === target && restorationGeneration === generation) {
+        target.dom.style.removeProperty("visibility");
+      }
+    });
   });
 }
 
@@ -647,11 +692,37 @@ export function getView(): EditorView | undefined {
 export function captureHistoryState(): NoteViewState | null {
   if (view === undefined) return null;
   const content = view.state.doc.toString();
-  const selection = view.state.selection.main;
+  let selection = view.state.selection.main;
+  const tableCell = focusedRenderedTableCell(view);
+  if (tableCell !== null) {
+    const table = view.state.sliceDoc(tableCell.tableFrom, tableCell.tableTo);
+    const cell = tableCellRanges(table).find(
+      (candidate) =>
+        candidate.row === tableCell.row &&
+        candidate.column === tableCell.column,
+    );
+    if (cell !== undefined) {
+      const cellEnd = tableCell.tableFrom + cell.to;
+      selection = EditorSelection.range(
+        Math.min(cellEnd, tableCell.tableFrom + cell.from + tableCell.anchor),
+        Math.min(cellEnd, tableCell.tableFrom + cell.from + tableCell.head),
+      );
+    }
+  }
+  const viewportTop = Math.max(
+    0,
+    view.scrollDOM.scrollTop - view.documentPadding.top,
+  );
+  let scrollLine = view.lineBlockAtHeight(viewportTop);
+  if (scrollLine.top < viewportTop && scrollLine.to < view.state.doc.length) {
+    scrollLine = view.lineBlockAt(scrollLine.to + 1);
+  }
   return {
     anchor: byteOffsetForCharacter(content, selection.anchor),
     head: byteOffsetForCharacter(content, selection.head),
-    scrollTop: view.scrollDOM.scrollTop,
+    scrollAnchor: byteOffsetForCharacter(content, scrollLine.from),
+    scrollOffset: scrollLine.top - viewportTop,
+    propertiesExpanded,
   };
 }
 
@@ -671,6 +742,8 @@ async function rereadAndReconcile(): Promise<void> {
 function initializeForNote(current: LoadedNote | null) {
   clearTimeout(idleSaveTimer);
   removed = false;
+  propertiesExpanded =
+    historyViewState?.propertiesExpanded ?? defaultPropertiesExpanded();
   if (current === null) {
     session = null;
     replaceEditorState(doc, false);
@@ -796,6 +869,7 @@ $effect(() => {
       {frontmatter}
       onEditValue={editFrontmatterValue}
       noteIdentity={path}
+      bind:expanded={propertiesExpanded}
     />
   {/if}
   <div

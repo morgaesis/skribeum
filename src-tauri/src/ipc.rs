@@ -682,11 +682,36 @@ fn settings_from_doc(doc: SettingsDoc) -> Settings {
     }
 }
 
-fn apply_zoom<R: Runtime>(app: &AppHandle<R>, zoom_percent: u32) -> Result<(), AppError> {
+fn set_all_window_zoom<R: Runtime>(app: &AppHandle<R>, zoom_percent: u32) -> Result<(), AppError> {
     skribeum_vault::validate_zoom_percent(zoom_percent).map_err(AppError::from)?;
     let factor = f64::from(zoom_percent) / 100.0;
+    let mut first_error = None;
     for window in app.webview_windows().values() {
-        let _ = window.set_zoom(factor);
+        if let Err(error) = window.set_zoom(factor)
+            && first_error.is_none()
+        {
+            first_error = Some(AppError::window_failed(error.to_string()));
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn change_all_window_zoom<R: Runtime>(
+    app: &AppHandle<R>,
+    previous_percent: u32,
+    zoom_percent: u32,
+) -> Result<(), AppError> {
+    if let Err(error) = set_all_window_zoom(app, zoom_percent) {
+        if let Err(rollback_error) = set_all_window_zoom(app, previous_percent) {
+            return Err(AppError::window_failed(format!(
+                "failed to apply zoom: {}; failed to restore the previous zoom: {}",
+                error.message, rollback_error.message
+            )));
+        }
+        return Err(error);
     }
     Ok(())
 }
@@ -1368,11 +1393,7 @@ fn settings_path(settings: State<'_, SettingsState>) -> Result<String, AppError>
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
-fn settings_write<R: Runtime>(
-    app: AppHandle<R>,
-    settings: State<'_, SettingsState>,
-    doc: SettingsDoc,
-) -> Result<(), AppError> {
+fn settings_write(settings: State<'_, SettingsState>, doc: SettingsDoc) -> Result<(), AppError> {
     let _mutation = settings.1.lock().unwrap_or_else(PoisonError::into_inner);
     let store = settings
         .0
@@ -1381,13 +1402,6 @@ fn settings_write<R: Runtime>(
     let mut document = settings_from_doc(doc);
     document.zoom_percent = store.read(&RealFs).map_err(AppError::from)?.zoom_percent;
     store.write(&RealFs, &document).map_err(AppError::from)?;
-    apply_zoom(&app, document.zoom_percent)?;
-    let _ = app.emit(
-        SettingsZoomChanged::NAME,
-        SettingsZoomChanged {
-            zoom_percent: document.zoom_percent,
-        },
-    );
     Ok(())
 }
 
@@ -1407,17 +1421,73 @@ fn zoom_set<R: Runtime>(
         .as_ref()
         .ok_or_else(AppError::settings_unavailable)?;
     let mut document = store.read(&RealFs).map_err(AppError::from)?;
+    let previous_document = document.clone();
+    let previous_percent = document.zoom_percent;
+    change_all_window_zoom(&app, previous_percent, zoom_percent)?;
     document.zoom_percent = zoom_percent;
-    store.write(&RealFs, &document).map_err(AppError::from)?;
-    apply_zoom(&app, zoom_percent)?;
-    let _ = app.emit(
+    if let Err(error) = store.write(&RealFs, &document) {
+        if let Err(rollback_error) = set_all_window_zoom(&app, previous_percent) {
+            return Err(AppError::window_failed(format!(
+                "failed to persist zoom: {error}; failed to restore the previous zoom: {}",
+                rollback_error.message
+            )));
+        }
+        return Err(AppError::from(error));
+    }
+    if let Err(error) = app.emit(
         SettingsZoomChanged::NAME,
         SettingsZoomChanged { zoom_percent },
-    );
+    ) {
+        let persistence_rollback = store.write(&RealFs, &previous_document);
+        let window_rollback = set_all_window_zoom(&app, previous_percent);
+        if let Err(rollback_error) = persistence_rollback {
+            return Err(AppError::window_failed(format!(
+                "failed to publish zoom state: {error}; failed to restore persisted zoom: {rollback_error}"
+            )));
+        }
+        if let Err(rollback_error) = window_rollback {
+            return Err(AppError::window_failed(format!(
+                "failed to publish zoom state: {error}; failed to restore the previous zoom: {}",
+                rollback_error.message
+            )));
+        }
+        return Err(AppError::window_failed(format!(
+            "failed to publish zoom state: {error}"
+        )));
+    }
     Ok(zoom_percent)
 }
 
-/// Applies persisted zoom before revealing a newly painted webview.
+#[cfg(target_os = "linux")]
+fn cancel_window_warmup<R: Runtime>(window: &WebviewWindow<R>) {
+    let _ = window.hide();
+    let _ = window.center();
+    let _ = window.set_skip_taskbar(false);
+}
+
+/// Gives Linux `WebKit` an offscreen frame in which to commit its first paint.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take injected windows by value.
+fn window_warmup<R: Runtime>(window: WebviewWindow<R>) -> Result<(), AppError> {
+    #[cfg(target_os = "linux")]
+    {
+        window
+            .set_skip_taskbar(true)
+            .map_err(|error| AppError::window_failed(error.to_string()))?;
+        if let Err(error) = window.set_position(tauri::PhysicalPosition::new(32_000, 32_000)) {
+            cancel_window_warmup(&window);
+            return Err(AppError::window_failed(error.to_string()));
+        }
+        if let Err(error) = window.show() {
+            cancel_window_warmup(&window);
+            return Err(AppError::window_failed(error.to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// Applies persisted zoom before revealing the first committed frontend render.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
@@ -1426,17 +1496,39 @@ fn window_ready<R: Runtime>(
     settings: State<'_, SettingsState>,
     webview_ms: Option<f64>,
 ) -> Result<(), AppError> {
-    let zoom_percent = settings
-        .0
-        .as_ref()
-        .and_then(|store| store.read(&RealFs).ok())
-        .map_or(100, |document| document.zoom_percent);
-    if window.set_zoom(f64::from(zoom_percent) / 100.0).is_err() {
-        let _ = window.set_zoom(1.0);
+    let _mutation = settings.1.lock().unwrap_or_else(PoisonError::into_inner);
+    let zoom_percent = match settings.0.as_ref() {
+        Some(store) => match store.read(&RealFs) {
+            Ok(document) => document.zoom_percent,
+            Err(error) => {
+                #[cfg(target_os = "linux")]
+                cancel_window_warmup(&window);
+                return Err(AppError::from(error));
+            }
+        },
+        None => 100,
+    };
+    if let Err(error) = window.set_zoom(f64::from(zoom_percent) / 100.0) {
+        #[cfg(target_os = "linux")]
+        cancel_window_warmup(&window);
+        return Err(AppError::window_failed(error.to_string()));
     }
-    window
-        .show()
-        .map_err(|error| AppError::window_failed(error.to_string()))?;
+    #[cfg(target_os = "linux")]
+    {
+        if let Err(error) = window.center() {
+            cancel_window_warmup(&window);
+            return Err(AppError::window_failed(error.to_string()));
+        }
+        if let Err(error) = window.set_skip_taskbar(false) {
+            cancel_window_warmup(&window);
+            return Err(AppError::window_failed(error.to_string()));
+        }
+    }
+    if let Err(error) = window.show() {
+        #[cfg(target_os = "linux")]
+        cancel_window_warmup(&window);
+        return Err(AppError::window_failed(error.to_string()));
+    }
     #[cfg(debug_assertions)]
     if let Some(process_ms) = crate::cold_start_elapsed_milliseconds() {
         eprintln!(
@@ -1544,6 +1636,7 @@ fn file_open_resolve(
 /// Drains operating-system open-with paths queued by argv or open-file events.
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)] // Tauri injects State by value, and typed IPC keeps a fallible command shape.
 fn open_files_take(state: State<'_, OpenFilesState>) -> Result<Vec<String>, AppError> {
     let mut paths = state.0.lock().unwrap_or_else(PoisonError::into_inner);
     Ok(std::mem::take(&mut *paths))
@@ -1730,8 +1823,9 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             update_check,
             settings_read,
             settings_path,
-            settings_write::<tauri::Wry>,
+            settings_write,
             zoom_set::<tauri::Wry>,
+            window_warmup::<tauri::Wry>,
             window_ready::<tauri::Wry>,
             file_open_resolve,
             open_files_take,

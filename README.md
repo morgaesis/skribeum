@@ -54,9 +54,11 @@ Opening a file outside the active vault opens its containing folder through
 the normal vault-opening flow, then selects the file. Later open-with requests
 are forwarded to the running application.
 
-Back and forward restore each note's exact UTF-8 caret offsets and scroll
-position without moving keyboard focus into the editor. A newly opened note
-starts at the top with its caret parked and the reading surface focused.
+Back and forward restore each note's exact UTF-8 caret offsets,
+content-anchored reading position, and properties-panel state without moving
+keyboard focus into the editor. A newly opened note starts at the top with its
+caret parked and the form-factor panel default. The panel starts expanded on
+wide viewports and collapsed on narrow viewports.
 
 `mod+e` toggles the active note between reading presentation and its complete
 Markdown source. Source mode keeps syntax colouring but shows frontmatter,

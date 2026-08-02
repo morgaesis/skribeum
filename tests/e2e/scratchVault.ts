@@ -172,17 +172,21 @@ export const TASK_TRACKS_NOTE_CONTENT =
 
 export const NAVIGATION_SOURCE_NOTE_NAME = "zzz-navigation-source.md";
 export const NAVIGATION_SOURCE_NOTE_CONTENT = [
+  "---",
+  "status: source",
+  "---",
+  "",
   "# Navigation source",
   "",
   "Follow [[zzz-navigation-target]].",
+  "",
+  "#shared",
   "",
   ...Array.from(
     { length: 80 },
     (_, index) => `Reading position line ${index + 1}.`,
   ),
   "Café restoration marker.",
-  "",
-  "#shared",
   "",
 ].join("\n");
 export const NAVIGATION_TARGET_NOTE_NAME = "zzz-navigation-target.md";

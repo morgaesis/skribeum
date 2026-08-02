@@ -70,7 +70,12 @@ export async function zoomSet(zoomPercent: number): Promise<number> {
   return unwrap(await commands.zoomSet(zoomPercent));
 }
 
-/** Reveals the desktop window after its first painted frontend frame. */
+/** Starts the platform-specific first-paint warm-up for the hidden window. */
+export async function windowWarmup(): Promise<void> {
+  unwrap(await commands.windowWarmup());
+}
+
+/** Reveals the desktop window after its first committed frontend render. */
 export async function windowReady(webviewMilliseconds: number): Promise<void> {
   unwrap(await commands.windowReady(webviewMilliseconds));
 }

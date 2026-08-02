@@ -317,12 +317,16 @@ export function urlForNoteAddress(address: NoteAddress, current: URL): URL {
   return url;
 }
 
-/** Reading state stored with one navigation history entry. Offsets are UTF-8 bytes. */
+/** Reading state stored with one navigation history entry. Document offsets are UTF-8 bytes. */
 export type NoteViewState = {
   anchor: number;
   head: number;
-  scrollTop: number;
+  scrollAnchor: number;
+  scrollOffset: number;
+  propertiesExpanded: boolean;
 };
+
+export const NAVIGATION_HISTORY_LIMIT = 100;
 
 type HistoryEntry = { address: NoteAddress; viewState: NoteViewState | null };
 type HistoryListener = (entry: HistoryEntry, rollback: () => void) => void;
@@ -359,10 +363,11 @@ class MemoryNavigationHistory implements NavigationHistory {
   }
 
   push(address: NoteAddress, viewState: NoteViewState | null = null): void {
-    this.entries = [
+    const entries = [
       ...this.entries.slice(0, this.index + 1),
       { address, viewState },
     ];
+    this.entries = entries.slice(-NAVIGATION_HISTORY_LIMIT);
     this.index = this.entries.length - 1;
   }
 
@@ -428,17 +433,22 @@ function storedViewState(value: unknown): NoteViewState | null {
   const state = value as Record<string, unknown>;
   return typeof state.anchor === "number" &&
     typeof state.head === "number" &&
-    typeof state.scrollTop === "number"
+    typeof state.scrollAnchor === "number" &&
+    typeof state.scrollOffset === "number" &&
+    typeof state.propertiesExpanded === "boolean"
     ? {
         anchor: state.anchor,
         head: state.head,
-        scrollTop: state.scrollTop,
+        scrollAnchor: state.scrollAnchor,
+        scrollOffset: state.scrollOffset,
+        propertiesExpanded: state.propertiesExpanded,
       }
     : null;
 }
 
 class BrowserNavigationHistory implements NavigationHistory {
   private index = 0;
+  private minimumIndex = 0;
   private maximumIndex = 0;
   private listener: HistoryListener | null = null;
   private rollbackTarget: number | null = null;
@@ -448,6 +458,7 @@ class BrowserNavigationHistory implements NavigationHistory {
     const stored = state?.[BROWSER_HISTORY_KEY];
     if (typeof stored === "number" && Number.isInteger(stored) && stored >= 0) {
       this.index = stored;
+      this.minimumIndex = Math.max(0, stored - NAVIGATION_HISTORY_LIMIT + 1);
       this.maximumIndex = stored;
     } else {
       browserWindow.history.replaceState(
@@ -481,6 +492,7 @@ class BrowserNavigationHistory implements NavigationHistory {
   push(address: NoteAddress, viewState: NoteViewState | null = null): void {
     this.index += 1;
     this.maximumIndex = this.index;
+    this.minimumIndex = Math.max(0, this.index - NAVIGATION_HISTORY_LIMIT + 1);
     const url = urlForNoteAddress(
       address,
       new URL(this.browserWindow.location.href),
@@ -510,12 +522,13 @@ class BrowserNavigationHistory implements NavigationHistory {
 
   reset(address: NoteAddress): void {
     this.index = 0;
+    this.minimumIndex = 0;
     this.maximumIndex = 0;
     this.replace(address);
   }
 
   back(): boolean {
-    if (this.index <= 0) {
+    if (this.index <= this.minimumIndex) {
       return false;
     }
     this.browserWindow.history.back();
@@ -531,7 +544,7 @@ class BrowserNavigationHistory implements NavigationHistory {
   }
 
   canGoBack(): boolean {
-    return this.index > 0;
+    return this.index > this.minimumIndex;
   }
 
   canGoForward(): boolean {

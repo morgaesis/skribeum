@@ -140,10 +140,14 @@ objects in an in-app stack, so link resolution, back and forward behavior, and
 fragment selection do not depend on the host surface.
 
 Each history entry also stores the main selection's anchor and head as UTF-8
-byte offsets plus the editor scroll position. Traversal constructs the editor
-state with that selection before paint, restores scroll without animation, and
+byte offsets, the first fully visible line as a UTF-8 byte offset, its pixel
+offset from the viewport, and the properties-panel expansion state. Each pane
+retains at most 100 in-memory entries. Traversal constructs the editor state
+with that selection before paint, restores the content-anchored position
+without animation, resolves the properties panel to its recorded state, and
 keeps focus on the reading surface. A fresh note open stores no restoration,
-starts at the top, and leaves its parked caret unfocused.
+starts at the top with the form-factor panel default, and leaves its parked
+caret unfocused.
 
 Paths are NFC-normalized, slash-separated, vault-root-relative values. A path
 is the durable address because vault handles are session-local and notes do
@@ -212,7 +216,8 @@ records each value's exact character range, typed inputs (dates, numbers,
 booleans, lists, honoring `.obsidian/types.json`) replace precisely that
 range through a normal editor transaction, and untouched keys are
 byte-preserved through the ordinary change-set save path. The panel starts
-collapsed for each note and identifies the note by its vault path. A shared
+expanded on wide layouts and collapsed on narrow layouts, and identifies the
+note by its vault path. A shared
 title resolver derives reading-surface labels from a non-empty frontmatter
 `title`, a first-line H1, or the trimmed file name, in that order.
 

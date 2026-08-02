@@ -17,8 +17,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Desktop windows remain hidden until the first frontend frame is painted and
   use the active theme surface behind the webview during startup.
-- Note history restores UTF-8 caret offsets and scroll position without
-  focusing the editor.
+- Note history restores UTF-8 caret offsets, content-anchored reading position,
+  and properties-panel state without focusing the editor.
 - The unified command surface accepts native typing and contains all keyboard
   input while it is open.
 - Whole-note and section embeds remain mounted when vault link context loads,

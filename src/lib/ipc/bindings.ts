@@ -81,7 +81,9 @@ export const commands = {
 	settingsWrite: (doc: SettingsDoc) => typedError<null, AppError>(__TAURI_INVOKE("settings_write", { doc })),
 	/**  Persists and applies one webview zoom percentage to every window. */
 	zoomSet: (zoomPercent: number) => typedError<number, AppError>(__TAURI_INVOKE("zoom_set", { zoomPercent })),
-	/**  Applies persisted zoom before revealing a newly painted webview. */
+	/**  Gives Linux `WebKit` an offscreen frame in which to commit its first paint. */
+	windowWarmup: () => typedError<null, AppError>(__TAURI_INVOKE("window_warmup")),
+	/**  Applies persisted zoom before revealing the first committed frontend render. */
 	windowReady: (webviewMs: number | null) => typedError<null, AppError>(__TAURI_INVOKE("window_ready", { webviewMs })),
 	/**  Resolves one operating-system open-with path against known vault roots. */
 	fileOpenResolve: (path: string) => typedError<OpenFileTarget, AppError>(__TAURI_INVOKE("file_open_resolve", { path })),

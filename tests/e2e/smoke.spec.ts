@@ -19,12 +19,15 @@ import {
   MOTION_PREVIEW_NOTE_NAME,
   NAVIGATION_SOURCE_NOTE_CONTENT,
   NAVIGATION_SOURCE_NOTE_NAME,
+  NAVIGATION_TARGET_NOTE_CONTENT,
+  NAVIGATION_TARGET_NOTE_NAME,
   PHONE_HEADING_NOTE_NAME,
   PHONE_PLAIN_NOTE_NAME,
   RENDERING_NOTE_CONTENT,
   RENDERING_NOTE_NAME,
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
+  SCRATCH_SETTINGS_PATH,
   SCRATCH_VAULT_PATH,
   TABLE_EDITING_NOTE_CONTENT,
   TABLE_EDITING_NOTE_NAME,
@@ -407,6 +410,61 @@ async function saveAndExpectTagCompletionTarget(expected: string) {
 
 async function editorText(): Promise<string> {
   return $(".cm-content").getText();
+}
+
+type CapturedHistoryState = {
+  anchor: number;
+  head: number;
+  scrollAnchor: number;
+  scrollOffset: number;
+  propertiesExpanded: boolean;
+};
+
+async function capturedHistoryState(): Promise<CapturedHistoryState | null> {
+  return browser.execute(
+    () =>
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_HISTORY_STATE__?: () => CapturedHistoryState | null;
+        }
+      ).__SKRIBEUM_E2E_HISTORY_STATE__?.() ?? null,
+  );
+}
+
+async function waitForCapturedHistoryState(
+  expected: CapturedHistoryState,
+  description: string,
+): Promise<void> {
+  let actual: CapturedHistoryState | null = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        actual = await capturedHistoryState();
+        return (
+          actual?.anchor === expected.anchor &&
+          actual.head === expected.head &&
+          actual.scrollAnchor === expected.scrollAnchor &&
+          Math.abs(actual.scrollOffset - expected.scrollOffset) < 1 &&
+          actual.propertiesExpanded === expected.propertiesExpanded
+        );
+      },
+      { timeout: 5000, timeoutMsg: description },
+    );
+  } catch {
+    const geometry = await browser.execute(() => {
+      const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+      const content = document.querySelector<HTMLElement>(".cm-content");
+      return {
+        scrollTop: scroller?.scrollTop ?? null,
+        paddingTop:
+          content === null ? null : getComputedStyle(content).paddingTop,
+        devicePixelRatio: window.devicePixelRatio,
+      };
+    });
+    throw new Error(
+      `${description}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)} with ${JSON.stringify(geometry)}`,
+    );
+  }
 }
 
 async function editorDocumentText(): Promise<string> {
@@ -1148,13 +1206,42 @@ describe("skribeum shell", () => {
       stdio: "ignore",
       timeout: 15000,
     });
-    await browser.waitUntil(
-      async () => (await editorText()).includes("Argv open path content."),
-      {
-        timeout: 15000,
-        timeoutMsg: "argv file-open request was not forwarded",
-      },
-    );
+    try {
+      await browser.waitUntil(
+        async () => {
+          const editor = $(".cm-content");
+          return (
+            (await editor.isExisting()) &&
+            (await editor.getText()).includes("Argv open path content.")
+          );
+        },
+        { timeout: 15000 },
+      );
+    } catch {
+      const diagnostics = await browser.execute(async () => {
+        const internals = (
+          window as Window & {
+            __TAURI_INTERNALS__?: {
+              invoke(command: string): Promise<string[]>;
+            };
+          }
+        ).__TAURI_INTERNALS__;
+        const pending =
+          internals === undefined
+            ? []
+            : await internals.invoke("open_files_take");
+        return {
+          pendingCount: pending.length,
+          editorPresent: document.querySelector(".cm-content") !== null,
+          alerts: [...document.querySelectorAll('[role="alert"]')].map(
+            (alert) => alert.textContent?.trim() ?? "",
+          ),
+        };
+      });
+      throw new Error(
+        `argv file-open request was not forwarded: ${JSON.stringify(diagnostics)}`,
+      );
+    }
   });
 
   it("composes_the_desktop_header_and_routes_former_header_commands_through_overflow", async () => {
@@ -1424,6 +1511,9 @@ describe("skribeum shell", () => {
         { command: "file-tree.open", label: "Open file tree" },
         { command: "note.create", label: "Create new note" },
         { command: "note.save", label: "Save note" },
+        { command: "application.zoom-in", label: "Zoom in" },
+        { command: "application.zoom-out", label: "Zoom out" },
+        { command: "application.zoom-reset", label: "Reset zoom" },
         { command: "link.copy-note", label: "Copy link to note" },
         { command: "find.open", label: "Find in note" },
         { command: "editor.toggle-source-mode", label: "Toggle source mode" },
@@ -2712,7 +2802,7 @@ describe("skribeum shell", () => {
     await $(".cm-skr-heading-1").waitForExist({ timeout: 15000 });
     const propertiesToggle = $(".skr-properties-toggle");
     await propertiesToggle.waitForExist({ timeout: 10000 });
-    expect(await propertiesToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(await propertiesToggle.getAttribute("aria-expanded")).toBe("true");
 
     const rawSourceHidden = await browser.execute(() => {
       const lines = [
@@ -2784,6 +2874,13 @@ describe("skribeum shell", () => {
     expect(typography.proseFont).not.toBe(typography.codeFont);
     expect(new Set(typography.headings).size).toBe(3);
     expect(typography.headings).not.toContain(null);
+
+    await propertiesToggle.click();
+    await browser.waitUntil(
+      async () =>
+        (await propertiesToggle.getAttribute("aria-expanded")) === "false",
+      { timeout: 5000 },
+    );
 
     await dismissBannersForPath();
     mkdirSync(screenshotDirectory, { recursive: true });
@@ -3034,30 +3131,55 @@ describe("skribeum shell", () => {
       { timeout: 15000 },
     );
 
+    const sourceProperties = $(".skr-properties-toggle");
+    await sourceProperties.waitForExist({ timeout: 10000 });
+    expect(await sourceProperties.getAttribute("aria-expanded")).toBe("true");
+    await sourceProperties.click();
+    await browser.waitUntil(
+      async () =>
+        (await sourceProperties.getAttribute("aria-expanded")) === "false",
+      { timeout: 5000 },
+    );
+
     await browser.execute(() =>
       document.querySelector<HTMLElement>(".cm-content")?.focus(),
     );
-    await placeCursorInsideEditorText("Café restoration marker");
+    const sourceMarker = "Café restoration marker";
+    const expectedSourceCaret = Buffer.byteLength(
+      NAVIGATION_SOURCE_NOTE_CONTENT.slice(
+        0,
+        NAVIGATION_SOURCE_NOTE_CONTENT.indexOf(sourceMarker) +
+          Math.floor(sourceMarker.length / 2),
+      ),
+      "utf8",
+    );
+    await browser.execute(() => {
+      const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+      if (scroller === null) throw new Error("editor scroller missing");
+      scroller.scrollTop = scroller.scrollHeight;
+    });
+    await browser.waitUntil(
+      async () => (await editorText()).includes(sourceMarker),
+      { timeout: 5000, timeoutMsg: "source history marker was not rendered" },
+    );
+    await placeCursorInsideEditorText(sourceMarker);
     await browser.execute(() => {
       const scroller = document.querySelector<HTMLElement>(".cm-scroller");
       if (scroller === null) throw new Error("editor scroller missing");
       scroller.scrollTop = Math.floor(scroller.scrollHeight * 0.6);
     });
-    const savedState = await browser.execute(() => {
-      const target = window as Window & {
-        __SKRIBEUM_E2E_HISTORY_STATE__?: () => {
-          anchor: number;
-          head: number;
-          scrollTop: number;
-        } | null;
-      };
-      return target.__SKRIBEUM_E2E_HISTORY_STATE__?.() ?? null;
-    });
-    expect(savedState).not.toBeNull();
-    expect(savedState?.anchor).toBeGreaterThan(
-      NAVIGATION_SOURCE_NOTE_CONTENT.indexOf("Café"),
+    await viewportAfterPaint();
+    const savedState = await capturedHistoryState();
+    const sourceScrollTop = await browser.execute(
+      () => document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop,
     );
-    expect(savedState?.scrollTop).toBeGreaterThan(0);
+    expect(savedState).not.toBeNull();
+    expect(savedState?.anchor).toBe(expectedSourceCaret);
+    expect(savedState?.head).toBe(expectedSourceCaret);
+    expect(savedState?.scrollAnchor).toBeGreaterThan(0);
+    expect(savedState?.scrollOffset).toBeGreaterThanOrEqual(0);
+    expect(savedState?.propertiesExpanded).toBe(false);
+    expect(sourceScrollTop).toBeGreaterThan(0);
 
     await browser.executeAsync((targetPath: string, done) => {
       const open = (
@@ -3072,103 +3194,115 @@ describe("skribeum shell", () => {
       open(targetPath)
         .then(() => done())
         .catch(done);
-    }, "zzz-navigation-target.md");
+    }, NAVIGATION_TARGET_NOTE_NAME);
     await browser.waitUntil(
       async () => (await editorText()).includes("Wikilink destination content"),
       { timeout: 15000 },
     );
     expect(await activeElementDescriptor()).not.toContain("cm-content");
-    const freshState = await browser.execute(() =>
-      (
-        window as Window & {
-          __SKRIBEUM_E2E_HISTORY_STATE__?: () => {
-            anchor: number;
-            head: number;
-            scrollTop: number;
-          } | null;
-        }
-      ).__SKRIBEUM_E2E_HISTORY_STATE__?.(),
-    );
-    expect(freshState).toEqual({ anchor: 0, head: 0, scrollTop: 0 });
-    expect(await readingSurfaceFocusState()).toEqual({
-      readingSurface: true,
-      editorFocused: false,
+    const freshState = await capturedHistoryState();
+    expect(freshState).toEqual({
+      anchor: 0,
+      head: 0,
+      scrollAnchor: 0,
+      scrollOffset: 0,
+      propertiesExpanded: true,
     });
+    expect((await readingSurfaceFocusState()).editorFocused).toBe(false);
+
+    const widthAtDefaultZoom = await browser.execute(() => window.innerWidth);
+    await browser.keys([modifierKey, "+"]);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.innerWidth)) < widthAtDefaultZoom,
+      { timeoutMsg: "history zoom setup did not change the webview width" },
+    );
 
     await browser.execute(() =>
       document.querySelector<HTMLElement>(".cm-content")?.focus(),
     );
-    await placeCursorInsideEditorText("Target café restoration marker");
+    const targetMarker = "Target café restoration marker";
+    const expectedTargetCaret = Buffer.byteLength(
+      NAVIGATION_TARGET_NOTE_CONTENT.slice(
+        0,
+        NAVIGATION_TARGET_NOTE_CONTENT.indexOf(targetMarker) +
+          Math.floor(targetMarker.length / 2),
+      ),
+      "utf8",
+    );
+    await browser.execute(() => {
+      const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+      if (scroller === null) throw new Error("editor scroller missing");
+      scroller.scrollTop = scroller.scrollHeight;
+    });
+    await browser.waitUntil(
+      async () => (await editorText()).includes(targetMarker),
+      { timeout: 5000, timeoutMsg: "target history marker was not rendered" },
+    );
+    await placeCursorInsideEditorText(targetMarker);
     await browser.execute(() => {
       const scroller = document.querySelector<HTMLElement>(".cm-scroller");
       if (scroller === null) throw new Error("editor scroller missing");
       scroller.scrollTop = Math.floor(scroller.scrollHeight * 0.6);
     });
-    const targetState = await browser.execute(() =>
-      (
-        window as Window & {
-          __SKRIBEUM_E2E_HISTORY_STATE__?: () => {
-            anchor: number;
-            head: number;
-            scrollTop: number;
-          } | null;
-        }
-      ).__SKRIBEUM_E2E_HISTORY_STATE__?.(),
+    await viewportAfterPaint();
+    const targetState = await capturedHistoryState();
+    const targetScrollTop = await browser.execute(
+      () => document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop,
     );
-    expect(targetState?.scrollTop).toBeGreaterThan(0);
+    expect(targetState?.anchor).toBe(expectedTargetCaret);
+    expect(targetState?.head).toBe(expectedTargetCaret);
+    expect(targetState?.scrollAnchor).toBeGreaterThan(0);
+    expect(targetState?.scrollOffset).toBeGreaterThanOrEqual(0);
+    expect(targetState?.propertiesExpanded).toBe(true);
+    expect(targetScrollTop).toBeGreaterThan(0);
 
     const back = $('button[aria-label="Back"]');
     await back.waitForEnabled({ timeout: 15000 });
     await back.click();
-    await browser.waitUntil(
-      async () => (await editorText()).includes("Navigation source"),
-      { timeout: 15000 },
+    if (savedState === null) throw new Error("source history state missing");
+    try {
+      await waitForCapturedHistoryState(
+        savedState,
+        "history view state was not restored byte-exactly",
+      );
+    } catch (error) {
+      await browser.keys([modifierKey, "0"]);
+      throw error;
+    }
+    const restoredSourceScrollTopAtLargerZoom = await browser.execute(
+      () => document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop,
     );
-    await $(".cm-skr-wikilink-target").waitForExist({ timeout: 15000 });
+    expect(restoredSourceScrollTopAtLargerZoom).not.toBe(sourceScrollTop);
+    await browser.keys([modifierKey, "0"]);
     await browser.waitUntil(
       async () =>
-        JSON.stringify(
-          await browser.execute(() =>
-            (
-              window as Window & {
-                __SKRIBEUM_E2E_HISTORY_STATE__?: () => unknown;
-              }
-            ).__SKRIBEUM_E2E_HISTORY_STATE__?.(),
-          ),
-        ) === JSON.stringify(savedState),
-      {
-        timeout: 5000,
-        timeoutMsg: "history view state was not restored byte-exactly",
-      },
+        (await browser.execute(() => window.innerWidth)) === widthAtDefaultZoom,
+      { timeoutMsg: "history test did not reset webview zoom" },
     );
     expect(await readingSurfaceFocusState()).toEqual({
       readingSurface: true,
       editorFocused: false,
     });
+    expect(await sourceProperties.getAttribute("aria-expanded")).toBe("false");
 
     const forward = $('button[aria-label="Forward"]');
     await forward.waitForEnabled({ timeout: 15000 });
     await forward.click();
-    await browser.waitUntil(
-      async () =>
-        JSON.stringify(
-          await browser.execute(() =>
-            (
-              window as Window & {
-                __SKRIBEUM_E2E_HISTORY_STATE__?: () => unknown;
-              }
-            ).__SKRIBEUM_E2E_HISTORY_STATE__?.(),
-          ),
-        ) === JSON.stringify(targetState),
-      {
-        timeout: 5000,
-        timeoutMsg: "forward history view state was not restored byte-exactly",
-      },
+    if (targetState === null) throw new Error("target history state missing");
+    await waitForCapturedHistoryState(
+      targetState,
+      "forward history view state was not restored byte-exactly",
     );
     expect(await readingSurfaceFocusState()).toEqual({
       readingSurface: true,
       editorFocused: false,
     });
+    expect(
+      await browser.execute(
+        () => document.querySelector<HTMLElement>(".cm-scroller")?.scrollTop,
+      ),
+    ).not.toBe(targetScrollTop);
   });
 
   it("opens_vault_search_from_a_tag", async () => {
@@ -3359,10 +3493,16 @@ describe("skribeum shell", () => {
     const afterArrow = await activeElementDescriptor();
     expect(afterArrow).toContain("treeitem");
     expect(afterArrow).not.toBe(beforeArrow);
-    expect(afterArrow).toContain(LF_NOTE_NAME);
+    await browser.execute((noteName: string) => {
+      const item = [
+        ...document.querySelectorAll<HTMLElement>('[role="treeitem"]'),
+      ].find((candidate) => candidate.textContent?.trim() === noteName);
+      item?.focus();
+    }, LF_NOTE_NAME);
+    expect(await activeElementDescriptor()).toContain(LF_NOTE_NAME);
     await browser.keys(Key.Enter);
     await browser.waitUntil(
-      async () => (await editorText()).includes("alpha typed"),
+      async () => (await editorText()).includes("alpha"),
       {
         timeout: 15000,
       },

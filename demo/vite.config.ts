@@ -49,7 +49,7 @@ function demoIpcBoundary(): Plugin {
 
 export default defineConfig({
   root: demoRoot,
-  base: "/skribeum/",
+  base: "/",
   plugins: [
     demoIpcBoundary(),
     svelte({ configFile: resolve(repositoryRoot, "svelte.config.js") }),

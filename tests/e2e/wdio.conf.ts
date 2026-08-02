@@ -39,7 +39,7 @@ process.env.TAURI_WEBDRIVER_PORT = String(embeddedPort);
 
 async function startDemoServer(): Promise<void> {
   const port = await availablePort();
-  const url = `http://127.0.0.1:${port}/skribeum/`;
+  const url = `http://127.0.0.1:${port}/`;
   demoServer = spawn(
     "bun",
     [

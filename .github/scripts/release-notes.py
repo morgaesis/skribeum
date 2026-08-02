@@ -13,7 +13,7 @@ import urllib.request
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
-DEMO_LINK = "🖥️ Try it in the browser first: https://morgaes.is/skribeum/"
+DEMO_LINK = "🖥️ Try it in the browser first: https://skribeum.app/"
 DETAILS_SUMMARY = "📜 The full, sober changelog (all of it, no jokes)"
 MAX_BODY_LENGTH = 125_000
 MAX_INTRO_LENGTH = 4_000

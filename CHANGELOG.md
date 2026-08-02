@@ -25,6 +25,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Application and browser icons use the lit Skribeum lamp mark, brand palette,
+  and a simplified silhouette at 16 pixels.
 - Rust and JavaScript dependency requirements and lockfiles track their latest
   compatible stable releases, with transitive WebdriverIO serialization moved
   beyond its published security advisories.

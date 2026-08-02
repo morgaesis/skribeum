@@ -36,8 +36,14 @@ import { STRINGS } from "../../strings";
 import {
   DEFAULT_TASK_STATUSES,
   normalizeTaskStatuses,
+  TASK_TRACKS,
+  type TaskPayloadKind,
   type TaskStatus,
+  taskStatusAdvanceSymbol,
   taskStatusBySymbol,
+  taskStatusPayload,
+  taskStatusTrack,
+  taskTrackLabel,
 } from "../../taskStatuses";
 import {
   observeVisualViewport,
@@ -206,6 +212,95 @@ function applyTaskStatus(
   });
 }
 
+const TASK_LEVELS = ["⏫", "🔼", "🔽"] as const;
+const TASK_DATE_TOKEN = /[ \t]📅 \d{4}-\d{2}-\d{2}/u;
+const TASK_LEVEL_TOKEN = /[ \t](?:⏫|🔼|🔽)/u;
+
+function payloadChange(
+  view: EditorView,
+  markerFrom: number,
+  kind: TaskPayloadKind,
+  value: string | undefined,
+): { from: number; to: number; insert: string } | null {
+  const line = view.state.doc.lineAt(markerFrom);
+  const source = view.state.doc.sliceString(line.from, line.to);
+  const pattern = kind === "date" ? TASK_DATE_TOKEN : TASK_LEVEL_TOKEN;
+  const match = pattern.exec(source);
+  const token =
+    value === undefined ? "" : kind === "date" ? ` 📅 ${value}` : ` ${value}`;
+  if (match !== null) {
+    const from = line.from + match.index;
+    return { from, to: from + match[0].length, insert: token };
+  }
+  return token.length === 0
+    ? null
+    : { from: line.to, to: line.to, insert: token };
+}
+
+function applyTaskStatusWithPayload(
+  view: EditorView,
+  from: number,
+  to: number,
+  currentSymbol: string,
+  symbol: string,
+  payload?: { kind: TaskPayloadKind; value: string },
+): void {
+  if (
+    view.state.readOnly ||
+    view.state.doc.sliceString(from, to) !== currentSymbol
+  ) {
+    return;
+  }
+  const changes: { from: number; to: number; insert: string }[] = [];
+  if (currentSymbol !== symbol) {
+    changes.push({ from, to, insert: symbol });
+  }
+  if (payload !== undefined) {
+    const change = payloadChange(view, from, payload.kind, payload.value);
+    if (change !== null) {
+      changes.push(change);
+    }
+  }
+  if (changes.length > 0) {
+    view.dispatch({ changes, userEvent: "input.task-status" });
+  }
+}
+
+function cycleTaskLevel(
+  view: EditorView,
+  markerFrom: number,
+  currentSymbol: string,
+): void {
+  if (
+    view.state.doc.sliceString(markerFrom, markerFrom + 1) !== currentSymbol
+  ) {
+    return;
+  }
+  const line = view.state.doc.lineAt(markerFrom);
+  const source = view.state.doc.sliceString(line.from, line.to);
+  const current = TASK_LEVEL_TOKEN.exec(source)?.[0].trim();
+  const currentIndex =
+    current === undefined
+      ? -1
+      : TASK_LEVELS.indexOf(current as (typeof TASK_LEVELS)[number]);
+  const next = TASK_LEVELS[currentIndex + 1];
+  const change = payloadChange(view, markerFrom, "level", next);
+  if (change !== null) {
+    view.dispatch({ changes: change, userEvent: "input.task-payload" });
+  }
+}
+
+function localIsoDate(): string {
+  const today = new Date();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${today.getFullYear()}-${month}-${day}`;
+}
+
+type TaskMenuEntry =
+  | { kind: "status"; status: TaskStatus }
+  | { kind: "more"; count: number };
+
 class TaskCheckboxWidget extends WidgetType {
   constructor(
     readonly status: TaskStatus,
@@ -260,11 +355,11 @@ class TaskCheckboxWidget extends WidgetType {
     palette.tabIndex = -1;
     palette.hidden = true;
 
-    let activeIndex: number | null = Math.max(
-      0,
-      this.statuses.findIndex((entry) => entry.symbol === this.status.symbol),
-    );
+    let activeIndex: number | null = null;
+    let entries: TaskMenuEntry[] = [];
     let options: HTMLElement[] = [];
+    let expandedReference = taskStatusTrack(this.status) === "reference";
+    let pendingDateStatus: TaskStatus | null = null;
     let paletteAnchor: { x: number; y: number } | null = null;
     let stopObservingViewport: (() => void) | null = null;
     let press: {
@@ -284,64 +379,14 @@ class TaskCheckboxWidget extends WidgetType {
         );
       }
       const active = activeIndex === null ? undefined : options[activeIndex];
-      if (active !== undefined) {
-        palette.setAttribute("aria-activedescendant", active.id);
-        if (scroll) {
-          active.scrollIntoView?.({ block: "nearest" });
-        }
-      } else {
+      if (active === undefined) {
         palette.removeAttribute("aria-activedescendant");
-      }
-    };
-    const buildOptions = () => {
-      if (options.length > 0) {
         return;
       }
-      options = this.statuses.map((entry, index) => {
-        const option = document.createElement("span");
-        option.id = `${paletteId}-option-${index}`;
-        option.className = "cm-skr-task-option";
-        option.setAttribute("role", "option");
-        option.setAttribute(
-          "aria-selected",
-          entry.symbol === this.status.symbol ? "true" : "false",
-        );
-        option.style.setProperty(
-          "--skr-task-option-color",
-          `var(${entry.color_token})`,
-        );
-
-        const optionGlyph = document.createElement("span");
-        optionGlyph.className = "cm-skr-task-option-glyph";
-        optionGlyph.setAttribute("aria-hidden", "true");
-        optionGlyph.textContent = entry.glyph;
-        const optionName = document.createElement("span");
-        optionName.className = "cm-skr-task-option-name";
-        optionName.textContent = entry.name;
-        option.append(optionGlyph, optionName);
-        option.addEventListener("pointerdown", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        });
-        option.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          closePalette(false);
-          applyTaskStatus(
-            view,
-            this.markerFrom,
-            this.markerTo,
-            this.status.symbol,
-            entry.symbol,
-          );
-        });
-        option.addEventListener("pointerenter", () => {
-          activeIndex = index;
-          updateActiveOption();
-        });
-        palette.append(option);
-        return option;
-      });
+      palette.setAttribute("aria-activedescendant", active.id);
+      if (scroll) {
+        active.scrollIntoView?.({ block: "nearest" });
+      }
     };
 
     const positionPalette = () => {
@@ -376,19 +421,205 @@ class TaskCheckboxWidget extends WidgetType {
       }
     };
 
+    const closePalette = (returnFocus: boolean) => {
+      palette.hidden = true;
+      palette.replaceChildren();
+      palette.removeAttribute("aria-activedescendant");
+      entries = [];
+      options = [];
+      pendingDateStatus = null;
+      paletteAnchor = null;
+      stopObservingViewport?.();
+      stopObservingViewport = null;
+      box.setAttribute("aria-expanded", "false");
+      if (returnFocus) {
+        box.focus();
+      }
+    };
+
+    const applyMenuStatus = (status: TaskStatus) => {
+      closePalette(false);
+      applyTaskStatus(
+        view,
+        this.markerFrom,
+        this.markerTo,
+        this.status.symbol,
+        status.symbol,
+      );
+    };
+
+    const applyPendingDate = (input: HTMLInputElement) => {
+      const status = pendingDateStatus;
+      if (status === null || input.value === "") {
+        return;
+      }
+      const date = input.value;
+      closePalette(false);
+      applyTaskStatusWithPayload(
+        view,
+        this.markerFrom,
+        this.markerTo,
+        this.status.symbol,
+        status.symbol,
+        { kind: "date", value: date },
+      );
+    };
+
+    const showDateFooter = (status: TaskStatus) => {
+      pendingDateStatus = status;
+      palette.querySelector(".cm-skr-task-payload-footer")?.remove();
+      const footer = document.createElement("span");
+      footer.className = "cm-skr-task-payload-footer";
+      const label = document.createElement("span");
+      label.className = "cm-skr-task-payload-label";
+      label.textContent = STRINGS.taskDateLabel;
+      const input = document.createElement("input");
+      input.type = "date";
+      input.value = localIsoDate();
+      input.setAttribute("aria-label", STRINGS.taskDateLabel);
+      input.setAttribute("data-testid", "task-date-payload");
+      input.addEventListener("pointerdown", (event) => event.stopPropagation());
+      input.addEventListener("change", () => applyPendingDate(input));
+      input.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          applyPendingDate(input);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          applyMenuStatus(status);
+        }
+      });
+      footer.append(label, input);
+      palette.append(footer);
+      positionPalette();
+      queueMicrotask(() => input.focus());
+    };
+
+    const selectEntry = (index: number) => {
+      const entry = entries[index];
+      if (entry === undefined) {
+        return;
+      }
+      if (entry.kind === "more") {
+        expandedReference = true;
+        pendingDateStatus = null;
+        buildOptions();
+        activeIndex = entries.findIndex(
+          (candidate) =>
+            candidate.kind === "status" &&
+            taskStatusTrack(candidate.status) === "reference",
+        );
+        updateActiveOption(true);
+        positionPalette();
+        return;
+      }
+      if (taskStatusPayload(entry.status) === "date") {
+        showDateFooter(entry.status);
+        return;
+      }
+      applyMenuStatus(entry.status);
+    };
+
+    const appendOption = (
+      group: HTMLElement,
+      entry: TaskMenuEntry,
+      status?: TaskStatus,
+    ) => {
+      const index = entries.length;
+      entries.push(entry);
+      const option = document.createElement("span");
+      options.push(option);
+      option.id = `${paletteId}-option-${index}`;
+      option.className = "cm-skr-task-option";
+      option.setAttribute("role", "option");
+      option.setAttribute(
+        "aria-selected",
+        status?.symbol === this.status.symbol ? "true" : "false",
+      );
+      if (status !== undefined) {
+        option.style.setProperty(
+          "--skr-task-option-color",
+          `var(${status.color_token})`,
+        );
+        const optionGlyph = document.createElement("span");
+        optionGlyph.className = "cm-skr-task-option-glyph";
+        optionGlyph.setAttribute("aria-hidden", "true");
+        optionGlyph.textContent = status.glyph;
+        option.append(optionGlyph);
+      }
+      const optionName = document.createElement("span");
+      optionName.className = "cm-skr-task-option-name";
+      optionName.textContent =
+        entry.kind === "more"
+          ? `${STRINGS.taskMoreStatuses} (${entry.count})`
+          : entry.status.name;
+      option.append(optionName);
+      option.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      option.addEventListener("pointerenter", () => {
+        activeIndex = index;
+        updateActiveOption();
+      });
+      option.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        selectEntry(index);
+      });
+      group.append(option);
+    };
+
+    const buildOptions = () => {
+      palette.replaceChildren();
+      entries = [];
+      options = [];
+      for (const track of TASK_TRACKS) {
+        const members = this.statuses.filter(
+          (status) => taskStatusTrack(status) === track,
+        );
+        if (members.length === 0) {
+          continue;
+        }
+        const group = document.createElement("span");
+        group.className = "cm-skr-task-track";
+        group.setAttribute("role", "group");
+        const heading = document.createElement("span");
+        heading.className = "cm-skr-task-track-heading";
+        heading.setAttribute("data-task-track-heading", track);
+        heading.textContent = taskTrackLabel(track);
+        heading.id = `${paletteId}-${track}`;
+        group.setAttribute("aria-labelledby", heading.id);
+        group.append(heading);
+        if (track === "reference" && !expandedReference) {
+          appendOption(group, { kind: "more", count: members.length });
+        } else {
+          for (const status of members) {
+            appendOption(group, { kind: "status", status }, status);
+          }
+        }
+        palette.append(group);
+      }
+    };
+
     const openPalette = (
       keyboard: boolean,
       anchor?: { x: number; y: number },
     ) => {
-      buildOptions();
-      if (keyboard && activeIndex === null) {
-        activeIndex = Math.max(
-          0,
-          this.statuses.findIndex(
-            (entry) => entry.symbol === this.status.symbol,
-          ),
-        );
+      if (entries.length === 0) {
+        buildOptions();
       }
+      activeIndex = keyboard
+        ? Math.max(
+            0,
+            entries.findIndex(
+              (entry) =>
+                entry.kind === "status" &&
+                entry.status.symbol === this.status.symbol,
+            ),
+          )
+        : null;
       palette.hidden = false;
       box.setAttribute("aria-expanded", "true");
       const bounds = box.getBoundingClientRect();
@@ -407,18 +638,19 @@ class TaskCheckboxWidget extends WidgetType {
         queueMicrotask(() => palette.focus());
       }
     };
-    const closePalette = (returnFocus: boolean) => {
-      palette.hidden = true;
-      palette.replaceChildren();
-      palette.removeAttribute("aria-activedescendant");
-      options = [];
-      paletteAnchor = null;
-      stopObservingViewport?.();
-      stopObservingViewport = null;
-      box.setAttribute("aria-expanded", "false");
-      if (returnFocus) {
-        box.focus();
+
+    const advance = () => {
+      if (taskStatusPayload(this.status) === "level") {
+        cycleTaskLevel(view, this.markerFrom, this.status.symbol);
+        return;
       }
+      applyTaskStatus(
+        view,
+        this.markerFrom,
+        this.markerTo,
+        this.status.symbol,
+        taskStatusAdvanceSymbol(this.status, this.statuses),
+      );
     };
 
     const movementFromStart = (event: PointerEvent) =>
@@ -426,25 +658,29 @@ class TaskCheckboxWidget extends WidgetType {
         event.clientX - (press?.startX ?? event.clientX),
         event.clientY - (press?.startY ?? event.clientY),
       );
-
     const optionAt = (x: number, y: number): number | null => {
       const target = document.elementFromPoint(x, y);
       const option =
         target instanceof Element
           ? target.closest<HTMLElement>(".cm-skr-task-option")
           : null;
-      if (option === null || !palette.contains(option)) {
-        return null;
+      if (option !== null && palette.contains(option)) {
+        const index = options.indexOf(option);
+        if (index >= 0) {
+          return index;
+        }
       }
-      const index = options.indexOf(option);
+      const index = options.findIndex((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return (
+          x >= bounds.left &&
+          x <= bounds.right &&
+          y >= bounds.top &&
+          y <= bounds.bottom
+        );
+      });
       return index < 0 ? null : index;
     };
-
-    const updatePointerOption = (event: PointerEvent) => {
-      activeIndex = optionAt(event.clientX, event.clientY);
-      updateActiveOption();
-    };
-
     const finishPress = () => {
       if (press !== null) {
         clearTimeout(press.holdTimer);
@@ -474,19 +710,16 @@ class TaskCheckboxWidget extends WidgetType {
       try {
         box.setPointerCapture(event.pointerId);
       } catch {
-        // Pointer capture can be unavailable for synthesized browser input.
-        // The listeners stay on the control, so the gesture remains usable.
+        // Synthesized browser input can lack pointer capture.
       }
       state.holdTimer = setTimeout(() => {
         if (press !== state || state.cancelled) {
           return;
         }
         state.menuOpen = true;
-        activeIndex = null;
         openPalette(false, { x: state.startX, y: state.startY });
       }, 500);
     });
-
     box.addEventListener("pointermove", (event) => {
       if (press === null || event.pointerId !== press.pointerId) {
         return;
@@ -502,10 +735,10 @@ class TaskCheckboxWidget extends WidgetType {
       }
       if (press.menuOpen) {
         event.preventDefault();
-        updatePointerOption(event);
+        activeIndex = optionAt(event.clientX, event.clientY);
+        updateActiveOption();
       }
     });
-
     box.addEventListener("pointerup", (event) => {
       const currentPress = press;
       if (currentPress === null || event.pointerId !== currentPress.pointerId) {
@@ -516,35 +749,21 @@ class TaskCheckboxWidget extends WidgetType {
       const moved = movementFromStart(event);
       if (currentPress.menuOpen) {
         const selectedIndex = optionAt(event.clientX, event.clientY);
-        const selected =
-          selectedIndex === null ? undefined : this.statuses[selectedIndex];
-        closePalette(false);
         finishPress();
-        if (selected !== undefined) {
-          applyTaskStatus(
-            view,
-            this.markerFrom,
-            this.markerTo,
-            this.status.symbol,
-            selected.symbol,
-          );
+        if (selectedIndex === null) {
+          closePalette(false);
+        } else {
+          selectEntry(selectedIndex);
         }
       } else {
-        const advance = !currentPress.cancelled && moved <= 8;
+        const shouldAdvance = !currentPress.cancelled && moved <= 8;
         closePalette(false);
         finishPress();
-        if (advance) {
-          applyTaskStatus(
-            view,
-            this.markerFrom,
-            this.markerTo,
-            this.status.symbol,
-            this.status.next_status,
-          );
+        if (shouldAdvance) {
+          advance();
         }
       }
     });
-
     box.addEventListener("pointercancel", (event) => {
       if (press === null || event.pointerId !== press.pointerId) {
         return;
@@ -552,7 +771,6 @@ class TaskCheckboxWidget extends WidgetType {
       closePalette(false);
       finishPress();
     });
-
     box.addEventListener("contextmenu", (event) => {
       if (press !== null || !palette.hidden) {
         event.preventDefault();
@@ -565,13 +783,7 @@ class TaskCheckboxWidget extends WidgetType {
       }
       event.preventDefault();
       event.stopPropagation();
-      applyTaskStatus(
-        view,
-        this.markerFrom,
-        this.markerTo,
-        this.status.symbol,
-        this.status.next_status,
-      );
+      advance();
     });
     // registry-exempt keydown: ARIA checkbox and listbox internal navigation.
     box.addEventListener("keydown", (event) => {
@@ -582,16 +794,13 @@ class TaskCheckboxWidget extends WidgetType {
       } else if (event.key === " " || event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        applyTaskStatus(
-          view,
-          this.markerFrom,
-          this.markerTo,
-          this.status.symbol,
-          this.status.next_status,
-        );
+        advance();
       }
     });
     palette.addEventListener("keydown", (event) => {
+      if (event.target instanceof HTMLInputElement) {
+        return;
+      }
       if (event.key === "ArrowDown" || event.key === "ArrowRight") {
         event.preventDefault();
         activeIndex = ((activeIndex ?? -1) + 1) % options.length;
@@ -611,17 +820,8 @@ class TaskCheckboxWidget extends WidgetType {
         updateActiveOption(true);
       } else if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        const selected =
-          activeIndex === null ? undefined : this.statuses[activeIndex];
-        if (selected !== undefined) {
-          closePalette(false);
-          applyTaskStatus(
-            view,
-            this.markerFrom,
-            this.markerTo,
-            this.status.symbol,
-            selected.symbol,
-          );
+        if (activeIndex !== null) {
+          selectEntry(activeIndex);
         }
       } else if (event.key === "Escape") {
         event.preventDefault();
@@ -635,7 +835,11 @@ class TaskCheckboxWidget extends WidgetType {
       }
     });
     host.addEventListener("pointerleave", () => {
-      if (press === null && !host.contains(document.activeElement)) {
+      if (
+        press === null &&
+        pendingDateStatus === null &&
+        !host.contains(document.activeElement)
+      ) {
         closePalette(false);
       }
     });
@@ -1324,14 +1528,20 @@ function taskMarkerCharacter(markerText: string): string {
 }
 
 function taskCheckboxAttributes(status: TaskStatus): [string, string][] {
-  return [
+  const attributes: [string, string][] = [
     ["role", "checkbox"],
     ["aria-checked", taskAriaChecked(status)],
     ["aria-label", status.name],
     ["data-task", status.symbol],
+    ["data-track", taskStatusTrack(status)],
     ["data-category", status.category],
     ["data-color-token", status.color_token],
   ];
+  const payload = taskStatusPayload(status);
+  if (payload !== undefined) {
+    attributes.push(["data-payload", payload]);
+  }
+  return attributes;
 }
 
 function serializeAttributes(
@@ -1615,9 +1825,18 @@ function dynamicAttributes(
         ? null
         : {
             "data-task": status.symbol,
+            "data-track": taskStatusTrack(status),
             "data-category": status.category,
             "data-color-token": status.color_token,
+            ...(taskStatusPayload(status) === undefined
+              ? {}
+              : { "data-payload": taskStatusPayload(status) ?? "" }),
           };
+    }
+    case "task-date-payload": {
+      const source = doc.sliceString(node.from, node.to);
+      const date = source.slice(-10);
+      return { "data-overdue": date < localIsoDate() ? "true" : "false" };
     }
     case "tag-search": {
       const tag = doc.sliceString(node.from + 1, node.to);
@@ -1669,10 +1888,14 @@ function findActiveReveal(
   wikilinks: WikilinkResolutionContext,
   taskStatuses: readonly TaskStatus[],
 ): RevealRegion | null {
-  const cursor = selection[0]?.to;
-  if (cursor === undefined) {
+  const primary = selection[0];
+  if (
+    primary === undefined ||
+    selection.some((range) => range.from !== range.to)
+  ) {
     return null;
   }
+  const cursor = primary.to;
   const rules = ruleIndex(table);
   let active: RevealRegion | null = null;
   const relevant = new Map<string, SyntaxNode>();
@@ -2176,13 +2399,22 @@ export function serializeDecorationSet(set: DecorationSet): string {
   return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
 }
 
+function revealSelection(state: EditorState): readonly {
+  from: number;
+  to: number;
+}[] {
+  const main = state.selection.main;
+  return state.facet(sourceRevealEnabled) &&
+    main.empty &&
+    state.selection.ranges.every((range) => range.empty)
+    ? [{ from: main.head, to: main.head }]
+    : [];
+}
+
 function buildViewDecorations(view: EditorView): DecorationSet {
   const state = view.state;
   const table = state.facet(decorationTable);
-  const cursor = state.selection.main.head;
-  const selection = state.facet(sourceRevealEnabled)
-    ? [{ from: cursor, to: cursor }]
-    : [];
+  const selection = revealSelection(state);
   const wikilinks =
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
   const taskStatuses = state.facet(taskStatusConfiguration);
@@ -2212,10 +2444,7 @@ function buildViewDecorations(view: EditorView): DecorationSet {
 
 function buildBlockDecorations(state: EditorState): DecorationSet {
   const table = state.facet(decorationTable);
-  const cursor = state.selection.main.head;
-  const selection = state.facet(sourceRevealEnabled)
-    ? [{ from: cursor, to: cursor }]
-    : [];
+  const selection = revealSelection(state);
   const wikilinks =
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
   const taskStatuses = state.facet(taskStatusConfiguration);
@@ -2976,6 +3205,20 @@ const engineTheme = EditorView.baseTheme({
     boxShadow: "var(--skr-shadow)",
   },
   ".cm-skr-task-palette[hidden]": { display: "none" },
+  ".cm-skr-task-track": {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr)",
+  },
+  ".cm-skr-task-track-heading": {
+    padding: "0.35rem 0.5rem 0.15rem",
+    color: "var(--skr-text-muted)",
+    fontFamily: "var(--skr-font-interface)",
+    fontSize: "12px",
+    fontWeight: "700",
+    letterSpacing: "0.08em",
+    lineHeight: "1.2",
+    textTransform: "uppercase",
+  },
   ".cm-skr-task-option": {
     display: "flex",
     alignItems: "center",
@@ -3003,6 +3246,40 @@ const engineTheme = EditorView.baseTheme({
     lineHeight: "1.3",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
+  },
+  ".cm-skr-task-payload-footer": {
+    display: "grid",
+    gridTemplateColumns: "auto minmax(8.5rem, 1fr)",
+    alignItems: "center",
+    gap: "0.5rem",
+    padding: "0.5rem",
+    borderTop: "1px solid var(--skr-border)",
+  },
+  ".cm-skr-task-payload-label": {
+    color: "var(--skr-text-muted)",
+    fontFamily: "var(--skr-font-interface)",
+    fontSize: "0.8125em",
+  },
+  ".cm-skr-task-payload-footer input": {
+    boxSizing: "border-box",
+    minHeight: "2.25rem",
+    padding: "0.25rem 0.4rem",
+    color: "var(--skr-text)",
+    backgroundColor: "var(--skr-surface)",
+    border: "1px solid var(--skr-border-strong)",
+    borderRadius: "0.25rem",
+    fontFamily: "var(--skr-font-interface)",
+  },
+  ".cm-skr-task-payload": {
+    padding: "0.08em 0.3em",
+    color: "var(--skr-text-muted)",
+    backgroundColor: "var(--skr-surface-subtle)",
+    borderRadius: "0.25rem",
+    fontFamily: "var(--skr-font-interface)",
+    fontSize: "0.8125em",
+  },
+  '.cm-skr-task-payload[data-overdue="true"]': {
+    color: "var(--skr-danger)",
   },
   ".cm-skr-inline-code": {
     fontFamily: "var(--skr-font-mono)",

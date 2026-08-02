@@ -111,6 +111,73 @@ function typeText(view: EditorView, text: string): void {
   }
 }
 
+function pressEditorKey(view: EditorView, key: string): void {
+  view.contentDOM.dispatchEvent(
+    new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+  );
+}
+
+describe("task marker editing", () => {
+  it.each([
+    ["Task", "- [ ] Task", "- [ ] Task\n- [ ] "],
+    ["Time", "- [D] Time", "- [D] Time\n- [D] "],
+    ["Importance", "- [!] Importance", "- [!] Importance\n- [!] "],
+    ["Reference", "- [b] Reference", "- [b] Reference\n- [b] "],
+  ])("inherits the %s track on newline", (_track, source, expected) => {
+    const view = makeView(source, source.length);
+    pressEditorKey(view, "Enter");
+    expect(view.state.doc.toString()).toBe(expected);
+  });
+
+  it("removes an untouched inherited marker with one Backspace", () => {
+    const source = "- [ ] Task";
+    const view = makeView(source, source.length);
+    pressEditorKey(view, "Enter");
+    view.dispatch({
+      selection: { anchor: view.state.selection.main.head },
+      userEvent: "select.pointer",
+    });
+    pressEditorKey(view, "Backspace");
+    expect(view.state.doc.toString()).toBe(`${source}\n`);
+    expect(view.state.doc.line(2).text).toBe("");
+  });
+
+  it("reveals and deletes a task marker one source character at a time", () => {
+    const source = "- [ ] task";
+    const view = makeView(source, source.indexOf("task"));
+    const documents: string[] = [];
+    for (let press = 0; press < 6; press += 1) {
+      pressEditorKey(view, "Backspace");
+      documents.push(view.state.doc.toString());
+      if (press < 5) {
+        view.dispatch({
+          selection: { anchor: view.state.selection.main.head },
+          userEvent: "select.pointer",
+        });
+      }
+    }
+    expect(documents).toEqual([
+      "- [ ]task",
+      "- [ task",
+      "- [task",
+      "- task",
+      "-task",
+      "task",
+    ]);
+  });
+
+  it("deletes forward into a revealed task marker one character at a time", () => {
+    const source = "- [ ] task";
+    const view = makeView(source, source.indexOf("["));
+    const documents: string[] = [];
+    for (let press = 0; press < 4; press += 1) {
+      pressEditorKey(view, "Delete");
+      documents.push(view.state.doc.toString());
+    }
+    expect(documents).toEqual(["-  ] task", "- ] task", "-  task", "- task"]);
+  });
+});
+
 describe("visible whitespace", () => {
   function lineEndCount(doc: string): number {
     const view = new EditorView({

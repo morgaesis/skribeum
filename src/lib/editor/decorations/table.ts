@@ -57,6 +57,7 @@ export type DynamicAttribute =
   | "code-language"
   | "mermaid-block"
   | "task-status"
+  | "task-date-payload"
   | "tag-search";
 
 export type DecorationRule = {
@@ -272,6 +273,21 @@ const listRows: DecorationRule[] = [
     node: "TaskMarker",
     presentation: { present: "widget", widget: "task-checkbox" },
     reveal: "cursor-inside",
+  },
+  {
+    node: "TaskDatePayload",
+    ancestor: "Task",
+    presentation: { present: "mark", class: "cm-skr-task-payload" },
+    reveal: "cursor-inside",
+    revealScope: "node",
+    dynamic: "task-date-payload",
+  },
+  {
+    node: "TaskLevelPayload",
+    ancestor: "Task",
+    presentation: { present: "mark", class: "cm-skr-task-payload" },
+    reveal: "cursor-inside",
+    revealScope: "node",
   },
 ];
 

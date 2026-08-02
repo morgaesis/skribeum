@@ -58,6 +58,7 @@ const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
     "lib/editor/decorations/engine.ts",
     "task checkbox and listbox internal navigation",
   ],
+  ["lib/editor/taskEditing.ts", "task marker editing semantics"],
   ["lib/rendering/CanvasView.svelte", "canvas camera internal navigation"],
   ["lib/features/findPanel.ts", "find widget internal keys"],
 ]);

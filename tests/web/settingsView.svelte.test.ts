@@ -321,6 +321,32 @@ describe("task status settings", () => {
     });
     await unmount(component);
   });
+
+  it("edits effective tracks and optional payload kinds", async () => {
+    const { component, updates } = renderSettings();
+    openSection("Editor");
+    const track = document.querySelector<HTMLButtonElement>(
+      '[data-testid="task-status-track"]',
+    );
+    expect(track?.textContent).toBe("Task");
+    track?.click();
+    flushSync();
+    [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+      .find(({ textContent }) => textContent === "Time")
+      ?.click();
+    expect(updates.at(-1)?.task_statuses?.[0]?.track).toBe("time");
+
+    const payload = document.querySelector<HTMLButtonElement>(
+      '[data-testid="task-status-payload"]',
+    );
+    payload?.click();
+    flushSync();
+    [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+      .find(({ textContent }) => textContent === "Due date")
+      ?.click();
+    expect(updates.at(-1)?.task_statuses?.[0]?.payload).toBe("date");
+    await unmount(component);
+  });
 });
 
 describe("settings surface", () => {

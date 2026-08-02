@@ -6,6 +6,9 @@
 - [ ] Task with **bold text** and a [[wikilink-target]] inside
 - [-] Obsidian cancelled-style marker some themes render
 - [?] Obsidian question-style custom status marker
+- [u] Unknown marker remains untouched plain text
+- [D] Time status with a due date 📅 2031-04-05
+- [!] Important status with a level ⏫
 
 1. [ ] Ordered unchecked task
 2. [x] Ordered checked task

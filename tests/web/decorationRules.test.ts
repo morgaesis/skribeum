@@ -43,7 +43,7 @@ const SAMPLE_DOCUMENTS = [
   "A [[plain-target]] and an aliased [[target|alias]] link.\n",
   "An embed ![[embedded-note]] inline.\n",
   "| Name | Score |\n| :--- | ---: |\n| Ada | 10 |\n",
-  "- plain item\n- [ ] open task\n- [x] done task\n",
+  "- plain item\n- [ ] open task\n- [D] dated task 📅 2030-01-02\n- [!] important task ⏫\n- [x] done task\n",
   "Inline math $a^2 + b^2 = c^2$ here.\n\n$$\nE = mc^2\n$$\n",
   "Inline `code span` here.\n\n```rust\nfn main() {}\n```\n",
   "```mermaid\ngraph TD\n  A --> B\n```\n",
@@ -102,6 +102,19 @@ function serializedAt(text: string, cursor: number | null): string {
       tree,
       table: DECORATION_TABLE,
       selection: cursor === null ? [] : [{ from: cursor, to: cursor }],
+    }),
+  );
+}
+
+function serializedSelection(text: string, from: number, to: number): string {
+  const tree = renderingParser.parse(text);
+  const doc = Text.of(text.split("\n"));
+  return serializeDecorationSet(
+    computeDecorations({
+      doc,
+      tree,
+      table: DECORATION_TABLE,
+      selection: [{ from, to }],
     }),
   );
 }
@@ -263,6 +276,40 @@ describe("cursor-reveal behavior per table row", () => {
     expect(hides(outsideHidden, outsideUrl)).toBe(false);
     expect(hides(outsideHidden, insideUrl)).toBe(true);
     expect(outside).toContain("cm-skr-rich-callout");
+  });
+
+  it("keeps every construct rendered for a non-empty selection", () => {
+    const text =
+      "# Heading\n\n- [ ] Task\n\n> [!note] Callout\n> [inside](target)\n";
+    const selected = serializedSelection(
+      text,
+      text.indexOf("Heading"),
+      text.indexOf("target") + 2,
+    );
+    expect(selected).toContain("hide node=HeaderMark");
+    expect(selected).toContain("hide node=URL");
+    expect(selected).toContain("widget task-checkbox");
+    expect(selected).not.toContain('data-revealed="true"');
+  });
+
+  it("keeps every construct rendered when a secondary range is non-empty", () => {
+    const text = "# Heading\n\n[body](target)\n";
+    const tree = renderingParser.parse(text);
+    const doc = Text.of(text.split("\n"));
+    const selected = serializeDecorationSet(
+      computeDecorations({
+        doc,
+        tree,
+        table: DECORATION_TABLE,
+        selection: [
+          { from: text.indexOf("body"), to: text.indexOf("body") },
+          { from: text.indexOf("Heading"), to: text.indexOf("target") },
+        ],
+      }),
+    );
+    expect(selected).toContain("hide node=HeaderMark");
+    expect(selected).toContain("hide node=URL");
+    expect(selected).not.toContain('data-revealed="true"');
   });
 
   it("reveals frontmatter from every line and restores it for another region", () => {

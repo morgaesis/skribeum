@@ -366,8 +366,9 @@ slicing text, never by injecting HTML.
 
 `settings.json` lives in the OS app-config directory, never in a vault.
 The document carries a `schema_version` and typed known keys (theme,
-editor font size, search result limit and the ordered `task_statuses` graph);
-writes are whole-document,
+editor font size, search result limit and the ordered `task_statuses` graph).
+Each task status has a track and an optional plain-text payload kind. Writes are
+whole-document,
 validated, durable through the crash-safe sequence, and preserve every
 unknown key already in the file, so settings written by a newer build
 survive a round trip through an older one. A missing file reads as the

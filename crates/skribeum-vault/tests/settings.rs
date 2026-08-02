@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
+use skribeum_vault::settings::{TaskStatusPayload, TaskStatusTrack};
 use skribeum_vault::{
     FileSystem, SETTINGS_SCHEMA_VERSION, Settings, SettingsError, SettingsStore, SimFs, TaskStatus,
     TaskStatusCategory, default_task_statuses,
@@ -57,6 +58,8 @@ fn configured_task_statuses() -> Vec<TaskStatus> {
             glyph: "○".to_owned(),
             color_token: "--skr-accent".to_owned(),
             next_status: "~".to_owned(),
+            track: Some(TaskStatusTrack::Task),
+            payload: None,
         },
         TaskStatus {
             symbol: "~".to_owned(),
@@ -65,6 +68,8 @@ fn configured_task_statuses() -> Vec<TaskStatus> {
             glyph: "Ⅱ".to_owned(),
             color_token: "--skr-callout-purple".to_owned(),
             next_status: " ".to_owned(),
+            track: Some(TaskStatusTrack::Reference),
+            payload: None,
         },
     ]
 }
@@ -282,6 +287,57 @@ fn default_status_names_round_trip_as_stable_catalogue_markers() {
 }
 
 #[test]
+fn default_task_statuses_assign_tracks_and_payloads() {
+    let statuses = default_task_statuses();
+    for status in &statuses {
+        let expected_track = match status.symbol.as_str() {
+            " " | "/" | "x" | "-" | "X" => TaskStatusTrack::Task,
+            "D" | "<" | ">" => TaskStatusTrack::Time,
+            "!" => TaskStatusTrack::Importance,
+            _ => TaskStatusTrack::Reference,
+        };
+        let expected_payload = match status.symbol.as_str() {
+            "D" | "<" | ">" => Some(TaskStatusPayload::Date),
+            "!" => Some(TaskStatusPayload::Level),
+            _ => None,
+        };
+        assert_eq!(status.track, Some(expected_track), "{}", status.symbol);
+        assert_eq!(status.payload, expected_payload, "{}", status.symbol);
+    }
+}
+
+#[test]
+fn missing_task_metadata_round_trips_without_becoming_null() {
+    let (fs, store) = store();
+    let path = PathBuf::from("config/settings.json");
+    fs.external_write(
+        &path,
+        br#"{
+          "task_statuses": [{
+            "symbol": "?",
+            "name": "Question",
+            "category": "TODO",
+            "glyph": "?",
+            "color_token": "--skr-accent",
+            "next_status": "?",
+            "future_style": {"weight": 2}
+          }]
+        }"#,
+    );
+
+    let settings = store.read(&fs).expect("read succeeds");
+    assert_eq!(settings.task_statuses[0].track, None);
+    assert_eq!(settings.task_statuses[0].payload, None);
+    store.write(&fs, &settings).expect("write succeeds");
+
+    let stored: Value =
+        serde_json::from_slice(&fs.read(&path).expect("file readable")).expect("valid JSON");
+    assert!(stored["task_statuses"][0].get("track").is_none());
+    assert!(stored["task_statuses"][0].get("payload").is_none());
+    assert_eq!(stored["task_statuses"][0]["future_style"]["weight"], 2);
+}
+
+#[test]
 fn undefined_task_color_tokens_fall_back_on_read_and_fail_on_write() {
     let (fs, store) = store();
     let path = PathBuf::from("config/settings.json");
@@ -319,6 +375,31 @@ fn malformed_task_status_configuration_reads_as_defaults() {
                 "glyph": "?",
                 "color_token": "--skr-accent",
                 "next_status": "missing"
+            }]
+        }))
+        .expect("fixture serializes")
+        .as_bytes(),
+    );
+    assert_eq!(
+        store.read(&fs).expect("read succeeds").task_statuses,
+        default_task_statuses()
+    );
+}
+
+#[test]
+fn malformed_task_metadata_rejects_the_complete_status_graph() {
+    let (fs, store) = store();
+    fs.external_write(
+        &PathBuf::from("config/settings.json"),
+        serde_json::to_string(&json!({
+            "task_statuses": [{
+                "symbol": "?",
+                "name": "Question",
+                "category": "TODO",
+                "glyph": "?",
+                "color_token": "--skr-accent",
+                "next_status": "?",
+                "track": "invalid"
             }]
         }))
         .expect("fixture serializes")

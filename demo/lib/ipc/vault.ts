@@ -58,10 +58,11 @@ type DemoWindow = Window & {
   showDirectoryPicker?: (options?: {
     mode?: PermissionMode;
   }) => Promise<BrowserDirectoryHandle>;
-  __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
 };
 
 const LOCAL_FOLDER_VAULT = "skribeum-local-folder";
+const E2E_NOTE_GATES_KEY = "skribeum.e2e.note-gates";
+const E2E_NOTE_RELEASE_EVENT = "skribeum:e2e-release-notes";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -103,8 +104,21 @@ let status: DemoVaultStatus = { source: "seeded" };
 const statusListeners = new Set<(next: DemoVaultStatus) => void>();
 
 async function waitForTestGate(relPath: string): Promise<void> {
-  if (typeof window !== "undefined") {
-    await (window as DemoWindow).__SKRIBEUM_E2E_NOTE_GATES__?.[relPath];
+  if (typeof window === "undefined") {
+    return;
+  }
+  let paths: unknown;
+  try {
+    paths = JSON.parse(sessionStorage.getItem(E2E_NOTE_GATES_KEY) ?? "[]");
+  } catch {
+    paths = [];
+  }
+  if (Array.isArray(paths) && paths.includes(relPath)) {
+    await new Promise<void>((resolve) => {
+      window.addEventListener(E2E_NOTE_RELEASE_EVENT, () => resolve(), {
+        once: true,
+      });
+    });
   }
 }
 

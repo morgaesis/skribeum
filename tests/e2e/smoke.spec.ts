@@ -4177,6 +4177,10 @@ describe("skribeum core editing surfaces", () => {
   it("browser_demo_restores_default_appearance_and_persists", async () => {
     await browser.url(browserDemoUrl());
     await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await browser.waitUntil(
+      async () => new URL(await browser.getUrl()).searchParams.has("note"),
+      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
+    );
     await browser.execute(() => {
       localStorage.removeItem("skribeum.demo.settings");
     });
@@ -4250,28 +4254,14 @@ describe("skribeum core editing surfaces", () => {
     await browser.url(browserDemoUrl());
     await $(".demo-shell").waitForExist({ timeout: 15000 });
     await browser.execute(() => {
-      type GateWindow = Window & {
-        __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
-        __SKRIBEUM_E2E_NOTE_RELEASES__?: Record<string, () => void>;
-      };
-      const target = window as GateWindow;
       const paths = [
         "Examples/Work/decision-log.md",
         "Examples/Personal/garden-log.md",
       ];
-      const gates: Record<string, Promise<void>> = {};
-      const releases: Record<string, () => void> = {};
-      target.__SKRIBEUM_E2E_NOTE_GATES__ = gates;
-      target.__SKRIBEUM_E2E_NOTE_RELEASES__ = releases;
-      for (const path of paths) {
-        gates[path] = new Promise((resolve) => {
-          releases[path] = resolve;
-        });
-      }
-    });
-    await browser.execute(() => {
+      sessionStorage.setItem("skribeum.e2e.note-gates", JSON.stringify(paths));
       const url = new URL(window.location.href);
       url.searchParams.set("note", "Features/embeds.md");
+      url.searchParams.set("embed-test", Date.now().toString());
       window.history.pushState(window.history.state, "", url);
       window.dispatchEvent(
         new PopStateEvent("popstate", { state: window.history.state }),
@@ -4302,18 +4292,8 @@ describe("skribeum core editing surfaces", () => {
     });
     expect(staticMotion).toBe("none");
     await browser.execute(() => {
-      type GateWindow = Window & {
-        __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
-        __SKRIBEUM_E2E_NOTE_RELEASES__?: Record<string, () => void>;
-      };
-      const target = window as GateWindow;
-      for (const release of Object.values(
-        target.__SKRIBEUM_E2E_NOTE_RELEASES__ ?? {},
-      )) {
-        release();
-      }
-      delete target.__SKRIBEUM_E2E_NOTE_GATES__;
-      delete target.__SKRIBEUM_E2E_NOTE_RELEASES__;
+      sessionStorage.removeItem("skribeum.e2e.note-gates");
+      window.dispatchEvent(new Event("skribeum:e2e-release-notes"));
     });
 
     await browser.waitUntil(

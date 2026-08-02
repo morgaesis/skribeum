@@ -986,7 +986,7 @@ function embeddedSection(source: string, fragment: string): string | null {
     from: heading.to,
     enter(ref) {
       const candidate = headingLevel(ref.name);
-      if (candidate !== null && candidate <= level) {
+      if (ref.from >= heading.to && candidate !== null && candidate <= level) {
         end = ref.from;
         return false;
       }
@@ -1049,8 +1049,9 @@ function renderLinkedNote(
         ? (context.currentPath ?? "")
         : "";
   const notice = (message: string) => {
-    host.classList.add("cm-skr-embed-notice");
+    host.className = "cm-skr-embed-body cm-skr-embed-notice";
     host.setAttribute("role", "status");
+    host.removeAttribute("aria-label");
     host.textContent = message;
   };
   if (resolution.kind === "unresolved") {
@@ -1077,7 +1078,19 @@ function renderLinkedNote(
       ? Promise.resolve(rootSource)
       : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null));
   let destroyed = false;
-  host.textContent = STRINGS.embedLoading;
+  let visibilityObserver: IntersectionObserver | null = null;
+  host.className = "cm-skr-embed-body cm-skr-embed-loading";
+  host.setAttribute("role", "status");
+  host.setAttribute("aria-label", STRINGS.embedLoading);
+  host.replaceChildren(
+    ...["long", "medium", "short"].map((width) => {
+      const bar = document.createElement("span");
+      bar.className = "cm-skr-embed-skeleton-bar";
+      bar.dataset.width = width;
+      bar.setAttribute("aria-hidden", "true");
+      return bar;
+    }),
+  );
   void load.then((source) => {
     if (destroyed || (!host.isConnected && !document.body.contains(host))) {
       return;
@@ -1091,8 +1104,11 @@ function renderLinkedNote(
       notice(STRINGS.embedSectionUnavailable);
       return;
     }
+    host.className = "cm-skr-embed-body";
+    host.removeAttribute("role");
+    host.removeAttribute("aria-label");
     host.textContent = "";
-    nestedMarkdownView(
+    const nested = nestedMarkdownView(
       host,
       selected,
       {
@@ -1105,10 +1121,20 @@ function renderLinkedNote(
       label,
       taskStatuses,
     );
+    if (typeof IntersectionObserver !== "undefined") {
+      visibilityObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          nested.requestMeasure();
+          onRendered();
+        }
+      });
+      visibilityObserver.observe(host);
+    }
     onRendered();
   });
   return () => {
     destroyed = true;
+    visibilityObserver?.disconnect();
     nestedViews.get(host)?.destroy();
   };
 }
@@ -1899,6 +1925,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           return undefined;
         }
         const node = ref.node;
+        let embedOwnsDescendants = false;
         for (const rule of nodeRules) {
           if (!ruleMatches(rule, node, doc)) {
             continue;
@@ -2098,6 +2125,12 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                   skr,
                 }),
               });
+              if (presentation.widget === "embed") {
+                // The embed replacement owns its complete syntax subtree.
+                // Descendant wikilink decorations overlap the atomic range
+                // and can displace the widget when link context refreshes.
+                embedOwnsDescendants = true;
+              }
             }
           } else {
             const motionClass = ["Link", "Image", "Wikilink"].includes(
@@ -2116,7 +2149,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             });
           }
         }
-        return undefined;
+        return embedOwnsDescendants ? false : undefined;
       },
     });
   }

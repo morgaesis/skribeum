@@ -341,6 +341,66 @@ html body .settings-dialog {
   }
 }
 
+@keyframes skr-embed-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.cm-skr-embed-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.65rem;
+  background: var(--skr-surface-raised);
+}
+
+.cm-skr-embed-skeleton-bar {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 0.65rem;
+  overflow: hidden;
+  border-radius: 0.2rem;
+  background: var(--skr-surface-subtle);
+}
+
+.cm-skr-embed-skeleton-bar[data-width="medium"] {
+  width: 78%;
+}
+
+.cm-skr-embed-skeleton-bar[data-width="short"] {
+  width: 54%;
+}
+
+.cm-skr-embed-skeleton-bar::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--skr-surface-raised),
+    transparent
+  );
+  content: "";
+  animation: skr-embed-shimmer var(--skr-motion-duration)
+    var(--skr-motion-easing) 1 both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-skr-embed-skeleton-bar::after {
+    animation: none;
+  }
+}
+
+:root[data-animations="false"] .cm-skr-embed-skeleton-bar::after {
+  animation: none;
+}
+
 :root[data-animations="false"] *,
 :root[data-animations="false"] *::before,
 :root[data-animations="false"] *::after {

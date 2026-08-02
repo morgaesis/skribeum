@@ -4245,4 +4245,241 @@ describe("skribeum core editing surfaces", () => {
     await verifyTagCompletionArrowSelection(demoTagCompletionHarness);
     await verifyTagCompletionEscape(demoTagCompletionHarness);
   });
+
+  it("browser_demo_renders_embed_skeletons_and_resolved_content", async () => {
+    await browser.url(browserDemoUrl());
+    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await browser.execute(() => {
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_NOTE_DELAYS__?: Record<string, number>;
+        }
+      ).__SKRIBEUM_E2E_NOTE_DELAYS__ = {
+        "Examples/Work/decision-log.md": 800,
+        "Examples/Personal/garden-log.md": 800,
+      };
+    });
+    await browser.keys([modifierKey, "k"]);
+    const commandInput = $('[role="combobox"]');
+    await commandInput.waitForExist({ timeout: 5000 });
+    await commandInput.addValue("embeds");
+    const embedsCommand = $('[role="option"]*=embeds.md');
+    await embedsCommand.waitForExist({ timeout: 5000 });
+    await embedsCommand.click();
+
+    const skeleton = $(".cm-skr-embed-loading");
+    await skeleton.waitForExist({ timeout: 500 });
+    expect(await $$(".cm-skr-embed").length).toBe(2);
+    expect(await $$(".cm-skr-embed-skeleton-bar").length).toBe(6);
+    const motion = await browser.execute(() => {
+      const bar = document.querySelector(".cm-skr-embed-skeleton-bar");
+      if (!(bar instanceof HTMLElement)) return null;
+      const style = getComputedStyle(bar, "::after");
+      return {
+        duration: Number.parseFloat(style.animationDuration) * 1000,
+        iterations: style.animationIterationCount,
+      };
+    });
+    expect(motion?.duration).toBeLessThanOrEqual(50);
+    expect(motion?.iterations).toBe("1");
+    const staticMotion = await browser.execute(() => {
+      document.documentElement.dataset.animations = "false";
+      const bar = document.querySelector(".cm-skr-embed-skeleton-bar");
+      return bar instanceof HTMLElement
+        ? getComputedStyle(bar, "::after").animationName
+        : null;
+    });
+    expect(staticMotion).toBe("none");
+
+    await browser.waitUntil(
+      async () => (await $$(".cm-skr-embed-loading")).length === 0,
+      {
+        timeout: 5000,
+        timeoutMsg: "embedded content did not replace skeletons",
+      },
+    );
+    const embeds = await $$(".cm-skr-embed");
+    expect(await embeds[0]?.getText()).toContain(
+      "Preserve a clear window-side route",
+    );
+    await embeds[1]?.scrollIntoView({ block: "center" });
+    await browser.waitUntil(
+      async () =>
+        (await embeds[1]?.getText())?.includes(
+          "Photograph the drainage channel after rain.",
+        ) === true,
+      { timeout: 5000, timeoutMsg: "section embed content did not render" },
+    );
+  });
+
+  it("browser_demo_serves_scheme_aware_favicon_metadata", async () => {
+    await browser.url(browserDemoUrl());
+    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    const metadata = await browser.executeAsync<
+      {
+        iconType: string | null;
+        svgRoot: string;
+        svgStyle: string;
+        appleSize: [number, number];
+      },
+      []
+    >(`
+const done = arguments[arguments.length - 1];
+const icon = document.querySelector('link[rel="icon"]');
+const apple = document.querySelector('link[rel="apple-touch-icon"]');
+Promise.all([
+  fetch(icon.href).then((response) => response.text()),
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve([image.naturalWidth, image.naturalHeight]);
+    image.onerror = reject;
+    image.src = apple.href;
+  }),
+]).then(([source, appleSize]) => {
+  const parsed = new DOMParser().parseFromString(source, 'image/svg+xml');
+  done({
+    iconType: icon.getAttribute('type'),
+    svgRoot: parsed.documentElement.localName,
+    svgStyle: parsed.querySelector('style')?.textContent ?? '',
+    appleSize,
+  });
+}).catch((error) => done({ error: String(error) }));
+`);
+    expect(metadata.iconType).toBe("image/svg+xml");
+    expect(metadata.svgRoot).toBe("svg");
+    expect(metadata.svgStyle).toContain("prefers-color-scheme: dark");
+    expect(metadata.svgStyle).toContain("#fffdf8");
+    expect(metadata.svgStyle).toContain("#2a2418");
+    expect(metadata.svgStyle).toContain("#1d1815");
+    expect(metadata.svgStyle).toContain("#ece4d5");
+    expect(metadata.appleSize).toEqual([180, 180]);
+  });
+
+  it("browser_demo_highlights_lazy_languages_with_palette_tokens", async () => {
+    const target = new URL(browserDemoUrl());
+    target.searchParams.set("note", "Features/code-blocks.md");
+    await browser.url(target.href);
+    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await browser.waitUntil(
+      () =>
+        browser.execute(() =>
+          [...document.querySelectorAll(".cm-line")].some(
+            (line) =>
+              line.textContent === "fn note_title(path: &str) -> &str {",
+          ),
+        ),
+      { timeout: 15000, timeoutMsg: "code sample note did not open" },
+    );
+    await browser.pause(1000);
+
+    const measurements = await browser.execute<
+      Array<{
+        mode: "light" | "dark";
+        language: string;
+        tokens: number;
+        paletteDerived: boolean;
+        minimumContrast: number;
+      }>,
+      []
+    >(String.raw`
+      const samples = [
+        ["sh", "if [ -f package.json ]; then"],
+        ["python", "def note_title(path: str) -> str:"],
+        ["yaml", "note:"],
+        ["rust", "fn note_title(path: &str) -> &str {"],
+      ];
+      const root = document.documentElement;
+      const parseColor = (color) => {
+        const hex = color.trim().match(/^#([0-9a-f]{6})$/i)?.[1];
+        if (hex !== undefined) {
+          return [0, 2, 4].map((index) =>
+            Number.parseInt(hex.slice(index, index + 2), 16),
+          );
+        }
+        const srgb = color
+          .trim()
+          .match(/^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/i);
+        if (srgb !== null) {
+          return srgb.slice(1, 4).map((channel) => Number(channel) * 255);
+        }
+        const values = color
+          .match(/[\d.]+/g)
+          ?.slice(0, 3)
+          .map(Number);
+        return values ?? [0, 0, 0];
+      };
+      const luminance = (color) =>
+        parseColor(color)
+          .map((channel) => channel / 255)
+          .map((channel) =>
+            channel <= 0.04045
+              ? channel / 12.92
+              : ((channel + 0.055) / 1.055) ** 2.4,
+          )
+          .reduce(
+            (sum, channel, index) =>
+              sum + channel * ([0.2126, 0.7152, 0.0722][index] ?? 0),
+            0,
+          );
+      const contrast = (left, right) => {
+        const values = [luminance(left), luminance(right)].sort(
+          (a, b) => b - a,
+        );
+        return ((values[0] ?? 0) + 0.05) / ((values[1] ?? 0) + 0.05);
+      };
+
+      return ["light", "dark"].flatMap((mode) => {
+        root.dataset.theme = mode;
+        const rootStyle = getComputedStyle(root);
+        const colorProbe = document.createElement("span");
+        document.body.append(colorProbe);
+        const tokenColors = new Set(
+          [
+            "keyword",
+            "string",
+            "number",
+            "comment",
+            "function",
+            "type",
+            "property",
+            "operator",
+          ].map((token) => {
+            colorProbe.style.color = "var(--skr-syntax-" + token + ")";
+            return getComputedStyle(colorProbe).color;
+          }),
+        );
+        colorProbe.remove();
+        const background = rootStyle.getPropertyValue("--skr-code-surface");
+        return samples.map(([language, source]) => {
+          const line = [
+            ...document.querySelectorAll(".cm-line"),
+          ].find((candidate) => candidate.textContent === source);
+          const spans = [
+            ...(line?.querySelectorAll("span[class]") ?? []),
+          ].filter((span) =>
+            [...span.classList].some((name) => !name.startsWith("cm-")),
+          );
+          const colors = spans.map((span) => getComputedStyle(span).color);
+          return {
+            mode,
+            language,
+            tokens: spans.length,
+            paletteDerived: colors.every((color) =>
+              tokenColors.has(color),
+            ),
+            minimumContrast: Math.min(
+              ...colors.map((color) => contrast(color, background)),
+            ),
+          };
+        });
+      });
+    `);
+
+    expect(measurements).toHaveLength(8);
+    for (const measurement of measurements) {
+      expect(measurement.tokens).toBeGreaterThan(0);
+      expect(measurement.paletteDerived).toBe(true);
+      expect(measurement.minimumContrast).toBeGreaterThanOrEqual(4.5);
+    }
+  });
 });

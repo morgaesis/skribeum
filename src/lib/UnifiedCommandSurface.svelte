@@ -21,10 +21,8 @@ let {
   restoreFocus?: boolean;
 } = $props();
 
-const initialQueryValue = () => initialQuery;
 const initialViewportHeight = () =>
   typeof window === "undefined" ? 0 : window.innerHeight;
-let query = $state(initialQueryValue());
 let active = $state(0);
 let inputElement = $state<HTMLInputElement | undefined>();
 let closeElement = $state<HTMLButtonElement | undefined>();
@@ -43,13 +41,6 @@ const LISTBOX_ID = "skr-command-surface-listbox";
 
 $effect(() => {
   inputElement?.focus();
-});
-
-$effect(() => {
-  if (initialQuery !== query) {
-    query = initialQuery;
-    active = 0;
-  }
 });
 
 $effect(() => {
@@ -83,9 +74,9 @@ onMount(() => {
   };
 });
 
-function onInput() {
+function onInput(event: Event & { currentTarget: HTMLInputElement }) {
   active = 0;
-  onQueryChange(query);
+  onQueryChange(event.currentTarget.value);
 }
 
 function pickActive() {
@@ -164,7 +155,7 @@ onDestroy(() => {
     <div class="command-surface-input-row">
       <input
         bind:this={inputElement}
-        bind:value={query}
+        value={initialQuery}
         type="text"
         role="combobox"
         aria-expanded="true"

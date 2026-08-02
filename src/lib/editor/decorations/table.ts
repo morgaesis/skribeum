@@ -235,11 +235,6 @@ const wikilinkRows: DecorationRule[] = [
     presentation: { present: "widget", widget: "embed" },
     reveal: "cursor-inside",
   },
-  {
-    node: "EmbedMark",
-    presentation: { present: "hide" },
-    reveal: "cursor-inside",
-  },
 ];
 
 const tableRows: DecorationRule[] = [

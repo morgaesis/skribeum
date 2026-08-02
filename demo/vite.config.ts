@@ -50,6 +50,7 @@ function demoIpcBoundary(): Plugin {
 export default defineConfig({
   root: demoRoot,
   base: "/",
+  publicDir: resolve(repositoryRoot, "public"),
   plugins: [
     demoIpcBoundary(),
     svelte({ configFile: resolve(repositoryRoot, "svelte.config.js") }),

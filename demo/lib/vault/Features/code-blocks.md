@@ -18,8 +18,32 @@ function displayTitle(note: NoteSummary): string {
 ## Shell example
 
 ```sh
-bun run check
-bun run test:web
+if [ -f package.json ]; then
+  bun run check
+fi
+```
+
+## Python example
+
+```py
+def note_title(path: str) -> str:
+    return path.removesuffix(".md")
+```
+
+## YAML example
+
+```yml
+note:
+  title: Field notes
+  published: true
+```
+
+## Rust example
+
+```rs
+fn note_title(path: &str) -> &str {
+    path.strip_suffix(".md").unwrap_or(path)
+}
 ```
 
 Inline code works well for short identifiers such as `displayTitle`, while a fenced block is clearer for a complete snippet. Code inside a fence stays literal, so text such as `[[not-a-link]]` is displayed as source rather than treated as a wikilink.

@@ -1,8 +1,10 @@
 import { forceParsing } from "@codemirror/language";
+import { languages } from "@codemirror/language-data";
 import type { EditorView } from "@codemirror/view";
 import { flushSync, mount, unmount } from "svelte";
 import { describe, expect, it } from "vitest";
 import Editor from "../../src/lib/Editor.svelte";
+import { codeLanguage } from "../../src/lib/editor/markdown/codeLanguages";
 
 const CASES = [
   ["typescript", "const typescriptValue: number = 1;"],
@@ -18,6 +20,8 @@ const CASES = [
   ["sh", "if true; then echo sh-value; fi"],
   ["bash", "if true; then echo bash-value; fi"],
   ["zsh", "if true; then echo zsh-value; fi"],
+  ["ruby", "def ruby_value = true"],
+  ["rb", "def rb_value = true"],
   ["json", '{"jsonValue": true}'],
   ["yaml", "yamlValue: true"],
   ["yml", "ymlValue: true"],
@@ -60,6 +64,14 @@ async function waitForLanguage(
 }
 
 describe("fenced code syntax highlighting", () => {
+  it("resolves every documented registry name, alias, and extension", () => {
+    for (const language of languages) {
+      for (const name of [...language.alias, ...language.extensions]) {
+        expect(codeLanguage(name), `${language.name}: ${name}`).not.toBeNull();
+      }
+    }
+  });
+
   it.each(CASES)(
     "renders %s fences with syntax highlighting",
     async (language, source) => {

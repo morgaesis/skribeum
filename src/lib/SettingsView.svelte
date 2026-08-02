@@ -13,9 +13,17 @@ import { describeUpdateState, type UpdateState } from "./features/updates";
 import { STRINGS } from "./strings";
 import {
   TASK_COLOR_TOKENS,
+  TASK_PAYLOAD_KINDS,
+  TASK_TRACKS,
+  type TaskPayloadKind,
   type TaskStatus,
   type TaskStatusCategory,
+  type TaskTrack,
   taskStatusDisplayName,
+  taskStatusDocument,
+  taskStatusPayload,
+  taskStatusTrack,
+  taskTrackLabel,
 } from "./taskStatuses";
 import type {
   CodeFontName,
@@ -31,7 +39,12 @@ type IndentStyle = "spaces" | "tabs";
 type AttachmentFolderMode = "vault" | "note" | "folder";
 type UpdateChannel = "stable" | "beta";
 type SearchScope = "titles" | "full-text";
-type TaskListboxField = "category" | "color_token" | "next_status";
+type TaskListboxField =
+  | "category"
+  | "color_token"
+  | "next_status"
+  | "track"
+  | "payload";
 type SectionId = SettingSectionId;
 
 type NumericSetting =
@@ -491,7 +504,7 @@ function oneSourceCharacter(value: string): boolean {
 
 function saveTaskStatuses(statuses: readonly TaskStatus[]) {
   taskStatusError = null;
-  update({ task_statuses: statuses.map((status) => ({ ...status })) });
+  update({ task_statuses: statuses.map(taskStatusDocument) });
 }
 
 function updateTaskStatus(index: number, patch: Partial<TaskStatus>) {
@@ -584,6 +597,7 @@ function addTaskStatus() {
       glyph: "•",
       color_token: "--skr-accent",
       next_status: first.symbol,
+      track: "reference",
     },
   ]);
 }
@@ -607,6 +621,12 @@ function taskCategoryLabel(category: TaskStatusCategory): string {
     case "NON_TASK":
       return STRINGS.settingsTaskCategoryNonTask;
   }
+}
+
+function taskPayloadLabel(payload: TaskPayloadKind | undefined): string {
+  if (payload === "date") return STRINGS.settingsTaskPayloadDate;
+  if (payload === "level") return STRINGS.settingsTaskPayloadLevel;
+  return STRINGS.settingsTaskPayloadNone;
 }
 
 function taskListboxKey(index: number, field: TaskListboxField): string {
@@ -637,7 +657,9 @@ async function chooseTaskListboxOption(
   field: TaskListboxField,
   value: string,
 ) {
-  updateTaskStatus(index, { [field]: value } as Partial<TaskStatus>);
+  updateTaskStatus(index, {
+    [field]: field === "payload" && value === "none" ? undefined : value,
+  } as Partial<TaskStatus>);
   openTaskListbox = null;
   await tick();
   dialogElement
@@ -1536,6 +1558,8 @@ function onKeydown(event: KeyboardEvent) {
                     <div class="task-status-row task-status-header" aria-hidden="true">
                       <span>{STRINGS.settingsTaskSymbol}</span>
                       <span>{STRINGS.settingsTaskName}</span>
+                      <span>{STRINGS.settingsTaskTrack}</span>
+                      <span>{STRINGS.settingsTaskPayload}</span>
                       <span>{STRINGS.settingsTaskCategory}</span>
                       <span>{STRINGS.settingsTaskGlyph}</span>
                       <span>{STRINGS.settingsTaskColor}</span>
@@ -1574,6 +1598,78 @@ function onKeydown(event: KeyboardEvent) {
                           }}
                           data-testid="task-status-name"
                         />
+                        <div class="task-listbox-control">
+                          <button
+                            type="button"
+                            class="text-control task-listbox-trigger"
+                            aria-label={`${STRINGS.settingsTaskTrack}: ${taskStatusDisplayName(status)}`}
+                            aria-haspopup="listbox"
+                            aria-expanded={openTaskListbox === taskListboxKey(index, "track")}
+                            data-task-listbox-trigger={taskListboxKey(index, "track")}
+                            data-testid="task-status-track"
+                            onclick={() => toggleTaskListbox(index, "track")}
+                            onkeydown={(event) => handleTaskListboxTrigger(event, index, "track")}
+                          >{taskTrackLabel(taskStatusTrack(status))}</button>
+                          {#if openTaskListbox === taskListboxKey(index, "track")}
+                            <div
+                              class="task-listbox-options"
+                              role="listbox"
+                              aria-label={`${STRINGS.settingsTaskTrack}: ${taskStatusDisplayName(status)}`}
+                              data-task-listbox={taskListboxKey(index, "track")}
+                            >
+                              {#each TASK_TRACKS as track}
+                                <button
+                                  type="button"
+                                  role="option"
+                                  aria-selected={taskStatusTrack(status) === track}
+                                  tabindex="-1"
+                                  onclick={() => chooseTaskListboxOption(index, "track", track)}
+                                  onkeydown={handleTaskListboxOption}
+                                >{taskTrackLabel(track)}</button>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                        <div class="task-listbox-control">
+                          <button
+                            type="button"
+                            class="text-control task-listbox-trigger"
+                            aria-label={`${STRINGS.settingsTaskPayload}: ${taskStatusDisplayName(status)}`}
+                            aria-haspopup="listbox"
+                            aria-expanded={openTaskListbox === taskListboxKey(index, "payload")}
+                            data-task-listbox-trigger={taskListboxKey(index, "payload")}
+                            data-testid="task-status-payload"
+                            onclick={() => toggleTaskListbox(index, "payload")}
+                            onkeydown={(event) => handleTaskListboxTrigger(event, index, "payload")}
+                          >{taskPayloadLabel(taskStatusPayload(status))}</button>
+                          {#if openTaskListbox === taskListboxKey(index, "payload")}
+                            <div
+                              class="task-listbox-options"
+                              role="listbox"
+                              aria-label={`${STRINGS.settingsTaskPayload}: ${taskStatusDisplayName(status)}`}
+                              data-task-listbox={taskListboxKey(index, "payload")}
+                            >
+                              <button
+                                type="button"
+                                role="option"
+                                aria-selected={taskStatusPayload(status) === undefined}
+                                tabindex="-1"
+                                onclick={() => chooseTaskListboxOption(index, "payload", "none")}
+                                onkeydown={handleTaskListboxOption}
+                              >{STRINGS.settingsTaskPayloadNone}</button>
+                              {#each TASK_PAYLOAD_KINDS as payload}
+                                <button
+                                  type="button"
+                                  role="option"
+                                  aria-selected={taskStatusPayload(status) === payload}
+                                  tabindex="-1"
+                                  onclick={() => chooseTaskListboxOption(index, "payload", payload)}
+                                  onkeydown={handleTaskListboxOption}
+                                >{taskPayloadLabel(payload)}</button>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
                         <div class="task-listbox-control">
                           <button
                             type="button"
@@ -2746,9 +2842,9 @@ function onKeydown(event: KeyboardEvent) {
     display: grid;
     gap: 0.35rem;
     grid-template-columns:
-      3.5rem minmax(8rem, 1.2fr) 8rem 4rem minmax(9rem, 1fr)
+      3.5rem minmax(8rem, 1.2fr) 7rem 8rem 8rem 4rem minmax(9rem, 1fr)
       minmax(9rem, 1fr) 6.5rem;
-    min-width: 51rem;
+    min-width: 66rem;
     padding: 0.35rem;
   }
 

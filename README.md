@@ -38,6 +38,26 @@ above the on-screen keyboard and scrolls its results internally. Keyboard
 shortcuts remain visible beside command results and in selection toolbar
 tooltips.
 
+## Tasks
+
+Task markers belong to Task, Time, Importance, or Reference tracks. A short tap
+advances the current track. Task cycles through Todo, Doing, and Done; Time
+finishes as Done; and Importance keeps its marker while cycling the plain-text
+level glyphs `⏫`, `🔼`, and `🔽`. Reference statuses follow their configured
+transitions.
+
+Hold a marker, or focus it and press Arrow Down, to open the grouped status
+menu. Choosing a Time status opens its due-date field. A touch date change or
+Enter writes an Obsidian Tasks token such as `📅 2031-04-05` directly into the
+note, while Escape applies the status without a date. Date and level tokens
+render as chips, but remain ordinary Markdown source that can be edited or
+deleted.
+
+Enter at the end of a task creates another marker from the same track without
+copying its payload. One immediate Backspace removes that new marker and its
+spacing. At the start of existing task text, Backspace reveals and deletes the
+marker one source character at a time.
+
 Copy link to note is available from Actions and command mode. Browser links use
 the current absolute note URL, while desktop links use the vault's configured
 note-link form. Outline rows copy heading links from their trailing action, and
@@ -58,7 +78,7 @@ readouts accept typed values for font size, line spacing and text column width,
 and Mermaid diagrams use the active palette. Appearance also controls prose and
 code font stacks and motion. Editor settings cover autosave, spell checking,
 indentation, wrapping, line numbers, visible whitespace, Markdown source
-reveal, link previews and configurable task statuses.
+reveal, link previews and configurable task tracks, statuses, and payloads.
 Files and vault settings control
 the folder used by the `Create new note` command, attachment resolution and
 compatible Obsidian configuration. Search settings control result count, title

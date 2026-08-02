@@ -6,11 +6,12 @@ import type { EditorState } from "@codemirror/state";
 import type { SyntaxNode } from "@lezer/common";
 import { taskStatusConfiguration } from "../editor/decorations/engine";
 import type { Command, CommandRegistry } from "../registry";
-import { STRINGS } from "../strings";
 import {
   normalizeTaskStatuses,
   type TaskStatus,
   taskStatusCommandId,
+  taskStatusTrack,
+  taskTrackLabel,
 } from "../taskStatuses";
 
 const taskCommandIds = new WeakMap<CommandRegistry, string[]>();
@@ -72,7 +73,7 @@ export function registerTaskStatusCommands(
     const id = taskStatusCommandId(status.symbol);
     const command: Command = {
       id,
-      title: `${STRINGS.taskStatusCommandPrefix} ${status.name}`,
+      title: `${taskTrackLabel(taskStatusTrack(status))}: ${status.name}`,
       scope: "editor",
       pointer: ["command-palette", "task-status-menu"],
       run: (context) => {

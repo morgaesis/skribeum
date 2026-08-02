@@ -28,6 +28,8 @@ const CHAR_BRACKET_CLOSE = 93;
 const CHAR_CARET = 94;
 const CHAR_PIPE = 124;
 const CHAR_NEWLINE = 10;
+const TASK_DATE_PAYLOAD = /^📅 \d{4}-\d{2}-\d{2}/u;
+const TASK_LEVEL_PAYLOADS = ["⏫", "🔼", "🔽"] as const;
 
 /**
  * Parses a wikilink body starting at `start` (the first `[`). Returns the
@@ -241,6 +243,45 @@ const callouts: MarkdownConfig = {
   ],
 };
 
+const taskPayloads: MarkdownConfig = {
+  defineNodes: ["TaskDatePayload", "TaskLevelPayload"],
+  parseInline: [
+    {
+      name: "TaskDatePayload",
+      parse(cx, _next, pos) {
+        if (
+          !cx.slice(pos, pos + 2).startsWith("📅") ||
+          (pos > cx.offset && !/\s/u.test(cx.slice(pos - 1, pos)))
+        ) {
+          return -1;
+        }
+        const match = TASK_DATE_PAYLOAD.exec(
+          cx.slice(pos, Math.min(cx.end, pos + 16)),
+        );
+        return match === null
+          ? -1
+          : cx.addElement(
+              cx.elt("TaskDatePayload", pos, pos + match[0].length),
+            );
+      },
+    },
+    {
+      name: "TaskLevelPayload",
+      parse(cx, _next, pos) {
+        if (pos > cx.offset && !/\s/u.test(cx.slice(pos - 1, pos))) {
+          return -1;
+        }
+        const level = TASK_LEVEL_PAYLOADS.find((candidate) =>
+          cx.slice(pos, pos + candidate.length).startsWith(candidate),
+        );
+        return level === undefined
+          ? -1
+          : cx.addElement(cx.elt("TaskLevelPayload", pos, pos + level.length));
+      },
+    },
+  ],
+};
+
 class ConfiguredTaskParser implements LeafBlockParser {
   constructor(private readonly markerLength: number) {}
 
@@ -263,12 +304,35 @@ class ConfiguredTaskParser implements LeafBlockParser {
   }
 }
 
+class UnknownTaskParser implements LeafBlockParser {
+  constructor(private readonly markerLength: number) {}
+
+  nextLine(): boolean {
+    return false;
+  }
+
+  finish(cx: BlockContext, leaf: LeafBlock): boolean {
+    cx.addLeafElement(
+      leaf,
+      cx.elt("UnknownTask", leaf.start, leaf.start + leaf.content.length, [
+        cx.elt("UnknownTaskMarker", leaf.start, leaf.start + this.markerLength),
+        ...cx.parser.parseInline(
+          leaf.content.slice(this.markerLength),
+          leaf.start + this.markerLength,
+        ),
+      ]),
+    );
+    return true;
+  }
+}
+
 /** A TaskList parser restricted to the configured one-character symbols. */
 export function taskListMarkdownExtension(
   statuses: readonly TaskStatus[],
 ): MarkdownConfig {
   const symbols = new Set(statuses.map((status) => status.symbol));
   return {
+    defineNodes: [{ name: "UnknownTask", block: true }, "UnknownTaskMarker"],
     parseBlock: [
       {
         name: "TaskList",
@@ -283,13 +347,14 @@ export function taskListMarkdownExtension(
           const symbol = String.fromCodePoint(codePoint);
           const close = 1 + symbol.length;
           if (
-            !symbols.has(symbol) ||
             leaf.content[close] !== "]" ||
             !/[ \t]/u.test(leaf.content[close + 1] ?? "")
           ) {
             return null;
           }
-          return new ConfiguredTaskParser(close + 1);
+          return symbols.has(symbol)
+            ? new ConfiguredTaskParser(close + 1)
+            : new UnknownTaskParser(close + 1);
         },
         after: "SetextHeading",
       },
@@ -377,6 +442,7 @@ const obsidianMarkdownExtensionsWithoutTasks: MarkdownConfig[] = [
   tags,
   blockIds,
   callouts,
+  taskPayloads,
   mathMarkdownExtension,
 ];
 

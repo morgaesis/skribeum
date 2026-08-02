@@ -36,11 +36,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Transient surfaces clamp to the visual viewport when an on-screen keyboard
   changes the usable area. Narrow command surfaces anchor at the top, and tag
   completion prefers space below the caret before flipping above it.
-- Task status controls advance on a short tap and expose the complete listbox
+- Task status controls advance on a short tap and expose the grouped menu
   after a 500ms stationary press. A continuous drag highlights and selects a
   status, while release outside cancels the gesture.
+- Task statuses belong to Task, Time, Importance, and Reference tracks. The
+  grouped menu keeps its default view to ten status rows, new task lines inherit
+  their track, and marker editing operates on exact source characters.
+- A non-empty editor selection keeps headings, callouts, tasks, and other
+  rendered constructs quiet. Source reveal applies only to a collapsed main
+  caret.
 
 ### Added
+
+- Time statuses store due dates as plain Obsidian Tasks tokens, and Importance
+  stores its level as a plain glyph token. Both payloads render as editable
+  chips without hidden state.
 
 - Copy-link commands produce browser note URLs or desktop configured links.
   Note links are available from Actions and command mode, while heading links

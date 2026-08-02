@@ -32,6 +32,8 @@ import {
   TAG_DELETE_NOTE_NAME,
   TAG_DELETE_PROBE_NOTE_NAME,
   TAG_REFRESH_NOTE_NAME,
+  TASK_TRACKS_NOTE_CONTENT,
+  TASK_TRACKS_NOTE_NAME,
   VISUAL_NOTE_CONTENT,
   VISUAL_NOTE_NAME,
 } from "./scratchVault";
@@ -885,6 +887,32 @@ async function placeCursorInsideEditorText(text: string) {
     throw new Error(`text not found: ${needle}`);
   }, text);
   await browser.pause(250);
+}
+
+async function placeCursorAtEditorTextStart(text: string) {
+  await browser.execute((needle: string) => {
+    const root = document.querySelector(".cm-content");
+    if (root === null) throw new Error("editor content missing");
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (
+      let node = walker.nextNode();
+      node !== null;
+      node = walker.nextNode()
+    ) {
+      const start = node.textContent?.indexOf(needle) ?? -1;
+      if (start < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+      return;
+    }
+    throw new Error(`text not found: ${needle}`);
+  }, text);
+  await browser.pause(200);
 }
 
 async function clearEditorSelection() {
@@ -2402,7 +2430,7 @@ describe("skribeum shell", () => {
     await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
     let checkbox = $(".cm-skr-task-checkbox");
     await checkbox.waitForExist({ timeout: 15000 });
-    expect(await checkbox.getAttribute("aria-label")).toBe("Unchecked");
+    expect(await checkbox.getAttribute("aria-label")).toBe("Todo");
 
     const hoverState = await browser.execute(() => {
       const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
@@ -2440,7 +2468,7 @@ describe("skribeum shell", () => {
     expect(hoverState).toEqual({
       expanded: "true",
       hidden: false,
-      optionCount: 38,
+      optionCount: 10,
     });
 
     checkbox = $(".cm-skr-task-checkbox");
@@ -2464,12 +2492,12 @@ describe("skribeum shell", () => {
     await browser.keys([modifierKey, "p"]);
     const input = $('[role="combobox"]');
     await input.waitForExist({ timeout: 10000 });
-    await input.addValue("set task status dropped");
+    await input.addValue("task cancelled");
     await browser.waitUntil(
       async () => (await $$('[role="option"]').length) === 1,
       { timeout: 10000 },
     );
-    expect(await $('[role="option"]').getText()).toContain("Dropped");
+    expect(await $('[role="option"]').getText()).toContain("Task: Cancelled");
     await browser.keys(Key.Enter);
     await browser.waitUntil(
       () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [-] Review task"),
@@ -2494,11 +2522,11 @@ describe("skribeum shell", () => {
       noOptionUnderPress: boolean;
     };
     const taskGesture = (
-      outcome: "advance" | "cancel" | "dropped",
+      outcome: "advance" | "cancel" | "cancelled",
     ): Promise<TaskGestureObservation> =>
       browser.executeAsync<
         TaskGestureObservation,
-        ["advance" | "cancel" | "dropped"]
+        ["advance" | "cancel" | "cancelled"]
       >((requestedOutcome, done) => {
         const box = document.querySelector<HTMLElement>(
           ".cm-skr-task-checkbox",
@@ -2556,12 +2584,12 @@ describe("skribeum shell", () => {
           const optionAtPress = document
             .elementFromPoint(pressPoint.x, pressPoint.y)
             ?.closest(".cm-skr-task-option");
-          const dropped = [
+          const cancelled = [
             ...menu.querySelectorAll<HTMLElement>('[role="option"]'),
-          ].find((candidate) => candidate.textContent?.includes("Dropped"));
+          ].find((candidate) => candidate.textContent?.includes("Cancelled"));
           const target =
-            requestedOutcome === "dropped" && dropped !== undefined
-              ? dropped.getBoundingClientRect()
+            requestedOutcome === "cancelled" && cancelled !== undefined
+              ? cancelled.getBoundingClientRect()
               : null;
           const targetPoint =
             target === null
@@ -2593,14 +2621,17 @@ describe("skribeum shell", () => {
     await $(".cm-skr-task-checkbox").click();
     await $(".cm-skr-task-checkbox").click();
     await waitForDisk(LIVE_PREVIEW_NOTE_NAME, LIVE_PREVIEW_NOTE_CONTENT);
-    const droppedGesture = await taskGesture("dropped");
-    expect(droppedGesture.menuOpened).toBe(true);
-    expect(droppedGesture.noOptionUnderPress).toBe(true);
-    expect(droppedGesture.menuGap).toBe(true);
-    expect(droppedGesture.activeOption).toContain("option-3");
+    const cancelledSelection = await taskGesture("cancelled");
+    expect(cancelledSelection.menuOpened).toBe(true);
+    expect(cancelledSelection.noOptionUnderPress).toBe(true);
+    expect(cancelledSelection.menuGap).toBe(true);
+    expect(cancelledSelection.activeOption).toContain("option-3");
     await browser.waitUntil(
       () => noteOnDisk(LIVE_PREVIEW_NOTE_NAME).includes("- [-] Review task"),
-      { timeout: 10000, timeoutMsg: "task drag release did not apply Dropped" },
+      {
+        timeout: 10000,
+        timeoutMsg: "task drag release did not apply Cancelled",
+      },
     );
 
     await $(".cm-skr-task-checkbox").click();
@@ -2614,6 +2645,286 @@ describe("skribeum shell", () => {
     });
     await browser.pause(700);
     expect(noteOnDisk(LIVE_PREVIEW_NOTE_NAME)).toBe(LIVE_PREVIEW_NOTE_CONTENT);
+  });
+
+  it("keeps_construct_geometry_stable_during_cross_construct_selection", async () => {
+    await openNoteFromTree(TASK_TRACKS_NOTE_NAME);
+    await $(".cm-line.cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+    type GeometryFrame = {
+      boxes: Array<{
+        height: number;
+        key: string;
+        left: number;
+        top: number;
+        width: number;
+      }>;
+      revealed: boolean;
+      selectionLength: number;
+    };
+    const frames = await browser.executeAsync<GeometryFrame[], []>((done) => {
+      const root = document.querySelector(".cm-content");
+      if (root === null) throw new Error("editor content missing");
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      const textNodes: Text[] = [];
+      for (
+        let node = walker.nextNode();
+        node !== null;
+        node = walker.nextNode()
+      ) {
+        if (
+          node instanceof Text &&
+          (node.textContent?.length ?? 0) > 0 &&
+          node.parentElement?.closest('[contenteditable="false"]') === null
+        ) {
+          textNodes.push(node);
+        }
+      }
+      const anchor = textNodes.find((node) =>
+        node.textContent?.includes("Task track fixture"),
+      );
+      const focus = textNodes.find((node) =>
+        node.textContent?.includes("Reference item"),
+      );
+      if (anchor === undefined || focus === undefined) {
+        throw new Error("selection endpoints missing");
+      }
+      const anchorIndex = textNodes.indexOf(anchor);
+      const focusIndex = textNodes.indexOf(focus);
+      const path = textNodes.slice(anchorIndex, focusIndex + 1);
+      const selection = window.getSelection();
+      if (selection === null) throw new Error("selection unavailable");
+      const observations: GeometryFrame[] = [];
+      const record = () => {
+        const elements = [
+          ...document.querySelectorAll<HTMLElement>(
+            ".cm-skr-heading, .cm-line.cm-skr-rich-callout, .cm-skr-task-control",
+          ),
+        ];
+        observations.push({
+          boxes: elements.map((element, index) => {
+            const box = element.getBoundingClientRect();
+            return {
+              height: box.height,
+              key: `${element.className}:${index}`,
+              left: box.left,
+              top: box.top,
+              width: box.width,
+            };
+          }),
+          revealed:
+            document.querySelector('[data-revealed="true"]') !== null ||
+            document.querySelector(".cm-skr-reveal-source") !== null,
+          selectionLength: selection.toString().length,
+        });
+      };
+      selection.setBaseAndExtent(anchor, 0, anchor, 0);
+      document.dispatchEvent(new Event("selectionchange"));
+      record();
+      let index = 0;
+      const step = () => {
+        const target = path[index];
+        if (target === undefined) {
+          done(observations);
+          return;
+        }
+        selection.setBaseAndExtent(
+          anchor,
+          0,
+          target,
+          target.textContent?.length ?? 0,
+        );
+        document.dispatchEvent(new Event("selectionchange"));
+        requestAnimationFrame(() => {
+          record();
+          index += 1;
+          step();
+        });
+      };
+      step();
+    });
+    expect(frames.length).toBeGreaterThan(4);
+    const baseline = frames[0]?.boxes;
+    expect(baseline).toBeDefined();
+    expect(frames[0]?.selectionLength).toBe(0);
+    expect(frames.slice(1).every((frame) => frame.selectionLength > 0)).toBe(
+      true,
+    );
+    for (const frame of frames) {
+      expect(frame.boxes).toEqual(baseline);
+      expect(frame.revealed).toBe(false);
+    }
+
+    await placeCursorInsideEditorText("Callout body");
+    await browser.waitUntil(
+      async () =>
+        await $(
+          '.cm-line.cm-skr-rich-callout[data-revealed="true"]',
+        ).isExisting(),
+      { timeout: 10000, timeoutMsg: "collapsed caret did not reveal callout" },
+    );
+    await placeCursorAtLineEnd("selection parking");
+  });
+
+  it("persists_task_tracks_payloads_and_marker_editing_as_exact_text", async () => {
+    await openNoteFromTree(LIVE_PREVIEW_NOTE_NAME);
+    writeFileSync(
+      path.join(SCRATCH_VAULT_PATH, TASK_TRACKS_NOTE_NAME),
+      TASK_TRACKS_NOTE_CONTENT,
+    );
+    await openNoteFromTree(TASK_TRACKS_NOTE_NAME);
+    await $(".cm-skr-task-checkbox").waitForExist({ timeout: 15000 });
+
+    const groupedMenu = await browser.execute(() => {
+      const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
+      host?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
+      return {
+        headings: [
+          ...document.querySelectorAll<HTMLElement>(
+            "[data-task-track-heading]",
+          ),
+        ].map((heading) => heading.textContent ?? ""),
+        rows: host?.querySelectorAll('[role="option"]').length ?? 0,
+      };
+    });
+    expect(groupedMenu).toEqual({
+      headings: ["Task", "Time", "Importance", "Reference"],
+      rows: 10,
+    });
+    await $(".skr-app-header").moveTo();
+
+    let task = $('.cm-skr-task-checkbox[data-track="task"]');
+    await task.click();
+    await browser.waitUntil(
+      () => noteOnDisk(TASK_TRACKS_NOTE_NAME).includes("- [/] Editable task"),
+      { timeout: 10000 },
+    );
+    task = $('.cm-skr-task-checkbox[data-track="task"]');
+    await browser.execute(() =>
+      document
+        .querySelector<HTMLElement>('.cm-skr-task-checkbox[data-track="task"]')
+        ?.focus(),
+    );
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      () => noteOnDisk(TASK_TRACKS_NOTE_NAME).includes("- [x] Editable task"),
+      { timeout: 10000 },
+    );
+
+    const importance = $('.cm-skr-task-checkbox[data-track="importance"]');
+    for (const expected of ["⏫", "🔼", "🔽"]) {
+      await importance.click();
+      await browser.waitUntil(
+        () =>
+          noteOnDisk(TASK_TRACKS_NOTE_NAME).includes(
+            `- [!] Important item ${expected}`,
+          ),
+        { timeout: 10000 },
+      );
+    }
+    await importance.click();
+    await browser.waitUntil(
+      () =>
+        noteOnDisk(TASK_TRACKS_NOTE_NAME).includes("- [!] Important item\n"),
+      { timeout: 10000 },
+    );
+
+    await browser.executeAsync<void, []>((done) => {
+      const box = document.querySelector<HTMLElement>(
+        '.cm-skr-task-checkbox[data-track="time"]',
+      );
+      if (box === null) throw new Error("time checkbox missing");
+      const bounds = box.getBoundingClientRect();
+      const pointerId = 77;
+      const dispatch = (type: string, x: number, y: number) =>
+        box.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            button: 0,
+            buttons: type === "pointerup" ? 0 : 1,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+            pointerId,
+            pointerType: "touch",
+          }),
+        );
+      const x = bounds.left + bounds.width / 2;
+      const y = bounds.top + bounds.height / 2;
+      dispatch("pointerdown", x, y);
+      setTimeout(() => {
+        const due = [
+          ...document.querySelectorAll<HTMLElement>(
+            ".cm-skr-task-palette [role=option]",
+          ),
+        ].find((option) => option.textContent?.includes("Due"));
+        if (due === undefined) throw new Error("Due option missing");
+        const target = due.getBoundingClientRect();
+        const targetX = target.left + target.width / 2;
+        const targetY = target.top + target.height / 2;
+        dispatch("pointermove", targetX, targetY);
+        dispatch("pointerup", targetX, targetY);
+        done();
+      }, 550);
+    });
+    const date = $('[data-testid="task-date-payload"]');
+    await date.waitForExist({ timeout: 10000 });
+    await browser.execute(() => {
+      const input = document.querySelector<HTMLInputElement>(
+        '[data-testid="task-date-payload"]',
+      );
+      if (input === null) throw new Error("date field missing");
+      input.value = "2031-04-05";
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await browser.waitUntil(
+      () =>
+        noteOnDisk(TASK_TRACKS_NOTE_NAME).includes(
+          "- [D] Dated item 📅 2031-04-05",
+        ),
+      { timeout: 10000 },
+    );
+    expect(await $(".cm-skr-task-payload").getText()).toBe("📅 2031-04-05");
+
+    await placeCursorAtLineEnd("Dated item 📅 2031-04-05");
+    await browser.keys(Key.Enter);
+    expect(
+      await browser.execute(
+        () =>
+          document.querySelectorAll(
+            '.cm-skr-task-checkbox[data-track="time"][data-task="D"]',
+          ).length,
+      ),
+    ).toBe(2);
+    await browser.keys(Key.Backspace);
+    await browser.keys([modifierKey, "s"]);
+    await browser.waitUntil(
+      () => {
+        const lines = noteOnDisk(TASK_TRACKS_NOTE_NAME).split("\n");
+        const dated = lines.indexOf("- [D] Dated item 📅 2031-04-05");
+        return lines[dated + 1] === "";
+      },
+      { timeout: 10000, timeoutMsg: "inherited marker left residual bytes" },
+    );
+
+    await placeCursorAtEditorTextStart("Editable task");
+    await browser.keys(Key.Backspace);
+    expect(
+      await browser.execute(
+        () =>
+          [...document.querySelectorAll<HTMLElement>(".cm-line")].find((line) =>
+            line.textContent?.includes("Editable task"),
+          )?.textContent ?? "",
+      ),
+    ).toBe("- [x]Editable task");
+    for (let press = 0; press < 5; press += 1) {
+      await browser.keys(Key.Backspace);
+    }
+    await browser.keys([modifierKey, "s"]);
+    await browser.waitUntil(
+      () =>
+        noteOnDisk(TASK_TRACKS_NOTE_NAME).split("\n").includes("Editable task"),
+      { timeout: 10000, timeoutMsg: "task marker did not delete by source" },
+    );
   });
 
   it("maps_callout_clicks_to_one_source_reveal_region", async () => {

@@ -142,6 +142,10 @@ export const REVEAL_NOTE_NAME = "zzzz-reveal.md";
 export const REVEAL_NOTE_CONTENT =
   "# Reveal interactions\n\n> [!tip] Linked callout\n> First body line.\n> Read [inside link](inside-target).\n\n[Outside link](outside-target)\n\ncursor parking\n";
 
+export const TASK_TRACKS_NOTE_NAME = "zzzz-task-tracks.md";
+export const TASK_TRACKS_NOTE_CONTENT =
+  "# Task track fixture\n\n> [!note] Selection callout\n> Callout body with [a link](target).\n\n- [ ] Editable task\n- [D] Dated item\n- [!] Important item\n- [b] Reference item\n\nselection parking\n";
+
 export const NAVIGATION_SOURCE_NOTE_NAME = "zzz-navigation-source.md";
 export const NAVIGATION_SOURCE_NOTE_CONTENT =
   "# Navigation source\n\nFollow [[zzz-navigation-target]].\n\n#shared\n";
@@ -223,6 +227,10 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),
     RENDERING_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TASK_TRACKS_NOTE_NAME),
+    TASK_TRACKS_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, TAG_REFRESH_NOTE_NAME),

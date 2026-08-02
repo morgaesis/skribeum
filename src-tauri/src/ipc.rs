@@ -352,6 +352,30 @@ pub enum TaskStatusCategory {
     NonTask,
 }
 
+/// Track that groups a task status by its purpose over IPC.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatusTrack {
+    /// Ordinary task state.
+    Task,
+    /// A dated task state.
+    Time,
+    /// A task importance marker.
+    Importance,
+    /// A user-defined reference marker.
+    Reference,
+}
+
+/// Optional plain-text payload associated with a task status over IPC.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatusPayload {
+    /// An Obsidian Tasks date token.
+    Date,
+    /// An importance-level token.
+    Level,
+}
+
 /// One configured task marker over IPC.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct TaskStatusDoc {
@@ -367,6 +391,10 @@ pub struct TaskStatusDoc {
     pub color_token: String,
     /// Symbol written by the default click transition.
     pub next_status: String,
+    /// Optional grouping metadata. Absent fields remain absent in settings.
+    pub track: Option<TaskStatusTrack>,
+    /// Optional payload metadata. Absent fields remain absent in settings.
+    pub payload: Option<TaskStatusPayload>,
 }
 
 /// The typed settings document over IPC. Unknown keys in the underlying
@@ -451,6 +479,16 @@ fn task_status_from_vault(status: skribeum_vault::TaskStatus) -> TaskStatusDoc {
         glyph: status.glyph,
         color_token: status.color_token,
         next_status: status.next_status,
+        track: status.track.map(|track| match track {
+            skribeum_vault::settings::TaskStatusTrack::Task => TaskStatusTrack::Task,
+            skribeum_vault::settings::TaskStatusTrack::Time => TaskStatusTrack::Time,
+            skribeum_vault::settings::TaskStatusTrack::Importance => TaskStatusTrack::Importance,
+            skribeum_vault::settings::TaskStatusTrack::Reference => TaskStatusTrack::Reference,
+        }),
+        payload: status.payload.map(|payload| match payload {
+            skribeum_vault::settings::TaskStatusPayload::Date => TaskStatusPayload::Date,
+            skribeum_vault::settings::TaskStatusPayload::Level => TaskStatusPayload::Level,
+        }),
     }
 }
 
@@ -469,6 +507,16 @@ fn task_status_into_vault(status: TaskStatusDoc) -> skribeum_vault::TaskStatus {
         glyph: status.glyph,
         color_token: status.color_token,
         next_status: status.next_status,
+        track: status.track.map(|track| match track {
+            TaskStatusTrack::Task => skribeum_vault::settings::TaskStatusTrack::Task,
+            TaskStatusTrack::Time => skribeum_vault::settings::TaskStatusTrack::Time,
+            TaskStatusTrack::Importance => skribeum_vault::settings::TaskStatusTrack::Importance,
+            TaskStatusTrack::Reference => skribeum_vault::settings::TaskStatusTrack::Reference,
+        }),
+        payload: status.payload.map(|payload| match payload {
+            TaskStatusPayload::Date => skribeum_vault::settings::TaskStatusPayload::Date,
+            TaskStatusPayload::Level => skribeum_vault::settings::TaskStatusPayload::Level,
+        }),
     }
 }
 

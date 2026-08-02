@@ -67,6 +67,47 @@ afterEach(() => {
 });
 
 describe("task status commands and byte fidelity", () => {
+  it("assigns the exact default vocabulary to four tracks", () => {
+    const statuses = defaultTaskStatuses();
+    const symbols = (track: string) =>
+      statuses
+        .filter((status) => status.track === track)
+        .map((status) => status.symbol)
+        .join("");
+    expect(symbols("task")).toBe(" /x-X");
+    expect(symbols("time")).toBe("D<>");
+    expect(symbols("importance")).toBe("!");
+    expect(symbols("reference")).toBe("?+RiBPCQNbIpLEArcdT@tO~WfFH&s");
+    expect(
+      statuses.slice(0, 9).map(({ symbol, name, next_status, payload }) => ({
+        symbol,
+        name,
+        next_status,
+        payload,
+      })),
+    ).toEqual([
+      { symbol: " ", name: "Todo", next_status: "/", payload: null },
+      { symbol: "/", name: "Doing", next_status: "x", payload: null },
+      { symbol: "x", name: "Done", next_status: " ", payload: null },
+      { symbol: "-", name: "Cancelled", next_status: " ", payload: null },
+      {
+        symbol: "X",
+        name: "Done (alternate)",
+        next_status: " ",
+        payload: null,
+      },
+      { symbol: "D", name: "Due", next_status: "x", payload: "date" },
+      { symbol: "<", name: "Scheduled", next_status: "x", payload: "date" },
+      { symbol: ">", name: "Forwarded", next_status: "x", payload: "date" },
+      {
+        symbol: "!",
+        name: "Important",
+        next_status: "!",
+        payload: "level",
+      },
+    ]);
+  });
+
   it("resolves backend default names through the message catalogue", () => {
     const backendDefaults = defaultTaskStatuses().map((status) => ({
       ...status,
@@ -102,9 +143,9 @@ describe("task status commands and byte fidelity", () => {
       .paletteCommands()
       .filter((command) => command.id.startsWith("task.status."));
     expect(commands.map((command) => command.title)).toEqual([
-      "Set task status: Finished",
-      "Set task status: Paused",
-      "Set task status: Ready",
+      "Reference: Paused",
+      "Task: Finished",
+      "Task: Ready",
     ]);
   });
 
@@ -178,6 +219,28 @@ describe("task status commands and byte fidelity", () => {
       },
     });
     expect(taskMarkers).toEqual(["[~]"]);
+    expect(editorState.doc.toString()).toBe(source);
+  });
+
+  it("round-trips an unknown-marker corpus without recognizing task nodes", () => {
+    const source = ["?", "u", "🌱", "·"]
+      .map((symbol) => `- [${symbol}] untouched ${symbol}`)
+      .join("\n");
+    const editorState = state(source, source.length);
+    const markers: string[] = [];
+    const linkMarks: string[] = [];
+    ensureSyntaxTree(editorState, editorState.doc.length, 2_000)?.iterate({
+      enter(node) {
+        if (node.name === "TaskMarker") {
+          markers.push(editorState.doc.sliceString(node.from, node.to));
+        }
+        if (node.name === "LinkMark") {
+          linkMarks.push(editorState.doc.sliceString(node.from, node.to));
+        }
+      },
+    });
+    expect(markers).toEqual([]);
+    expect(linkMarks).toEqual([]);
     expect(editorState.doc.toString()).toBe(source);
   });
 

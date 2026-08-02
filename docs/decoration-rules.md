@@ -8,7 +8,9 @@ construct by name. The table below mirrors that file row for row;
 `tests/web/decorationRules.test.ts` asserts the two stay identical and
 carries a behavioral reveal test for every row.
 
-The main cursor selects one active reveal region before any row is rendered.
+Only a collapsed main caret selects one active reveal region before any row is
+rendered. A non-empty range selects no region, so every construct keeps its
+rendered presentation throughout selection. Secondary carets never reveal.
 Composite regions take precedence over nested regions, then the smallest
 matching region wins. Every table row is evaluated against that one region,
 so moving the cursor selects a new region and restores decorations in the
@@ -156,6 +158,8 @@ above. `-` means the row applies to every node of that name.
 | `ListMark` | `-` | `mark cm-skr-list-mark` | never |
 | `Task` | `-` | `mark cm-skr-task` | never |
 | `TaskMarker` | `-` | `widget task-checkbox` | cursor-inside |
+| `TaskDatePayload` | `ancestor=Task revealScope=node` | `mark cm-skr-task-payload` | cursor-inside |
+| `TaskLevelPayload` | `ancestor=Task revealScope=node` | `mark cm-skr-task-payload` | cursor-inside |
 | `InlineMath` | `-` | `widget math-inline` | cursor-inside |
 | `BlockMath` | `-` | `widget math-block` | cursor-inside |
 | `InlineCode` | `-` | `mark cm-skr-inline-code` | never |
@@ -201,32 +205,59 @@ array. Each entry has this shape:
 ```json
 {
   "symbol": " ",
-  "name": "Unchecked",
+  "name": "Todo",
   "category": "TODO",
   "glyph": "○",
   "color_token": "--skr-accent",
-  "next_status": "/"
+  "next_status": "/",
+  "track": "task",
+  "payload": null
 }
 ```
 
 `symbol` and `next_status` are single source characters. `category` is one of
 `TODO`, `IN_PROGRESS`, `ON_HOLD`, `DONE`, `CANCELLED` or `NON_TASK`.
-`color_token` names an existing `--skr-*` theme custom property. Array order
-drives the listbox and command surface. Symbols must be unique, and every
-`next_status` must refer to another entry. A malformed array, duplicate symbol
-or dangling transition loads the complete default list. Unknown keys in the
-settings document and inside retained status entries survive writes.
-The settings surface edits every field, preserves graph validity while symbols
-are remapped or removed, and provides controls for adding and reordering rows.
+`color_token` names an existing `--skr-*` theme custom property. `track` is
+`task`, `time`, `importance` or `reference`; `payload` is `date`, `level` or
+absent. Stored entries without these optional fields remain valid. The default
+symbols derive their documented assignments, while every other symbol derives
+Reference with no payload. Symbols are unique, and every `next_status` refers
+to another entry. A malformed array, duplicate symbol or dangling transition
+loads the complete default graph. Unknown keys in the settings document and
+inside retained status entries survive writes. The settings surface edits
+every field and preserves graph validity while symbols are remapped or removed.
 
-Tapping the checkbox writes `next_status`. The default primary cycle is
-Unchecked to Half Done to Regular to Unchecked. Holding a press within 8 CSS
-pixels for 500ms opens the full status listbox with every option clear of the
-finger. Dragging updates `aria-activedescendant`, releasing over an option
-selects it, and releasing outside cancels the gesture. Pointer hover also opens
-the listbox. With the checkbox focused, Arrow Down opens the same listbox, the
-arrow keys move through options, Enter or Space selects, and Escape dismisses
-it.
+The menu groups statuses in Task, Time, Importance and Reference order. Task,
+Time and Importance stay expanded. Reference appears as one `More statuses
+(n)` row until activated, except when the current marker belongs to Reference.
+The default menu therefore contains ten selectable rows. Holding a press within
+8 CSS pixels for 500ms opens the menu clear of the finger. Dragging updates
+`aria-activedescendant`, releasing over a status selects it, and releasing
+outside cancels the gesture. Pointer hover opens the same menu. With the
+checkbox focused, Arrow Down opens it; arrow keys, Home and End move through
+options; Enter or Space selects; and Escape dismisses it.
+
+Task advances through Todo, Doing and Done. Cancelled and Done (alternate) are
+menu-only states that return to Todo when activated directly. Time statuses
+advance to Done. Important keeps the `!` marker and cycles its level token
+through none, `⏫`, `🔼`, `🔽` and none. Reference follows its configured
+`next_status`. Command titles include the track, such as `Task: Done` and
+`Time: Due`.
+
+Time statuses use a plain ` 📅 YYYY-MM-DD` token. Choosing one opens the menu
+footer date field with the local date filled in. Enter or a touch date change
+writes the marker and token; Escape writes only the marker. Important uses one
+plain `⏫`, `🔼` or `🔽` token. Both token kinds render as interface-font chips,
+and an overdue date uses the danger color. A caret inside a chip reveals its
+source. Editing or deleting that source edits or deletes the payload because
+the document contains no separate payload state.
+
+Enter at the end of a task line creates a sibling marker in the same track:
+`[ ]`, `[D]`, `[!]`, or the same Reference symbol. Payloads do not inherit.
+Backspace immediately after this continuation removes the complete inserted
+marker and all inserted spacing. Backspace at the start of existing task text
+reveals the source and consumes the separator, closing bracket, status symbol,
+opening bracket, list-marker separator and list marker one character at a time.
 
 The six categories remain visually distinct from the configured glyph and
 color. TODO uses the strong unfilled border, IN_PROGRESS uses a tinted active
@@ -235,48 +266,48 @@ task text, CANCELLED dims and strikes the task text, and NON_TASK removes the
 box border. All colors resolve through the configured theme token and the
 shared design-system variables.
 
-The shipped SlRvb-compatible status list is:
+The default vocabulary is:
 
-| Symbol | Name | Category | Glyph | Color token | Next |
-| --- | --- | --- | --- | --- | --- |
-| `(space)` | Unchecked | `TODO` | ○ | `--skr-accent` | `/` |
-| `x` | Regular | `DONE` | ✓ | `--skr-success` | `(space)` |
-| `X` | Checked | `DONE` | ✔ | `--skr-success` | `(space)` |
-| `-` | Dropped | `CANCELLED` | ✕ | `--skr-danger` | `(space)` |
-| `>` | Forward | `TODO` | → | `--skr-accent` | `/` |
-| `<` | Migrated | `TODO` | ← | `--skr-accent` | `/` |
-| `D` | Date | `TODO` | ◷ | `--skr-accent` | `/` |
-| `?` | Question | `TODO` | ? | `--skr-accent` | `/` |
-| `/` | Half Done | `IN_PROGRESS` | ◐ | `--skr-warning` | `x` |
-| `+` | Add | `TODO` | + | `--skr-accent` | `/` |
-| `R` | Research | `TODO` | ⌕ | `--skr-accent` | `/` |
-| `!` | Important | `TODO` | ! | `--skr-accent` | `/` |
-| `i` | Idea | `TODO` | ◇ | `--skr-accent` | `/` |
-| `B` | Brainstorm | `TODO` | ◎ | `--skr-accent` | `/` |
-| `P` | Pro | `TODO` | + | `--skr-accent` | `/` |
-| `C` | Con | `TODO` | − | `--skr-accent` | `/` |
-| `Q` | Quote | `TODO` | ❝ | `--skr-accent` | `/` |
-| `N` | Note | `TODO` | ▤ | `--skr-accent` | `/` |
-| `b` | Bookmark | `TODO` | ◆ | `--skr-accent` | `/` |
-| `I` | Information | `TODO` | ⓘ | `--skr-accent` | `/` |
-| `p` | Paraphrase | `TODO` | ¶ | `--skr-accent` | `/` |
-| `L` | Location | `TODO` | ⌖ | `--skr-accent` | `/` |
-| `E` | Example | `TODO` | ◇ | `--skr-accent` | `/` |
-| `A` | Answer | `TODO` | ↳ | `--skr-accent` | `/` |
-| `r` | Reward | `TODO` | ★ | `--skr-accent` | `/` |
-| `c` | Choice | `TODO` | ◆ | `--skr-accent` | `/` |
-| `d` | Doing | `IN_PROGRESS` | ◒ | `--skr-warning` | `x` |
-| `T` | Time | `TODO` | ◷ | `--skr-accent` | `/` |
-| `@` | Character | `TODO` | @ | `--skr-accent` | `/` |
-| `t` | Talk | `TODO` | ◖ | `--skr-accent` | `/` |
-| `O` | Outline | `TODO` | ☰ | `--skr-accent` | `/` |
-| `~` | Conflict | `TODO` | ≈ | `--skr-accent` | `/` |
-| `W` | World | `TODO` | ◉ | `--skr-accent` | `/` |
-| `f` | Clue | `TODO` | ? | `--skr-accent` | `/` |
-| `F` | Foreshadow | `TODO` | ⋙ | `--skr-accent` | `/` |
-| `H` | Favorite | `TODO` | ♥ | `--skr-accent` | `/` |
-| `&` | Symbolism | `TODO` | § | `--skr-accent` | `/` |
-| `s` | Secret | `TODO` | ◆ | `--skr-accent` | `/` |
+| Track | Symbol | Name | Category | Glyph | Payload | Next |
+| --- | --- | --- | --- | --- | --- | --- |
+| Task | `(space)` | Todo | `TODO` | ○ | none | `/` |
+| Task | `/` | Doing | `IN_PROGRESS` | ◐ | none | `x` |
+| Task | `x` | Done | `DONE` | ✓ | none | `(space)` |
+| Task | `-` | Cancelled | `CANCELLED` | ✕ | none | `(space)` |
+| Task | `X` | Done (alternate) | `DONE` | ✔ | none | `(space)` |
+| Time | `D` | Due | `TODO` | ◷ | `date` | `x` |
+| Time | `<` | Scheduled | `TODO` | ← | `date` | `x` |
+| Time | `>` | Forwarded | `TODO` | → | `date` | `x` |
+| Importance | `!` | Important | `TODO` | ! | `level` | `!` |
+| Reference | `?` | Question | `TODO` | ? | none | `/` |
+| Reference | `+` | Add | `TODO` | + | none | `/` |
+| Reference | `R` | Research | `TODO` | ⌕ | none | `/` |
+| Reference | `i` | Idea | `TODO` | ◇ | none | `/` |
+| Reference | `B` | Brainstorm | `TODO` | ◎ | none | `/` |
+| Reference | `P` | Pro | `TODO` | + | none | `/` |
+| Reference | `C` | Con | `TODO` | − | none | `/` |
+| Reference | `Q` | Quote | `TODO` | ❝ | none | `/` |
+| Reference | `N` | Note | `TODO` | ▤ | none | `/` |
+| Reference | `b` | Bookmark | `TODO` | ◆ | none | `/` |
+| Reference | `I` | Information | `TODO` | ⓘ | none | `/` |
+| Reference | `p` | Paraphrase | `TODO` | ¶ | none | `/` |
+| Reference | `L` | Location | `TODO` | ⌖ | none | `/` |
+| Reference | `E` | Example | `TODO` | ◇ | none | `/` |
+| Reference | `A` | Answer | `TODO` | ↳ | none | `/` |
+| Reference | `r` | Reward | `TODO` | ★ | none | `/` |
+| Reference | `c` | Choice | `TODO` | ◆ | none | `/` |
+| Reference | `d` | Doing | `IN_PROGRESS` | ◒ | none | `x` |
+| Reference | `T` | Time | `TODO` | ◷ | none | `/` |
+| Reference | `@` | Character | `TODO` | @ | none | `/` |
+| Reference | `t` | Talk | `TODO` | ◖ | none | `/` |
+| Reference | `O` | Outline | `TODO` | ☰ | none | `/` |
+| Reference | `~` | Conflict | `TODO` | ≈ | none | `/` |
+| Reference | `W` | World | `TODO` | ◉ | none | `/` |
+| Reference | `f` | Clue | `TODO` | ? | none | `/` |
+| Reference | `F` | Foreshadow | `TODO` | ⋙ | none | `/` |
+| Reference | `H` | Favorite | `TODO` | ♥ | none | `/` |
+| Reference | `&` | Symbolism | `TODO` | § | none | `/` |
+| Reference | `s` | Secret | `TODO` | ◆ | none | `/` |
 
 No decoration is computed on a document line longer than 10,000 characters.
 Marks, line decorations and inline widgets are windowed to visible ranges.

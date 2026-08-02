@@ -106,6 +106,78 @@ describe("rendered decoration DOM", () => {
     expect(view.state.doc.toString()).toBe(source);
   });
 
+  it("cycles the task marker by keyboard with exact source bytes", () => {
+    const view = mountedView("- [ ] task");
+    view.dom.querySelector<HTMLElement>(".cm-skr-task-checkbox")?.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(view.state.doc.toString()).toBe("- [/] task");
+  });
+
+  it("groups the default menu into at most ten selectable rows", () => {
+    const view = mountedView("- [ ] task");
+    const control = view.dom.querySelector<HTMLElement>(".cm-skr-task-control");
+    control?.dispatchEvent(new Event("pointerenter"));
+    expect(
+      [...(control?.querySelectorAll("[data-task-track-heading]") ?? [])].map(
+        (heading) => heading.textContent,
+      ),
+    ).toEqual(["Task", "Time", "Importance", "Reference"]);
+    expect(control?.querySelectorAll('[role="option"]')).toHaveLength(10);
+    expect(control?.textContent).toContain("More statuses (29)");
+    [...(control?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])]
+      .find((option) => option.textContent?.includes("More statuses"))
+      ?.click();
+    expect(control?.querySelectorAll('[role="option"]')).toHaveLength(38);
+    expect(control?.textContent).not.toContain("More statuses (29)");
+  });
+
+  it("writes a menu date as plain text and renders its token as a chip", () => {
+    const view = mountedView("- [ ] task");
+    const control = view.dom.querySelector<HTMLElement>(".cm-skr-task-control");
+    control?.dispatchEvent(new Event("pointerenter"));
+    const due = [
+      ...(control?.querySelectorAll<HTMLElement>('[role="option"]') ?? []),
+    ].find((option) => option.textContent?.includes("Due"));
+    due?.click();
+    const date = control?.querySelector<HTMLInputElement>(
+      '[data-testid="task-date-payload"]',
+    );
+    expect(date).not.toBeNull();
+    if (date === null) return;
+    date.value = "2030-01-02";
+    date.dispatchEvent(new Event("input", { bubbles: true }));
+    date.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(view.state.doc.toString()).toBe("- [D] task 📅 2030-01-02");
+    expect(view.dom.querySelector(".cm-skr-task-payload")?.textContent).toBe(
+      "📅 2030-01-02",
+    );
+  });
+
+  it("cycles importance levels as source payloads", () => {
+    const expected = [
+      "- [!] important ⏫",
+      "- [!] important 🔼",
+      "- [!] important 🔽",
+      "- [!] important",
+    ];
+    const view = mountedView("- [!] important");
+    for (const document of expected) {
+      view.dom.querySelector<HTMLElement>(".cm-skr-task-checkbox")?.click();
+      expect(view.state.doc.toString()).toBe(document);
+    }
+  });
+
   it("renders and cycles a custom status while leaving unknown markers alone", () => {
     const taskStatuses: TaskStatus[] = [
       {
@@ -172,9 +244,7 @@ describe("rendered decoration DOM", () => {
     expect(listbox?.hidden).toBe(true);
     control?.dispatchEvent(new Event("pointerenter"));
     expect(listbox?.hidden).toBe(false);
-    expect(listbox?.querySelectorAll('[role="option"]')).toHaveLength(
-      DEFAULT_TASK_STATUSES.length,
-    );
+    expect(listbox?.querySelectorAll('[role="option"]')).toHaveLength(10);
 
     control?.dispatchEvent(new Event("pointerleave"));
     checkbox?.focus();
@@ -189,7 +259,7 @@ describe("rendered decoration DOM", () => {
     listbox?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
     );
-    expect(view.state.doc.toString()).toBe("- [x] task\n\noutside");
+    expect(view.state.doc.toString()).toBe("- [/] task\n\noutside");
   });
 
   it("keeps heading marker geometry stable while cursor visibility changes", async () => {

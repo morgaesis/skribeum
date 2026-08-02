@@ -357,7 +357,29 @@ export type TaskStatusDoc = {
 	color_token: string,
 	/**  Symbol written by the default click transition. */
 	next_status: string,
+	/**  Optional grouping metadata. Absent fields remain absent in settings. */
+	track: TaskStatusTrack | null,
+	/**  Optional payload metadata. Absent fields remain absent in settings. */
+	payload: TaskStatusPayload | null,
 };
+
+/**  Optional plain-text payload associated with a task status over IPC. */
+export type TaskStatusPayload = 
+/**  An Obsidian Tasks date token. */
+"date" | 
+/**  An importance-level token. */
+"level";
+
+/**  Track that groups a task status by its purpose over IPC. */
+export type TaskStatusTrack = 
+/**  Ordinary task state. */
+"task" | 
+/**  A dated task state. */
+"time" | 
+/**  A task importance marker. */
+"importance" | 
+/**  A user-defined reference marker. */
+"reference";
 
 /**
  *  One vault tree row over IPC. Paths are vault-relative `VaultPath`

@@ -1468,8 +1468,10 @@ fn cancel_window_warmup<R: Runtime>(window: &WebviewWindow<R>) {
 /// Gives Linux `WebKit` an offscreen frame in which to commit its first paint.
 #[tauri::command]
 #[specta::specta]
-#[allow(clippy::needless_pass_by_value)] // Tauri commands take injected windows by value.
-fn window_warmup<R: Runtime>(window: WebviewWindow<R>) -> Result<(), AppError> {
+#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)] // Tauri commands keep one typed result signature across every platform.
+fn window_warmup<R: Runtime>(
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] window: WebviewWindow<R>,
+) -> Result<(), AppError> {
     #[cfg(target_os = "linux")]
     {
         window

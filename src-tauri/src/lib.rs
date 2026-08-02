@@ -633,17 +633,20 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build the application window");
 
-    app.run(|_app, _event| {
-        #[cfg(target_os = "macos")]
-        if let tauri::RunEvent::Opened { urls } = _event {
+    #[cfg(target_os = "macos")]
+    app.run(|app, event| {
+        if let tauri::RunEvent::Opened { urls } = event {
             let paths = canonical_open_paths(
                 urls.iter()
                     .filter_map(|url| url.to_file_path().ok())
                     .map(OsString::from),
             );
-            ipc::queue_open_files(_app, paths);
+            ipc::queue_open_files(app, paths);
         }
     });
+
+    #[cfg(not(target_os = "macos"))]
+    app.run(|_, _| {});
 }
 
 #[cfg(test)]

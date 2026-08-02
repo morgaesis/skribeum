@@ -58,6 +58,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Rendered Markdown tables support one-caret, in-grid cell editing with exact
+  source-span writes, keyboard travel and boundary growth, explicit row and
+  column commands, pointer insertion strips, whole-table selection, deliberate
+  source access, and ARIA grid semantics.
 - `mod+e` toggles a transient whole-note source presentation with Markdown
   syntax colouring, complete source text, monospace typography, and a Source
   chip in the title region. Syntax reveal remains an independent reading-mode

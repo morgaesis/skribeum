@@ -2,54 +2,19 @@
 0..2 hide node=HeaderMark
 10..10 line class="cm-skr-heading cm-skr-heading-2"
 10..13 hide node=HeaderMark
-26..44 widget table-row data-header="true" role="row"
-45..63 widget table-separator aria-hidden="true"
-64..98 widget table-row data-header="false" role="row"
-99..127 widget table-row data-header="false" role="row"
+26..127 widget table aria-rowcount="3" role="grid"
 129..129 line class="cm-skr-heading cm-skr-heading-2"
 129..132 hide node=HeaderMark
-152..211 widget table-row data-header="true" role="row"
-212..271 widget table-separator aria-hidden="true"
-272..303 widget table-row data-header="false" role="row"
-304..331 widget table-row data-header="false" role="row"
+152..331 widget table aria-rowcount="3" role="grid"
 333..333 line class="cm-skr-heading cm-skr-heading-2"
 333..336 hide node=HeaderMark
-364..388 widget table-row data-header="true" role="row"
-389..413 widget table-separator aria-hidden="true"
-414..470 widget table-row data-header="false" role="row"
-416..417 hide node=CodeMark
-416..424 mark class="cm-skr-inline-code"
-423..424 hide node=CodeMark
-471..522 widget table-row data-header="false" role="row"
-523..577 widget table-row data-header="false" role="row"
+364..577 widget table aria-rowcount="4" role="grid"
 579..579 line class="cm-skr-heading cm-skr-heading-2"
 579..582 hide node=HeaderMark
-609..622 widget table-row data-header="true" role="row"
-623..636 widget table-separator aria-hidden="true"
-637..646 widget table-row data-header="false" role="row"
-647..656 widget table-row data-header="false" role="row"
+609..656 widget table aria-rowcount="3" role="grid"
 658..658 line class="cm-skr-heading cm-skr-heading-2"
 658..661 hide node=HeaderMark
-696..723 widget table-row data-header="true" role="row"
-724..751 widget table-separator aria-hidden="true"
-752..795 widget table-row data-header="false" role="row"
-754..756 hide node=EmphasisMark
-754..772 mark class="cm-skr-strong"
-770..772 hide node=EmphasisMark
-775..776 hide node=EmphasisMark
-775..793 mark class="cm-skr-emphasis"
-792..793 hide node=EmphasisMark
-796..840 widget table-row data-header="false" role="row"
-798..800 hide node=WikilinkMark
-798..819 mark class="cm-skr-wikilink" data-resolved="false"
-800..817 mark class="cm-skr-wikilink-target"
-817..819 hide node=WikilinkMark
-822..823 hide node=CodeMark
-822..838 mark class="cm-skr-inline-code"
-837..838 hide node=CodeMark
+696..840 widget table aria-rowcount="3" role="grid"
 842..842 line class="cm-skr-heading cm-skr-heading-2"
 842..845 hide node=HeaderMark
-864..885 widget table-row data-header="true" role="row"
-886..907 widget table-separator aria-hidden="true"
-908..921 widget table-row data-header="false" role="row"
-922..955 widget table-row data-header="false" role="row"
+864..955 widget table aria-rowcount="3" role="grid"

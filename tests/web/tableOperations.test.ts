@@ -1,6 +1,6 @@
 // Criterion 2 (M3a): every table operation declares its byte ranges and
-// the M1b containment property holds over them, including the formatting
-// pass that re-pads cells the operation did not target. The property is
+// the M1b containment property holds over them without reformatting cells
+// the operation did not target. The property is
 // asserted byte-for-byte: the declared spans, converted to UTF-8 byte
 // ranges, are applied to the base bytes through the same change-set
 // applier the save path uses, and must reproduce the operation's result
@@ -15,6 +15,7 @@ import {
 import {
   applyTableOperation,
   editTable,
+  editTableCell,
   formatTableChanges,
   isDelimiterLine,
   type TableOperation,
@@ -64,6 +65,9 @@ const ALL_OPERATIONS: readonly TableOperation[] = [
   { kind: "insert-column", column: 0, position: "before" },
   { kind: "insert-column", column: 0, position: "after" },
   { kind: "insert-column", column: 1, position: "after" },
+  { kind: "delete-row", line: 2 },
+  { kind: "delete-column", column: 0 },
+  { kind: "delete-column", column: 1 },
 ];
 
 const SIMPLE = "| a | b |\n| --- | --- |\n| c | d |";
@@ -81,16 +85,16 @@ describe("table structure operations", () => {
     expect(tableAlignments(result)).toEqual(tableAlignments(SIMPLE));
   });
 
-  it("clamps a row above the header to the first body position", () => {
+  it("inserts above the header while preserving delimiter adjacency", () => {
     const result = assertContainment(SIMPLE, {
       kind: "insert-row",
       line: 0,
       position: "above",
     });
     const lines = result.split("\n");
-    expect(lines[0]).toContain("a");
+    expect(lines[0]?.trim().replaceAll("|", "").trim()).toBe("");
     expect(isDelimiterLine(lines[1] ?? "")).toBe(true);
-    expect(lines[2]?.trim().replaceAll("|", "").trim()).toBe("");
+    expect(lines[2]).toContain("a");
   });
 
   it("inserts a column preserving GFM alignment markers", () => {
@@ -113,24 +117,21 @@ describe("table structure operations", () => {
   });
 
   it("declares the formatting pass over cells the operation widens", () => {
-    // Inserting a column after column 0 re-pads nothing, but a new widest
-    // cell forces re-padding: build a table whose new column makes the
-    // format pass touch every line, then rely on assertContainment to
-    // prove those touches are declared.
     const uneven = "| a | b |\n| --- | --- |\n| longer-content | d |";
     const spans = editTable(uneven, {
       kind: "insert-column",
       column: 0,
       position: "after",
     });
-    // The formatting pass must have emitted declared spans on lines other
-    // than the structural insertion points (re-padded cells).
-    expect(spans.length).toBeGreaterThan(3);
-    assertContainment(uneven, {
+    expect(spans).toHaveLength(3);
+    const result = assertContainment(uneven, {
       kind: "insert-column",
       column: 0,
       position: "after",
     });
+    expect(result).toBe(
+      "| a | | b |\n| --- | --- | --- |\n| longer-content | | d |",
+    );
   });
 
   it("normalizes ragged cell widths as declared formatting changes", () => {
@@ -160,6 +161,134 @@ describe("table cell navigation model", () => {
       "c",
       "d",
     ]);
+  });
+
+  it("writes only one trimmed cell span and escapes a typed pipe", () => {
+    const source = "|  alpha   | beta |\n| --- | ---: |\n| café  |  keep  |";
+    const change = editTableCell(source, 1, 0, "naïve|🙂");
+    expect(change).not.toBeNull();
+    if (change === null) {
+      return;
+    }
+    expect(source.slice(change.from, change.to)).toBe("café");
+    const result = `${source.slice(0, change.from)}${change.insert}${source.slice(change.to)}`;
+    expect(result).toBe(
+      "|  alpha   | beta |\n| --- | ---: |\n| naïve\\|🙂  |  keep  |",
+    );
+    expect(source.slice(0, change.from)).toBe(result.slice(0, change.from));
+    const reconstructed = applyByteChangeSet(
+      encoder.encode(source),
+      declaredByteChanges(source, [change]),
+    );
+    expect(Array.from(reconstructed)).toEqual(
+      Array.from(encoder.encode(result)),
+    );
+  });
+
+  it("deletes rows and columns without rewriting surviving cell bytes", () => {
+    expect(
+      applyTableOperation("| a  | b |\n| --- | --- |\n| c | d  |", {
+        kind: "delete-row",
+        line: 2,
+      }),
+    ).toBe("| a  | b |\n| --- | --- |");
+    expect(
+      applyTableOperation("| a  | b |\n| --- | --- |\n| c | d  |", {
+        kind: "delete-column",
+        column: 0,
+      }),
+    ).toBe("| b |\n| --- |\n| d  |");
+  });
+
+  it("promotes the first body row when deleting the header", () => {
+    expect(applyTableOperation(SIMPLE, { kind: "delete-row", line: 0 })).toBe(
+      "| c | d |\n| --- | --- |",
+    );
+    expect(
+      applyTableOperation("| a | b |\n| --- | --- |", {
+        kind: "delete-row",
+        line: 0,
+      }),
+    ).toBe("");
+  });
+
+  it("handles escaped terminal pipes and ragged implicit cells", () => {
+    const outerPipeFree = "a | b\\|\n--- | ---\nc | d";
+    expect(
+      tableCellRanges(outerPipeFree).map((cell) =>
+        outerPipeFree.slice(cell.from, cell.to),
+      ),
+    ).toEqual(["a", "b\\|", "c", "d"]);
+
+    const ragged = "| a | b | c |\n| --- | --- | --- |\n| x | y |";
+    expect(
+      applyTableOperation(ragged, {
+        kind: "insert-column",
+        column: 2,
+        position: "before",
+      }),
+    ).toBe("| a | b | | c |\n| --- | --- | --- | --- |\n| x | y | |");
+    expect(
+      applyTableOperation(ragged, { kind: "delete-column", column: 2 }),
+    ).toBe("| a | b |\n| --- | --- |\n| x | y |");
+
+    const oneCellBody = "| a | b | c |\n| --- | --- | --- |\n| x |";
+    expect(
+      applyTableOperation(oneCellBody, {
+        kind: "insert-column",
+        column: 2,
+        position: "after",
+      }),
+    ).toBe("| a | b | c | |\n| --- | --- | --- | --- |\n| x | | | |");
+    expect(
+      applyTableOperation(oneCellBody, {
+        kind: "delete-column",
+        column: 0,
+      }),
+    ).toBe("| b | c |\n| --- | --- |\n| |");
+  });
+
+  it("treats only the structural second row as the delimiter", () => {
+    const source =
+      "| --- | --- |\n| --- | --- |\n| --- | --- |\n| value | keep |";
+    const cells = tableCellRanges(source);
+    expect(cells.map((cell) => source.slice(cell.from, cell.to))).toEqual([
+      "---",
+      "---",
+      "---",
+      "---",
+      "value",
+      "keep",
+    ]);
+    expect(editTableCell(source, 1, 0, "changed")).toMatchObject({
+      insert: "changed",
+    });
+  });
+
+  it("preserves a terminal newline across structure operations", () => {
+    const source = `${SIMPLE}\n`;
+    expect(
+      applyTableOperation(source, {
+        kind: "insert-column",
+        column: 0,
+        position: "after",
+      }),
+    ).toBe("| a | | b |\n| --- | --- | --- |\n| c | | d |\n");
+    expect(applyTableOperation(source, { kind: "delete-row", line: 2 })).toBe(
+      "| a | b |\n| --- | --- |\n",
+    );
+  });
+
+  it("inserts content between an empty cell's existing gutters", () => {
+    const source = "|  | b |\n| --- | --- |\n| c | d |";
+    const change = editTableCell(source, 0, 0, "x");
+    expect(change).not.toBeNull();
+    if (change === null) {
+      return;
+    }
+    expect(
+      `${source.slice(0, change.from)}${change.insert}${source.slice(change.to)}`,
+    ).toBe("| x | b |\n| --- | --- |\n| c | d |");
   });
 
   it("handles escaped pipes inside cells", () => {
@@ -229,10 +358,13 @@ describe("containment property over generated tables (criterion 2)", () => {
       for (const operation of ALL_OPERATIONS) {
         const result = assertContainment(table, operation);
         const after = tableAlignments(result);
-        if (operation.kind === "insert-row") {
+        if (
+          operation.kind === "insert-row" ||
+          operation.kind === "delete-row"
+        ) {
           // Row inserts never touch the delimiter row.
           expect(after).toEqual(before);
-        } else {
+        } else if (operation.kind === "insert-column") {
           // Column inserts preserve every pre-existing alignment.
           expect(after.length).toBe(before.length + 1);
           const inserted =
@@ -242,6 +374,14 @@ describe("containment property over generated tables (criterion 2)", () => {
           const surviving = [...after];
           surviving.splice(inserted, 1);
           expect(surviving).toEqual(before);
+        } else if (before.length === 1) {
+          expect(result).toBe("");
+          expect(after).toEqual([]);
+        } else {
+          const deleted = Math.min(operation.column, before.length - 1);
+          const expected = [...before];
+          expected.splice(deleted, 1);
+          expect(after).toEqual(expected);
         }
       }
     }

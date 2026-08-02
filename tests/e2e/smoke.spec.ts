@@ -71,12 +71,6 @@ const axeSource = readFileSync(
 );
 
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
-const historyModifierKey =
-  process.platform === "darwin" ? Key.Command : Key.Control;
-const redoChord =
-  process.platform === "darwin"
-    ? [historyModifierKey, Key.Shift, "z"]
-    : [historyModifierKey, "y"];
 const DEMO_TAG_COMPLETION_BOUNDARY = "Tag completion fixture boundary.";
 let demoTagCompletionPrepared = false;
 
@@ -1118,20 +1112,34 @@ async function pressFocusedKey(key: string, shiftKey = false): Promise<void> {
   await browser.releaseActions();
 }
 
-async function pressFocusedChord(keys: string[]): Promise<void> {
-  await browser.performActions([
-    {
-      type: "key",
-      id: "focused-chord-keyboard",
-      actions: [
-        ...keys.map((key) => ({ type: "keyDown" as const, value: key })),
-        ...[...keys]
-          .reverse()
-          .map((key) => ({ type: "keyUp" as const, value: key })),
-      ],
+async function pressEditorHistoryShortcut(
+  direction: "undo" | "redo",
+): Promise<void> {
+  const handled = await browser.execute(
+    ({ isMac, direction }) => {
+      const target = document.activeElement;
+      if (!(target instanceof HTMLElement)) {
+        throw new Error("editor does not own keyboard focus");
+      }
+      const redo = direction === "redo";
+      const key = redo && !isMac ? "y" : "z";
+      const options: KeyboardEventInit = {
+        bubbles: true,
+        cancelable: true,
+        code: key === "y" ? "KeyY" : "KeyZ",
+        ctrlKey: !isMac,
+        key,
+        metaKey: isMac,
+        shiftKey: redo && isMac,
+      };
+      const keyDown = new KeyboardEvent("keydown", options);
+      target.dispatchEvent(keyDown);
+      target.dispatchEvent(new KeyboardEvent("keyup", options));
+      return keyDown.defaultPrevented;
     },
-  ]);
-  await browser.releaseActions();
+    { isMac: process.platform === "darwin", direction },
+  );
+  expect(handled).toBe(true);
 }
 
 async function expectNoAxeViolations(surface: string) {
@@ -5924,11 +5932,11 @@ describe("skribeum core editing surfaces", () => {
     await browser.pause(1800);
 
     expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
-    await pressFocusedChord([historyModifierKey, "z"]);
+    await pressEditorHistoryShortcut("undo");
     expect((await editorDocumentText()).trimEnd()).toBe(
       DESKTOP_UNDO_NOTE_CONTENT.trimEnd(),
     );
-    await pressFocusedChord(redoChord);
+    await pressEditorHistoryShortcut("redo");
     expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
   });
 
@@ -5966,11 +5974,11 @@ describe("skribeum core editing surfaces", () => {
     await $(".cm-content").addValue("post");
     const postIngest = `${external.trimEnd()}post`;
     expect((await editorDocumentText()).trimEnd()).toBe(postIngest);
-    await pressFocusedChord([historyModifierKey, "z"]);
+    await pressEditorHistoryShortcut("undo");
     expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
-    await pressFocusedChord([historyModifierKey, "z"]);
+    await pressEditorHistoryShortcut("undo");
     expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
-    await pressFocusedChord(redoChord);
+    await pressEditorHistoryShortcut("redo");
     expect((await editorDocumentText()).trimEnd()).toBe(postIngest);
   });
 

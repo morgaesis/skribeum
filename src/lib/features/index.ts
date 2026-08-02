@@ -11,6 +11,7 @@ import { registerInsertions } from "./insertions";
 import { registerNavigation } from "./navigation";
 import { registerSettingActions } from "./settingsCatalog";
 import { registerSlashMenu } from "./slashMenu";
+import { registerSourceMode } from "./sourceMode";
 import { registerSurfaces } from "./surfaces";
 import { registerTableEditing } from "./tableEditing";
 import { registerTags } from "./tags";
@@ -29,6 +30,7 @@ export function createAppRegistry(
   registerInsertions(registry);
   registerTags(registry);
   registerSlashMenu(registry);
+  registerSourceMode(registry);
   registerNavigation(registry);
   registerTableEditing(registry);
   registerTaskStatusCommands(registry, taskStatuses);

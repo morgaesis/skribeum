@@ -18,18 +18,22 @@ audit. Use it only with files that are backed up and versioned.
 `mod+k` opens one command surface. Enter a note or file name directly, or start
 the query with `>` for commands and individual settings, `#` for tags, or `?`
 for note text. `mod+o`, `mod+p`, `mod+shift+p`, and `mod+shift+f` open the same
-surface in their familiar modes. On wide viewports, the application bar exposes
-these aliases and an Actions menu for the file tree, outline, in-note find,
-settings, note creation, saving, copy-link actions, and navigation history.
+surface in their familiar modes. On wide viewports, the header contains icon
+buttons for note history, the note's display title, an optional read-only or
+Source indicator, and one overflow button. The anchored overflow menu contains
+the command aliases, file tree, outline, in-note find, settings, note creation,
+saving, copy-link actions, navigation history, and vault opening.
 
 At 60rem (960 CSS pixels) and narrower, the file tree and outline leave the
 editor column and open as modal bottom sheets. The permanent top bar contains
-a Files button, the current note title, and an overflow button. The overflow
-sheet provides the quick switcher, search, command palette, settings, outline,
-file tree, note creation, saving, in-note find, navigation history, and vault
-opening. The editor retains 24px inline gutters, which leaves 312px for prose
-on a 360px viewport and 342px on a 390px viewport. Properties remain collapsed
-above the note, and raw frontmatter remains hidden until explicitly requested.
+a Files button, the current note display title, and an overflow button. The
+overflow sheet provides the quick switcher, search, command palette, settings,
+outline, file tree, note creation, saving, in-note find, navigation history,
+and vault opening. The editor retains 24px inline gutters, which leaves 312px
+for prose on a 360px viewport and 342px on a 390px viewport. Properties remain
+collapsed above the note. A frontmatter `title` supplies the display title,
+followed by a first-line H1 and then the file name. The properties panel
+continues to identify the note by its vault path.
 
 Every visible control accepts pointer, touch, and keyboard activation. Tab and
 Shift+Tab stay inside an open modal sheet, Escape closes it, and focus returns
@@ -37,6 +41,13 @@ to the control that opened it. On narrow viewports, the command surface anchors
 above the on-screen keyboard and scrolls its results internally. Keyboard
 shortcuts remain visible beside command results and in selection toolbar
 tooltips.
+
+`mod+e` toggles the active note between reading presentation and its complete
+Markdown source. Source mode keeps syntax colouring but shows frontmatter,
+tables, math, embeds, task markers, callouts, and other constructs as source in
+the monospace face. A Source chip in the title region is the mode indicator.
+The Syntax reveal setting remains independent and controls caret-based marker
+reveal only in the normal reading presentation.
 
 ## Tasks
 
@@ -46,8 +57,12 @@ finishes as Done; and Importance keeps its marker while cycling the plain-text
 level glyphs `⏫`, `🔼`, and `🔽`. Reference statuses follow their configured
 transitions.
 
-Hold a marker, or focus it and press Arrow Down, to open the grouped status
-menu. Choosing a Time status opens its due-date field. A touch date change or
+Hold a marker, focus it and press Arrow Down, or invoke `Task: set status` from
+the command surface to open the grouped status menu. The overflow menu also
+shows this command while the caret or checkbox focus is on a task line. The
+deliberate route stays open for a tap or click and closes on Escape or an
+outside press. Choosing a Time status opens its due-date field. A touch date
+change or
 Enter writes an Obsidian Tasks token such as `📅 2031-04-05` directly into the
 note, while Escape applies the status without a date. Date and level tokens
 render as chips, but remain ordinary Markdown source that can be edited or
@@ -58,14 +73,14 @@ copying its payload. One immediate Backspace removes that new marker and its
 spacing. At the start of existing task text, Backspace reveals and deletes the
 marker one source character at a time.
 
-Copy link to note is available from Actions and command mode. Browser links use
+Copy link to note is available from the overflow menu and command mode. Browser links use
 the current absolute note URL, while desktop links use the vault's configured
 note-link form. Outline rows copy heading links from their trailing action, and
 command mode can copy the heading nearest the caret.
 
 ## Settings
 
-Open Settings from Actions or with `mod+,`. The surface is organized into
+Open Settings from the overflow menu or with `mod+,`. The surface is organized into
 Appearance, Editor, Files and vault, Search, Updates and About. Its search box
 filters settings by their names and plain-language descriptions. Every setting
 is also a `>` mode action that opens this surface aligned to the matching row

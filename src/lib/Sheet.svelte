@@ -7,11 +7,13 @@ let {
   onClose,
   children,
   restoreFocus = true,
+  variant = "sheet",
 }: {
   label: string;
   onClose: () => void;
   children?: Snippet;
   restoreFocus?: boolean;
+  variant?: "sheet" | "anchored";
 } = $props();
 
 let dialog = $state<HTMLElement>();
@@ -74,25 +76,31 @@ onDestroy(() => {
 
 <div
   class="sheet-backdrop"
+  class:sheet-backdrop-anchored={variant === "anchored"}
   role="presentation"
   onclick={(event) => event.target === event.currentTarget && onClose()}
 >
   <div
     bind:this={dialog}
     class="sheet"
+    class:sheet-anchored={variant === "anchored"}
     role="dialog"
     aria-modal="true"
-    aria-labelledby={titleId}
+    aria-labelledby={variant === "sheet" ? titleId : undefined}
+    aria-label={variant === "anchored" ? label : undefined}
     tabindex="-1"
     data-testid="overlay-sheet"
+    data-sheet-variant={variant}
     onkeydown={onKeydown}
   >
-    <header>
-      <h2 id={titleId}>{label}</h2>
-      <button type="button" class="sheet-close" onclick={onClose}>
-        {STRINGS.closeAction}
-      </button>
-    </header>
+    {#if variant === "sheet"}
+      <header>
+        <h2 id={titleId}>{label}</h2>
+        <button type="button" class="sheet-close" onclick={onClose}>
+          {STRINGS.closeAction}
+        </button>
+      </header>
+    {/if}
     <div class="sheet-content">
       {#if children !== undefined}
         {@render children()}
@@ -129,6 +137,22 @@ onDestroy(() => {
     outline: none;
     overflow: hidden;
     width: 100%;
+  }
+
+  .sheet-backdrop-anchored {
+    align-items: flex-start;
+    justify-content: flex-end;
+    box-sizing: border-box;
+    padding: 2.25rem 0.25rem 0.25rem;
+    background: transparent;
+  }
+
+  .sheet-anchored {
+    width: min(22rem, calc(var(--skr-visual-viewport-width) - 0.5rem));
+    height: auto;
+    max-height: calc(var(--skr-visual-viewport-height) - 2.5rem);
+    border-bottom: 1px solid var(--skr-border);
+    border-radius: 0.375rem;
   }
 
   header {

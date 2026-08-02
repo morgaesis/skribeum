@@ -22,6 +22,8 @@ export type CommandContext = {
   openNote(path: string): Promise<void>;
   /** Creates and opens a note in the configured default folder. */
   createNote?(): Promise<void>;
+  /** Opens the platform vault picker. */
+  openVault?(): Promise<void> | void;
   /** Opens the view registered under `id`. */
   openView(id: string): void;
   /** Opens the unified command surface with an optional prefix preloaded. */
@@ -48,6 +50,10 @@ export type CommandContext = {
   copyNoteLink?(): Promise<void>;
   /** Copies a link to a named heading, or the heading nearest the caret. */
   copyHeadingLink?(heading?: string): Promise<void>;
+  /** Toggles the active note's transient whole-document source presentation. */
+  toggleSourceMode?(): boolean;
+  /** Task marker selected when a command surface opened, if any. */
+  taskStatusMarkerFrom?: number | null;
   /** An explicit heading supplied by an outline-row pointer action. */
   heading?: string;
 };

@@ -206,7 +206,16 @@ records each value's exact character range, typed inputs (dates, numbers,
 booleans, lists, honoring `.obsidian/types.json`) replace precisely that
 range through a normal editor transaction, and untouched keys are
 byte-preserved through the ordinary change-set save path. The panel starts
-collapsed for each note, and raw frontmatter stays hidden until requested.
+collapsed for each note and identifies the note by its vault path. A shared
+title resolver derives reading-surface labels from a non-empty frontmatter
+`title`, a first-line H1, or the trimmed file name, in that order.
+
+Whole-note source mode reconfigures the editor's rendering compartment to keep
+Markdown parsing and token highlighting while omitting presentation
+decorations. The CodeMirror document, history, selection, save session, and
+settings compartment remain in place. The Syntax reveal setting therefore
+resumes unchanged when source mode closes, while the properties panel stays
+absent and the complete source projection is visible in the monospace face.
 
 The two-parser split (decision 11) is held together by a permanent
 conformance gate: `tests/syntax-spec.toml` is the shared syntax contract,
@@ -245,7 +254,11 @@ the breakpoint, permanent side columns become modal overlay sheets, settings
 fills the visual viewport, and palette surfaces anchor to its top edge. The
 editor keeps the design-system gutter floor of 1.5rem on each side. A 3rem top
 bar provides Files, the scroll-aware note title, and the overflow sheet as the
-permanent touch routes. The desktop header remains 2.5rem high.
+permanent touch routes. The desktop header remains 2.5rem high and contains
+icon-only Back and Forward controls, the same scroll-aware display title,
+conditional read-only and Source indicators, and one overflow icon. Its menu is
+anchored to the trailing button. A no-vault reading area contains the single
+labelled Open vault empty-state action.
 
 Modal surfaces measure against the visual viewport, make the background inert,
 trap Tab and Shift+Tab, close with Escape or a visible Close button, and restore
@@ -253,7 +266,10 @@ the invoking control. File and outline rows expand from their desktop geometry
 to 44px touch targets in sheets. The command registry records each user
 command's pointer surfaces; ARIA widget navigation commands are explicitly
 marked as widget-internal, and registry coverage rejects an unclassified or
-unreachable user command.
+unreachable user command. The task-status command checks the live caret or task
+checkbox focus before joining an overflow menu and asks the existing checkbox
+widget to enter tap mode, so pointer, keyboard, and hold-drag routes share one
+grouped menu and one status application path.
 
 ## Two parsers, one contract
 

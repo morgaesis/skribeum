@@ -33,12 +33,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Narrow viewports use a three-region top bar for Files, the scroll-aware note
   title, and an overflow sheet containing every shell command available to
   touch. The editor occupies the remaining note area.
+- Wide viewports use icon-only note history, a scroll-aware display-title
+  region, conditional read-only and Source indicators, and one anchored
+  overflow menu. Opening a vault remains directly available from the no-vault
+  empty state.
+- Note title regions use a non-empty frontmatter `title`, a first-line H1, or
+  the trimmed file name. The properties panel keeps the vault path visible as
+  the note identity.
 - Transient surfaces clamp to the visual viewport when an on-screen keyboard
   changes the usable area. Narrow command surfaces anchor at the top, and tag
   completion prefers space below the caret before flipping above it.
 - Task status controls advance on a short tap and expose the grouped menu
   after a 500ms stationary press. A continuous drag highlights and selects a
   status, while release outside cancels the gesture.
+- `Task: set status` opens the grouped task menu without a hold gesture from
+  the command surface or a task-line contextual overflow row. Tap, click,
+  keyboard selection, Escape, and outside press use the same menu state.
 - Task statuses belong to Task, Time, Importance, and Reference tracks. The
   grouped menu keeps its default view to ten status rows, new task lines inherit
   their track, and marker editing operates on exact source characters.
@@ -48,12 +58,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mod+e` toggles a transient whole-note source presentation with Markdown
+  syntax colouring, complete source text, monospace typography, and a Source
+  chip in the title region. Syntax reveal remains an independent reading-mode
+  setting.
+
 - Time statuses store due dates as plain Obsidian Tasks tokens, and Importance
   stores its level as a plain glyph token. Both payloads render as editable
   chips without hidden state.
 
 - Copy-link commands produce browser note URLs or desktop configured links.
-  Note links are available from Actions and command mode, while heading links
+  Note links are available from the overflow menu and command mode, while heading links
   are available from outline rows and the heading nearest the caret.
 - Every settings row is a searchable command action that opens settings,
   aligns the target row to the pane, and focuses its control.

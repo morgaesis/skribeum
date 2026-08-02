@@ -31,7 +31,7 @@ import { describe, expect, it } from "vitest";
 import { createAppRegistry } from "../../src/lib/features";
 import { commandItems } from "../../src/lib/features/pickers";
 import { filteredSlashCommands } from "../../src/lib/features/slashMenu";
-import { parseKeybinding } from "../../src/lib/registry";
+import { type CommandContext, parseKeybinding } from "../../src/lib/registry";
 
 const sourceDirectory = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -170,6 +170,44 @@ describe("registration coverage (criterion 1)", () => {
     }
   });
 
+  it("reserves Mod-E for whole-note source mode", () => {
+    const registry = createAppRegistry();
+    expect(
+      registry
+        .commands()
+        .filter((command) =>
+          command.keybindings?.some(
+            (binding) => binding.toLowerCase() === "mod-e",
+          ),
+        )
+        .map((command) => command.id),
+    ).toEqual(["editor.toggle-source-mode"]);
+  });
+
+  it("invokes the vault picker through its registered command", () => {
+    let pickerCalls = 0;
+    const context: CommandContext = {
+      view: null,
+      openNote: () => Promise.resolve(),
+      openVault: () => {
+        pickerCalls += 1;
+      },
+      openView: () => {},
+      openCommandSurface: () => {},
+      toggleView: () => {},
+      closeSurfaces: () => {},
+      requestSave: () => {},
+      notePaths: () => [],
+      recentNotePaths: () => [],
+      navigateBack: () => false,
+      navigateForward: () => false,
+      followLink: () => false,
+    };
+
+    expect(createAppRegistry().run("vault.open", context)).toBe(true);
+    expect(pickerCalls).toBe(1);
+  });
+
   it("every user command reaches a visible pointer surface", () => {
     const registry = createAppRegistry();
     const visibleCommands = new Set([
@@ -210,7 +248,13 @@ describe("registration coverage (criterion 1)", () => {
     ]);
     expect(
       registry.pointerCommands("overflow-menu").map((command) => command.id),
-    ).toEqual(["palette.open", "quick-switcher.open", "vault-search.open"]);
+    ).toEqual([
+      "palette.open",
+      "quick-switcher.open",
+      "vault-search.open",
+      "vault.open",
+      "task.set-status",
+    ]);
     expect(
       registry.pointerCommands("editor-tag").map((command) => command.id),
     ).toEqual(["tag.search-under-cursor"]);

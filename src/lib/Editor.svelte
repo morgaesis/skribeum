@@ -30,7 +30,10 @@ import {
 } from "./editor/frontmatter";
 import { showInvisibleCharacters } from "./editor/invisibles";
 import { NoteSession } from "./editor/noteSession";
-import { noteRenderingExtensions } from "./editor/syntaxPolicy";
+import {
+  noteRenderingExtensions,
+  noteSourceExtensions,
+} from "./editor/syntaxPolicy";
 import { findExtension } from "./features/findPanel";
 import type { FollowWikilinkOptions } from "./features/navigation";
 import { selectionToolbar } from "./features/selectionToolbar";
@@ -66,6 +69,7 @@ let {
   registry = null,
   commandContext = null,
   settings = DEFAULT_SETTINGS,
+  sourceMode = false,
   onConflict,
   onWriteError,
   onDocChanged,
@@ -91,10 +95,12 @@ let {
   commandContext?: (() => CommandContext) | null;
   /** Live editor preferences from the persisted settings document. */
   settings?: SettingsDocument;
+  /** Transient whole-note raw Markdown presentation. */
+  sourceMode?: boolean;
   onConflict?: () => void;
   onWriteError?: (message: string) => void;
   /** Notified after any document-changing transaction (outline refresh). */
-  onDocChanged?: () => void;
+  onDocChanged?: (source: string, path: string | null) => void;
   /** Reports whether the shell title should be visible for this document. */
   onTitleVisibilityChange?: (visible: boolean) => void;
   /** Notified after pending edits are written and indexed. */
@@ -143,15 +149,15 @@ const editorAppearance = EditorView.theme({
  */
 const FRONTMATTER_SCAN_LIMIT = 16384;
 let frontmatter = $state<Frontmatter | null>(null);
-let showRawFrontmatter = $state(false);
-let frontmatterNoteIdentity = $state<string | null>(null);
 
-$effect(() => {
-  if (path !== frontmatterNoteIdentity) {
-    frontmatterNoteIdentity = path;
-    showRawFrontmatter = false;
-  }
-});
+function renderingExtensions(
+  content: string | Parameters<typeof noteRenderingExtensions>[0],
+  statuses: readonly TaskStatus[],
+): Extension[] {
+  return sourceMode
+    ? noteSourceExtensions(content, statuses)
+    : noteRenderingExtensions(content, undefined, statuses);
+}
 
 function refreshFrontmatter() {
   if (view === undefined || session === null) {
@@ -250,13 +256,13 @@ function stateFor(content: string, locked: boolean): EditorState {
     selection: { anchor: initialCursor },
     extensions: [
       renderingCompartment.of(
-        noteRenderingExtensions(content, undefined, normalizedTaskStatuses),
+        renderingExtensions(content, normalizedTaskStatuses),
       ),
       ...(wikilinkNavigationOptions === undefined
         ? []
         : [wikilinkPointerNavigation(wikilinkNavigationOptions)]),
       editorAppearance,
-      settingsCompartment.of(settingsExtensions(settings)),
+      settingsCompartment.of(settingsExtensions(settings, sourceMode)),
       bulkTextInput(),
       ...visualViewportTooltips,
       historyCompartment.of(history()),
@@ -278,7 +284,10 @@ function stateFor(content: string, locked: boolean): EditorState {
   });
 }
 
-function settingsExtensions(document: SettingsDocument): Extension[] {
+function settingsExtensions(
+  document: SettingsDocument,
+  wholeNoteSourceMode: boolean,
+): Extension[] {
   return [
     ...(document.show_line_numbers ? [lineNumbers()] : []),
     ...(document.wrap_long_lines ? [EditorView.lineWrapping] : []),
@@ -289,7 +298,9 @@ function settingsExtensions(document: SettingsDocument): Extension[] {
         : " ".repeat(document.indent_width),
     ),
     sourceRevealMode(document.reveal_markdown_syntax),
-    ...(document.show_invisible_characters ? [showInvisibleCharacters()] : []),
+    ...(document.show_invisible_characters && !wholeNoteSourceMode
+      ? [showInvisibleCharacters()]
+      : []),
     EditorView.contentAttributes.of({
       "aria-label": STRINGS.editorLabel,
       spellcheck: document.spell_check ? "true" : "false",
@@ -324,12 +335,12 @@ function dispatchTransactions(
   if (transactions.some((transaction) => transaction.docChanged)) {
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
-    onDocChanged?.();
+    onDocChanged?.(target.state.doc.toString(), path);
   } else if (treeGrewInBackground(target)) {
     // Background parsing advanced without a document change. Consumers of
     // the syntax tree (the outline) recompute, or a large note's outline
     // stays truncated at the initial parse slice until the first edit.
-    onDocChanged?.();
+    onDocChanged?.(target.state.doc.toString(), path);
   }
 }
 
@@ -593,13 +604,13 @@ async function rereadAndReconcile(): Promise<void> {
 function initializeForNote(current: LoadedNote | null) {
   clearTimeout(idleSaveTimer);
   removed = false;
-  showRawFrontmatter = false;
   if (current === null) {
     session = null;
     view?.setState(stateFor(doc, false));
     applyLinkContext();
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
+    onDocChanged?.(view?.state.doc.toString() ?? doc, path);
     return;
   }
   if (current.readOnly) {
@@ -608,6 +619,7 @@ function initializeForNote(current: LoadedNote | null) {
     applyLinkContext();
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
+    onDocChanged?.(view?.state.doc.toString() ?? current.text, path);
     return;
   }
   session = new NoteSession(current.bytes, current.meta.projection_hash);
@@ -632,6 +644,7 @@ function initializeForNote(current: LoadedNote | null) {
   applyLinkContext();
   refreshFrontmatter();
   scheduleTitleVisibilityRefresh();
+  onDocChanged?.(view?.state.doc.toString() ?? text, path);
 }
 
 onMount(() => {
@@ -668,19 +681,18 @@ $effect(() => {
   }
 });
 
-// Status settings apply without rebuilding the editor or touching the source.
+// Status and source presentation changes reconfigure rendering without
+// rebuilding the editor or touching its document.
 $effect(() => {
   const normalizedTaskStatuses = normalizeTaskStatuses(taskStatuses);
+  void sourceMode;
   if (view !== undefined) {
     view.dispatch({
       effects: renderingCompartment.reconfigure(
-        noteRenderingExtensions(
-          view.state.doc,
-          undefined,
-          normalizedTaskStatuses,
-        ),
+        renderingExtensions(view.state.doc, normalizedTaskStatuses),
       ),
     });
+    scheduleTitleVisibilityRefresh();
   }
 });
 
@@ -700,10 +712,11 @@ $effect(() => {
 
 $effect(() => {
   const nextSettings = settings;
+  const nextSourceMode = sourceMode;
   if (view !== undefined) {
     view.dispatch({
       effects: settingsCompartment.reconfigure(
-        settingsExtensions(nextSettings),
+        settingsExtensions(nextSettings, nextSourceMode),
       ),
     });
   }
@@ -711,17 +724,15 @@ $effect(() => {
 </script>
 
 <div class="skr-editor-shell flex h-full min-h-0 flex-col">
-  {#if frontmatter !== null && frontmatter.entries.length > 0}
+  {#if !sourceMode && frontmatter !== null && frontmatter.entries.length > 0}
     <PropertiesPanel
       {frontmatter}
-      rawSourceVisible={showRawFrontmatter}
-      onRawSourceVisibleChange={(visible) => (showRawFrontmatter = visible)}
       onEditValue={editFrontmatterValue}
       noteIdentity={path}
     />
   {/if}
   <div
-    class:skr-show-raw-frontmatter={showRawFrontmatter}
+    class:skr-source-mode={sourceMode}
     class="editor min-h-0 flex-1"
     bind:this={host}
   ></div>
@@ -764,9 +775,17 @@ $effect(() => {
     font-weight: 400;
     line-height: 1.6;
   }
-  .editor:not(.skr-show-raw-frontmatter)
+  .editor:not(.skr-source-mode)
     :global(.cm-line.cm-skr-frontmatter:not([data-revealed="true"])) {
     display: none;
+  }
+  .editor.skr-source-mode
+    > :global(.cm-editor)
+    > :global(.cm-scroller)
+    > :global(.cm-content) {
+    font-family: var(--skr-font-mono);
+    font-size: 0.875em;
+    line-height: 1.6;
   }
   .skr-editor-shell:has(
       :global(.cm-line.cm-skr-frontmatter[data-revealed="true"])

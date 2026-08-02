@@ -664,10 +664,21 @@ class TaskCheckboxWidget extends WidgetType {
         target instanceof Element
           ? target.closest<HTMLElement>(".cm-skr-task-option")
           : null;
-      if (option === null || !palette.contains(option)) {
-        return null;
+      if (option !== null && palette.contains(option)) {
+        const index = options.indexOf(option);
+        if (index >= 0) {
+          return index;
+        }
       }
-      const index = options.indexOf(option);
+      const index = options.findIndex((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return (
+          x >= bounds.left &&
+          x <= bounds.right &&
+          y >= bounds.top &&
+          y <= bounds.bottom
+        );
+      });
       return index < 0 ? null : index;
     };
     const finishPress = () => {

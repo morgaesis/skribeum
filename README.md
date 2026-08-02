@@ -125,7 +125,8 @@ can still be used by an older build.
 
 Development and commit history are public.
 See [SECURITY](SECURITY.md) for the security scope and vulnerability reporting
-process.
+process. See the [dependency policy](docs/dependency-policy.md) for version and
+audit requirements.
 
 ## License
 

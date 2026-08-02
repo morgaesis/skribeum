@@ -42,6 +42,7 @@ import {
   type SettingsDocument,
 } from "./features/settingsStore";
 import { slashMenu } from "./features/slashMenu";
+import { tableEditingExtension } from "./features/tableEditing";
 import { type TagAffordanceOptions, tagAffordances } from "./features/tags";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
@@ -226,8 +227,10 @@ function registryExtensions(): Extension[] {
       followLink: () => false,
     }));
   if (activeRegistry === null) {
+    const emptyRegistry = new CommandRegistry();
     return [
-      editorKeymap(new CommandRegistry(), provider),
+      editorKeymap(emptyRegistry, provider),
+      tableEditingExtension(emptyRegistry, provider),
       ...(tagAffordanceOptions === undefined
         ? []
         : [tagAffordances(tagAffordanceOptions)]),
@@ -235,6 +238,7 @@ function registryExtensions(): Extension[] {
   }
   return [
     editorKeymap(activeRegistry, provider),
+    tableEditingExtension(activeRegistry, provider),
     ...(tagAffordanceOptions === undefined
       ? []
       : [tagAffordances(tagAffordanceOptions)]),

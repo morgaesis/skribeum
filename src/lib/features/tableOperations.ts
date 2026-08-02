@@ -1,10 +1,9 @@
 // Pure GFM table editing over a table block's source text. Every
 // operation returns declared spans (`{from, to, insert}` in character
-// offsets within the block): a structural change (a new row or column)
-// composed with the formatting pass that re-pads other cells, so each
-// touched byte, including padding in cells the operation did not target,
-// is inside a declared range. The M1b containment property is asserted
-// over exactly these spans.
+// offsets within the block). Structural changes preserve every existing
+// byte outside the inserted or removed boundary, while cell writes replace
+// only one cell's trimmed source span. The M1b containment property is
+// asserted over exactly these spans.
 
 import { ChangeSet, Text } from "@codemirror/state";
 
@@ -13,7 +12,9 @@ export type TableSpanChange = { from: number; to: number; insert: string };
 
 export type TableOperation =
   | { kind: "insert-row"; line: number; position: "above" | "below" }
-  | { kind: "insert-column"; column: number; position: "before" | "after" };
+  | { kind: "insert-column"; column: number; position: "before" | "after" }
+  | { kind: "delete-row"; line: number }
+  | { kind: "delete-column"; column: number };
 
 export type ColumnAlignment = "none" | "left" | "center" | "right";
 
@@ -35,14 +36,27 @@ function parseCells(text: string): {
   leadingPipe: boolean;
   trailingPipe: boolean;
 } {
+  if (text.length === 0) {
+    return { cells: [], leadingPipe: false, trailingPipe: false };
+  }
   const boundaries: number[] = [];
   for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === "|" && (index === 0 || text[index - 1] !== "\\")) {
+    let backslashes = 0;
+    for (
+      let before = index - 1;
+      before >= 0 && text[before] === "\\";
+      before -= 1
+    ) {
+      backslashes += 1;
+    }
+    if (text[index] === "|" && backslashes % 2 === 0) {
       boundaries.push(index);
     }
   }
-  const leadingPipe = text.trimStart().startsWith("|");
-  const trailingPipe = text.trimEnd().endsWith("|");
+  const trimmedStart = text.length - text.trimStart().length;
+  const trimmedEnd = text.trimEnd().length - 1;
+  const leadingPipe = boundaries[0] === trimmedStart;
+  const trailingPipe = boundaries.at(-1) === trimmedEnd;
   const cells: CellSpan[] = [];
   let cursor = 0;
   const remaining = [...boundaries];
@@ -81,6 +95,10 @@ export function isDelimiterLine(text: string): boolean {
   );
 }
 
+function tableDelimiterIndex(lines: readonly ParsedLine[]): number {
+  return lines.length > 1 && isDelimiterLine(lines[1]?.text ?? "") ? 1 : -1;
+}
+
 function alignmentOf(cellText: string): ColumnAlignment {
   const trimmed = cellText.trim();
   const left = trimmed.startsWith(":");
@@ -100,7 +118,8 @@ function alignmentOf(cellText: string): ColumnAlignment {
 /** The alignment declared per column by the delimiter row. */
 export function tableAlignments(text: string): ColumnAlignment[] {
   const lines = parseTableLines(text);
-  const delimiter = lines.find((line) => isDelimiterLine(line.text));
+  const delimiterIndex = tableDelimiterIndex(lines);
+  const delimiter = lines[delimiterIndex];
   if (delimiter === undefined) {
     return [];
   }
@@ -130,7 +149,7 @@ function delimiterCellText(alignment: ColumnAlignment, width: number): string {
  */
 export function formatTableChanges(text: string): TableSpanChange[] {
   const lines = parseTableLines(text);
-  const delimiterIndex = lines.findIndex((line) => isDelimiterLine(line.text));
+  const delimiterIndex = tableDelimiterIndex(lines);
   const widths: number[] = [];
   for (const [index, line] of lines.entries()) {
     for (const [column, cell] of line.cells.entries()) {
@@ -175,18 +194,33 @@ function structuralSpans(
   operation: TableOperation,
 ): TableSpanChange[] {
   const lines = parseTableLines(text);
-  const delimiterIndex = lines.findIndex((line) => isDelimiterLine(line.text));
+  const delimiterIndex = tableDelimiterIndex(lines);
   const columnCount = Math.max(...lines.map((line) => line.cells.length), 1);
   if (operation.kind === "insert-row") {
     const template = lines[0];
     const leading = template?.leadingPipe !== false;
     const trailing = template?.trailingPipe !== false;
-    const row = `${leading ? "|" : ""}${Array.from({ length: columnCount }, () => "   ").join("|")}${trailing ? "|" : ""}`;
+    const row = `${leading ? "|" : ""}${Array.from({ length: columnCount }, () => " ").join("|")}${trailing ? "|" : ""}`;
     // A row never lands adjacent to the header on the delimiter's side:
     // above the delimiter becomes above the header's successor, i.e. the
     // first body position, and below the header means below the delimiter.
     let line = Math.max(0, Math.min(operation.line, lines.length - 1));
     let position = operation.position;
+    if (delimiterIndex === 1 && line === 0 && position === "above") {
+      const delimiter = lines[delimiterIndex];
+      const header = lines[0];
+      if (delimiter === undefined || header === undefined) {
+        return [];
+      }
+      const following = lines[delimiterIndex + 1];
+      return [
+        {
+          from: header.start,
+          to: following?.start ?? text.length,
+          insert: `${row}\n${delimiter.text}\n${header.text}${following === undefined ? "" : "\n"}`,
+        },
+      ];
+    }
     if (delimiterIndex >= 0) {
       if (line < delimiterIndex) {
         line = delimiterIndex;
@@ -205,14 +239,108 @@ function structuralSpans(
     const lineEnd = target.start + target.text.length;
     return [{ from: lineEnd, to: lineEnd, insert: `\n${row}` }];
   }
+  if (operation.kind === "delete-row") {
+    const line = Math.max(0, Math.min(operation.line, lines.length - 1));
+    const target = lines[line];
+    if (target === undefined || line === delimiterIndex) {
+      return [];
+    }
+    if (line === 0 && delimiterIndex === 1) {
+      const firstBody = lines[2];
+      if (firstBody === undefined) {
+        return [{ from: 0, to: text.length, insert: "" }];
+      }
+      return [
+        {
+          from: target.start,
+          to: target.start + target.text.length,
+          insert: firstBody.text,
+        },
+        {
+          from: firstBody.start - 1,
+          to: firstBody.start + firstBody.text.length,
+          insert: "",
+        },
+      ];
+    }
+    if (lines.length === 1) {
+      return [{ from: 0, to: text.length, insert: "" }];
+    }
+    if (line < lines.length - 1) {
+      return [
+        {
+          from: target.start,
+          to: lines[line + 1]?.start ?? target.start + target.text.length,
+          insert: "",
+        },
+      ];
+    }
+    return [
+      {
+        from: Math.max(0, target.start - 1),
+        to: target.start + target.text.length,
+        insert: "",
+      },
+    ];
+  }
+
   const column = Math.max(0, Math.min(operation.column, columnCount - 1));
+  if (operation.kind === "delete-column") {
+    if (columnCount === 1) {
+      return [{ from: 0, to: text.length, insert: "" }];
+    }
+    const removals: TableSpanChange[] = [];
+    for (const [index, line] of lines.entries()) {
+      const cell = line.cells[column];
+      if (cell === undefined) {
+        continue;
+      }
+      const next = line.cells[column + 1];
+      const previous = line.cells[column - 1];
+      if (next !== undefined) {
+        removals.push({
+          from: line.start + cell.from,
+          to: line.start + next.from,
+          insert: "",
+        });
+      } else if (previous !== undefined) {
+        removals.push({
+          from: line.start + previous.to,
+          to: line.start + cell.to,
+          insert: "",
+        });
+      } else {
+        removals.push({
+          from: line.start + cell.from,
+          to: line.start + cell.to,
+          insert: index === delimiterIndex ? " --- " : " ",
+        });
+      }
+    }
+    return removals;
+  }
+
   const spans: TableSpanChange[] = [];
   for (const [index, line] of lines.entries()) {
     if (line.cells.length === 0) {
       continue;
     }
-    const content = index === delimiterIndex ? " --- " : "   ";
-    const cell = line.cells[Math.min(column, line.cells.length - 1)];
+    const content = index === delimiterIndex ? " --- " : " ";
+    const cell = line.cells[column];
+    const trailingCell = line.cells.at(-1);
+    if (cell === undefined && trailingCell !== undefined) {
+      const missing = Math.max(0, column - line.cells.length);
+      const additions = Array.from(
+        { length: missing + (operation.position === "before" ? 1 : 2) },
+        () => content,
+      ).join("|");
+      spans.push({
+        from: line.start + trailingCell.to,
+        to: line.start + trailingCell.to,
+        insert: `|${additions}`,
+      });
+      continue;
+    }
     if (cell === undefined) {
       continue;
     }
@@ -234,36 +362,14 @@ function structuralSpans(
 }
 
 /**
- * Builds the full declared change set for one table operation: the
- * structural spans composed with the formatting pass over the structural
- * result, expressed as spans over the original block text.
+ * Builds the declared change set for one table structure operation without
+ * rewriting existing cells or their padding.
  */
 export function editTable(
   text: string,
   operation: TableOperation,
 ): TableSpanChange[] {
-  const structural = structuralSpans(text, operation);
-  if (structural.length === 0) {
-    return [];
-  }
-  const doc = Text.of(text.split("\n"));
-  const structuralSet = ChangeSet.of(
-    structural.map((span) => ({ ...span })),
-    doc.length,
-  );
-  const afterStructural = structuralSet.apply(doc);
-  const formatSet = ChangeSet.of(
-    formatTableChanges(afterStructural.toString()).map((span) => ({
-      ...span,
-    })),
-    afterStructural.length,
-  );
-  const composed = structuralSet.compose(formatSet);
-  const spans: TableSpanChange[] = [];
-  composed.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-    spans.push({ from: fromA, to: toA, insert: inserted.toString() });
-  });
-  return spans;
+  return structuralSpans(text, operation);
 }
 
 /** Applies an operation, returning the resulting block text (for tests). */
@@ -279,6 +385,8 @@ export type TableCell = {
   from: number;
   to: number;
   line: number;
+  /** Navigable row index, excluding the delimiter row. */
+  row: number;
   column: number;
 };
 
@@ -288,23 +396,111 @@ export type TableCell = {
  */
 export function tableCellRanges(text: string): TableCell[] {
   const lines = parseTableLines(text);
+  const delimiterIndex = tableDelimiterIndex(lines);
   const cells: TableCell[] = [];
+  let row = 0;
   for (const [index, line] of lines.entries()) {
-    if (isDelimiterLine(line.text) || line.cells.length === 0) {
+    if (index === delimiterIndex || line.cells.length === 0) {
       continue;
     }
     for (const [column, cell] of line.cells.entries()) {
       const raw = line.text.slice(cell.from, cell.to);
-      const leading = raw.length - raw.trimStart().length;
       const trimmedLength = raw.trim().length;
+      const leading =
+        trimmedLength === 0
+          ? Math.ceil(raw.length / 2)
+          : raw.length - raw.trimStart().length;
       const from = line.start + cell.from + leading;
       cells.push({
         from,
         to: from + trimmedLength,
         line: index,
+        row,
         column,
       });
     }
+    row += 1;
   }
   return cells;
+}
+
+/** Extends a parsed table through adjacent pipe rows the Markdown tree omits. */
+export function extendedTableBlockEnd(
+  sourceFromTable: string,
+  parsedLength: number,
+): number {
+  const columnCount = Math.max(
+    1,
+    ...tableCellRanges(sourceFromTable.slice(0, parsedLength))
+      .filter((cell) => cell.row === 0)
+      .map((cell) => cell.column + 1),
+  );
+  let to = parsedLength;
+  let lineStart = parsedLength;
+  while (sourceFromTable[lineStart] === "\n") {
+    lineStart += 1;
+    const lineEnd = sourceFromTable.indexOf("\n", lineStart);
+    const end = lineEnd < 0 ? sourceFromTable.length : lineEnd;
+    const line = sourceFromTable.slice(lineStart, end);
+    const trimmed = line.trim();
+    if (
+      !trimmed.startsWith("|") ||
+      !trimmed.endsWith("|") ||
+      (parseTableLines(line)[0]?.cells.length ?? 0) !== columnCount
+    ) {
+      break;
+    }
+    to = end;
+    lineStart = end;
+  }
+  return to;
+}
+
+/** Extends a parsed table through adjacent compatible rows in a document. */
+export function extendedTableDocumentEnd(
+  doc: Text,
+  tableFrom: number,
+  tableTo: number,
+): number {
+  return (
+    tableFrom +
+    extendedTableBlockEnd(
+      doc.sliceString(tableFrom, doc.length),
+      Math.max(0, tableTo - tableFrom),
+    )
+  );
+}
+
+/** Escapes only pipes that are not already Markdown-escaped. */
+export function escapeTableCellPipes(text: string): string {
+  let escaped = "";
+  let backslashes = 0;
+  for (const character of text) {
+    if (character === "|" && backslashes % 2 === 0) {
+      escaped += "\\";
+    }
+    escaped += character;
+    backslashes = character === "\\" ? backslashes + 1 : 0;
+  }
+  return escaped;
+}
+
+/** One byte-faithful cell write, scoped to the cell's trimmed source span. */
+export function editTableCell(
+  text: string,
+  row: number,
+  column: number,
+  source: string,
+): TableSpanChange | null {
+  const cell = tableCellRanges(text).find(
+    (candidate) => candidate.row === row && candidate.column === column,
+  );
+  if (cell === undefined) {
+    return null;
+  }
+  return {
+    from: cell.from,
+    to: cell.to,
+    insert: escapeTableCellPipes(source),
+  };
 }

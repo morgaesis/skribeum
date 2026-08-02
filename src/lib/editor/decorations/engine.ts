@@ -30,6 +30,13 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { tags } from "@lezer/highlight";
+import {
+  editTableCell,
+  escapeTableCellPipes,
+  extendedTableDocumentEnd,
+  type TableCell,
+  tableCellRanges,
+} from "../../features/tableOperations";
 import { renderMath } from "../../rendering/math";
 import { renderMermaid } from "../../rendering/mermaid";
 import { STRINGS } from "../../strings";
@@ -132,6 +139,174 @@ export const decorationTable = Facet.define<
 const sourceRevealEnabled = Facet.define<boolean, boolean>({
   combine: (values) => values.at(-1) ?? true,
 });
+
+const setTableCellReveal = StateEffect.define<boolean>();
+const tableCellRevealField = StateField.define<boolean>({
+  create: () => false,
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setTableCellReveal)) {
+        return effect.value;
+      }
+    }
+    return value;
+  },
+});
+
+type ExplicitTableSource = {
+  from: number;
+  to: number;
+  row: number;
+  column: number;
+  cellOffset: number;
+};
+
+const setExplicitTableSource = StateEffect.define<ExplicitTableSource | null>();
+
+const explicitTableSourceField = StateField.define<ExplicitTableSource | null>({
+  create: () => null,
+  update(value, transaction) {
+    let next =
+      value === null
+        ? null
+        : {
+            ...value,
+            from: transaction.changes.mapPos(value.from, -1),
+            to: transaction.changes.mapPos(value.to, 1),
+          };
+    for (const effect of transaction.effects) {
+      if (effect.is(setExplicitTableSource)) {
+        next = effect.value;
+      }
+    }
+    return next;
+  },
+});
+
+/** The deliberately revealed table source range, if any. */
+export function explicitTableSource(
+  state: EditorState,
+): Readonly<ExplicitTableSource> | null {
+  return state.field(explicitTableSourceField, false) ?? null;
+}
+
+/** Reveals one complete table as source at the active cell's source offset. */
+export function editRenderedTableSource(view: EditorView): boolean {
+  if (view.state.readOnly) {
+    return false;
+  }
+  const session = tableCellSessions.get(view);
+  if (session === undefined) {
+    return false;
+  }
+  const table = view.state.sliceDoc(session.tableFrom, session.tableTo);
+  const cell = tableCellRanges(table).find(
+    (candidate) =>
+      candidate.row === session.row && candidate.column === session.column,
+  );
+  if (cell === undefined) {
+    return false;
+  }
+  const state: ExplicitTableSource = {
+    from: session.tableFrom,
+    to: session.tableTo,
+    row: session.row,
+    column: session.column,
+    cellOffset: session.head,
+  };
+  blurRenderedTableCell(view);
+  view.focus();
+  view.dispatch({
+    effects: setExplicitTableSource.of(state),
+    selection: {
+      anchor: Math.min(
+        session.tableFrom + cell.to,
+        session.tableFrom + cell.from + session.head,
+      ),
+    },
+    scrollIntoView: true,
+    userEvent: "select.table-source",
+  });
+  return true;
+}
+
+/** Restores the rendered table, optionally returning focus to its source cell. */
+export function closeRenderedTableSource(
+  view: EditorView,
+  restoreCell: boolean,
+): boolean {
+  const openSource = explicitTableSource(view.state);
+  if (openSource === null) {
+    return false;
+  }
+  const caret = view.state.selection.main.head - openSource.from;
+  const cells = tableCellRanges(
+    view.state.sliceDoc(openSource.from, openSource.to),
+  );
+  const currentCell = cells.reduce<TableCell | undefined>((nearest, cell) => {
+    if (cell.from <= caret && caret <= cell.to) {
+      return cell;
+    }
+    if (nearest === undefined) {
+      return cell;
+    }
+    const distance = Math.min(
+      Math.abs(caret - cell.from),
+      Math.abs(caret - cell.to),
+    );
+    const nearestDistance = Math.min(
+      Math.abs(caret - nearest.from),
+      Math.abs(caret - nearest.to),
+    );
+    return distance < nearestDistance ? cell : nearest;
+  }, undefined);
+  const source =
+    currentCell === undefined
+      ? openSource
+      : {
+          ...openSource,
+          row: currentCell.row,
+          column: currentCell.column,
+          cellOffset: Math.max(
+            0,
+            Math.min(
+              currentCell.to - currentCell.from,
+              caret - currentCell.from,
+            ),
+          ),
+        };
+  view.dispatch({
+    effects: setExplicitTableSource.of(null),
+    ...(restoreCell
+      ? { selection: { anchor: source.from }, scrollIntoView: true }
+      : {}),
+  });
+  if (restoreCell) {
+    tableCellSessions.set(view, {
+      tableFrom: source.from,
+      tableTo: source.to,
+      row: source.row,
+      column: source.column,
+      anchor: source.cellOffset,
+      head: source.cellOffset,
+      verticalGoal: source.cellOffset,
+    });
+    updateTableCellStates(view);
+    view.requestMeasure({
+      read: () => null,
+      write: () => {
+        focusRenderedTableCell(
+          view,
+          source.from,
+          source.row,
+          source.column,
+          source.cellOffset,
+        );
+      },
+    });
+  }
+  return true;
+}
 
 /** Keeps cursor-sensitive source markers hidden on non-editable surfaces. */
 export const readOnlyDecorationMode = sourceRevealEnabled.of(false);
@@ -1035,34 +1210,44 @@ class MermaidWidget extends WidgetType {
   }
 }
 
-type TableLayout = {
-  cells: string[];
-  columns: string;
-  alignments: ("left" | "center" | "right")[];
+type TableRenderedCell = {
+  source: string;
+  row: number;
+  column: number;
+};
+
+type TableRenderedRow = {
+  cells: TableRenderedCell[];
   header: boolean;
-  first: boolean;
-  last: boolean;
 };
 
-type TableGeometry = {
-  rows: Array<{
-    from: number;
-    to: number;
-    cells: string[];
-  }>;
+type TableLayout = {
+  from: number;
+  to: number;
+  rows: TableRenderedRow[];
   columns: string;
   alignments: ("left" | "center" | "right")[];
 };
 
-function directChildren(node: SyntaxNode, name: string): SyntaxNode[] {
-  const children: SyntaxNode[] = [];
-  for (let child = node.firstChild; child !== null; child = child.nextSibling) {
-    if (child.name === name) {
-      children.push(child);
-    }
-  }
-  return children;
-}
+type TableCellSession = {
+  tableFrom: number;
+  tableTo: number;
+  row: number;
+  column: number;
+  anchor: number;
+  head: number;
+  verticalGoal: number;
+};
+
+const tableCellSessions = new WeakMap<EditorView, TableCellSession>();
+const nestedTableCellViews = new WeakMap<HTMLElement, EditorView>();
+const nestedTableCellParents = new WeakMap<
+  EditorView,
+  { parent: EditorView; tableFrom: number; row: number; column: number }
+>();
+const syncingTableCellViews = new WeakSet<EditorView>();
+const tableCellRevealStates = new WeakMap<EditorView, boolean>();
+const tablePointerCleanups = new WeakMap<HTMLElement, () => void>();
 
 function delimiterAlignments(text: string, count: number) {
   const cells = text
@@ -1078,115 +1263,1027 @@ function delimiterAlignments(text: string, count: number) {
   });
 }
 
-function tableLayout(
-  node: SyntaxNode,
-  doc: Text,
-  geometries: Map<string, TableGeometry>,
-): TableLayout {
-  const table = node.parent;
-  const key = `${table?.from ?? node.from}:${table?.to ?? node.to}`;
-  let geometry = geometries.get(key);
-  if (geometry === undefined) {
-    const rows: SyntaxNode[] = [];
-    let delimiter = "";
-    if (table !== null) {
-      for (
-        let child = table.firstChild;
-        child !== null;
-        child = child.nextSibling
-      ) {
-        if (child.name === "TableHeader" || child.name === "TableRow") {
-          rows.push(child);
-        } else if (child.name === "TableDelimiter") {
-          delimiter = doc.sliceString(child.from, child.to);
-        }
-      }
-    }
-    const geometryRows = rows.map((row) => ({
-      from: row.from,
-      to: row.to,
-      cells: directChildren(row, "TableCell").map((cell) =>
-        doc.sliceString(cell.from, cell.to).trim(),
+function extendedTableEnd(node: SyntaxNode, doc: Text): number {
+  return extendedTableDocumentEnd(doc, node.from, node.to);
+}
+
+function tableLayout(node: SyntaxNode, doc: Text): TableLayout {
+  const to = extendedTableEnd(node, doc);
+  const source = doc.sliceString(node.from, to);
+  const cells = tableCellRanges(source);
+  const rowCount = Math.max(0, ...cells.map((cell) => cell.row)) + 1;
+  const rows = Array.from({ length: rowCount }, (_, row) => ({
+    header: row === 0,
+    cells: cells
+      .filter((cell) => cell.row === row)
+      .map((cell) => ({
+        source: source.slice(cell.from, cell.to),
+        row,
+        column: cell.column,
+      })),
+  }));
+  const delimiter = source.split("\n")[1] ?? "";
+  const columnCount = Math.max(1, ...rows.map((row) => row.cells.length));
+  const widths = Array.from({ length: columnCount }, (_, index) =>
+    Math.max(
+      8,
+      Math.min(
+        32,
+        Math.max(...rows.map((row) => row.cells[index]?.source.length ?? 0)),
       ),
-    }));
-    const columnCount = Math.max(
-      1,
-      ...geometryRows.map((row) => row.cells.length),
-    );
-    const widths = Array.from({ length: columnCount }, (_, index) =>
-      Math.max(
-        8,
-        Math.min(
-          32,
-          Math.max(...geometryRows.map((row) => row.cells[index]?.length ?? 0)),
-        ),
-      ),
-    );
-    geometry = {
-      rows: geometryRows,
-      columns: widths.map((width) => `minmax(0, ${width}fr)`).join(" "),
-      alignments: delimiterAlignments(delimiter, columnCount),
-    };
-    geometries.set(key, geometry);
-  }
-  const rowIndex = geometry.rows.findIndex(
-    (row) => row.from === node.from && row.to === node.to,
+    ),
   );
   return {
-    cells: geometry.rows[rowIndex]?.cells ?? [],
-    columns: geometry.columns,
-    alignments: geometry.alignments,
-    header: node.name === "TableHeader",
-    first: rowIndex === 0,
-    last: rowIndex === geometry.rows.length - 1,
+    from: node.from,
+    to,
+    rows,
+    columns: widths.map((width) => `minmax(0, ${width}fr)`).join(" "),
+    alignments: delimiterAlignments(delimiter, columnCount),
   };
 }
 
-class TableRowWidget extends WidgetType {
-  constructor(readonly layout: TableLayout) {
-    super();
+function tableLayoutAt(state: EditorState, from: number): TableLayout | null {
+  if (from < 0 || from >= state.doc.length) {
+    return null;
   }
-
-  override eq(other: TableRowWidget): boolean {
-    return JSON.stringify(other.layout) === JSON.stringify(this.layout);
+  let node: SyntaxNode | null = syntaxTree(state).resolveInner(
+    Math.min(state.doc.length, from + 1),
+    1,
+  );
+  while (node !== null && node.name !== "Table") {
+    node = node.parent;
   }
+  return node?.from === from ? tableLayout(node, state.doc) : null;
+}
 
-  override toDOM(): HTMLElement {
-    const row = document.createElement("div");
-    row.className = [
-      "cm-skr-table-row",
-      this.layout.header ? "cm-skr-table-header" : "",
-      this.layout.first ? "cm-skr-table-first" : "",
-      this.layout.last ? "cm-skr-table-last" : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-    row.setAttribute("role", "row");
-    row.style.gridTemplateColumns = this.layout.columns;
-    for (const [index, text] of this.layout.cells.entries()) {
-      const cell = document.createElement(
-        this.layout.header ? "strong" : "span",
-      );
-      cell.className = "cm-skr-table-cell";
-      cell.setAttribute("role", this.layout.header ? "columnheader" : "cell");
-      cell.style.textAlign = this.layout.alignments[index] ?? "left";
-      cell.textContent = text;
-      row.append(cell);
+function tableLayoutWithin(
+  state: EditorState,
+  from: number,
+  to: number,
+): TableLayout | null {
+  let found: TableLayout | null = null;
+  syntaxTree(state).iterate({
+    from,
+    to,
+    enter(node) {
+      if (
+        found === null &&
+        node.name === "Table" &&
+        node.from >= from &&
+        node.to <= to
+      ) {
+        found = tableLayout(node.node, state.doc);
+        return false;
+      }
+      return found === null;
+    },
+  });
+  return found;
+}
+
+function tableCellHost(
+  view: EditorView,
+  tableFrom: number,
+  row: number,
+  column: number,
+): HTMLElement | null {
+  return view.dom.querySelector<HTMLElement>(
+    `.cm-skr-table-cell[data-table-from="${tableFrom}"][data-row="${row}"][data-column="${column}"]`,
+  );
+}
+
+function updateTableCellStates(view: EditorView): void {
+  const session = tableCellSessions.get(view);
+  if (session === undefined) {
+    delete view.dom.dataset.tableCellActive;
+  } else {
+    view.dom.dataset.tableCellActive = "true";
+  }
+  for (const cell of view.dom.querySelectorAll<HTMLElement>(
+    ".cm-skr-table-cell[data-table-from]",
+  )) {
+    const active =
+      session !== undefined &&
+      Number(cell.dataset.tableFrom) === session.tableFrom &&
+      Number(cell.dataset.row) === session.row &&
+      Number(cell.dataset.column) === session.column;
+    cell.dataset.editing = active ? "true" : "false";
+    cell.setAttribute("aria-selected", active ? "true" : "false");
+    const editor = cell.querySelector<HTMLElement>(".cm-content");
+    if (editor !== null) {
+      editor.tabIndex = active ? 0 : -1;
     }
-    return row;
-  }
-
-  override ignoreEvent(): boolean {
-    return false;
+    for (const descendant of cell.querySelectorAll<HTMLElement>("[tabindex]")) {
+      if (descendant !== editor) {
+        descendant.tabIndex = -1;
+      }
+    }
+    const nested = nestedTableCellViews.get(cell);
+    if (nested !== undefined && tableCellRevealStates.get(nested) !== active) {
+      tableCellRevealStates.set(nested, active);
+      nested.dispatch({ effects: setTableCellReveal.of(active) });
+    }
   }
 }
 
-class TableSeparatorWidget extends WidgetType {
-  override toDOM(): HTMLElement {
-    const separator = document.createElement("div");
-    separator.className = "cm-skr-table-separator";
-    separator.setAttribute("aria-hidden", "true");
-    return separator;
+function tableCellSelection(
+  view: EditorView,
+  selection: "start" | "end" | "all" | number,
+): { anchor: number; head?: number } {
+  if (selection === "all") {
+    return { anchor: 0, head: view.state.doc.length };
+  }
+  if (selection === "end") {
+    return { anchor: view.state.doc.length };
+  }
+  return {
+    anchor:
+      selection === "start"
+        ? 0
+        : Math.max(0, Math.min(selection, view.state.doc.length)),
+  };
+}
+
+/** Focuses one rendered cell while parking the host selection at the table. */
+export function focusRenderedTableCell(
+  view: EditorView,
+  tableFrom: number,
+  row: number,
+  column: number,
+  selection: "start" | "end" | "all" | number = "end",
+): boolean {
+  if (view.state.readOnly) {
+    return false;
+  }
+  const host = tableCellHost(view, tableFrom, row, column);
+  const nested = host === null ? undefined : nestedTableCellViews.get(host);
+  if (host === null || nested === undefined) {
+    return false;
+  }
+  const range = tableCellSelection(nested, selection);
+  const grid = host.closest<HTMLElement>(".cm-skr-table-grid");
+  const tableTo = Number(grid?.dataset.tableTo ?? tableFrom);
+  tableCellSessions.set(view, {
+    tableFrom,
+    tableTo,
+    row,
+    column,
+    anchor: range.anchor,
+    head: range.head ?? range.anchor,
+    verticalGoal: range.head ?? range.anchor,
+  });
+  if (
+    !view.state.selection.main.empty ||
+    view.state.selection.main.head !== tableFrom
+  ) {
+    view.dispatch({ selection: { anchor: tableFrom }, scrollIntoView: true });
+  }
+  updateTableCellStates(view);
+  nested.dispatch({ selection: range, scrollIntoView: true });
+  nested.focus();
+  return true;
+}
+
+/** The active rendered table cell, if the cell caret owns focus. */
+export function focusedRenderedTableCell(
+  view: EditorView,
+): Readonly<TableCellSession> | null {
+  const session = tableCellSessions.get(view);
+  if (session === undefined) {
+    return null;
+  }
+  const host = tableCellHost(
+    view,
+    session.tableFrom,
+    session.row,
+    session.column,
+  );
+  const nested = host === null ? undefined : nestedTableCellViews.get(host);
+  if (host === null || nested === undefined || !nested.dom.isConnected) {
+    tableCellSessions.delete(view);
+    updateTableCellStates(view);
+    return null;
+  }
+  return session;
+}
+
+/** Ends cell editing without revealing table source. */
+export function blurRenderedTableCell(view: EditorView): void {
+  const session = tableCellSessions.get(view);
+  if (session !== undefined) {
+    const host = tableCellHost(
+      view,
+      session.tableFrom,
+      session.row,
+      session.column,
+    );
+    const nested = host === null ? undefined : nestedTableCellViews.get(host);
+    const active = document.activeElement;
+    if (
+      nested !== undefined &&
+      active instanceof HTMLElement &&
+      nested.dom.contains(active)
+    ) {
+      active.blur();
+    }
+  }
+  tableCellSessions.delete(view);
+  updateTableCellStates(view);
+}
+
+function tableExitPosition(
+  view: EditorView,
+  session: TableCellSession,
+  direction: "before" | "after",
+): number {
+  if (direction === "before") {
+    return view.state.doc.lineAt(Math.max(0, session.tableFrom - 1)).to;
+  }
+  if (session.tableTo >= view.state.doc.length) {
+    return view.state.doc.length;
+  }
+  return view.state.doc.lineAt(
+    Math.min(view.state.doc.length, session.tableTo + 1),
+  ).from;
+}
+
+function focusHostOutsideTable(
+  view: EditorView,
+  session: TableCellSession,
+  direction: "before" | "after",
+): void {
+  const anchor = tableExitPosition(view, session, direction);
+  blurRenderedTableCell(view);
+  view.focus();
+  view.dispatch({ selection: { anchor }, scrollIntoView: true });
+}
+
+function promoteCellSelection(
+  view: EditorView,
+  session: TableCellSession,
+): void {
+  blurRenderedTableCell(view);
+  view.focus();
+  view.dispatch({
+    selection: { anchor: session.tableFrom, head: session.tableTo },
+    scrollIntoView: true,
+    userEvent: "select.table",
+  });
+}
+
+function tableCellsForSession(view: EditorView, session: TableCellSession) {
+  return tableCellRanges(
+    view.state.sliceDoc(session.tableFrom, session.tableTo),
+  );
+}
+
+function moveCell(
+  view: EditorView,
+  session: TableCellSession,
+  row: number,
+  column: number,
+  selection: "start" | "end" | "all" | number,
+  preserveVerticalGoal = false,
+): boolean {
+  const cell = tableCellsForSession(view, session).find(
+    (candidate) => candidate.row === row && candidate.column === column,
+  );
+  const verticalGoal = session.verticalGoal;
+  const moved =
+    cell !== undefined &&
+    focusRenderedTableCell(view, session.tableFrom, row, column, selection);
+  if (moved && preserveVerticalGoal) {
+    const next = tableCellSessions.get(view);
+    if (next !== undefined) {
+      next.verticalGoal = verticalGoal;
+    }
+  }
+  return moved;
+}
+
+function dispatchTableWidgetCommand(
+  view: EditorView,
+  id: string,
+  tableFrom: number,
+  row: number,
+  column: number,
+): void {
+  focusRenderedTableCell(view, tableFrom, row, column, "end");
+  view.dom.dispatchEvent(
+    new CustomEvent("skribeum:table-command", {
+      bubbles: true,
+      detail: { id },
+    }),
+  );
+}
+
+function handleTableCellKey(event: KeyboardEvent, nested: EditorView): boolean {
+  const owner = nestedTableCellParents.get(nested);
+  if (owner === undefined) {
+    return false;
+  }
+  const parent = owner.parent;
+  const session = tableCellSessions.get(parent);
+  if (session === undefined) {
+    return false;
+  }
+  const selection = nested.state.selection.main;
+  const headAtStart = selection.head === 0;
+  const headAtEnd = selection.head === nested.state.doc.length;
+  const atStart = selection.empty && headAtStart;
+  const atEnd = selection.empty && headAtEnd;
+  const cells = tableCellsForSession(parent, session);
+  const firstRow = cells.reduce(
+    (minimum, cell) => Math.min(minimum, cell.row),
+    session.row,
+  );
+  const lastRow = cells.reduce(
+    (maximum, cell) => Math.max(maximum, cell.row),
+    session.row,
+  );
+  const stop = () => {
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  };
+  if (
+    event.shiftKey &&
+    ((event.key === "ArrowLeft" && headAtStart) ||
+      (event.key === "ArrowRight" && headAtEnd) ||
+      (event.key === "ArrowUp" && session.row === firstRow) ||
+      (event.key === "ArrowDown" && session.row === lastRow))
+  ) {
+    promoteCellSelection(parent, session);
+    return stop();
+  }
+  if (event.key === "ArrowLeft" && atStart) {
+    const index = cells.findIndex(
+      (cell) => cell.row === session.row && cell.column === session.column,
+    );
+    const previous = cells[index - 1];
+    if (previous !== undefined) {
+      moveCell(parent, session, previous.row, previous.column, "end");
+    }
+    return stop();
+  }
+  if (event.key === "ArrowRight" && atEnd) {
+    const index = cells.findIndex(
+      (cell) => cell.row === session.row && cell.column === session.column,
+    );
+    const next = cells[index + 1];
+    if (next === undefined) {
+      focusHostOutsideTable(parent, session, "after");
+    } else {
+      moveCell(parent, session, next.row, next.column, "start");
+    }
+    return stop();
+  }
+  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    const direction = event.key === "ArrowUp" ? -1 : 1;
+    const targetRow = session.row + direction;
+    if (
+      !moveCell(
+        parent,
+        session,
+        targetRow,
+        session.column,
+        session.verticalGoal,
+        true,
+      )
+    ) {
+      focusHostOutsideTable(
+        parent,
+        session,
+        direction < 0 ? "before" : "after",
+      );
+    }
+    return stop();
+  }
+  if (event.key === "Tab") {
+    const index = cells.findIndex(
+      (cell) => cell.row === session.row && cell.column === session.column,
+    );
+    const next = cells[index + (event.shiftKey ? -1 : 1)];
+    if (next !== undefined) {
+      moveCell(parent, session, next.row, next.column, "all");
+    } else if (!event.shiftKey) {
+      dispatchTableWidgetCommand(
+        parent,
+        "table.row.insert-below",
+        session.tableFrom,
+        session.row,
+        0,
+      );
+    }
+    return stop();
+  }
+  if (event.key === "Enter") {
+    if (
+      !moveCell(
+        parent,
+        session,
+        session.row + 1,
+        session.column,
+        session.verticalGoal,
+        true,
+      )
+    ) {
+      dispatchTableWidgetCommand(
+        parent,
+        "table.row.insert-below",
+        session.tableFrom,
+        session.row,
+        session.column,
+      );
+    }
+    return stop();
+  }
+  if (event.key === "Escape") {
+    focusHostOutsideTable(parent, session, "after");
+    return stop();
+  }
+  if (
+    (event.key === "Backspace" && atStart) ||
+    (event.key === "Delete" && atEnd)
+  ) {
+    return stop();
+  }
+  return false;
+}
+
+// registry-exempt keydown: rendered table cells own editing and WAI-ARIA grid
+// travel while application-level structure changes remain registry commands.
+const tableCellKeys = EditorView.domEventHandlers({
+  keydown: handleTableCellKey,
+});
+
+function escapedPrefixLength(source: string, offset: number): number {
+  return escapeTableCellPipes(source.slice(0, offset)).length;
+}
+
+function writeTableCell(
+  parent: EditorView,
+  nested: EditorView,
+  row: number,
+  column: number,
+  source: string,
+  anchor: number,
+  head: number,
+): void {
+  const session = tableCellSessions.get(parent);
+  const owner = nestedTableCellParents.get(nested);
+  const tableFrom = owner?.tableFrom;
+  if (
+    session === undefined ||
+    parent.state.readOnly ||
+    syncingTableCellViews.has(nested) ||
+    owner?.parent !== parent ||
+    tableFrom === undefined ||
+    owner.row !== row ||
+    owner.column !== column ||
+    session.tableFrom !== tableFrom ||
+    session.row !== row ||
+    session.column !== column
+  ) {
+    return;
+  }
+  const table = parent.state.sliceDoc(session.tableFrom, session.tableTo);
+  const change = editTableCell(table, row, column, source);
+  if (change === null) {
+    return;
+  }
+  session.anchor = escapedPrefixLength(source, anchor);
+  session.head = escapedPrefixLength(source, head);
+  session.verticalGoal = session.head;
+  parent.dispatch({
+    changes: {
+      from: session.tableFrom + change.from,
+      to: session.tableFrom + change.to,
+      insert: change.insert,
+    },
+    selection: { anchor: session.tableFrom },
+    userEvent: "input.table-cell",
+  });
+}
+
+function nestedTableCellView(
+  parent: EditorView,
+  host: HTMLElement,
+  layout: TableLayout,
+  cell: TableRenderedCell,
+  taskStatuses: readonly TaskStatus[],
+  wikilinks: WikilinkResolutionContext,
+): EditorView {
+  const nested = new EditorView({
+    state: EditorState.create({
+      doc: cell.source,
+      extensions: [
+        markdown({
+          base: markdownLanguage,
+          extensions: obsidianMarkdownExtensionsFor(taskStatuses),
+          codeLanguages: codeLanguage,
+        }),
+        syntaxHighlighting(tokenHighlightStyle, { fallback: true }),
+        taskStatusConfiguration.of(taskStatuses),
+        decorationEngine(wikilinks),
+        tableCellRevealField,
+        EditorState.transactionFilter.of((transaction) => {
+          if (!transaction.docChanged) {
+            return transaction;
+          }
+          const source = transaction.newDoc.toString();
+          const normalized = source.replace(/\r?\n/gu, " ");
+          if (source === normalized) {
+            return transaction;
+          }
+          const normalizeOffset = (offset: number) =>
+            source.slice(0, offset).replace(/\r?\n/gu, " ").length;
+          return {
+            changes: {
+              from: 0,
+              to: transaction.startState.doc.length,
+              insert: normalized,
+            },
+            selection: {
+              anchor: normalizeOffset(transaction.newSelection.main.anchor),
+              head: normalizeOffset(transaction.newSelection.main.head),
+            },
+          };
+        }),
+        EditorView.lineWrapping,
+        ...(parent.state.readOnly ? [] : [tableCellKeys]),
+        EditorState.readOnly.of(parent.state.readOnly),
+        EditorView.editable.of(!parent.state.readOnly),
+        EditorView.contentAttributes.of({
+          "aria-label": `${STRINGS.tableCellLabel} ${cell.row + 1}, ${cell.column + 1}`,
+          "aria-multiline": "false",
+          spellcheck: "true",
+          tabindex: "-1",
+        }),
+      ],
+    }),
+    parent: host,
+    dispatchTransactions(transactions, target) {
+      const current = tableCellSessions.get(parent);
+      const owner = nestedTableCellParents.get(target);
+      const ownsCaret =
+        owner?.parent === parent &&
+        current?.tableFrom === owner.tableFrom &&
+        current.row === owner.row &&
+        current.column === owner.column;
+      if (
+        transactions.some((transaction) => transaction.docChanged) &&
+        !syncingTableCellViews.has(target) &&
+        !ownsCaret
+      ) {
+        return;
+      }
+      target.update(transactions);
+      const selection = target.state.selection.main;
+      const selectionChanged = transactions.some(
+        (transaction) => transaction.selection !== undefined,
+      );
+      if (
+        current !== undefined &&
+        ownsCaret &&
+        (selectionChanged ||
+          transactions.some((transaction) => transaction.docChanged))
+      ) {
+        current.anchor = selection.anchor;
+        current.head = selection.head;
+        current.verticalGoal = selection.head;
+      }
+      if (transactions.some((transaction) => transaction.docChanged)) {
+        writeTableCell(
+          parent,
+          target,
+          cell.row,
+          cell.column,
+          target.state.doc.toString(),
+          selection.anchor,
+          selection.head,
+        );
+      }
+    },
+  });
+  nestedTableCellViews.set(host.parentElement ?? host, nested);
+  tableCellRevealStates.set(nested, false);
+  nestedTableCellParents.set(nested, {
+    parent,
+    tableFrom: layout.from,
+    row: cell.row,
+    column: cell.column,
+  });
+  if (!parent.state.readOnly) {
+    nested.dom.addEventListener("focusin", () => {
+      const owner = nestedTableCellParents.get(nested);
+      if (owner === undefined) {
+        return;
+      }
+      const selection = nested.state.selection.main;
+      const tableTo = Number(
+        host.closest<HTMLElement>(".cm-skr-table-grid")?.dataset.tableTo ??
+          owner.tableFrom,
+      );
+      tableCellSessions.set(parent, {
+        tableFrom: owner.tableFrom,
+        tableTo,
+        row: owner.row,
+        column: owner.column,
+        anchor: selection.anchor,
+        head: selection.head,
+        verticalGoal: selection.head,
+      });
+      if (parent.state.selection.main.head !== owner.tableFrom) {
+        parent.dispatch({ selection: { anchor: owner.tableFrom } });
+      }
+      updateTableCellStates(parent);
+    });
+  }
+  return nested;
+}
+
+class TableWidget extends WidgetType {
+  readonly contextKey: string;
+
+  constructor(
+    readonly layout: TableLayout,
+    readonly taskStatuses: readonly TaskStatus[],
+    readonly wikilinks: WikilinkResolutionContext,
+  ) {
+    super();
+    this.contextKey = JSON.stringify({
+      currentPath: wikilinks.currentPath,
+      linkPreviews: wikilinks.linkPreviews,
+      paths: wikilinks.paths,
+      config: wikilinks.config,
+      taskStatuses,
+    });
+  }
+
+  override eq(other: TableWidget): boolean {
+    return (
+      JSON.stringify(other.layout) === JSON.stringify(this.layout) &&
+      other.contextKey === this.contextKey
+    );
+  }
+
+  override toDOM(view: EditorView): HTMLElement {
+    const shell = document.createElement("div");
+    shell.className = "cm-skr-table-shell";
+    const grid = document.createElement("div");
+    grid.className = "cm-skr-table-grid";
+    grid.setAttribute("role", "grid");
+    grid.setAttribute("aria-rowcount", String(this.layout.rows.length));
+    grid.setAttribute(
+      "aria-colcount",
+      String(Math.max(0, ...this.layout.rows.map((row) => row.cells.length))),
+    );
+    grid.dataset.tableFrom = String(this.layout.from);
+    grid.dataset.tableTo = String(this.layout.to);
+    shell.dataset.tableContext = this.contextKey;
+    for (const [rowIndex, layoutRow] of this.layout.rows.entries()) {
+      const row = document.createElement("div");
+      row.className = [
+        "cm-skr-table-row",
+        layoutRow.header ? "cm-skr-table-header" : "",
+        rowIndex === 0 ? "cm-skr-table-first" : "",
+        rowIndex === this.layout.rows.length - 1 ? "cm-skr-table-last" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      row.setAttribute("role", "row");
+      row.setAttribute("aria-rowindex", String(rowIndex + 1));
+      row.style.gridTemplateColumns = this.layout.columns;
+      for (const cellLayout of layoutRow.cells) {
+        const cell = document.createElement("div");
+        cell.className = "cm-skr-table-cell";
+        cell.setAttribute(
+          "role",
+          layoutRow.header ? "columnheader" : "gridcell",
+        );
+        cell.setAttribute("aria-colindex", String(cellLayout.column + 1));
+        cell.setAttribute("aria-selected", "false");
+        cell.dataset.tableFrom = String(this.layout.from);
+        cell.dataset.row = String(cellLayout.row);
+        cell.dataset.column = String(cellLayout.column);
+        cell.dataset.editing = "false";
+        cell.style.textAlign =
+          this.layout.alignments[cellLayout.column] ?? "left";
+        const editorHost = document.createElement("div");
+        editorHost.className = "cm-skr-table-cell-editor";
+        cell.append(editorHost);
+        row.append(cell);
+        nestedTableCellView(
+          view,
+          editorHost,
+          this.layout,
+          cellLayout,
+          this.taskStatuses,
+          this.wikilinks,
+        );
+        const focusAtPointer = (event: MouseEvent | PointerEvent) => {
+          if (view.state.readOnly) {
+            return;
+          }
+          const nested = nestedTableCellViews.get(cell);
+          if (nested !== undefined) {
+            const clicked = nested.posAtCoords({
+              x: event.clientX,
+              y: event.clientY,
+            });
+            const content = nested.contentDOM.getBoundingClientRect();
+            const position =
+              clicked ??
+              (event.clientX <= content.left ? 0 : nested.state.doc.length);
+            focusRenderedTableCell(
+              view,
+              Number(cell.dataset.tableFrom),
+              Number(cell.dataset.row),
+              Number(cell.dataset.column),
+              position,
+            );
+            event.preventDefault();
+          }
+        };
+        cell.addEventListener("click", focusAtPointer);
+        const startSelectionDrag = (startEvent: MouseEvent | PointerEvent) => {
+          if (view.state.readOnly) {
+            return;
+          }
+          focusAtPointer(startEvent);
+          tablePointerCleanups.get(grid)?.();
+          const pointerId =
+            typeof PointerEvent !== "undefined" &&
+            startEvent instanceof PointerEvent
+              ? startEvent.pointerId
+              : null;
+          const onMove = (event: MouseEvent | PointerEvent) => {
+            if (
+              pointerId !== null &&
+              event instanceof PointerEvent &&
+              event.pointerId !== pointerId
+            ) {
+              return;
+            }
+            const targetCell =
+              event.target instanceof Element
+                ? event.target.closest<HTMLElement>(".cm-skr-table-cell")
+                : null;
+            const bounds = cell.getBoundingClientRect();
+            const outsideCell =
+              event.clientX < bounds.left ||
+              event.clientX > bounds.right ||
+              event.clientY < bounds.top ||
+              event.clientY > bounds.bottom;
+            if (outsideCell || targetCell !== cell) {
+              const session = tableCellSessions.get(view);
+              if (session !== undefined) {
+                promoteCellSelection(view, session);
+              }
+              cleanup();
+            }
+          };
+          const onPointerMove = (event: PointerEvent) => onMove(event);
+          const onMouseMove = (event: MouseEvent) => onMove(event);
+          const cleanup = () => {
+            document.removeEventListener("pointermove", onPointerMove, true);
+            document.removeEventListener("pointerup", cleanup, true);
+            document.removeEventListener("pointercancel", cleanup, true);
+            document.removeEventListener("mousemove", onMouseMove, true);
+            document.removeEventListener("mouseup", cleanup, true);
+            tablePointerCleanups.delete(grid);
+          };
+          tablePointerCleanups.set(grid, cleanup);
+          if (pointerId !== null) {
+            document.addEventListener("pointermove", onPointerMove, true);
+            document.addEventListener("pointerup", cleanup, true);
+            document.addEventListener("pointercancel", cleanup, true);
+          } else {
+            document.addEventListener("mousemove", onMouseMove, true);
+            document.addEventListener("mouseup", cleanup, true);
+          }
+        };
+        let pointerDownHandled = false;
+        cell.addEventListener("pointerdown", (event) => {
+          pointerDownHandled = true;
+          queueMicrotask(() => {
+            pointerDownHandled = false;
+          });
+          startSelectionDrag(event);
+        });
+        cell.addEventListener("mousedown", (event) => {
+          if (!pointerDownHandled) {
+            startSelectionDrag(event);
+          }
+        });
+      }
+      grid.append(row);
+    }
+
+    if (view.state.readOnly) {
+      shell.prepend(grid);
+      return shell;
+    }
+
+    const lastRow = Math.max(0, this.layout.rows.length - 1);
+    const lastRowColumn = Math.max(
+      0,
+      (this.layout.rows[lastRow]?.cells.length ?? 1) - 1,
+    );
+    const lastColumn = Math.max(
+      0,
+      ...this.layout.rows.map((row) => row.cells.length - 1),
+    );
+    const lastColumnRow = Math.max(
+      0,
+      this.layout.rows.findIndex((row) =>
+        row.cells.some((cell) => cell.column === lastColumn),
+      ),
+    );
+    const appendRow = document.createElement("button");
+    appendRow.type = "button";
+    appendRow.className = "cm-skr-table-insert cm-skr-table-insert-row";
+    appendRow.textContent = "+";
+    appendRow.tabIndex = -1;
+    appendRow.setAttribute("aria-label", STRINGS.tableAppendRow);
+    appendRow.addEventListener("click", () =>
+      dispatchTableWidgetCommand(
+        view,
+        "table.row.insert-below",
+        Number(grid.dataset.tableFrom),
+        lastRow,
+        lastRowColumn,
+      ),
+    );
+    shell.append(appendRow);
+
+    const appendColumn = document.createElement("button");
+    appendColumn.type = "button";
+    appendColumn.className = "cm-skr-table-insert cm-skr-table-insert-column";
+    appendColumn.textContent = "+";
+    appendColumn.tabIndex = -1;
+    appendColumn.setAttribute("aria-label", STRINGS.tableAppendColumn);
+    appendColumn.addEventListener("click", () =>
+      dispatchTableWidgetCommand(
+        view,
+        "table.column.insert-after",
+        Number(grid.dataset.tableFrom),
+        lastColumnRow,
+        lastColumn,
+      ),
+    );
+    shell.append(appendColumn);
+
+    shell.prepend(grid);
+
+    queueMicrotask(() => {
+      updateTableCellStates(view);
+      const session = tableCellSessions.get(view);
+      if (session?.tableFrom === this.layout.from) {
+        focusRenderedTableCell(
+          view,
+          session.tableFrom,
+          session.row,
+          session.column,
+          session.anchor === session.head ? session.head : "all",
+        );
+      }
+    });
+    return shell;
+  }
+
+  override updateDOM(dom: HTMLElement, view: EditorView): boolean {
+    if (dom.dataset.tableContext !== this.contextKey) {
+      return false;
+    }
+    const grid = dom.querySelector<HTMLElement>(":scope > .cm-skr-table-grid");
+    if (grid === null) {
+      return false;
+    }
+    const rows = [
+      ...grid.querySelectorAll<HTMLElement>(":scope > .cm-skr-table-row"),
+    ];
+    const expectedCells = this.layout.rows.flatMap((row) => row.cells);
+    const cells = [
+      ...grid.querySelectorAll<HTMLElement>(
+        ":scope > .cm-skr-table-row > .cm-skr-table-cell",
+      ),
+    ];
+    if (
+      rows.length !== this.layout.rows.length ||
+      cells.length !== expectedCells.length ||
+      expectedCells.some(
+        (cell, index) =>
+          Number(cells[index]?.dataset.row) !== cell.row ||
+          Number(cells[index]?.dataset.column) !== cell.column,
+      )
+    ) {
+      return false;
+    }
+
+    grid.setAttribute("aria-rowcount", String(this.layout.rows.length));
+    grid.setAttribute(
+      "aria-colcount",
+      String(Math.max(0, ...this.layout.rows.map((row) => row.cells.length))),
+    );
+    grid.dataset.tableFrom = String(this.layout.from);
+    grid.dataset.tableTo = String(this.layout.to);
+    for (const row of rows) {
+      row.style.gridTemplateColumns = this.layout.columns;
+      for (const cell of row.querySelectorAll<HTMLElement>(
+        ":scope > .cm-skr-table-cell",
+      )) {
+        const column = Number(cell.dataset.column);
+        cell.dataset.tableFrom = String(this.layout.from);
+        cell.style.textAlign = this.layout.alignments[column] ?? "left";
+      }
+    }
+
+    for (const [index, cell] of cells.entries()) {
+      const layoutCell = expectedCells[index];
+      const nested = nestedTableCellViews.get(cell);
+      if (layoutCell === undefined || nested === undefined) {
+        return false;
+      }
+      nestedTableCellParents.set(nested, {
+        parent: view,
+        tableFrom: this.layout.from,
+        row: layoutCell.row,
+        column: layoutCell.column,
+      });
+      if (nested.state.doc.toString() !== layoutCell.source) {
+        const session = tableCellSessions.get(view);
+        const active =
+          session?.tableFrom === this.layout.from &&
+          session.row === layoutCell.row &&
+          session.column === layoutCell.column;
+        const anchor = Math.min(
+          layoutCell.source.length,
+          active ? session.anchor : nested.state.selection.main.anchor,
+        );
+        const head = Math.min(
+          layoutCell.source.length,
+          active ? session.head : nested.state.selection.main.head,
+        );
+        syncingTableCellViews.add(nested);
+        nested.dispatch({
+          changes: {
+            from: 0,
+            to: nested.state.doc.length,
+            insert: layoutCell.source,
+          },
+          selection: { anchor, head },
+        });
+        syncingTableCellViews.delete(nested);
+      }
+    }
+    updateTableCellStates(view);
+    return true;
+  }
+
+  override destroy(dom: HTMLElement): void {
+    const grid = dom.querySelector<HTMLElement>(":scope > .cm-skr-table-grid");
+    if (grid !== null) {
+      tablePointerCleanups.get(grid)?.();
+      tablePointerCleanups.delete(grid);
+    }
+    const parents = new Set<EditorView>();
+    for (const host of dom.querySelectorAll<HTMLElement>(
+      ".cm-skr-table-cell",
+    )) {
+      const nested = nestedTableCellViews.get(host);
+      const owner =
+        nested === undefined ? undefined : nestedTableCellParents.get(nested);
+      if (owner !== undefined) {
+        parents.add(owner.parent);
+      }
+      nested?.destroy();
+      if (nested !== undefined) {
+        nestedTableCellParents.delete(nested);
+      }
+      nestedTableCellViews.delete(host);
+    }
+    for (const parent of parents) {
+      queueMicrotask(() => {
+        const session = tableCellSessions.get(parent);
+        if (
+          session !== undefined &&
+          tableCellHost(
+            parent,
+            session.tableFrom,
+            session.row,
+            session.column,
+          ) === null
+        ) {
+          blurRenderedTableCell(parent);
+        }
+      });
+    }
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
   }
 }
 
@@ -1604,8 +2701,7 @@ function isBlockWidgetRule(rule: DecorationRule): boolean {
     rule.presentation.place !== "before" &&
     (rule.presentation.widget === "math-block" ||
       rule.presentation.widget === "mermaid-diagram" ||
-      rule.presentation.widget === "table-row" ||
-      rule.presentation.widget === "table-separator")
+      rule.presentation.widget === "table")
   );
 }
 
@@ -1672,6 +2768,10 @@ type ComputeOptions = {
   taskStatuses?: readonly TaskStatus[];
   /** Preselected across the full table when decorations are split. */
   activeReveal?: RevealRegion | null;
+  /** One table intentionally shown as source instead of its grid widget. */
+  explicitTableSource?: { from: number; to: number } | null;
+  /** Prevents parent-document inline decorations from overlapping table cells. */
+  suppressRenderedTableDescendants?: boolean;
 };
 
 type RevealRegion = {
@@ -2104,8 +3204,12 @@ function widgetFor(
   doc: Text,
   wikilinks: WikilinkResolutionContext,
   taskStatuses: readonly TaskStatus[],
-  tableGeometries: Map<string, TableGeometry>,
-): { widget: WidgetType; block: boolean; attributes: Record<string, string> } {
+): {
+  widget: WidgetType;
+  block: boolean;
+  attributes: Record<string, string>;
+  to?: number;
+} {
   switch (widget) {
     case "task-checkbox": {
       const marker = taskMarkerCharacter(doc.sliceString(node.from, node.to));
@@ -2146,23 +3250,18 @@ function widgetFor(
           "data-language": "mermaid",
         },
       };
-    case "table-row": {
-      const layout = tableLayout(node, doc, tableGeometries);
+    case "table": {
+      const layout = tableLayout(node, doc);
       return {
-        widget: new TableRowWidget(layout),
+        widget: new TableWidget(layout, taskStatuses, wikilinks),
         block: true,
+        to: layout.to,
         attributes: {
-          role: "row",
-          "data-header": layout.header ? "true" : "false",
+          role: "grid",
+          "aria-rowcount": String(layout.rows.length),
         },
       };
     }
-    case "table-separator":
-      return {
-        widget: new TableSeparatorWidget(),
-        block: true,
-        attributes: { "aria-hidden": "true" },
-      };
     case "embed": {
       const target = node.getChild("Wikilink")?.getChild("WikilinkTarget");
       const targetText =
@@ -2219,7 +3318,6 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
   const built: BuiltDecoration[] = [];
   const seenLines = new Set<string>();
   const seenMotionRanges = new Set<string>();
-  const tableGeometries = new Map<string, TableGeometry>();
 
   const activeRevealOwns = (node: SyntaxNode): boolean =>
     activeReveal !== null &&
@@ -2249,6 +3347,21 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           ) {
             return false;
           }
+        }
+        if (
+          ref.name === "Table" &&
+          options.explicitTableSource !== null &&
+          options.explicitTableSource !== undefined &&
+          options.explicitTableSource.from <= ref.from &&
+          options.explicitTableSource.to >= ref.to
+        ) {
+          return false;
+        }
+        if (
+          ref.name === "Table" &&
+          options.suppressRenderedTableDescendants === true
+        ) {
+          return false;
         }
         const nodeRules = rules.get(ref.name);
         if (nodeRules === undefined) {
@@ -2431,7 +3544,6 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               doc,
               wikilinks,
               taskStatuses,
-              tableGeometries,
             );
             const skr = `widget ${presentation.widget}${serializeAttributes(builtWidget.attributes)}`;
             if (presentation.place === "before") {
@@ -2447,7 +3559,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             } else {
               built.push({
                 from: ref.from,
-                to: ref.to,
+                to: builtWidget.to ?? ref.to,
                 decoration: Decoration.replace({
                   atomic: true,
                   widget: builtWidget.widget,
@@ -2455,10 +3567,13 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                   skr,
                 }),
               });
-              if (presentation.widget === "embed") {
-                // The embed replacement owns its complete syntax subtree.
-                // Descendant wikilink decorations overlap the atomic range
-                // and can displace the widget when link context refreshes.
+              if (
+                presentation.widget === "embed" ||
+                presentation.widget === "table"
+              ) {
+                // Complete replacements own their syntax subtrees. Descendant
+                // decorations overlap the atomic range and can displace the
+                // widget when another input to the engine refreshes.
                 embedOwnsDescendants = true;
               }
             }
@@ -2512,6 +3627,7 @@ function revealSelection(state: EditorState): readonly {
 }[] {
   const main = state.selection.main;
   return state.facet(sourceRevealEnabled) &&
+    state.field(tableCellRevealField, false) !== false &&
     main.empty &&
     state.selection.ranges.every((range) => range.empty)
     ? [{ from: main.head, to: main.head }]
@@ -2546,6 +3662,9 @@ function buildViewDecorations(view: EditorView): DecorationSet {
     wikilinks,
     taskStatuses,
     activeReveal,
+    explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
+    suppressRenderedTableDescendants:
+      state.field(explicitTableSourceField, false) === null,
   });
 }
 
@@ -2570,6 +3689,7 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
       wikilinks,
       taskStatuses,
     ),
+    explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
   });
 }
 
@@ -2617,10 +3737,14 @@ const blockEngineField = StateField.define<BlockEngineState>({
         transaction.startState.facet(decorationTable) ||
       transaction.state.facet(sourceRevealEnabled) !==
         transaction.startState.facet(sourceRevealEnabled) ||
+      transaction.state.field(tableCellRevealField, false) !==
+        transaction.startState.field(tableCellRevealField, false) ||
       transaction.state.facet(taskStatusConfiguration) !==
         transaction.startState.facet(taskStatusConfiguration) ||
       transaction.state.field(wikilinkContext, false) !==
-        transaction.startState.field(wikilinkContext, false)
+        transaction.startState.field(wikilinkContext, false) ||
+      transaction.state.field(explicitTableSourceField, false) !==
+        transaction.startState.field(explicitTableSourceField, false)
     ) {
       return {
         decorations: buildBlockDecorations(transaction.state),
@@ -2643,10 +3767,14 @@ function needsRebuild(update: ViewUpdate): boolean {
       update.startState.facet(decorationTable) ||
     update.state.facet(sourceRevealEnabled) !==
       update.startState.facet(sourceRevealEnabled) ||
+    update.state.field(tableCellRevealField, false) !==
+      update.startState.field(tableCellRevealField, false) ||
     update.state.facet(taskStatusConfiguration) !==
       update.startState.facet(taskStatusConfiguration) ||
     update.state.field(wikilinkContext, false) !==
-      update.startState.field(wikilinkContext, false)
+      update.startState.field(wikilinkContext, false) ||
+    update.state.field(explicitTableSourceField, false) !==
+      update.startState.field(explicitTableSourceField, false)
   );
 }
 
@@ -3075,6 +4203,159 @@ const calloutPointerMapping = EditorView.domEventHandlers({
   },
 });
 
+function syncTableSelection(view: EditorView): void {
+  const selection = view.state.selection.main;
+  for (const grid of view.dom.querySelectorAll<HTMLElement>(
+    ".cm-skr-table-grid[data-table-from][data-table-to]",
+  )) {
+    const from = Number(grid.dataset.tableFrom);
+    const to = Number(grid.dataset.tableTo);
+    grid.classList.toggle(
+      "cm-skr-table-selected",
+      !selection.empty && selection.from <= from && selection.to >= to,
+    );
+  }
+}
+
+const tableSessionPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(readonly view: EditorView) {
+      syncTableSelection(view);
+    }
+
+    update(update: ViewUpdate): void {
+      const source = update.state.field(explicitTableSourceField, false);
+      const recognizedSource =
+        source === null || source === undefined
+          ? null
+          : tableLayoutWithin(update.state, source.from, source.to);
+      if (
+        source !== null &&
+        source !== undefined &&
+        (recognizedSource === null ||
+          (update.selectionSet &&
+            (update.state.selection.main.head < recognizedSource.from ||
+              update.state.selection.main.head > recognizedSource.to)))
+      ) {
+        queueMicrotask(() => closeRenderedTableSource(this.view, false));
+      } else if (
+        source !== null &&
+        source !== undefined &&
+        recognizedSource !== null &&
+        (source.from !== recognizedSource.from ||
+          source.to !== recognizedSource.to)
+      ) {
+        queueMicrotask(() => {
+          this.view.dispatch({
+            effects: setExplicitTableSource.of({
+              ...source,
+              from: recognizedSource.from,
+              to: recognizedSource.to,
+            }),
+          });
+        });
+      }
+      let session = tableCellSessions.get(this.view);
+      if (session !== undefined && update.docChanged) {
+        const previousFrom = session.tableFrom;
+        const previousTo = session.tableTo;
+        const activeRow = session.row;
+        const activeColumn = session.column;
+        const previousCell = tableCellRanges(
+          update.startState.sliceDoc(previousFrom, previousTo),
+        ).find(
+          (cell) => cell.row === activeRow && cell.column === activeColumn,
+        );
+        const inputFromNestedCell = update.transactions.some((transaction) =>
+          transaction.isUserEvent("input.table-cell"),
+        );
+        let replacedWholeTable = false;
+        update.changes.iterChangedRanges((from, to) => {
+          if (from <= previousFrom && to >= previousTo) {
+            replacedWholeTable = true;
+          }
+        });
+        session.tableFrom = update.changes.mapPos(previousFrom, -1);
+        session.tableTo = update.changes.mapPos(previousTo, 1);
+        const layout = replacedWholeTable
+          ? null
+          : tableLayoutAt(update.state, session.tableFrom);
+        if (
+          layout === null ||
+          !layout.rows[activeRow]?.cells.some(
+            (cell) => cell.column === activeColumn,
+          )
+        ) {
+          blurRenderedTableCell(this.view);
+          session = undefined;
+        } else {
+          session.tableFrom = layout.from;
+          session.tableTo = layout.to;
+          const currentCell = tableCellRanges(
+            update.state.sliceDoc(layout.from, layout.to),
+          ).find(
+            (cell) => cell.row === activeRow && cell.column === activeColumn,
+          );
+          if (
+            !inputFromNestedCell &&
+            previousCell !== undefined &&
+            currentCell !== undefined
+          ) {
+            const currentCellFrom = layout.from + currentCell.from;
+            const currentCellLength = currentCell.to - currentCell.from;
+            const mapSelection = (position: number): number =>
+              Math.max(
+                0,
+                Math.min(
+                  currentCellLength,
+                  update.changes.mapPos(
+                    previousFrom + previousCell.from + position,
+                    1,
+                  ) - currentCellFrom,
+                ),
+              );
+            session.anchor = mapSelection(session.anchor);
+            session.head = mapSelection(session.head);
+            session.verticalGoal = mapSelection(session.verticalGoal);
+          }
+        }
+      }
+      if (
+        session !== undefined &&
+        update.selectionSet &&
+        (!update.state.selection.main.empty ||
+          update.state.selection.main.head !== session.tableFrom)
+      ) {
+        blurRenderedTableCell(this.view);
+      }
+      if (update.docChanged || update.selectionSet) {
+        syncTableSelection(this.view);
+        queueMicrotask(() => {
+          syncTableSelection(this.view);
+          updateTableCellStates(this.view);
+        });
+      }
+    }
+
+    destroy(): void {
+      blurRenderedTableCell(this.view);
+    }
+  },
+  {
+    eventHandlers: {
+      mousedown(event, view) {
+        if (
+          event.target instanceof Element &&
+          event.target.closest(".cm-skr-table-grid") === null
+        ) {
+          blurRenderedTableCell(view);
+        }
+        return false;
+      },
+    },
+  },
+);
+
 const engineTheme = EditorView.baseTheme({
   ".cm-skr-heading": {
     fontFamily: "var(--skr-font-prose)",
@@ -3396,12 +4677,23 @@ const engineTheme = EditorView.baseTheme({
     borderRadius: "3px",
     padding: "0 2px",
   },
+  ".cm-skr-table-shell": {
+    position: "relative",
+    boxSizing: "border-box",
+    width: "100%",
+    overflow: "visible",
+  },
+  ".cm-skr-table-grid": {
+    boxSizing: "border-box",
+    width: "100%",
+  },
   ".cm-skr-table-row": {
     boxSizing: "border-box",
     display: "grid",
     width: "100%",
     borderLeft: "1px solid var(--skr-border)",
     borderRight: "1px solid var(--skr-border)",
+    borderBottom: "1px solid var(--skr-border)",
     backgroundColor: "var(--skr-surface)",
   },
   ".cm-skr-table-first": {
@@ -3410,12 +4702,10 @@ const engineTheme = EditorView.baseTheme({
     borderTopRightRadius: "0.375rem",
   },
   ".cm-skr-table-last": {
-    borderBottom: "1px solid var(--skr-border)",
     borderBottomLeftRadius: "0.375rem",
     borderBottomRightRadius: "0.375rem",
   },
   ".cm-skr-table-header": {
-    borderBottom: "1px solid var(--skr-border)",
     backgroundColor: "var(--skr-surface-subtle)",
     fontFamily: "var(--skr-font-interface)",
     fontSize: "0.875em",
@@ -3424,12 +4714,80 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-table-cell": {
     boxSizing: "border-box",
     minWidth: "0",
-    padding: "0.375rem 0.625rem",
     overflowWrap: "anywhere",
     borderRight: "1px solid var(--skr-border)",
   },
   ".cm-skr-table-cell:last-child": { borderRight: "0" },
-  ".cm-skr-table-separator": { display: "none" },
+  ".cm-skr-table-cell[data-editing=true]": {
+    outline: "2px solid var(--skr-focus)",
+    outlineOffset: "-2px",
+  },
+  ".cm-skr-table-selected .cm-skr-table-cell": {
+    backgroundColor: "var(--skr-selection-surface)",
+    color: "var(--skr-selection-text)",
+  },
+  ".cm-skr-table-cell-editor .cm-editor": {
+    minHeight: "100%",
+    color: "inherit",
+    backgroundColor: "transparent",
+  },
+  ".cm-skr-table-cell-editor .cm-editor.cm-focused": { outline: "none" },
+  ".cm-skr-table-cell-editor .cm-scroller": {
+    overflow: "visible",
+    fontFamily: "inherit",
+    lineHeight: "inherit",
+  },
+  ".cm-skr-table-cell-editor .cm-content": {
+    minHeight: "1.7em",
+    padding: "0.375rem 0.625rem",
+    caretColor: "var(--skr-caret)",
+    fontFamily: "inherit",
+    lineHeight: "inherit",
+    textAlign: "inherit",
+  },
+  ".cm-skr-table-cell-editor .cm-line": {
+    padding: "0",
+    textAlign: "inherit",
+  },
+  ".cm-skr-table-cell-editor .cm-gutters, .cm-skr-table-cell-editor .cm-activeLine":
+    { backgroundColor: "transparent" },
+  ".cm-skr-table-insert": {
+    position: "absolute",
+    zIndex: "2",
+    margin: "0",
+    padding: "0",
+    color: "var(--skr-text-muted)",
+    backgroundColor: "transparent",
+    border: "0",
+    opacity: "0",
+    cursor: "pointer",
+    transition: "opacity var(--skr-motion-duration) linear",
+  },
+  ".cm-skr-table-insert:hover, .cm-skr-table-insert:focus-visible": {
+    opacity: "1",
+  },
+  ".cm-skr-table-insert-row": {
+    left: "0",
+    bottom: "-1.25rem",
+    width: "100%",
+    height: "1.75rem",
+    paddingTop: "0.5rem",
+    backgroundImage:
+      "linear-gradient(to bottom, transparent calc(0.5rem - 1px), var(--skr-border-strong) calc(0.5rem - 1px), var(--skr-border-strong) 0.5rem, transparent 0.5rem)",
+  },
+  ".cm-skr-table-insert-column": {
+    top: "0",
+    right: "-1.25rem",
+    width: "1.75rem",
+    height: "100%",
+    paddingLeft: "0.5rem",
+    backgroundImage:
+      "linear-gradient(to right, transparent calc(0.5rem - 1px), var(--skr-border-strong) calc(0.5rem - 1px), var(--skr-border-strong) 0.5rem, transparent 0.5rem)",
+  },
+  '[data-table-cell-active="true"] > .cm-scroller > .cm-cursorLayer .cm-cursor':
+    {
+      display: "none",
+    },
   ".cm-skr-code-block": {
     boxSizing: "border-box",
     position: "relative",
@@ -3593,12 +4951,14 @@ export function decorationEngine(
     initialContext === undefined
       ? wikilinkContext
       : wikilinkContext.init(() => initialContext),
+    explicitTableSourceField,
     blockEngineField,
     enginePlugin,
     linkPreviewPlugin,
     linkPreviewKeys,
     EditorView.atomicRanges.of(atomicDecorations),
     calloutPointerMapping,
+    tableSessionPlugin,
     engineTheme,
   ];
 }

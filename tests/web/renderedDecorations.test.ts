@@ -1,4 +1,4 @@
-import { cursorCharForward } from "@codemirror/commands";
+import { cursorCharForward, deleteCharBackward } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
@@ -6,8 +6,13 @@ import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { changedTextSpan } from "../../src/lib/editor/byteChangeSet";
 import {
+  closeRenderedTableSource,
   decorationEngine,
   dispatchWikilinkContext,
+  editRenderedTableSource,
+  explicitTableSource,
+  focusedRenderedTableCell,
+  focusRenderedTableCell,
   taskStatusConfiguration,
   tokenHighlightStyle,
 } from "../../src/lib/editor/decorations/engine";
@@ -405,20 +410,22 @@ describe("rendered decoration DOM", () => {
     ).toBe(true);
   });
 
-  it("renders an aligned bordered table and reveals only the cursor row", () => {
+  it("renders one ARIA grid and never reveals pipe source on cursor travel", () => {
     const source =
       "| Name | Score |\n| :--- | ---: |\n| Ada | 10 |\n| Grace | 9 |\n\noutside";
     const view = mountedView(source);
+    const grid = view.dom.querySelector('[role="grid"]');
+    expect(grid).not.toBeNull();
     const rows = view.dom.querySelectorAll<HTMLElement>('[role="row"]');
     expect(rows).toHaveLength(3);
     expect(rows[0]?.querySelector('[role="columnheader"]')?.textContent).toBe(
       "Name",
     );
-    expect(rows[1]?.querySelectorAll('[role="cell"]')[1]?.textContent).toBe(
+    expect(rows[1]?.querySelectorAll('[role="gridcell"]')[1]?.textContent).toBe(
       "10",
     );
     expect(
-      (rows[1]?.querySelectorAll<HTMLElement>('[role="cell"]')[1] ?? null)
+      (rows[1]?.querySelectorAll<HTMLElement>('[role="gridcell"]')[1] ?? null)
         ?.style.textAlign,
     ).toBe("right");
     expect(rows[0]?.style.gridTemplateColumns).toBe(
@@ -426,10 +433,590 @@ describe("rendered decoration DOM", () => {
     );
 
     view.dispatch({ selection: { anchor: source.indexOf("Name") } });
-    expect(view.dom.querySelectorAll('[role="row"]')).toHaveLength(2);
-    expect(view.contentDOM.textContent).toContain("| Name | Score |");
-    expect(view.dom.querySelector('[role="cell"]')?.textContent).toBe("Ada");
+    expect(view.dom.querySelectorAll('[role="row"]')).toHaveLength(3);
+    expect(view.contentDOM.textContent).not.toContain("| Name | Score |");
+    expect(view.dom.querySelector('[role="gridcell"]')?.textContent).toBe(
+      "Ada",
+    );
   });
+
+  it("parks the host selection while a nested cell writes one exact span", async () => {
+    const source =
+      "before\n| Name  | Score |\n| :--- | ---: |\n| café   | keep  |\n\nafter";
+    const tableFrom = source.indexOf("| Name");
+    const view = mountedView(source, source.length);
+    const rows = [...view.dom.querySelectorAll<HTMLElement>('[role="row"]')];
+    const beforeTemplate = rows[0]?.style.gridTemplateColumns;
+    const tableShell = view.dom.querySelector(".cm-skr-table-shell");
+
+    expect(focusRenderedTableCell(view, tableFrom, 1, 0, "end")).toBe(true);
+    const activeCell = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"]',
+    );
+    const nestedEditor = activeCell?.querySelector<HTMLElement>(".cm-editor");
+    const nested =
+      nestedEditor === null || nestedEditor === undefined
+        ? null
+        : EditorView.findFromDOM(nestedEditor);
+    expect(nested).not.toBeNull();
+    expect(view.state.selection.main.head).toBe(tableFrom);
+    expect(view.dom.dataset.tableCellActive).toBe("true");
+    expect(activeCell?.getAttribute("role")).toBe("gridcell");
+    expect(activeCell?.getAttribute("aria-selected")).toBe("true");
+    expect(
+      activeCell?.querySelector<HTMLElement>(".cm-content")?.tabIndex,
+    ).toBe(0);
+    expect(
+      [
+        ...view.dom.querySelectorAll<HTMLElement>(
+          ".cm-skr-table-cell .cm-content",
+        ),
+      ]
+        .filter(
+          (element) => element !== activeCell?.querySelector(".cm-content"),
+        )
+        .every((element) => element.tabIndex === -1),
+    ).toBe(true);
+
+    const insertion = "naïve|🙂 and a much longer value";
+    nested?.dispatch({
+      changes: {
+        from: 0,
+        to: nested.state.doc.length,
+        insert: insertion,
+      },
+      selection: { anchor: insertion.length },
+      userEvent: "input.type",
+    });
+    await Promise.resolve();
+
+    expect(view.state.doc.toString()).toBe(
+      "before\n| Name  | Score |\n| :--- | ---: |\n| naïve\\|🙂 and a much longer value   | keep  |\n\nafter",
+    );
+    expect(view.dom.querySelector(".cm-skr-table-shell")).toBe(tableShell);
+    expect(
+      EditorView.findFromDOM(
+        view.dom.querySelector<HTMLElement>(
+          '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+        ) as HTMLElement,
+      ),
+    ).toBe(nested);
+    expect(view.state.selection.main.head).toBe(tableFrom);
+    const updatedRows = [
+      ...view.dom.querySelectorAll<HTMLElement>('[role="row"]'),
+    ];
+    expect(updatedRows[0]?.style.gridTemplateColumns).not.toBe(beforeTemplate);
+    expect(
+      updatedRows.every(
+        (row) =>
+          row.style.gridTemplateColumns ===
+          updatedRows[0]?.style.gridTemplateColumns,
+      ),
+    ).toBe(true);
+  });
+
+  it("reveals table pipes only through the deliberate table source command", async () => {
+    const source = "before\n| a | b |\n| --- | --- |\n| c | d |\n\nafter";
+    const tableFrom = source.indexOf("| a");
+    const view = mountedView(source, source.length);
+    expect(focusRenderedTableCell(view, tableFrom, 1, 1, 1)).toBe(true);
+    expect(view.contentDOM.textContent).not.toContain("| --- | --- |");
+
+    expect(editRenderedTableSource(view)).toBe(true);
+    await Promise.resolve();
+    expect(explicitTableSource(view.state)).toMatchObject({
+      from: tableFrom,
+      row: 1,
+      column: 1,
+    });
+    expect(view.state.selection.main.head).toBe(source.indexOf("d") + 1);
+    expect(view.dom.querySelector('[role="grid"]')).toBeNull();
+    expect(view.contentDOM.textContent).toContain("| --- | --- |");
+
+    const outside = source.indexOf("after");
+    view.dispatch({ selection: { anchor: outside } });
+    await Promise.resolve();
+    expect(explicitTableSource(view.state)).toBeNull();
+    expect(view.state.selection.main.head).toBe(outside);
+    expect(view.dom.querySelector('[role="grid"]')).not.toBeNull();
+  });
+
+  it("tracks explicit source edits at both table boundaries", async () => {
+    const source = "before\n| a | b |\n| --- | --- |\n| c | d |\n\nafter";
+    const tableFrom = source.indexOf("| a");
+    const view = mountedView(source, source.length);
+    expect(focusRenderedTableCell(view, tableFrom, 1, 1, "end")).toBe(true);
+    expect(editRenderedTableSource(view)).toBe(true);
+    let range = explicitTableSource(view.state);
+    expect(range).not.toBeNull();
+    if (range === null) return;
+
+    view.dispatch({
+      changes: { from: range.from, to: range.from, insert: " " },
+      selection: { anchor: range.from + 1 },
+      userEvent: "input.type",
+    });
+    range = explicitTableSource(view.state);
+    expect(range?.from).toBe(tableFrom);
+    expect(view.dom.querySelector('[role="grid"]')).toBeNull();
+    if (range === null) return;
+
+    view.dispatch({
+      changes: { from: range.to, to: range.to, insert: " " },
+      selection: { anchor: range.to + 1 },
+      userEvent: "input.type",
+    });
+    await Promise.resolve();
+    range = explicitTableSource(view.state);
+    expect(range?.to).toBe(source.indexOf("\n\nafter") + 2);
+    expect(view.dom.querySelector('[role="grid"]')).toBeNull();
+  });
+
+  it("restores the exact cell after a deliberate source round trip", async () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |\n| e | f |";
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, 0, 1, 1, "end")).toBe(true);
+    expect(editRenderedTableSource(view)).toBe(true);
+    expect(view.state.selection.main.head).toBe(source.indexOf("d") + 1);
+    expect(closeRenderedTableSource(view, true)).toBe(true);
+    await Promise.resolve();
+
+    expect(focusedRenderedTableCell(view)).toMatchObject({
+      row: 1,
+      column: 1,
+      anchor: 1,
+      head: 1,
+    });
+  });
+
+  it("maps the cell caret through external edits within its source", () => {
+    const source = "| ab | b |\n| --- | --- |\n| c | d |";
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, 0, 0, 0, "end")).toBe(true);
+
+    view.dispatch({
+      changes: { from: source.indexOf("b"), insert: "X" },
+      userEvent: "input.external",
+    });
+
+    const nested = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+    );
+    const nestedView = nested === null ? null : EditorView.findFromDOM(nested);
+    expect(nestedView?.state.doc.toString()).toBe("aXb");
+    expect(nestedView?.state.selection.main.head).toBe(3);
+  });
+
+  it("drops cell ownership when its rendered widget is evicted", () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |";
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, 0, 1, 0, "end")).toBe(true);
+    view.dom
+      .querySelector<HTMLElement>('.cm-skr-table-cell[data-editing="true"]')
+      ?.remove();
+
+    expect(focusedRenderedTableCell(view)).toBeNull();
+    expect(view.dom.dataset.tableCellActive).toBeUndefined();
+  });
+
+  it("promotes a pointer drag when the browser omits move button state", () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |";
+    const view = mountedView(source, 0);
+    const cell = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-row="1"][data-column="0"]',
+    );
+    expect(cell).not.toBeNull();
+    cell?.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        pointerId: 7,
+        buttons: 1,
+      }),
+    );
+    document.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        pointerId: 7,
+        buttons: 0,
+      }),
+    );
+
+    expect(view.dom.querySelector(".cm-skr-table-selected")).not.toBeNull();
+    expect(focusedRenderedTableCell(view)).toBeNull();
+  });
+
+  it("promotes a mouse drag when pointer events are unavailable", () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |";
+    const view = mountedView(source, 0);
+    const cell = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-row="1"][data-column="0"]',
+    );
+    expect(cell).not.toBeNull();
+    const pointerEventDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "PointerEvent",
+    );
+    Object.defineProperty(globalThis, "PointerEvent", {
+      configurable: true,
+      value: undefined,
+      writable: true,
+    });
+    try {
+      cell?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    } finally {
+      if (pointerEventDescriptor === undefined) {
+        Reflect.deleteProperty(globalThis, "PointerEvent");
+      } else {
+        Object.defineProperty(
+          globalThis,
+          "PointerEvent",
+          pointerEventDescriptor,
+        );
+      }
+    }
+
+    expect(view.dom.querySelector(".cm-skr-table-selected")).not.toBeNull();
+    expect(focusedRenderedTableCell(view)).toBeNull();
+  });
+
+  it("closes explicit source when Enter leaves the recognized table", async () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |\n\nafter";
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, 0, 1, 1, "end")).toBe(true);
+    expect(editRenderedTableSource(view)).toBe(true);
+    const range = explicitTableSource(view.state);
+    expect(range).not.toBeNull();
+    if (range === null) return;
+
+    view.dispatch({
+      changes: { from: range.to, to: range.to, insert: "\n" },
+      selection: { anchor: range.to + 1 },
+      userEvent: "input.type",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(explicitTableSource(view.state)).toBeNull();
+    expect(view.dom.querySelector('[role="grid"]')).not.toBeNull();
+    expect(view.state.selection.main.head).toBe(range.to + 1);
+  });
+
+  it("rederives the table start after a leading source newline", async () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |";
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, 0, 1, 0, "end")).toBe(true);
+    expect(editRenderedTableSource(view)).toBe(true);
+    const range = explicitTableSource(view.state);
+    expect(range).not.toBeNull();
+    if (range === null) return;
+
+    view.dispatch({
+      changes: { from: range.from, to: range.from, insert: "\n" },
+      selection: { anchor: range.from + 1 },
+      userEvent: "input.type",
+    });
+    await Promise.resolve();
+    expect(explicitTableSource(view.state)?.from).toBe(1);
+    expect(closeRenderedTableSource(view, true)).toBe(true);
+    await Promise.resolve();
+    expect(focusedRenderedTableCell(view)).toMatchObject({
+      tableFrom: 1,
+      row: 0,
+      column: 0,
+    });
+  });
+
+  it("preserves the vertical text goal through shorter cells", () => {
+    const source =
+      "| 123456789 | x |\n| --- | --- |\n| z | y |\n| abcdefghi | q |";
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, 0, 0, 0, 8)).toBe(true);
+    const activeNested = (): EditorView | null => {
+      const editor = view.dom.querySelector<HTMLElement>(
+        '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+      );
+      return editor === null ? null : EditorView.findFromDOM(editor);
+    };
+    const down = () =>
+      activeNested()?.contentDOM.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    down();
+    expect(activeNested()?.state.selection.main.head).toBe(1);
+    down();
+    expect(activeNested()?.state.selection.main.head).toBe(8);
+  });
+
+  it("keeps inactive inline cells quiet and exposes one grid tab stop", () => {
+    const source = "| **bold** | `code` |\n| --- | --- |\n| [[Note]] | #tag |";
+    const view = mountedView(source, 0);
+    expect(view.contentDOM.textContent).not.toContain("**bold**");
+    expect(view.contentDOM.textContent).not.toContain("`code`");
+    expect(focusRenderedTableCell(view, 0, 0, 0, 2)).toBe(true);
+    expect(
+      view.dom.querySelectorAll('.cm-skr-table-grid [tabindex="0"]'),
+    ).toHaveLength(1);
+    expect(
+      [
+        ...view.dom.querySelectorAll<HTMLButtonElement>(".cm-skr-table-insert"),
+      ].every((button) => button.tabIndex === -1),
+    ).toBe(true);
+    expect(focusRenderedTableCell(view, 0, 0, 1, "end")).toBe(true);
+    const first = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-row="0"][data-column="0"]',
+    );
+    expect(first?.textContent).toBe("bold");
+  });
+
+  it("rejects stale cross-table writes and normalizes pasted newlines", async () => {
+    const source =
+      "| a | b |\n| --- | --- |\n| c | d |\n\n| e | f |\n| --- | --- |\n| g | h |";
+    const secondTable = source.indexOf("| e");
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, 0, 1, 0, "end")).toBe(true);
+    const firstEditorElement = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+    );
+    const first =
+      firstEditorElement === null
+        ? null
+        : EditorView.findFromDOM(firstEditorElement);
+    expect(focusRenderedTableCell(view, secondTable, 1, 0, "end")).toBe(true);
+    const before = view.state.doc.toString();
+    first?.dispatch({ changes: { from: 0, to: 1, insert: "stale" } });
+    expect(view.state.doc.toString()).toBe(before);
+    expect(first?.state.doc.toString()).toBe("c");
+
+    const activeElement = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+    );
+    const active =
+      activeElement === null ? null : EditorView.findFromDOM(activeElement);
+    active?.dispatch({ changes: { from: 0, to: 1, insert: "two\nlines" } });
+    await Promise.resolve();
+    expect(view.state.doc.toString()).toContain("| two lines | h |");
+    expect(view.dom.querySelectorAll('[role="grid"]')).toHaveLength(2);
+  });
+
+  it("keeps outer-pipe-free boundary edits owned by the same cell", async () => {
+    const source = "a | b\n--- | ---\nc | d\n\nafter";
+    const view = mountedView(source, 0);
+    const activeNested = (): EditorView | null => {
+      const editor = view.dom.querySelector<HTMLElement>(
+        '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+      );
+      return editor === null ? null : EditorView.findFromDOM(editor);
+    };
+
+    expect(focusRenderedTableCell(view, 0, 0, 0, "start")).toBe(true);
+    activeNested()?.dispatch({ changes: { from: 0, to: 0, insert: "Z" } });
+    await Promise.resolve();
+    expect(focusedRenderedTableCell(view)).toMatchObject({
+      tableFrom: 0,
+      row: 0,
+      column: 0,
+    });
+    expect(view.state.doc.toString()).toContain("Za | b");
+
+    expect(focusRenderedTableCell(view, 0, 1, 1, "end")).toBe(true);
+    const last = activeNested();
+    last?.dispatch({
+      changes: {
+        from: last.state.doc.length,
+        to: last.state.doc.length,
+        insert: "!",
+      },
+    });
+    await Promise.resolve();
+    expect(focusedRenderedTableCell(view)).toMatchObject({
+      tableFrom: 0,
+      row: 1,
+      column: 1,
+    });
+    expect(view.state.doc.toString()).toContain("c | d!");
+  });
+
+  it("drops cell ownership when the active table is replaced", () => {
+    const first = "| a | b |\n| --- | --- |\n| c | d |";
+    const second = "| e | f |\n| --- | --- |\n| g | h |";
+    const source = `${first}\n\n${second}`;
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, 0, 1, 0, "end")).toBe(true);
+    view.dispatch({ changes: { from: 0, to: first.length + 2, insert: "" } });
+    expect(focusedRenderedTableCell(view)).toBeNull();
+    expect(view.dom.querySelectorAll('[role="grid"]')).toHaveLength(1);
+  });
+
+  it("releases nested DOM focus when the host selection leaves the table", () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |\n\nafter";
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, 0, 1, 0, "end")).toBe(true);
+    const nestedContent = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-content',
+    );
+    expect(document.activeElement).toBe(nestedContent);
+
+    view.dispatch({ selection: { anchor: source.indexOf("after") } });
+
+    expect(focusedRenderedTableCell(view)).toBeNull();
+    expect(document.activeElement).not.toBe(nestedContent);
+    expect(view.dom.querySelector('[data-editing="true"]')).toBeNull();
+  });
+
+  it("moves the one cell caret across boundaries and promotes outward selection", () => {
+    const source = "before\n| a | b |\n| --- | --- |\n| c | d |\n\nafter";
+    const tableFrom = source.indexOf("| a");
+    const tableTo = source.indexOf("\n\nafter");
+    const view = mountedView(source, 0);
+    const activeNested = (): EditorView | null => {
+      const editor = view.dom.querySelector<HTMLElement>(
+        '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+      );
+      return editor === null ? null : EditorView.findFromDOM(editor);
+    };
+    const press = (key: string, shiftKey = false) => {
+      activeNested()?.contentDOM.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key,
+          shiftKey,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+
+    expect(focusRenderedTableCell(view, tableFrom, 1, 0, "end")).toBe(true);
+    expect(activeNested()?.state.selection.main.head).toBe(1);
+    press("ArrowRight");
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("1");
+    expect(activeNested()?.state.selection.main.head).toBe(0);
+
+    press("Tab", true);
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("0");
+    expect(activeNested()?.state.selection.main).toMatchObject({
+      from: 0,
+      to: 1,
+    });
+
+    expect(focusRenderedTableCell(view, tableFrom, 0, 1, "end")).toBe(true);
+    press("ArrowRight");
+    expect(
+      view.dom.querySelector('[data-editing="true"]')?.getAttribute("data-row"),
+    ).toBe("1");
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("0");
+    expect(activeNested()?.state.selection.main.head).toBe(0);
+
+    press("ArrowLeft");
+    expect(
+      view.dom.querySelector('[data-editing="true"]')?.getAttribute("data-row"),
+    ).toBe("0");
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("1");
+
+    expect(focusRenderedTableCell(view, tableFrom, 1, 1, "end")).toBe(true);
+    press("ArrowRight", true);
+    expect(view.state.selection.main.from).toBe(tableFrom);
+    expect(view.state.selection.main.to).toBe(tableTo);
+    expect(view.dom.querySelector('[data-editing="true"]')).toBeNull();
+    expect(view.dom.querySelector(".cm-skr-table-selected")).not.toBeNull();
+
+    expect(focusRenderedTableCell(view, tableFrom, 1, 0, "end")).toBe(true);
+    activeNested()?.dispatch({ selection: { anchor: 1, head: 0 } });
+    press("ArrowLeft", true);
+    expect(view.state.selection.main.from).toBe(tableFrom);
+    expect(view.state.selection.main.to).toBe(tableTo);
+
+    expect(focusRenderedTableCell(view, tableFrom, 0, 0, "start")).toBe(true);
+    press("ArrowUp", true);
+    expect(view.state.selection.main.from).toBe(tableFrom);
+    expect(view.state.selection.main.to).toBe(tableTo);
+
+    expect(focusRenderedTableCell(view, tableFrom, 0, 0, "start")).toBe(true);
+    press("ArrowUp");
+    expect(view.state.selection.main.head).toBe(source.indexOf("before") + 6);
+    expect(view.dom.querySelector('[data-editing="true"]')).toBeNull();
+
+    expect(focusRenderedTableCell(view, tableFrom, 1, 0, "start")).toBe(true);
+    const beforeBackspace = view.state.doc.toString();
+    press("Backspace");
+    expect(view.state.doc.toString()).toBe(beforeBackspace);
+
+    expect(focusRenderedTableCell(view, tableFrom, 1, 1, "end")).toBe(true);
+    press("Delete");
+    expect(view.state.doc.toString()).toBe(beforeBackspace);
+
+    expect(focusRenderedTableCell(view, tableFrom, 1, 0, "start")).toBe(true);
+    press("Escape");
+    expect(view.state.selection.main.head).toBe(tableTo + 1);
+  });
+
+  it("copies and deletes an outward-promoted table as exact source", () => {
+    const table = "| a | b |\n| --- | --- |\n| c | d |";
+    const source = `before\n${table}\n\nafter`;
+    const tableFrom = source.indexOf("| a");
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, tableFrom, 1, 1, "end")).toBe(true);
+    const nestedEditor = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+    );
+    const nested =
+      nestedEditor === null ? null : EditorView.findFromDOM(nestedEditor);
+    nested?.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    const selection = view.state.selection.main;
+    expect(view.state.sliceDoc(selection.from, selection.to)).toBe(table);
+    expect(deleteCharBackward(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("before\n\n\nafter");
+    expect(view.dom.querySelector('[role="grid"]')).toBeNull();
+  });
+
+  it("keeps a thirty-row table rendered during host cursor travel", () => {
+    const body = Array.from(
+      { length: 30 },
+      (_, index) => `| row ${index + 1} | value ${index + 1} |`,
+    );
+    const source = [
+      "before",
+      "| Name | Value |",
+      "| --- | --- |",
+      ...body,
+      "",
+      "after",
+    ].join("\n");
+    const view = mountedView(source, 0);
+    for (const marker of ["Name", "row 1", "row 15", "row 30", "after"]) {
+      view.dispatch({ selection: { anchor: source.indexOf(marker) } });
+      expect(view.dom.querySelectorAll('[role="row"]')).toHaveLength(31);
+      expect(view.dom.querySelector('[data-editing="true"]')).toBeNull();
+      expect(view.contentDOM.textContent).not.toContain("| --- | --- |");
+    }
+  }, 10000);
 
   it("renders a section embed as nested read-only markdown", async () => {
     const context: WikilinkResolutionContext = {

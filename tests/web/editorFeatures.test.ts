@@ -13,7 +13,10 @@ import {
   BULK_TEXT_INPUT_LENGTH,
   bulkTextInput,
 } from "../../src/lib/editor/bulkInput";
-import { decorationEngine } from "../../src/lib/editor/decorations/engine";
+import {
+  decorationEngine,
+  focusRenderedTableCell,
+} from "../../src/lib/editor/decorations/engine";
 import { showInvisibleCharacters } from "../../src/lib/editor/invisibles";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
 import { createAppRegistry } from "../../src/lib/features";
@@ -24,6 +27,7 @@ import {
   slashMenu,
   slashMenuOpen,
 } from "../../src/lib/features/slashMenu";
+import { tableEditingExtension } from "../../src/lib/features/tableEditing";
 import {
   filteredTagCompletions,
   type TagCatalogEntry,
@@ -556,19 +560,48 @@ describe("tag affordances", () => {
 });
 
 describe("table editing through the registry", () => {
+  it("keeps every explicit table command reachable from the slash menu", () => {
+    expect(
+      filteredSlashCommands(registry, "table").map((command) => command.id),
+    ).toEqual(
+      expect.arrayContaining([
+        "table.row.insert-above",
+        "table.row.insert-below",
+        "table.column.insert-before",
+        "table.column.insert-after",
+        "table.row.delete",
+        "table.column.delete",
+        "table.edit-source",
+      ]),
+    );
+  });
+
   const TABLE = "| a | b |\n| --- | --- |\n| c | d |";
 
   it("moves across cells on the cell navigation commands", () => {
-    const view = makeView(TABLE, 2);
+    const view = makeView(TABLE, 2, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
     expect(runEditorCommand("table.cell.next")).toBe(true);
-    // The cursor landed at the end of cell content "b".
-    expect(view.state.doc.sliceString(0, view.state.selection.main.head)).toBe(
-      "| a | b",
-    );
+    expect(view.state.selection.main.head).toBe(0);
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("0");
+    expect(runEditorCommand("table.cell.next")).toBe(true);
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("1");
     expect(runEditorCommand("table.cell.previous")).toBe(true);
-    expect(view.state.doc.sliceString(0, view.state.selection.main.head)).toBe(
-      "| a",
-    );
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("0");
   });
 
   it("declines cell navigation outside a table", () => {
@@ -578,19 +611,326 @@ describe("table editing through the registry", () => {
   });
 
   it("grows the table when tabbing past the last cell", () => {
-    const view = makeView(TABLE, TABLE.length - 2);
+    const view = makeView(TABLE, TABLE.length - 2, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    expect(runEditorCommand("table.cell.next")).toBe(true);
     expect(runEditorCommand("table.cell.next")).toBe(true);
     expect(view.state.doc.toString().split("\n")).toHaveLength(4);
   });
 
+  it("tabs from the last rendered cell into the first cell of a new row", async () => {
+    const source = `${TABLE}\n\nafter`;
+    const view = makeView(source, 0, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    expect(focusRenderedTableCell(view, 0, 1, 1, "end")).toBe(true);
+    const nestedEditor = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+    );
+    const nested =
+      nestedEditor === null ? null : EditorView.findFromDOM(nestedEditor);
+    nested?.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(view.state.doc.toString()).toBe(`${TABLE}\n| | |\n\nafter`);
+    expect(
+      view.dom.querySelector('[data-editing="true"]')?.getAttribute("data-row"),
+    ).toBe("2");
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("0");
+
+    const activeEditor = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+    );
+    const active =
+      activeEditor === null ? null : EditorView.findFromDOM(activeEditor);
+    active?.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(runEditorCommand("table.cell.enter-up")).toBe(true);
+    expect(
+      view.dom.querySelector('[data-editing="true"]')?.getAttribute("data-row"),
+    ).toBe("2");
+  });
+
+  it("enters the same column and grows it from the last rendered row", async () => {
+    const view = makeView(TABLE, 0, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    expect(focusRenderedTableCell(view, 0, 0, 1, "start")).toBe(true);
+    const pressEnter = () => {
+      const editor = view.dom.querySelector<HTMLElement>(
+        '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+      );
+      const nested = editor === null ? null : EditorView.findFromDOM(editor);
+      nested?.contentDOM.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+
+    pressEnter();
+    expect(view.state.doc.toString()).toBe(TABLE);
+    expect(
+      view.dom.querySelector('[data-editing="true"]')?.getAttribute("data-row"),
+    ).toBe("1");
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("1");
+
+    pressEnter();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(view.state.doc.toString()).toBe(`${TABLE}\n| | |`);
+    expect(
+      view.dom.querySelector('[data-editing="true"]')?.getAttribute("data-row"),
+    ).toBe("2");
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("1");
+  });
+
   it("inserts rows and columns from the registered commands", () => {
-    const view = makeView(TABLE, TABLE.indexOf("c"));
+    const view = makeView(TABLE, TABLE.indexOf("c"), [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
     expect(runEditorCommand("table.row.insert-below")).toBe(true);
     expect(view.state.doc.toString().split("\n")).toHaveLength(4);
     expect(runEditorCommand("table.column.insert-after")).toBe(true);
     const header = view.state.doc.toString().split("\n")[0] ?? "";
     expect(header.split("|").length).toBe(5);
   });
+
+  it("produces exact documents for all six structure commands", () => {
+    const cases = [
+      ["table.row.insert-above", "| a | b |\n| --- | --- |\n| | |\n| c | d |"],
+      ["table.row.insert-below", "| a | b |\n| --- | --- |\n| c | d |\n| | |"],
+      [
+        "table.column.insert-before",
+        "| | a | b |\n| --- | --- | --- |\n| | c | d |",
+      ],
+      [
+        "table.column.insert-after",
+        "| a | | b |\n| --- | --- | --- |\n| c | | d |",
+      ],
+      ["table.row.delete", "| a | b |\n| --- | --- |"],
+      ["table.column.delete", "| b |\n| --- |\n| d |"],
+    ] as const;
+    for (const [id, expected] of cases) {
+      const view = makeView(TABLE, TABLE.indexOf("c"), [
+        decorationEngine(),
+        tableEditingExtension(registry, context),
+      ]);
+      expect(runEditorCommand(id)).toBe(true);
+      expect(view.state.doc.toString(), id).toBe(expected);
+      view.destroy();
+    }
+  }, 15_000);
+
+  it("does not run structure commands in a read-only editor", async () => {
+    const view = makeView(TABLE, TABLE.indexOf("c"), [
+      EditorState.readOnly.of(true),
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    expect(focusRenderedTableCell(view, 0, 1, 0, "end")).toBe(false);
+    expect(runEditorCommand("table.row.delete")).toBe(false);
+    expect(runEditorCommand("table.edit-source")).toBe(false);
+    expect(view.state.doc.toString()).toBe(TABLE);
+    expect(
+      view.dom.querySelector('[aria-label="Append table row"]'),
+    ).toBeNull();
+    expect(view.dom.querySelector('[data-editing="true"]')).toBeNull();
+    expect(view.state.doc.toString()).toBe(TABLE);
+  });
+
+  it("keeps a valid table when changing the focused header row", () => {
+    const cases = [
+      ["table.row.insert-above", "| | |\n| --- | --- |\n| a | b |\n| c | d |"],
+      ["table.row.delete", "| c | d |\n| --- | --- |"],
+    ] as const;
+    for (const [id, expected] of cases) {
+      const view = makeView(TABLE, 0, [
+        decorationEngine(),
+        tableEditingExtension(registry, context),
+      ]);
+      expect(focusRenderedTableCell(view, 0, 0, 0, "end")).toBe(true);
+      expect(runEditorCommand(id)).toBe(true);
+      expect(view.state.doc.toString()).toBe(expected);
+      expect(view.dom.querySelector('[role="grid"]')).not.toBeNull();
+      view.destroy();
+    }
+  });
+
+  it("shows raw table source only through its registered command", async () => {
+    const view = makeView(TABLE, TABLE.indexOf("c"), [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    expect(runEditorCommand("table.cell.next")).toBe(true);
+    expect(view.dom.querySelector('[role="grid"]')).not.toBeNull();
+    expect(runEditorCommand("table.edit-source")).toBe(true);
+    await Promise.resolve();
+    expect(view.dom.querySelector('[role="grid"]')).toBeNull();
+    expect(view.contentDOM.textContent).toContain("| --- | --- |");
+    view.dispatch({ selection: { anchor: TABLE.indexOf("b") } });
+    expect(runEditorCommand("table.source.close")).toBe(true);
+    await Promise.resolve();
+    expect(view.dom.querySelector('[role="grid"]')).not.toBeNull();
+    expect(
+      view.dom.querySelector('[data-editing="true"]')?.getAttribute("data-row"),
+    ).toBe("0");
+    expect(
+      view.dom
+        .querySelector('[data-editing="true"]')
+        ?.getAttribute("data-column"),
+    ).toBe("1");
+  });
+
+  it("routes the row and column insertion strips through registry commands", async () => {
+    const rowView = makeView(TABLE, TABLE.length, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    const rowButton = rowView.dom.querySelector<HTMLButtonElement>(
+      '[aria-label="Append table row"]',
+    );
+    expect(
+      rowButton?.parentElement?.classList.contains("cm-skr-table-shell"),
+    ).toBe(true);
+    expect(rowButton?.tabIndex).toBe(-1);
+    expect(getComputedStyle(rowButton as HTMLButtonElement).height).toBe(
+      "28px",
+    );
+    rowButton?.click();
+    await Promise.resolve();
+    expect(rowView.state.doc.toString()).toBe(`${TABLE}\n| | |`);
+    rowView.destroy();
+
+    const columnView = makeView(TABLE, TABLE.length, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    const columnButton = columnView.dom.querySelector<HTMLButtonElement>(
+      '[aria-label="Append table column"]',
+    );
+    expect(columnButton?.tabIndex).toBe(-1);
+    expect(getComputedStyle(columnButton as HTMLButtonElement).width).toBe(
+      "28px",
+    );
+    columnButton?.click();
+    await Promise.resolve();
+    expect(columnView.state.doc.toString()).toBe(
+      "| a | b | |\n| --- | --- | --- |\n| c | d | |",
+    );
+  });
+
+  it("routes ragged insertion strips from existing edge cells", async () => {
+    const ragged = "| a | b | c |\n| --- | --- | --- |\n| x |";
+    const rowView = makeView(ragged, ragged.length, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    rowView.dom
+      .querySelector<HTMLButtonElement>('[aria-label="Append table row"]')
+      ?.click();
+    await Promise.resolve();
+    expect(rowView.state.doc.toString()).toBe(`${ragged}\n| | | |`);
+    rowView.destroy();
+
+    const columnView = makeView(ragged, ragged.length, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    columnView.dom
+      .querySelector<HTMLButtonElement>('[aria-label="Append table column"]')
+      ?.click();
+    await Promise.resolve();
+    expect(columnView.state.doc.toString()).toBe(
+      "| a | b | c | |\n| --- | --- | --- | --- |\n| x | | | |",
+    );
+  });
+
+  it("travels through thirty rendered rows without revealing source", () => {
+    const body = Array.from(
+      { length: 30 },
+      (_, index) => `| row ${index + 1} | value ${index + 1} |`,
+    );
+    const source = [
+      "before",
+      "| Name | Value |",
+      "| --- | --- |",
+      ...body,
+      "",
+      "after",
+    ].join("\n");
+    const view = makeView(source, source.indexOf("before") + 6, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    expect(runEditorCommand("table.cell.enter-down")).toBe(true);
+    expect(
+      view.dom.querySelector('[data-editing="true"]')?.getAttribute("data-row"),
+    ).toBe("0");
+    for (let row = 1; row <= 30; row += 1) {
+      const activeEditor = view.dom.querySelector<HTMLElement>(
+        '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+      );
+      const active =
+        activeEditor === null ? null : EditorView.findFromDOM(activeEditor);
+      active?.contentDOM.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      expect(
+        view.dom
+          .querySelector('[data-editing="true"]')
+          ?.getAttribute("data-row"),
+      ).toBe(String(row));
+    }
+    const lastEditor = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+    );
+    (lastEditor === null
+      ? null
+      : EditorView.findFromDOM(lastEditor)
+    )?.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(view.dom.querySelector('[data-editing="true"]')).toBeNull();
+    expect(view.state.selection.main.head).toBe(source.indexOf("after") - 1);
+    expect(view.contentDOM.textContent).not.toContain("| --- | --- |");
+  }, 30_000);
 });
 
 describe("in-note find through the registry", () => {

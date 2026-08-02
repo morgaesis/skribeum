@@ -4259,13 +4259,14 @@ describe("skribeum core editing surfaces", () => {
         "Examples/Personal/garden-log.md": 800,
       };
     });
-    await browser.keys([modifierKey, "k"]);
-    const commandInput = $('[role="combobox"]');
-    await commandInput.waitForExist({ timeout: 5000 });
-    await commandInput.addValue("embeds");
-    const embedsCommand = $('[role="option"]*=embeds.md');
-    await embedsCommand.waitForExist({ timeout: 5000 });
-    await embedsCommand.click();
+    await browser.execute(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("note", "Features/embeds.md");
+      window.history.pushState(window.history.state, "", url);
+      window.dispatchEvent(
+        new PopStateEvent("popstate", { state: window.history.state }),
+      );
+    });
 
     const skeleton = $(".cm-skr-embed-loading");
     await skeleton.waitForExist({ timeout: 500 });

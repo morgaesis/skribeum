@@ -370,8 +370,18 @@ function replaceEditorState(content: string, locked: boolean): void {
       0,
       target.scrollDOM.scrollTop - target.documentPadding.top,
     );
-    const actualOffset = line.top - viewportTop;
-    target.scrollDOM.scrollTop += actualOffset - restoration.scrollOffset;
+    let restoredViewportTop = line.top - restoration.scrollOffset;
+    if (scrollAnchor > 0) {
+      const previousLine = target.lineBlockAt(scrollAnchor - 1);
+      if (
+        previousLine.from !== line.from &&
+        previousLine.top >= restoredViewportTop
+      ) {
+        const devicePixelRatio = Math.max(1, window.devicePixelRatio);
+        restoredViewportTop = previousLine.top + 0.25 / devicePixelRatio;
+      }
+    }
+    target.scrollDOM.scrollTop += restoredViewportTop - viewportTop;
   };
   requestAnimationFrame(() => {
     correctScrollOffset();

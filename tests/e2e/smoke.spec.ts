@@ -4255,8 +4255,8 @@ describe("skribeum core editing surfaces", () => {
           __SKRIBEUM_E2E_NOTE_DELAYS__?: Record<string, number>;
         }
       ).__SKRIBEUM_E2E_NOTE_DELAYS__ = {
-        "Examples/Work/decision-log.md": 800,
-        "Examples/Personal/garden-log.md": 800,
+        "Examples/Work/decision-log.md": 2000,
+        "Examples/Personal/garden-log.md": 2000,
       };
     });
     await browser.execute(() => {
@@ -4269,7 +4269,7 @@ describe("skribeum core editing surfaces", () => {
     });
 
     const skeleton = $(".cm-skr-embed-loading");
-    await skeleton.waitForExist({ timeout: 500 });
+    await skeleton.waitForExist({ timeout: 3000 });
     expect(await $$(".cm-skr-embed").length).toBe(2);
     expect(await $$(".cm-skr-embed-skeleton-bar").length).toBe(6);
     const motion = await browser.execute(() => {

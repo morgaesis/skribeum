@@ -8,7 +8,7 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
+libfuzzer-sys = "0.4.13"
 skribeum-core = { path = "../crates/skribeum-core" }
 skribeum-vault = { path = "../crates/skribeum-vault" }
 

@@ -161,6 +161,18 @@ jobs:
         with:
           command: check advisories bans licenses sources
 
+  javascript-audit:
+    name: JavaScript audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run audit
+
   e2e:
     name: e2e (${{ matrix.os }})
     strategy:

@@ -12,19 +12,21 @@ name = "skribeum_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 skribeum-core = { path = "../crates/skribeum-core" }
 skribeum-vault = { path = "../crates/skribeum-vault" }
-tauri = { version = "2", features = ["specta"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+tauri = { version = "2.11.5", features = ["specta"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 tauri-plugin-wdio-webdriver = { version = "1.2.0", optional = true }
+# The paired release candidates share generated type contracts and move
+# together after their integration tests pass.
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 specta = "=2.0.0-rc.25"
 specta-typescript = "0.0.12"
-tauri-plugin-dialog = "2"
+tauri-plugin-dialog = "2.7.2"
 tauri-plugin-updater = "2.10.1"
 
 [lints]

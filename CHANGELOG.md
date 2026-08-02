@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- Rust advisory checks reject unsound transitive dependencies, and JavaScript
+  dependency audits reject every reported severity. The Tauri 2 Linux GTK 3
+  stack's `RUSTSEC-2024-0429` advisory remains an explicit exception because
+  its published crates require `glib` 0.18.
+
 ### Fixed
 
 - The unified command surface accepts native typing and contains all keyboard
@@ -17,6 +24,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reloading the note.
 
 ### Changed
+
+- Rust and JavaScript dependency requirements and lockfiles track their latest
+  compatible stable releases, with transitive WebdriverIO serialization moved
+  beyond its published security advisories.
 
 - Appearance settings use one six-card palette chooser. Choosing a card applies
   its light or dark appearance, while Match system appearance follows the last

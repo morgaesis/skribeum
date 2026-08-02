@@ -10,6 +10,11 @@ members = [
 # keeping it outside the workspace keeps every other build on exact stable.
 exclude = ["fuzz"]
 
+[workspace.dependencies]
+# RUSTSEC-2024-0429 is blocked by Tauri 2's Linux GTK 3 stack. Tauri 2.11.5,
+# webkit2gtk 2.0.2, and muda 0.19.3 require gtk and glib 0.18. Dependency
+# refreshes must recheck this chain before retaining glib below 0.20.
+
 [workspace.package]
 version = "0.0.6"
 edition = "2024"

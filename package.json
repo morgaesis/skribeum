@@ -7,6 +7,7 @@
     "demo:dev": "vite --config demo/vite.config.ts",
     "build": "vite build",
     "demo:build": "vite build --config demo/vite.config.ts",
+    "audit": "bun audit --audit-level=low",
     "check": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit",
     "e2e": "wdio run tests/e2e/wdio.conf.ts",
     "ux:fleet": "bun tests/ux-fleet/run.ts",
@@ -15,7 +16,8 @@
     "tauri": "tauri"
   },
   "overrides": {
-    "@wdio/native-utils": "2.5.0"
+    "@wdio/native-utils": "2.5.0",
+    "serialize-javascript": "7.0.7"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",
@@ -57,7 +59,7 @@
     "lefthook": "^2.1.10",
     "svelte-check": "^4.7.4",
     "tailwindcss": "^4.3.3",
-    "typescript": "~6",
+    "typescript": "~6.0.3",
     "vite": "^8.2.0",
     "vitest": "^4.1.10"
   }

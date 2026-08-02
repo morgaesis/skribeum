@@ -160,17 +160,14 @@ export const STRINGS = {
   settingsSectionSearch: "Search",
   settingsSectionUpdates: "Updates",
   settingsSectionAbout: "About",
-  settingsTheme: "Theme",
-  settingsThemeSystem: "System",
-  settingsThemeLight: "Light",
-  settingsThemeDark: "Dark",
+  settingsTheme: "Match system appearance",
   settingsThemeDescription:
-    "Choose whether Skribeum follows your device or uses a light or dark appearance.",
+    "Follow the system appearance using the last chosen light and dark palettes.",
   settingsPalette: "Colour palette",
   settingsLightPalette: "Light palette",
   settingsDarkPalette: "Dark palette",
   settingsPaletteDescription:
-    "Choose the named palette used for this appearance.",
+    "Choose one palette to apply its colours and light or dark appearance.",
   settingsPaletteManuscript: "Manuscript",
   settingsPaletteManuscriptDescription:
     "Warm paper for light mode and warm charcoal for dark mode.",
@@ -268,9 +265,13 @@ export const STRINGS = {
   settingsDefaultNoteFolder: "Default new-note location",
   settingsDefaultNoteFolderDescription:
     "Save new notes in this folder inside the vault. Leave it empty for the vault root.",
+  settingsDefaultNoteFolderDesktopRequired:
+    "Choosing a default note folder requires the desktop application.",
   settingsAttachmentFolder: "Attachment location",
   settingsAttachmentFolderDescription:
     "Choose where attachment links look for files inside the vault.",
+  settingsAttachmentFolderDesktopRequired:
+    "Choosing an attachment folder requires the desktop application.",
   settingsAttachmentVault: "Vault root",
   settingsAttachmentNote: "Beside the note",
   settingsAttachmentFolderChoice: "Specific folder",
@@ -278,8 +279,8 @@ export const STRINGS = {
   settingsHonorObsidian: "Use Obsidian configuration",
   settingsHonorObsidianDescription:
     "Use compatible Obsidian attachment and property settings when they are present.",
-  settingsDesktopOnly:
-    "Desktop only. This setting is unavailable in the browser demo.",
+  settingsObsidianDesktopRequired:
+    "Reading Obsidian configuration requires the desktop application.",
   settingsSearchLimit: "Search result limit",
   settingsSearchLimitDescription:
     "Set the maximum number of matching notes shown in a search.",
@@ -292,13 +293,17 @@ export const STRINGS = {
   settingsUpdateChannel: "Update channel",
   settingsUpdateChannelDescription:
     "Choose stable releases or earlier beta releases. Beta checks stable releases when no beta is available.",
+  settingsUpdateChannelDesktopRequired:
+    "Choosing an update channel requires the desktop application.",
   settingsUpdateStable: "Stable",
   settingsUpdateBeta: "Beta",
   settingsCheckUpdates: "Check for updates",
   settingsCheckUpdatesDescription:
     "Look for a newer desktop application version without interrupting your work.",
+  settingsCheckUpdatesDesktopRequired:
+    "Update checks require the desktop application.",
   settingsVersion: "Version",
-  settingsVersionDescription: "The version of Skribeum currently running.",
+  settingsVersionDescription: "The installed Skribeum version.",
   settingsLicense: "License",
   settingsLicenseDescription:
     "Skribeum is available under the MIT or Apache 2.0 license, at your option.",
@@ -318,7 +323,10 @@ export const STRINGS = {
   settingsFileDescription:
     "The desktop file that stores these preferences outside every vault.",
   settingsFileResolving: "Locating settings.json",
-  settingsDesktopUnavailableShort: "Unavailable in the browser demo",
+  settingsFileDesktopRequired:
+    "Locating the settings file requires the desktop application.",
+  settingsDesktopUnavailableShort:
+    "Settings file access requires the desktop application.",
   settingsDecrease: "Decrease",
   settingsIncrease: "Increase",
   settingsUnitPixels: "px",

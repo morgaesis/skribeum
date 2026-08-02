@@ -311,7 +311,8 @@ describe("work package 1 browser behavior", () => {
       );
       button?.focus();
     });
-    await tooltip.waitForExist({ timeout: 500 });
-    expect(await tooltip.$("kbd").getText()).toBe(displayedBinding);
+    const focusedTooltip = $(".cm-skr-toolbar-command-tooltip");
+    await focusedTooltip.waitForExist({ timeout: 500 });
+    expect(await focusedTooltip.$("kbd").getText()).toBe(displayedBinding);
   });
 });

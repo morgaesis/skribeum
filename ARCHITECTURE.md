@@ -184,9 +184,12 @@ extension recognizes inline and block math without changing the vault-wide
 extraction contract. KaTeX replaces each recognized expression with local
 HTML and MathML, while malformed expressions remain visible in an error
 widget. Mermaid fences use the stock fenced-code nodes and load Mermaid only
-when the first diagram widget mounts. Fenced-code language parsers also load
-on demand, while unknown info strings stay plain. GFM tables render as aligned
-row widgets so cursor entry reveals one source row. Note and section embeds
+when the first diagram widget mounts. Mermaid uses the base theme with colours
+resolved from the active theme tokens, and connected diagrams render again when
+the palette changes because SVG output contains fixed colours. Fenced-code
+language parsers also load on demand, while unknown info strings stay plain.
+GFM tables render as aligned row widgets so cursor entry reveals one source row.
+Note and section embeds
 mount nested read-only instances of the same decoration engine with a bounded
 ancestry context for depth and cycle notices. Callouts use the same nested
 renderer for their bodies, with typed icon and accent metadata and native fold

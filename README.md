@@ -50,12 +50,14 @@ filters settings by their names and plain-language descriptions. Every setting
 is also a `>` mode action that opens this surface aligned to the matching row
 with its control focused.
 
-Appearance controls the light, dark or system theme, separate named palettes
-for light and dark modes, prose and code font stacks, font size, line spacing,
-text column width and motion. Editor
-settings cover autosave, spell checking, indentation, wrapping, line numbers,
-visible whitespace, Markdown source reveal, link previews and configurable task
-statuses.
+Appearance presents six light and dark palette cards in one chooser. Selecting
+a card applies and pins its appearance. Match system appearance follows the
+operating system between the last chosen light and dark palettes. Slider
+readouts accept typed values for font size, line spacing and text column width,
+and Mermaid diagrams use the active palette. Appearance also controls prose and
+code font stacks and motion. Editor settings cover autosave, spell checking,
+indentation, wrapping, line numbers, visible whitespace, Markdown source
+reveal, link previews and configurable task statuses.
 Files and vault settings control
 the folder used by the `Create new note` command, attachment resolution and
 compatible Obsidian configuration. Search settings control result count, title

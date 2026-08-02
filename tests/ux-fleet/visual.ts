@@ -248,12 +248,8 @@ async function parkCursor(text: string): Promise<void> {
 export async function setTheme(value: Theme): Promise<void> {
   await browser.keys([modifier, ","]);
   await $('[data-testid="settings-view"]').waitForExist({ timeout: 10_000 });
-  await browser.execute((next) => {
-    const select = document.querySelector<HTMLSelectElement>('[data-testid="settings-theme"]');
-    if (select === null) throw new Error("theme select missing");
-    select.value = next;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
+  const palette = value === "light" ? "manuscript" : "graphite";
+  await $(`[data-testid="settings-palette-${palette}"]`).click();
   await browser.waitUntil(() => browser.execute((next) => document.documentElement.dataset.theme === next, value));
   await browser.keys(Key.Escape);
   await settle();

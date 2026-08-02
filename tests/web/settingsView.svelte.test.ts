@@ -91,10 +91,11 @@ describe("task status settings", () => {
     const rowIds = [
       ...document.querySelectorAll<HTMLElement>("[data-setting-id]"),
     ].map((row) => row.dataset.settingId);
-    expect(new Set(rowIds)).toEqual(
-      new Set(SETTINGS_DESCRIPTORS.map((setting) => setting.id)),
-    );
-    expect(rowIds).toHaveLength(SETTINGS_DESCRIPTORS.length);
+    const visibleSettingIds = SETTINGS_DESCRIPTORS.map(
+      (setting) => setting.id,
+    ).filter((id) => id !== "updates.version");
+    expect(new Set(rowIds)).toEqual(new Set(visibleSettingIds));
+    expect(rowIds).toHaveLength(visibleSettingIds.length);
     await unmount(component);
   });
 
@@ -161,12 +162,12 @@ describe("task status settings", () => {
     const { component, updates } = renderSettings();
     document
       .querySelector<HTMLButtonElement>(
-        '[data-testid="settings-light-palette-studio"]',
+        '[data-testid="settings-palette-studio"]',
       )
       ?.click();
     document
       .querySelector<HTMLButtonElement>(
-        '[data-testid="settings-dark-palette-signal"]',
+        '[data-testid="settings-palette-signal"]',
       )
       ?.click();
     openSection("Editor");
@@ -174,8 +175,14 @@ describe("task status settings", () => {
       .querySelector<HTMLInputElement>('[data-testid="settings-link-previews"]')
       ?.click();
 
-    expect(updates).toContainEqual({ light_palette: "studio" });
-    expect(updates).toContainEqual({ dark_palette: "signal" });
+    expect(updates).toContainEqual({
+      theme: "light",
+      light_palette: "studio",
+    });
+    expect(updates).toContainEqual({
+      theme: "dark",
+      dark_palette: "signal",
+    });
     expect(updates).toContainEqual({ link_previews: false });
     unmount(component);
   });
@@ -331,24 +338,169 @@ describe("settings surface", () => {
       STRINGS.settingsSectionAbout,
     ]);
     expect(document.querySelector(".settings-nav")).toBeNull();
+    expect(
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          '[data-setting-id$=".version"]',
+        ),
+      ].map(({ dataset }) => dataset.settingId),
+    ).toEqual(["about.version"]);
     await unmount(component);
   });
 
-  it("changes the direct theme control with arrow keys", async () => {
+  it("applies a palette and its mode with arrow keys", async () => {
     const { component, updates } = renderSettings();
-    const system = document.querySelector<HTMLButtonElement>(
-      '[data-testid="settings-theme-system"]',
+    const manuscript = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-palette-manuscript"]',
     );
-    const light = document.querySelector<HTMLButtonElement>(
-      '[data-testid="settings-theme-light"]',
+    const studio = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-palette-studio"]',
     );
-    system?.focus();
-    system?.dispatchEvent(
+    manuscript?.focus();
+    manuscript?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
     );
-    flushSync();
-    expect(updates.at(-1)).toEqual({ theme: "light" });
-    expect(document.activeElement).toBe(light);
+    await vi.waitFor(() => {
+      expect(updates.at(-1)).toEqual({
+        theme: "light",
+        light_palette: "studio",
+      });
+      expect(document.activeElement).toBe(studio);
+    });
+    await unmount(component);
+  });
+
+  it("commits, clamps, snaps, and reverts typed slider values", async () => {
+    const { component, updates } = renderSettings();
+    const readout = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-editor-line-height-readout"]',
+    );
+    readout?.click();
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector<HTMLInputElement>(
+          '[data-testid="settings-editor-line-height-entry"]',
+        ),
+      ).not.toBeNull();
+    });
+    let entry = document.querySelector<HTMLInputElement>(
+      '[data-testid="settings-editor-line-height-entry"]',
+    );
+    if (entry === null) throw new Error("line-height entry is missing");
+    entry.value = "999";
+    entry.dispatchEvent(new Event("input", { bubbles: true }));
+    entry.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await vi.waitFor(() => {
+      expect(updates.at(-1)).toEqual({ editor_line_height: 220 });
+    });
+
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="settings-editor-line-height-readout"]',
+      )
+      ?.click();
+    await vi.waitFor(() => {
+      entry = document.querySelector<HTMLInputElement>(
+        '[data-testid="settings-editor-line-height-entry"]',
+      );
+      expect(entry).not.toBeNull();
+    });
+    if (entry === null) throw new Error("line-height entry is missing");
+    entry.value = "173";
+    entry.dispatchEvent(new Event("input", { bubbles: true }));
+    entry.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await vi.waitFor(() => {
+      expect(updates.at(-1)).toEqual({ editor_line_height: 175 });
+    });
+
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="settings-editor-line-height-readout"]',
+      )
+      ?.click();
+    await vi.waitFor(() => {
+      entry = document.querySelector<HTMLInputElement>(
+        '[data-testid="settings-editor-line-height-entry"]',
+      );
+      expect(entry).not.toBeNull();
+    });
+    if (entry === null) throw new Error("line-height entry is missing");
+    entry.value = "180";
+    entry.dispatchEvent(new Event("input", { bubbles: true }));
+    entry.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await vi.waitFor(() => {
+      expect(updates).toHaveLength(2);
+      expect(document.activeElement?.getAttribute("data-numeric-readout")).toBe(
+        "editor_line_height",
+      );
+    });
+    await unmount(component);
+  });
+
+  it("keeps focus on a control clicked while numeric entry commits", async () => {
+    const { component, updates } = renderSettings();
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="settings-editor-line-height-readout"]',
+      )
+      ?.click();
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector('[data-numeric-entry="editor_line_height"]'),
+      ).not.toBeNull();
+    });
+    const search = document.querySelector<HTMLInputElement>(
+      '[data-testid="settings-search"]',
+    );
+    if (search === null) throw new Error("settings search is missing");
+    search.focus();
+    await vi.waitFor(() => {
+      expect(updates.at(-1)).toEqual({ editor_line_height: 170 });
+      expect(document.activeElement).toBe(search);
+    });
+    await unmount(component);
+  });
+
+  it("provides typed entry for every numeric readout", async () => {
+    const { component } = renderSettings();
+    const settings = [
+      "editor-font-size",
+      "editor-line-height",
+      "editor-line-width",
+      "autosave-delay-ms",
+      "indent-width",
+      "search-result-limit",
+    ];
+    for (const setting of settings) {
+      const readout = document.querySelector<HTMLButtonElement>(
+        `[data-testid="settings-${setting}-readout"]`,
+      );
+      expect(readout?.tabIndex).toBe(0);
+      readout?.click();
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector(`[data-testid="settings-${setting}-entry"]`),
+        ).not.toBeNull();
+      });
+      document
+        .querySelector<HTMLInputElement>(
+          `[data-testid="settings-${setting}-entry"]`,
+        )
+        ?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector(`[data-testid="settings-${setting}-readout"]`),
+        ).not.toBeNull();
+      });
+    }
     await unmount(component);
   });
 
@@ -449,31 +601,68 @@ describe("settings surface", () => {
     });
     flushSync();
     openSection(STRINGS.settingsSectionFiles);
-    expect(
-      document
-        .querySelector<HTMLElement>(
-          '[data-testid="settings-desktop-unavailable"]',
-        )
-        ?.textContent?.trim(),
-    ).toBe(STRINGS.settingsDesktopOnly);
+    expect(document.body.textContent).toContain(
+      STRINGS.settingsDefaultNoteFolderDesktopRequired,
+    );
+    expect(document.body.textContent).toContain(
+      STRINGS.settingsAttachmentFolderDesktopRequired,
+    );
+    expect(document.body.textContent).toContain(
+      STRINGS.settingsObsidianDesktopRequired,
+    );
     expect(
       document.querySelector<HTMLInputElement>(
         '[data-testid="settings-default-note-folder"]',
       )?.disabled,
     ).toBe(true);
-    openSection(STRINGS.settingsSectionUpdates);
     expect(
-      document
-        .querySelector<HTMLElement>(
-          '[data-testid="settings-desktop-unavailable"]',
-        )
-        ?.textContent?.trim(),
-    ).toBe(STRINGS.settingsDesktopOnly);
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '[data-setting-id="files.attachment-folder"] button',
+        ),
+      ].every(({ disabled }) => disabled),
+    ).toBe(true);
+    expect(
+      document.querySelector<HTMLInputElement>(
+        '[data-setting-id="files.obsidian-config"] input',
+      )?.disabled,
+    ).toBe(true);
+    const search = document.querySelector<HTMLInputElement>(
+      '[data-testid="settings-search"]',
+    );
+    if (search === null) throw new Error("settings search is missing");
+    search.value = "desktop application";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    expect(document.body.textContent).toContain(
+      STRINGS.settingsDefaultNoteFolderDesktopRequired,
+    );
+    search.value = "";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    openSection(STRINGS.settingsSectionUpdates);
+    expect(document.body.textContent).toContain(
+      STRINGS.settingsUpdateChannelDesktopRequired,
+    );
+    expect(document.body.textContent).toContain(
+      STRINGS.settingsCheckUpdatesDesktopRequired,
+    );
+    expect(
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '[data-setting-id="updates.channel"] button',
+        ),
+      ].every(({ disabled }) => disabled),
+    ).toBe(true);
     expect(
       document.querySelector<HTMLButtonElement>(
         '[data-testid="settings-check-updates"]',
       )?.disabled,
     ).toBe(true);
+    openSection(STRINGS.settingsSectionAbout);
+    expect(document.body.textContent).toContain(
+      STRINGS.settingsFileDesktopRequired,
+    );
     await unmount(component);
   });
 });

@@ -8,6 +8,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Appearance settings use one six-card palette chooser. Choosing a card applies
+  its light or dark appearance, while Match system appearance follows the last
+  chosen palette for each mode.
+- Settings use the larger continuous dialog, token-coloured scrollbars,
+  capability-specific desktop requirements, and typed entry for numeric
+  readouts.
+- Mermaid diagrams resolve their base theme from the active palette and render
+  again after appearance changes.
 - One prefix-routed command surface handles note and file names, commands and
   settings, tags, and note text. Existing switcher, palette, and vault-search
   shortcuts open the same surface with their corresponding mode preloaded.

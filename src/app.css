@@ -14,6 +14,33 @@ body {
   font-family: var(--skr-font-interface);
 }
 
+* {
+  scrollbar-color: var(--skr-border) transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 0.625rem;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 2.5rem;
+  border: 2px solid transparent;
+  border-radius: 0.3125rem;
+  background-clip: content-box;
+  background-color: var(--skr-border);
+  transition: background-color 50ms linear;
+}
+
+*::-webkit-scrollbar-thumb:hover,
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--skr-border-strong);
+}
+
 button,
 input,
 select {

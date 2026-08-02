@@ -695,17 +695,6 @@ async function calloutVisualIdentity() {
   });
 }
 
-/** Activates one of the direct theme radio buttons. */
-async function selectTheme(value: string) {
-  const button = $(`[data-testid="settings-theme-${value}"]`);
-  await button.waitForClickable({ timeout: 10000 });
-  await button.click();
-  await browser.waitUntil(
-    async () => (await button.getAttribute("aria-checked")) === "true",
-    { timeout: 10000, timeoutMsg: `${value} theme did not become active` },
-  );
-}
-
 async function selectSettingsChoice(selector: string, label: string) {
   let button = $(selector);
   await button.waitForClickable({ timeout: 10000 });
@@ -2756,6 +2745,7 @@ describe("skribeum core editing surfaces", () => {
 
   it("settings_surface_has_one_hierarchy_responsive_swatches_and_keyboard_access", async () => {
     await closeAnyOverlay();
+    await restoreDesktopViewport();
     await $('[role="tree"]').waitForExist({ timeout: 15000 });
     const editor = $(".cm-content");
     await editor.click();
@@ -2884,11 +2874,37 @@ describe("skribeum core editing surfaces", () => {
     await reopenedJumpMenu.waitForExist({ reverse: true, timeout: 5000 });
     expect(await activeElementDescriptor()).toContain("jump-button");
 
+    const dialogGeometry = await browser.execute(() => {
+      const settings = document.querySelector<HTMLElement>(
+        '[data-testid="settings-view"]',
+      );
+      if (settings === null) throw new Error("settings dialog is missing");
+      const box = settings.getBoundingClientRect();
+      return {
+        height: box.height,
+        width: box.width,
+        expectedHeight: Math.min(window.innerHeight * 0.85, 48 * 16),
+        expectedWidth: Math.min(48 * 16, window.innerWidth - 2 * 16),
+        versionHomes: [
+          ...settings.querySelectorAll<HTMLElement>(
+            '[data-setting-id$=".version"]',
+          ),
+        ].map(({ dataset }) => dataset.settingId),
+      };
+    });
+    expect(
+      Math.abs(dialogGeometry.height - dialogGeometry.expectedHeight),
+    ).toBeLessThan(1);
+    expect(
+      Math.abs(dialogGeometry.width - dialogGeometry.expectedWidth),
+    ).toBeLessThan(1);
+    expect(dialogGeometry.versionHomes).toEqual(["about.version"]);
+
     await setViewportSize(390, 844);
     const cardGeometry = await browser.execute(() => {
       const cards = [
         ...document.querySelectorAll<HTMLElement>(
-          '[aria-label="Light palette"] .palette-card',
+          '[data-testid="settings-palette"] .palette-card',
         ),
       ].map((card) => card.getBoundingClientRect());
       const firstTop = cards[0]?.top;
@@ -2899,13 +2915,13 @@ describe("skribeum core editing surfaces", () => {
         ).length,
       };
     });
-    expect(cardGeometry).toEqual({ count: 3, firstRow: 2 });
+    expect(cardGeometry).toEqual({ count: 6, firstRow: 2 });
     expect(await horizontalViewportEscapes()).toEqual([]);
 
     const previewColors = async () =>
       browser.execute(() => {
         const preview = document.querySelector<HTMLElement>(
-          '[data-testid="settings-light-palette-preview"]',
+          '[data-testid="settings-palette-preview"]',
         );
         const heading = preview?.querySelector<HTMLElement>(
           ".palette-live-heading",
@@ -2928,7 +2944,7 @@ describe("skribeum core editing surfaces", () => {
           unchecked === null ||
           checked === null
         ) {
-          throw new Error("light palette preview is incomplete");
+          throw new Error("palette preview is incomplete");
         }
         return {
           accent: getComputedStyle(checked).backgroundColor,
@@ -2941,16 +2957,16 @@ describe("skribeum core editing surfaces", () => {
         };
       });
 
-    const manuscript = $('[data-testid="settings-light-palette-manuscript"]');
+    const manuscript = $('[data-testid="settings-palette-manuscript"]');
     await manuscript.scrollIntoView();
     await selectSettingsChoice(
-      '[data-testid="settings-light-palette-manuscript"]',
+      '[data-testid="settings-palette-manuscript"]',
       "Manuscript palette",
     );
     expect(
       await browser.execute(() => {
         const preview = document.querySelector<HTMLElement>(
-          '[data-testid="settings-light-palette-preview"]',
+          '[data-testid="settings-palette-preview"]',
         );
         return {
           body: preview
@@ -2973,7 +2989,7 @@ describe("skribeum core editing surfaces", () => {
     });
     const manuscriptColors = await previewColors();
     await browser.keys(Key.ArrowRight);
-    const studio = $('[data-testid="settings-light-palette-studio"]');
+    const studio = $('[data-testid="settings-palette-studio"]');
     await browser.waitUntil(
       async () => (await studio.getAttribute("aria-checked")) === "true",
       { timeout: 5000, timeoutMsg: "palette arrow key did not select Studio" },
@@ -3059,7 +3075,7 @@ describe("skribeum core editing surfaces", () => {
     expect(dialogTrap).toBe(true);
 
     await selectSettingsChoice(
-      '[data-testid="settings-light-palette-manuscript"]',
+      '[data-testid="settings-palette-manuscript"]',
       "Manuscript palette",
     );
     await restoreDesktopViewport();
@@ -3247,62 +3263,218 @@ describe("skribeum core editing surfaces", () => {
     expect(positive).toBe(false);
   });
 
-  it("switches_the_persisted_theme_live", async () => {
+  it("palette_selection_and_system_matching_round_trip_stored_fields", async () => {
+    const original = await persistedSettings();
+    if (typeof original === "string") throw new Error(original);
+    const storedSystemSettings: SettingsDocument = {
+      ...original,
+      theme: "system",
+      light_palette: "gazette",
+      dark_palette: "signal",
+    };
+    await persistSettings(storedSystemSettings);
+    await browser.refresh();
+    await $('[role="tree"]').waitForExist({ timeout: 15000 });
+
+    await browser.execute(`
+      const nativeMatchMedia = window.matchMedia.bind(window);
+      const media = "(prefers-color-scheme: dark)";
+      const query = new EventTarget();
+      Object.defineProperties(query, {
+        matches: { configurable: true, value: false },
+        media: { value: media },
+        onchange: { value: null, writable: true },
+      });
+      window.matchMedia = function (queryText) {
+        return queryText === media ? query : nativeMatchMedia(queryText);
+      };
+      window.__skribeumColourSchemeQuery = query;
+      window.__skribeumNativeMatchMedia = nativeMatchMedia;
+    `);
+
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    const original = await browser.execute(
-      () => document.documentElement.dataset.theme ?? "system",
+    const systemToggle = $('[data-testid="settings-match-system"]');
+    expect(await systemToggle.isSelected()).toBe(true);
+    expect(
+      await $('[data-testid="settings-palette-gazette"]').getAttribute(
+        "aria-checked",
+      ),
+    ).toBe("true");
+    expect(
+      await $('[data-testid="settings-palette-signal"]').getAttribute("class"),
+    ).toContain("paired");
+
+    await browser.execute(() => {
+      const testWindow = window as unknown as {
+        __skribeumColourSchemeQuery?: MediaQueryList;
+      };
+      const query = testWindow.__skribeumColourSchemeQuery;
+      if (query === undefined)
+        throw new Error("colour-scheme query is missing");
+      Object.defineProperty(query, "matches", {
+        configurable: true,
+        value: true,
+      });
+      const event = new Event("change");
+      Object.defineProperties(event, {
+        matches: { value: true },
+        media: { value: query.media },
+      });
+      query.dispatchEvent(event);
+    });
+    await browser.waitUntil(
+      async () =>
+        (await $('[data-testid="settings-palette-signal"]').getAttribute(
+          "aria-checked",
+        )) === "true",
+      {
+        timeout: 5000,
+        timeoutMsg: "system dark palette did not become active",
+      },
+    );
+    expect(await systemToggle.isSelected()).toBe(true);
+    expect(
+      await browser.execute(() => document.documentElement.dataset.theme),
+    ).toBe("system");
+
+    await selectSettingsChoice(
+      '[data-testid="settings-palette-graphite"]',
+      "Graphite palette",
+    );
+    await browser.waitUntil(async () => !(await systemToggle.isSelected()), {
+      timeout: 5000,
+      timeoutMsg: "system match toggle stayed enabled",
+    });
+    expect(
+      await browser.execute(() => ({
+        theme: document.documentElement.dataset.theme,
+        lightPalette: document.documentElement.dataset.lightPalette,
+        darkPalette: document.documentElement.dataset.darkPalette,
+      })),
+    ).toEqual({
+      theme: "dark",
+      lightPalette: "gazette",
+      darkPalette: "graphite",
+    });
+    await browser.waitUntil(
+      async () => {
+        const stored = await persistedSettings();
+        return (
+          typeof stored !== "string" &&
+          stored.theme === "dark" &&
+          stored.light_palette === "gazette" &&
+          stored.dark_palette === "graphite"
+        );
+      },
+      { timeout: 10000, timeoutMsg: "dark palette fields did not persist" },
     );
 
-    await selectTheme("dark");
+    await selectSettingsChoice(
+      '[data-testid="settings-palette-studio"]',
+      "Studio palette",
+    );
+    await systemToggle.click();
     await browser.waitUntil(
-      async () =>
-        (await browser.execute(
-          () => document.documentElement.dataset.theme,
-        )) === "dark",
-      { timeout: 10000 },
-    );
-    // Two frames let the style pass apply the flipped dataset before the
-    // dark value is recorded; the initial theme may already look dark, so
-    // divergence is only asserted between the two forced states below.
-    await browser.execute(
-      () =>
-        new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        ),
-    );
-    const darkBackground = await browser.execute(
-      () => getComputedStyle(document.body).backgroundColor,
-    );
-
-    await selectTheme("light");
-    await browser.waitUntil(
-      async () =>
-        (await browser.execute(
-          () => document.documentElement.dataset.theme,
-        )) === "light",
-      { timeout: 10000 },
-    );
-    // The dataset flips synchronously; the computed background follows on
-    // the next style pass, so the change is awaited, not read immediately.
-    await browser.waitUntil(
-      async () =>
-        (await browser.execute(
-          () => getComputedStyle(document.body).backgroundColor,
-        )) !== darkBackground,
+      async () => {
+        const stored = await persistedSettings();
+        return (
+          typeof stored !== "string" &&
+          stored.theme === "system" &&
+          stored.light_palette === "studio" &&
+          stored.dark_palette === "graphite"
+        );
+      },
       {
         timeout: 10000,
-        timeoutMsg: "light theme background never diverged from dark",
+        timeoutMsg: "system palette fields did not round-trip",
       },
     );
 
-    await selectTheme(original);
+    await browser.keys(Key.Escape);
+    await dialog.waitForExist({ reverse: true, timeout: 5000 });
+    await browser.execute(() => {
+      const testWindow = window as unknown as {
+        __skribeumColourSchemeQuery?: MediaQueryList;
+        __skribeumNativeMatchMedia?: typeof window.matchMedia;
+      };
+      if (testWindow.__skribeumNativeMatchMedia !== undefined) {
+        window.matchMedia = testWindow.__skribeumNativeMatchMedia;
+      }
+      delete testWindow.__skribeumColourSchemeQuery;
+      delete testWindow.__skribeumNativeMatchMedia;
+    });
+    await persistSettings(original);
+    await browser.refresh();
+    await $('[role="tree"]').waitForExist({ timeout: 15000 });
+  });
+
+  it("typed_slider_entry_commits_clamps_and_reverts", async () => {
+    const original = await persistedSettings();
+    if (typeof original === "string") throw new Error(original);
+    await browser.keys([modifierKey, ","]);
+    const dialog = $('[data-testid="settings-view"]');
+    await dialog.waitForExist({ timeout: 10000 });
+
+    let readout = $('[data-testid="settings-editor-font-size-readout"]');
+    await readout.click();
+    let entry = $('[data-testid="settings-editor-font-size-entry"]');
+    await entry.waitForExist({ timeout: 5000 });
+    await entry.setValue("24");
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      async () => {
+        readout = $('[data-testid="settings-editor-font-size-readout"]');
+        return (
+          (await readout.isExisting()) &&
+          (await readout.getText()).trim() === "24 px" &&
+          (await persistedFontSize()) === 24
+        );
+      },
+      { timeout: 10000, timeoutMsg: "typed font size did not commit" },
+    );
+
+    await readout.click();
+    entry = $('[data-testid="settings-editor-font-size-entry"]');
+    await entry.waitForExist({ timeout: 5000 });
+    await entry.setValue("999");
+    await $('[data-testid="settings-search"]').click();
+    await browser.waitUntil(
+      async () => {
+        readout = $('[data-testid="settings-editor-font-size-readout"]');
+        return (
+          (await readout.isExisting()) &&
+          (await readout.getText()).trim() === "40 px" &&
+          (await persistedFontSize()) === 40
+        );
+      },
+      { timeout: 10000, timeoutMsg: "typed font size did not clamp on blur" },
+    );
+
+    await readout.click();
+    entry = $('[data-testid="settings-editor-font-size-entry"]');
+    await entry.waitForExist({ timeout: 5000 });
+    await entry.setValue("19");
     await browser.keys(Key.Escape);
     await browser.waitUntil(
-      async () => !(await $('[data-testid="settings-view"]').isExisting()),
-      { timeout: 5000 },
+      async () => {
+        readout = $('[data-testid="settings-editor-font-size-readout"]');
+        return (
+          (await readout.isExisting()) &&
+          (await readout.getText()).trim() === "40 px" &&
+          (await persistedFontSize()) === 40
+        );
+      },
+      { timeout: 10000, timeoutMsg: "typed font size did not revert" },
     );
+    expect(await activeElementDescriptor()).toContain("numeric-readout");
+
+    await browser.keys(Key.Escape);
+    await dialog.waitForExist({ reverse: true, timeout: 5000 });
+    await persistSettings(original);
+    await browser.refresh();
+    await $('[role="tree"]').waitForExist({ timeout: 15000 });
   });
 
   it("packaged_settings_restore_default_appearance_and_persist", async () => {
@@ -3384,7 +3556,9 @@ describe("skribeum core editing surfaces", () => {
     await dialog.waitForExist({ reverse: true, timeout: 5000 });
   });
 
-  it("renders_math_and_lazy_mermaid_with_inline_errors", async () => {
+  it("renders_math_and_rethemes_lazy_mermaid_from_computed_tokens", async () => {
+    const original = await persistedSettings();
+    if (typeof original === "string") throw new Error(original);
     await openNoteFromTree(RENDERING_NOTE_NAME);
     await $(".cm-skr-math-inline .katex").waitForExist({ timeout: 15000 });
     await $(".cm-skr-math-block math").waitForExist({ timeout: 15000 });
@@ -3395,6 +3569,88 @@ describe("skribeum core editing surfaces", () => {
     expect(await $(".cm-skr-mermaid.cm-skr-render-error").getText()).toContain(
       "Diagram error",
     );
+
+    const mermaidColours = () =>
+      browser.execute(() => {
+        const host = document.querySelector<HTMLElement>(
+          ".cm-skr-mermaid:not(.cm-skr-render-error)",
+        );
+        const node = host?.querySelector<SVGElement>(
+          "g.node rect, g.node polygon, g.node path",
+        );
+        const edge = host?.querySelector<SVGElement>("path.flowchart-link");
+        if (
+          host === null ||
+          host === undefined ||
+          node === null ||
+          edge === null
+        ) {
+          throw new Error("rendered Mermaid colours are unavailable");
+        }
+        const rootStyles = getComputedStyle(document.documentElement);
+        const resolveColour = (value: string) => {
+          const probe = document.createElement("span");
+          probe.style.color = value;
+          document.body.append(probe);
+          const colour = getComputedStyle(probe).color;
+          probe.remove();
+          return colour;
+        };
+        return {
+          fill: getComputedStyle(node).fill,
+          stroke: getComputedStyle(edge).stroke,
+          generation: host.dataset.mermaidThemeGeneration,
+          tokenFill: resolveColour(
+            rootStyles.getPropertyValue("--skr-surface-subtle"),
+          ),
+          tokenStroke: resolveColour(
+            rootStyles.getPropertyValue("--skr-text-muted"),
+          ),
+        };
+      });
+
+    const before = await mermaidColours();
+    expect(before.fill).toBe(before.tokenFill);
+    expect(before.stroke).toBe(before.tokenStroke);
+
+    await browser.keys([modifierKey, ","]);
+    const dialog = $('[data-testid="settings-view"]');
+    await dialog.waitForExist({ timeout: 10000 });
+    await selectSettingsChoice(
+      '[data-testid="settings-palette-signal"]',
+      "Signal palette",
+    );
+    await browser.waitUntil(
+      async () => {
+        const appearance = await browser.execute(() => ({
+          theme: document.documentElement.dataset.theme,
+          palette: document.documentElement.dataset.darkPalette,
+        }));
+        return appearance.theme === "dark" && appearance.palette === "signal";
+      },
+      { timeout: 10000, timeoutMsg: "Signal palette tokens did not apply" },
+    );
+    const changedTokens = await mermaidColours();
+    expect(changedTokens.tokenFill).not.toBe(before.tokenFill);
+    expect(changedTokens.tokenStroke).not.toBe(before.tokenStroke);
+    await browser.waitUntil(
+      async () => (await mermaidColours()).generation !== before.generation,
+      {
+        timeout: 30000,
+        timeoutMsg: "Mermaid did not render again for the palette",
+      },
+    );
+    const after = await mermaidColours();
+    expect(after.fill).toBe(after.tokenFill);
+    expect(after.stroke).toBe(after.tokenStroke);
+    expect(after.fill).not.toBe(before.fill);
+    expect(after.stroke).not.toBe(before.stroke);
+
+    await browser.keys(Key.Escape);
+    await dialog.waitForExist({ reverse: true, timeout: 5000 });
+    await persistSettings(original);
+    await browser.refresh();
+    await $('[role="tree"]').waitForExist({ timeout: 15000 });
   });
 
   it("opens_and_operates_the_read_only_canvas_by_keyboard", async () => {
@@ -3473,12 +3729,11 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    await selectTheme("dark");
-    await waitForPersistedDemoSetting("theme", "dark");
     await selectSettingsChoice(
-      '[data-testid="settings-dark-palette-graphite"]',
+      '[data-testid="settings-palette-graphite"]',
       "Graphite palette",
     );
+    await waitForPersistedDemoSetting("theme", "dark");
     await waitForPersistedDemoSetting("dark_palette", "graphite");
     await selectSettingsChoice(
       '[data-choice="prose_font-sans"]',

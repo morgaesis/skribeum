@@ -1,5 +1,5 @@
 <script lang="ts">
-import { onDestroy, tick } from "svelte";
+import { onDestroy, onMount, tick } from "svelte";
 import {
   SETTINGS_DESCRIPTORS,
   type SettingSectionId,
@@ -22,7 +22,6 @@ import type {
   DarkPaletteName,
   LightPaletteName,
   ProseFontName,
-  ThemeName,
 } from "./themes/theme";
 
 // registry-exempt keydown: ARIA dialog dismissal plus radio and segmented
@@ -56,37 +55,62 @@ const settingSearchText = Object.fromEntries(
   sections.map((section) => [
     section.id,
     SETTINGS_DESCRIPTORS.filter(
-      (setting) => setting.section === section.id,
+      (setting) =>
+        setting.section === section.id && setting.id !== "updates.version",
     ).map((setting): [string, string] => [setting.label, setting.description]),
   ]),
 ) as Record<SectionId, [string, string][]>;
 
-const lightPaletteCards: {
-  value: LightPaletteName;
+type PaletteCard = {
+  value: LightPaletteName | DarkPaletteName;
+  mode: "light" | "dark";
   label: string;
-}[] = [
+};
+
+const paletteCards: PaletteCard[] = [
   {
     value: "manuscript",
+    mode: "light",
     label: STRINGS.settingsPaletteManuscript,
   },
   {
     value: "studio",
+    mode: "light",
     label: STRINGS.settingsPaletteStudio,
   },
   {
     value: "gazette",
+    mode: "light",
     label: STRINGS.settingsPaletteGazette,
+  },
+  {
+    value: "lamplight",
+    mode: "dark",
+    label: STRINGS.settingsPaletteLamplight,
+  },
+  {
+    value: "graphite",
+    mode: "dark",
+    label: STRINGS.settingsPaletteGraphite,
+  },
+  {
+    value: "signal",
+    mode: "dark",
+    label: STRINGS.settingsPaletteSignal,
   },
 ];
 
-const darkPaletteCards: {
-  value: DarkPaletteName;
-  label: string;
-}[] = [
-  { value: "lamplight", label: STRINGS.settingsPaletteLamplight },
-  { value: "graphite", label: STRINGS.settingsPaletteGraphite },
-  { value: "signal", label: STRINGS.settingsPaletteSignal },
-];
+const numericSettings: Record<
+  NumericSetting,
+  { minimum: number; maximum: number; step: number }
+> = {
+  editor_font_size: { minimum: 8, maximum: 40, step: 1 },
+  editor_line_height: { minimum: 120, maximum: 220, step: 5 },
+  editor_line_width: { minimum: 45, maximum: 120, step: 1 },
+  autosave_delay_ms: { minimum: 100, maximum: 10_000, step: 100 },
+  indent_width: { minimum: 1, maximum: 8, step: 1 },
+  search_result_limit: { minimum: 1, maximum: 1000, step: 1 },
+};
 
 const TASK_STATUS_CATEGORIES: readonly TaskStatusCategory[] = [
   "TODO",
@@ -186,6 +210,10 @@ let jumpMenuOpen = $state(false);
 let previewSettings = $state<Partial<SettingsDocument>>({});
 let taskStatusError = $state<string | null>(null);
 let openTaskListbox = $state<string | null>(null);
+let editingNumericSetting = $state<NumericSetting | null>(null);
+let numericDraft = $state("");
+let numericPrevious = $state(0);
+let systemPrefersDark = $state(false);
 let focusedTargetSetting: string | null = null;
 
 const documentSettings = $derived(settings.document);
@@ -196,11 +224,56 @@ const displayedSettings = $derived({
 const searchScope = $derived<SearchScope>(
   documentSettings.search_note_bodies ? "full-text" : "titles",
 );
+const activePalette = $derived<LightPaletteName | DarkPaletteName>(
+  documentSettings.theme === "dark" ||
+    (documentSettings.theme === "system" && systemPrefersDark)
+    ? (documentSettings.dark_palette as DarkPaletteName)
+    : (documentSettings.light_palette as LightPaletteName),
+);
+const activePaletteCard = $derived(
+  paletteCards.find(({ value }) => value === activePalette) ?? paletteCards[0],
+);
 const settingsPathText = $derived(
   desktopAvailable
     ? (settingsFilePath ?? STRINGS.settingsFileResolving)
-    : STRINGS.settingsDesktopUnavailableShort,
+    : STRINGS.settingsFileDesktopRequired,
 );
+const defaultNoteFolderDescription = $derived(
+  desktopAvailable
+    ? STRINGS.settingsDefaultNoteFolderDescription
+    : STRINGS.settingsDefaultNoteFolderDesktopRequired,
+);
+const attachmentFolderDescription = $derived(
+  desktopAvailable
+    ? STRINGS.settingsAttachmentFolderDescription
+    : STRINGS.settingsAttachmentFolderDesktopRequired,
+);
+const obsidianDescription = $derived(
+  desktopAvailable
+    ? STRINGS.settingsHonorObsidianDescription
+    : STRINGS.settingsObsidianDesktopRequired,
+);
+const updateChannelDescription = $derived(
+  desktopAvailable
+    ? STRINGS.settingsUpdateChannelDescription
+    : STRINGS.settingsUpdateChannelDesktopRequired,
+);
+const checkUpdatesDescription = $derived(
+  desktopAvailable
+    ? STRINGS.settingsCheckUpdatesDescription
+    : STRINGS.settingsCheckUpdatesDesktopRequired,
+);
+
+onMount(() => {
+  const query = window.matchMedia?.("(prefers-color-scheme: dark)");
+  if (query === undefined) return;
+  systemPrefersDark = query.matches;
+  const onChange = (event: MediaQueryListEvent) => {
+    systemPrefersDark = event.matches;
+  };
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+});
 
 $effect(() => {
   if (targetSetting !== null && focusedTargetSetting !== targetSetting) {
@@ -216,8 +289,9 @@ $effect(() => {
 async function focusSetting(id: string) {
   searchQuery = "";
   await tick();
+  const targetId = id === "updates.version" ? "about.version" : id;
   const row = contentElement?.querySelector<HTMLElement>(
-    `[data-setting-id="${CSS.escape(id)}"]`,
+    `[data-setting-id="${CSS.escape(targetId)}"]`,
   );
   if (contentElement === undefined || row === null || row === undefined) return;
   const contentBox = contentElement.getBoundingClientRect();
@@ -254,6 +328,121 @@ function updateNumber(
 ) {
   if (Number.isInteger(value) && value >= minimum && value <= maximum) {
     update({ [setting]: value });
+  }
+}
+
+function paletteIsStoredChoice(card: PaletteCard): boolean {
+  return card.mode === "light"
+    ? documentSettings.light_palette === card.value
+    : documentSettings.dark_palette === card.value;
+}
+
+function choosePalette(card: PaletteCard) {
+  if (card.mode === "light") {
+    update({
+      theme: "light",
+      light_palette: card.value as LightPaletteName,
+    });
+  } else {
+    update({
+      theme: "dark",
+      dark_palette: card.value as DarkPaletteName,
+    });
+  }
+}
+
+async function paletteKeydown(event: KeyboardEvent, card: PaletteCard) {
+  const index = paletteCards.indexOf(card);
+  let nextIndex: number | null = null;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    nextIndex = (index + 1) % paletteCards.length;
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    nextIndex = (index - 1 + paletteCards.length) % paletteCards.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = paletteCards.length - 1;
+  }
+  if (nextIndex === null) return;
+  event.preventDefault();
+  const next = paletteCards[nextIndex];
+  if (next === undefined) return;
+  choosePalette(next);
+  await tick();
+  dialogElement
+    ?.querySelector<HTMLButtonElement>(
+      `[data-testid="settings-palette-${next.value}"]`,
+    )
+    ?.focus();
+}
+
+function paletteMatches(): boolean {
+  const paletteSearchTerms: readonly (readonly [string, string])[] = [
+    [STRINGS.settingsPalette, STRINGS.settingsPaletteDescription],
+    [STRINGS.settingsTheme, STRINGS.settingsThemeDescription],
+    [STRINGS.settingsLightPalette, STRINGS.settingsPaletteDescription],
+    [STRINGS.settingsDarkPalette, STRINGS.settingsPaletteDescription],
+  ];
+  return paletteSearchTerms.some(([label, description]) =>
+    matches(label, description),
+  );
+}
+
+async function startNumericEntry(setting: NumericSetting, value: number) {
+  editingNumericSetting = setting;
+  numericDraft = String(value);
+  numericPrevious = value;
+  await tick();
+  const input = dialogElement?.querySelector<HTMLInputElement>(
+    `[data-numeric-entry="${setting}"]`,
+  );
+  input?.focus();
+  input?.select();
+}
+
+function snappedNumericValue(setting: NumericSetting, raw: string): number {
+  const { minimum, maximum, step } = numericSettings[setting];
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return numericPrevious;
+  const clamped = Math.min(maximum, Math.max(minimum, parsed));
+  return Math.min(
+    maximum,
+    Math.max(minimum, minimum + Math.round((clamped - minimum) / step) * step),
+  );
+}
+
+async function finishNumericEntry(
+  setting: NumericSetting,
+  commit: boolean,
+  restoreReadoutFocus = true,
+) {
+  if (editingNumericSetting !== setting) return;
+  const value = commit
+    ? snappedNumericValue(setting, numericDraft)
+    : numericPrevious;
+  editingNumericSetting = null;
+  if (commit) {
+    const nextPreview = { ...previewSettings };
+    delete nextPreview[setting];
+    previewSettings = nextPreview;
+    update({ [setting]: value });
+  }
+  if (restoreReadoutFocus) {
+    await tick();
+    dialogElement
+      ?.querySelector<HTMLButtonElement>(`[data-numeric-readout="${setting}"]`)
+      ?.focus();
+  }
+}
+
+function numericEntryKeydown(event: KeyboardEvent, setting: NumericSetting) {
+  event.stopPropagation();
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void finishNumericEntry(setting, true);
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    void finishNumericEntry(setting, false);
   }
 }
 
@@ -533,7 +722,26 @@ function matches(label: string, description: string): boolean {
 }
 
 function hasMatches(section: SectionId): boolean {
-  return settingSearchText[section].some(([label, description]) =>
+  if (
+    settingSearchText[section].some(([label, description]) =>
+      matches(label, description),
+    )
+  ) {
+    return true;
+  }
+  if (desktopAvailable) return false;
+  const desktopDescriptions: Partial<Record<SectionId, [string, string][]>> = {
+    files: [
+      [STRINGS.settingsDefaultNoteFolder, defaultNoteFolderDescription],
+      [STRINGS.settingsAttachmentFolder, attachmentFolderDescription],
+      [STRINGS.settingsHonorObsidian, obsidianDescription],
+    ],
+    updates: [
+      [STRINGS.settingsUpdateChannel, updateChannelDescription],
+      [STRINGS.settingsCheckUpdates, checkUpdatesDescription],
+    ],
+  };
+  return (desktopDescriptions[section] ?? []).some(([label, description]) =>
     matches(label, description),
   );
 }
@@ -696,12 +904,11 @@ function onKeydown(event: KeyboardEvent) {
 {#snippet palettePreview(
   label: string,
   palette: LightPaletteName | DarkPaletteName,
-  mode: "light" | "dark",
 )}
   <div
     class="palette-live-preview skr-palette-swatch"
     data-palette={palette}
-    data-testid={`settings-${mode}-palette-preview`}
+    data-testid="settings-palette-preview"
   >
     <strong class="palette-live-heading">{label}</strong>
     <div class="palette-live-rule" aria-hidden="true"></div>
@@ -720,6 +927,62 @@ function onKeydown(event: KeyboardEvent) {
       <span>{STRINGS.settingsPalettePreviewCheckedTask}</span>
     </div>
   </div>
+{/snippet}
+
+{#snippet paletteCard(card: PaletteCard)}
+  <button
+    type="button"
+    class="palette-card skr-palette-swatch"
+    class:active={activePalette === card.value}
+    class:paired={documentSettings.theme === "system" &&
+      paletteIsStoredChoice(card) &&
+      activePalette !== card.value}
+    role="radio"
+    aria-checked={activePalette === card.value}
+    tabindex={activePalette === card.value ? 0 : -1}
+    data-palette={card.value}
+    data-testid={`settings-palette-${card.value}`}
+    onclick={() => choosePalette(card)}
+    onkeydown={(event) => paletteKeydown(event, card)}
+  >
+    <strong>{card.label}</strong>
+    <span class="palette-card-dot" aria-hidden="true"></span>
+  </button>
+{/snippet}
+
+{#snippet numericReadout(
+  setting: NumericSetting,
+  value: number,
+  unit: string,
+  label: string,
+)}
+  {#if editingNumericSetting === setting}
+    <input
+      class="numeric-entry"
+      type="number"
+      inputmode="numeric"
+      min={numericSettings[setting].minimum}
+      max={numericSettings[setting].maximum}
+      step={numericSettings[setting].step}
+      value={numericDraft}
+      aria-label={label}
+      data-numeric-entry={setting}
+      data-testid={`settings-${setting.replaceAll("_", "-")}-entry`}
+      oninput={(event) =>
+        (numericDraft = (event.currentTarget as HTMLInputElement).value)}
+      onkeydown={(event) => numericEntryKeydown(event, setting)}
+      onblur={() => finishNumericEntry(setting, true, false)}
+    />
+  {:else}
+    <button
+      class="numeric-readout"
+      type="button"
+      data-numeric-readout={setting}
+      data-testid={`settings-${setting.replaceAll("_", "-")}-readout`}
+      aria-label={`${label}: ${value} ${unit}`}
+      onclick={() => startNumericEntry(setting, value)}
+    >{value}{unit === STRINGS.settingsUnitPercent ? "" : " "}{unit}</button>
+  {/if}
 {/snippet}
 
 <div
@@ -828,144 +1091,67 @@ function onKeydown(event: KeyboardEvent) {
               {STRINGS.settingsSectionAppearance}
             </h3>
 
-            {#if matches(STRINGS.settingsTheme, STRINGS.settingsThemeDescription)}
-              <div class="setting-row" data-setting-id="appearance.theme">
+            {#if paletteMatches()}
+              <div class="setting-row palette-setting">
                 <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsTheme}</span>
-                  <p>{STRINGS.settingsThemeDescription}</p>
-                  {@render settingError(["theme"])}
+                  <span class="setting-label">{STRINGS.settingsPalette}</span>
+                  <p>{STRINGS.settingsPaletteDescription}</p>
+                  {@render settingError(["theme", "light_palette", "dark_palette"])}
                 </div>
-                <div
-                  class="segmented"
-                  role="radiogroup"
-                  aria-label={STRINGS.settingsTheme}
-                  data-testid="settings-theme"
-                >
-                  {#each ["system", "light", "dark"] as theme}
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={documentSettings.theme === theme}
-                      tabindex={documentSettings.theme === theme ? 0 : -1}
-                      class:active={documentSettings.theme === theme}
-                      data-choice={`theme-${theme}`}
-                      data-testid={`settings-theme-${theme}`}
-                      onclick={() => update({ theme })}
-                      onkeydown={(event) =>
-                        segmentedKeydown(
-                          event,
-                          ["system", "light", "dark"],
-                          theme as ThemeName,
-                          "theme",
-                        )}
-                      >{theme === "system"
-                        ? STRINGS.settingsThemeSystem
-                        : theme === "light"
-                          ? STRINGS.settingsThemeLight
-                          : STRINGS.settingsThemeDark}</button
+                <div class="palette-picker">
+                  <div
+                    class="palette-options"
+                    role="radiogroup"
+                    aria-label={STRINGS.settingsPalette}
+                    data-testid="settings-palette"
+                  >
+                    <span
+                      class="palette-target"
+                      data-setting-id="appearance.light-palette"
                     >
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            {#if matches(STRINGS.settingsLightPalette, STRINGS.settingsPaletteDescription)}
-              <div class="setting-row palette-setting" data-setting-id="appearance.light-palette">
-                <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsLightPalette}</span>
-                  <p>{STRINGS.settingsPaletteDescription}</p>
-                  {@render settingError(["light_palette"])}
-                </div>
-                <div class="palette-picker">
-                  <div
-                    class="palette-options"
-                    role="radiogroup"
-                    aria-label={STRINGS.settingsLightPalette}
-                  >
-                    {#each lightPaletteCards as palette}
-                      <button
-                        type="button"
-                        class="palette-card skr-palette-swatch"
-                        class:active={documentSettings.light_palette === palette.value}
-                        role="radio"
-                        aria-checked={documentSettings.light_palette === palette.value}
-                        tabindex={documentSettings.light_palette === palette.value
-                          ? 0
-                          : -1}
-                        data-palette={palette.value}
-                        data-choice={`light_palette-${palette.value}`}
-                        data-testid={`settings-light-palette-${palette.value}`}
-                        onclick={() => update({ light_palette: palette.value })}
-                        onkeydown={(event) =>
-                          segmentedKeydown(
-                            event,
-                            ["manuscript", "studio", "gazette"],
-                            palette.value,
-                            "light_palette",
-                          )}
-                      >
-                        <strong>{palette.label}</strong>
-                        <span class="palette-card-dot" aria-hidden="true"></span>
-                      </button>
-                    {/each}
+                      {#each paletteCards.filter(({ mode }) => mode === "light") as card}
+                        {@render paletteCard(card)}
+                      {/each}
+                    </span>
+                    <span
+                      class="palette-target"
+                      data-setting-id="appearance.dark-palette"
+                    >
+                      {#each paletteCards.filter(({ mode }) => mode === "dark") as card}
+                        {@render paletteCard(card)}
+                      {/each}
+                    </span>
                   </div>
-                  {@render palettePreview(
-                    lightPaletteCards.find(
-                      ({ value }) => value === documentSettings.light_palette,
-                    )?.label ?? STRINGS.settingsPaletteManuscript,
-                    documentSettings.light_palette as LightPaletteName,
-                    "light",
-                  )}
-                </div>
-              </div>
-            {/if}
-
-            {#if matches(STRINGS.settingsDarkPalette, STRINGS.settingsPaletteDescription)}
-              <div class="setting-row palette-setting" data-setting-id="appearance.dark-palette">
-                <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsDarkPalette}</span>
-                  <p>{STRINGS.settingsPaletteDescription}</p>
-                  {@render settingError(["dark_palette"])}
-                </div>
-                <div class="palette-picker">
-                  <div
-                    class="palette-options"
-                    role="radiogroup"
-                    aria-label={STRINGS.settingsDarkPalette}
+                  <label
+                    class="match-system-setting"
+                    data-setting-id="appearance.theme"
                   >
-                    {#each darkPaletteCards as palette}
-                      <button
-                        type="button"
-                        class="palette-card skr-palette-swatch"
-                        class:active={documentSettings.dark_palette === palette.value}
-                        role="radio"
-                        aria-checked={documentSettings.dark_palette === palette.value}
-                        tabindex={documentSettings.dark_palette === palette.value
-                          ? 0
-                          : -1}
-                        data-palette={palette.value}
-                        data-choice={`dark_palette-${palette.value}`}
-                        data-testid={`settings-dark-palette-${palette.value}`}
-                        onclick={() => update({ dark_palette: palette.value })}
-                        onkeydown={(event) =>
-                          segmentedKeydown(
-                            event,
-                            ["lamplight", "graphite", "signal"],
-                            palette.value,
-                            "dark_palette",
-                          )}
-                      >
-                        <strong>{palette.label}</strong>
-                        <span class="palette-card-dot" aria-hidden="true"></span>
-                      </button>
-                    {/each}
-                  </div>
+                    <span class="setting-copy">
+                      <span class="setting-label">{STRINGS.settingsTheme}</span>
+                      <span>{STRINGS.settingsThemeDescription}</span>
+                    </span>
+                    <span class="switch">
+                      <input
+                        type="checkbox"
+                        checked={documentSettings.theme === "system"}
+                        data-testid="settings-match-system"
+                        onchange={(event) =>
+                          update({
+                            theme: (
+                              event.currentTarget as HTMLInputElement
+                            ).checked
+                              ? "system"
+                              : systemPrefersDark
+                                ? "dark"
+                                : "light",
+                          })}
+                      />
+                      <span aria-hidden="true"></span>
+                    </span>
+                  </label>
                   {@render palettePreview(
-                    darkPaletteCards.find(
-                      ({ value }) => value === documentSettings.dark_palette,
-                    )?.label ?? STRINGS.settingsPaletteLamplight,
-                    documentSettings.dark_palette as DarkPaletteName,
-                    "dark",
+                    activePaletteCard?.label ?? STRINGS.settingsPaletteManuscript,
+                    activePalette,
                   )}
                 </div>
               </div>
@@ -1038,15 +1224,16 @@ function onKeydown(event: KeyboardEvent) {
             {/if}
 
             {#if matches(STRINGS.settingsFontSize, STRINGS.settingsFontSizeDescription)}
-              <label class="setting-row" data-setting-id="appearance.font-size">
-                <span class="setting-copy">
+              <div class="setting-row" data-setting-id="appearance.font-size">
+                <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsFontSize}</span>
                   <span>{STRINGS.settingsFontSizeDescription}</span>
                   {@render settingError(["editor_font_size"])}
-                </span>
-                <span class="slider-control">
+                </div>
+                <div class="slider-control">
                   <input
                     type="range"
+                    aria-label={STRINGS.settingsFontSize}
                     min="8"
                     max="40"
                     step="1"
@@ -1057,21 +1244,27 @@ function onKeydown(event: KeyboardEvent) {
                     onchange={(event) =>
                       inputNumber(event, "editor_font_size", 8, 40)}
                   />
-                  <output>{displayedSettings.editor_font_size} {STRINGS.settingsUnitPixels}</output>
-                </span>
-              </label>
+                  {@render numericReadout(
+                    "editor_font_size",
+                    displayedSettings.editor_font_size,
+                    STRINGS.settingsUnitPixels,
+                    STRINGS.settingsFontSize,
+                  )}
+                </div>
+              </div>
             {/if}
 
             {#if matches(STRINGS.settingsLineHeight, STRINGS.settingsLineHeightDescription)}
-              <label class="setting-row" data-setting-id="appearance.line-height">
-                <span class="setting-copy">
+              <div class="setting-row" data-setting-id="appearance.line-height">
+                <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsLineHeight}</span>
                   <span>{STRINGS.settingsLineHeightDescription}</span>
                   {@render settingError(["editor_line_height"])}
-                </span>
-                <span class="slider-control">
+                </div>
+                <div class="slider-control">
                   <input
                     type="range"
+                    aria-label={STRINGS.settingsLineHeight}
                     min="120"
                     max="220"
                     step="5"
@@ -1081,21 +1274,27 @@ function onKeydown(event: KeyboardEvent) {
                     onchange={(event) =>
                       inputNumber(event, "editor_line_height", 120, 220)}
                   />
-                  <output>{displayedSettings.editor_line_height}{STRINGS.settingsUnitPercent}</output>
-                </span>
-              </label>
+                  {@render numericReadout(
+                    "editor_line_height",
+                    displayedSettings.editor_line_height,
+                    STRINGS.settingsUnitPercent,
+                    STRINGS.settingsLineHeight,
+                  )}
+                </div>
+              </div>
             {/if}
 
             {#if matches(STRINGS.settingsLineWidth, STRINGS.settingsLineWidthDescription)}
-              <label class="setting-row" data-setting-id="appearance.line-width">
-                <span class="setting-copy">
+              <div class="setting-row" data-setting-id="appearance.line-width">
+                <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsLineWidth}</span>
                   <span>{STRINGS.settingsLineWidthDescription}</span>
                   {@render settingError(["editor_line_width"])}
-                </span>
-                <span class="slider-control">
+                </div>
+                <div class="slider-control">
                   <input
                     type="range"
+                    aria-label={STRINGS.settingsLineWidth}
                     min="45"
                     max="120"
                     step="1"
@@ -1106,9 +1305,14 @@ function onKeydown(event: KeyboardEvent) {
                     onchange={(event) =>
                       inputNumber(event, "editor_line_width", 45, 120)}
                   />
-                  <output>{displayedSettings.editor_line_width} {STRINGS.settingsUnitCharacters}</output>
-                </span>
-              </label>
+                  {@render numericReadout(
+                    "editor_line_width",
+                    displayedSettings.editor_line_width,
+                    STRINGS.settingsUnitCharacters,
+                    STRINGS.settingsLineWidth,
+                  )}
+                </div>
+              </div>
             {/if}
 
             {#if matches(STRINGS.settingsAnimations, STRINGS.settingsAnimationsDescription)}
@@ -1164,7 +1368,12 @@ function onKeydown(event: KeyboardEvent) {
                         10_000,
                       )}>−</button
                   >
-                  <output>{documentSettings.autosave_delay_ms} {STRINGS.settingsUnitMilliseconds}</output>
+                  {@render numericReadout(
+                    "autosave_delay_ms",
+                    documentSettings.autosave_delay_ms,
+                    STRINGS.settingsUnitMilliseconds,
+                    STRINGS.settingsAutosave,
+                  )}
                   <button
                     type="button"
                     aria-label={`${STRINGS.settingsIncrease} ${STRINGS.settingsAutosave}`}
@@ -1256,7 +1465,12 @@ function onKeydown(event: KeyboardEvent) {
                         8,
                       )}>−</button
                   >
-                  <output>{documentSettings.indent_width} {STRINGS.settingsUnitSpaces}</output>
+                  {@render numericReadout(
+                    "indent_width",
+                    documentSettings.indent_width,
+                    STRINGS.settingsUnitSpaces,
+                    STRINGS.settingsIndentWidth,
+                  )}
                   <button
                     type="button"
                     aria-label={`${STRINGS.settingsIncrease} ${STRINGS.settingsIndentWidth}`}
@@ -1524,17 +1738,12 @@ function onKeydown(event: KeyboardEvent) {
             <h3 id="settings-files-heading">
               {STRINGS.settingsSectionFiles}
             </h3>
-            {#if !desktopAvailable}
-              <p class="desktop-only" data-testid="settings-desktop-unavailable">
-                {STRINGS.settingsDesktopOnly}
-              </p>
-            {/if}
             <fieldset disabled={!desktopAvailable}>
-              {#if matches(STRINGS.settingsDefaultNoteFolder, STRINGS.settingsDefaultNoteFolderDescription)}
+              {#if matches(STRINGS.settingsDefaultNoteFolder, defaultNoteFolderDescription)}
                 <label class="setting-row" data-setting-id="files.default-note-folder">
                   <span class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsDefaultNoteFolder}</span>
-                    <span>{STRINGS.settingsDefaultNoteFolderDescription}</span>
+                    <span>{defaultNoteFolderDescription}</span>
                     {@render settingError(["default_note_folder"])}
                   </span>
                   <input
@@ -1553,11 +1762,11 @@ function onKeydown(event: KeyboardEvent) {
                 </label>
               {/if}
 
-              {#if matches(STRINGS.settingsAttachmentFolder, STRINGS.settingsAttachmentFolderDescription)}
+              {#if matches(STRINGS.settingsAttachmentFolder, attachmentFolderDescription)}
                 <div class="setting-row attachment-setting" data-setting-id="files.attachment-folder">
                   <div class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsAttachmentFolder}</span>
-                    <p>{STRINGS.settingsAttachmentFolderDescription}</p>
+                    <p>{attachmentFolderDescription}</p>
                     {@render settingError(["attachment_folder_mode", "attachment_folder_path"])}
                   </div>
                   <div class="attachment-controls">
@@ -1607,11 +1816,11 @@ function onKeydown(event: KeyboardEvent) {
                 </div>
               {/if}
 
-              {#if matches(STRINGS.settingsHonorObsidian, STRINGS.settingsHonorObsidianDescription)}
+              {#if matches(STRINGS.settingsHonorObsidian, obsidianDescription)}
                 <label class="setting-row" data-setting-id="files.obsidian-config">
                   <span class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsHonorObsidian}</span>
-                    <span>{STRINGS.settingsHonorObsidianDescription}</span>
+                    <span>{obsidianDescription}</span>
                     {@render settingError(["honor_obsidian_config"])}
                   </span>
                   <span class="switch">
@@ -1662,7 +1871,12 @@ function onKeydown(event: KeyboardEvent) {
                         1000,
                       )}>−</button
                   >
-                  <output>{documentSettings.search_result_limit} {STRINGS.settingsUnitResults}</output>
+                  {@render numericReadout(
+                    "search_result_limit",
+                    documentSettings.search_result_limit,
+                    STRINGS.settingsUnitResults,
+                    STRINGS.settingsSearchLimit,
+                  )}
                   <button
                     type="button"
                     aria-label={`${STRINGS.settingsIncrease} ${STRINGS.settingsSearchLimit}`}
@@ -1750,17 +1964,12 @@ function onKeydown(event: KeyboardEvent) {
             <h3 id="settings-updates-heading">
               {STRINGS.settingsSectionUpdates}
             </h3>
-            {#if !desktopAvailable}
-              <p class="desktop-only" data-testid="settings-desktop-unavailable">
-                {STRINGS.settingsDesktopOnly}
-              </p>
-            {/if}
             <fieldset disabled={!desktopAvailable}>
-              {#if matches(STRINGS.settingsUpdateChannel, STRINGS.settingsUpdateChannelDescription)}
+              {#if matches(STRINGS.settingsUpdateChannel, updateChannelDescription)}
                 <div class="setting-row" data-setting-id="updates.channel">
                   <div class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsUpdateChannel}</span>
-                    <p>{STRINGS.settingsUpdateChannelDescription}</p>
+                    <p>{updateChannelDescription}</p>
                     {@render settingError(["update_channel"])}
                   </div>
                   <div class="segmented" role="radiogroup" aria-label={STRINGS.settingsUpdateChannel}>
@@ -1790,11 +1999,11 @@ function onKeydown(event: KeyboardEvent) {
                 </div>
               {/if}
 
-              {#if matches(STRINGS.settingsCheckUpdates, STRINGS.settingsCheckUpdatesDescription)}
+              {#if matches(STRINGS.settingsCheckUpdates, checkUpdatesDescription)}
                 <div class="setting-row" data-setting-id="updates.check">
                   <div class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsCheckUpdates}</span>
-                    <p>{STRINGS.settingsCheckUpdatesDescription}</p>
+                    <p>{checkUpdatesDescription}</p>
                     {#if updateState.kind !== "idle"}
                       <p class="update-status" role="status">
                         {describeUpdateState(updateState)}
@@ -1809,16 +2018,6 @@ function onKeydown(event: KeyboardEvent) {
                     onclick={onCheckUpdate}
                     >{STRINGS.updateCheck}</button
                   >
-                </div>
-              {/if}
-
-              {#if matches(STRINGS.settingsVersion, STRINGS.settingsVersionDescription)}
-                <div class="setting-row" data-setting-id="updates.version">
-                  <div class="setting-copy">
-                    <span class="setting-label">{STRINGS.settingsVersion}</span>
-                    <p>{STRINGS.settingsVersionDescription}</p>
-                  </div>
-                  <output tabindex="-1">{currentVersion}</output>
                 </div>
               {/if}
             </fieldset>
@@ -1938,12 +2137,12 @@ function onKeydown(event: KeyboardEvent) {
     color: var(--skr-text);
     display: flex;
     flex-direction: column;
-    height: min(80vh, 34rem);
+    height: min(85vh, 48rem);
     max-height: calc(100vh - 2rem);
     outline: none;
     overflow: hidden;
     position: relative;
-    width: min(44rem, calc(100vw - 2rem));
+    width: min(48rem, calc(100vw - 2rem));
   }
 
   .settings-footer {
@@ -1996,7 +2195,6 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .settings-error,
-  .desktop-only,
   .prealpha-note,
   .update-status {
     border-left: 3px solid var(--skr-warning);
@@ -2074,6 +2272,7 @@ function onKeydown(event: KeyboardEvent) {
   .secondary-button,
   .segmented button,
   .palette-options button,
+  .numeric-readout,
   .stepper button {
     background: transparent;
     border: 1px solid transparent;
@@ -2154,6 +2353,7 @@ function onKeydown(event: KeyboardEvent) {
     min-width: 0;
     overflow-y: auto;
     padding: 1rem 1.125rem 1.5rem;
+    scrollbar-gutter: stable;
   }
 
   .settings-content section + section {
@@ -2222,7 +2422,11 @@ function onKeydown(event: KeyboardEvent) {
     grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
   }
 
-  .palette-card {
+  .palette-target {
+    display: contents;
+  }
+
+  .palette-options .palette-card {
     align-items: center;
     background: var(--skr-surface);
     border: 1px solid var(--skr-border);
@@ -2247,7 +2451,13 @@ function onKeydown(event: KeyboardEvent) {
     border-width: 2px;
   }
 
+  .palette-card.paired {
+    border-color: var(--skr-border-strong);
+    border-width: 2px;
+  }
+
   .palette-card strong {
+    color: var(--skr-heading);
     font-size: 0.875rem;
     font-weight: 700;
     overflow-wrap: anywhere;
@@ -2272,6 +2482,16 @@ function onKeydown(event: KeyboardEvent) {
     gap: 0.5rem;
     margin-top: 0.5rem;
     padding: 1rem;
+  }
+
+  .match-system-setting {
+    align-items: center;
+    border-bottom: 1px solid var(--skr-border);
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 2.75rem;
+    padding: 0.75rem 0;
   }
 
   .palette-live-heading {
@@ -2352,6 +2572,36 @@ function onKeydown(event: KeyboardEvent) {
     width: 100%;
   }
 
+  .numeric-readout,
+  .numeric-entry {
+    background: var(--skr-surface-subtle);
+    border: 1px solid transparent;
+    border-radius: 0.25rem;
+    box-sizing: border-box;
+    color: var(--skr-text);
+    font-family: var(--skr-font-interface);
+    font-size: 0.8125rem;
+    min-height: 1.75rem;
+    padding: 0.25rem 0.4rem;
+    text-align: center;
+    width: 5.5rem;
+  }
+
+  .numeric-readout {
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .numeric-readout:hover {
+    background: var(--skr-accent-subtle);
+  }
+
+  .numeric-entry {
+    border-color: var(--skr-border-strong);
+    font-variant-numeric: tabular-nums;
+    width: 5ch;
+  }
+
   output {
     color: var(--skr-text-muted);
     font-size: 0.75rem;
@@ -2389,10 +2639,15 @@ function onKeydown(event: KeyboardEvent) {
     opacity: 0.5;
   }
 
-  .stepper output {
+  .stepper .numeric-readout,
+  .stepper .numeric-entry {
     align-items: center;
+    background: transparent;
+    border-bottom: 0;
     border-left: 1px solid var(--skr-border);
+    border-radius: 0;
     border-right: 1px solid var(--skr-border);
+    border-top: 0;
     display: flex;
     justify-content: center;
     min-width: 6.5rem;
@@ -2590,12 +2845,8 @@ function onKeydown(event: KeyboardEvent) {
     padding: 0;
   }
 
-  fieldset:disabled {
+  fieldset:disabled :is(button, input) {
     opacity: 0.62;
-  }
-
-  .desktop-only {
-    margin-inline: 0;
   }
 
   .prealpha-note {
@@ -2675,6 +2926,10 @@ function onKeydown(event: KeyboardEvent) {
     .setting-row {
       align-items: start;
       grid-template-columns: 1fr;
+    }
+
+    .match-system-setting {
+      grid-template-columns: minmax(0, 1fr) auto;
     }
 
     .slider-control {

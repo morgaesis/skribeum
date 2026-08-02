@@ -34,6 +34,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   second launch.
 - Application zoom is available from the command surface and the standard
   `mod++`, `mod+-`, and `mod+0` shortcuts, with the selected factor persisted.
+- Application and browser icons use the lit Skribeum lamp mark, brand palette,
+  and a simplified silhouette at 16 pixels.
 - Rust and JavaScript dependency requirements and lockfiles track their latest
   compatible stable releases, with transitive WebdriverIO serialization moved
   beyond its published security advisories.

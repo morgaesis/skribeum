@@ -4294,67 +4294,128 @@ describe("skribeum core editing surfaces", () => {
       { timeout: 15000, timeoutMsg: "browser demo note content did not load" },
     );
     await browser.execute(() => {
+      type GateWindow = Window & {
+        __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
+        __SKRIBEUM_E2E_NOTE_RELEASES__?: Record<string, () => void>;
+      };
+      const target = window as GateWindow;
       const paths = [
         "Examples/Work/decision-log.md",
         "Examples/Personal/garden-log.md",
       ];
-      sessionStorage.setItem("skribeum.e2e.note-gates", JSON.stringify(paths));
-      const url = new URL(window.location.href);
-      url.searchParams.set("note", "Features/embeds.md");
-      url.searchParams.set("embed-test", Date.now().toString());
-      window.history.pushState(window.history.state, "", url);
-      window.dispatchEvent(
-        new PopStateEvent("popstate", { state: window.history.state }),
-      );
+      const gates: Record<string, Promise<void>> = {};
+      const releases: Record<string, () => void> = {};
+      target.__SKRIBEUM_E2E_NOTE_GATES__ = gates;
+      target.__SKRIBEUM_E2E_NOTE_RELEASES__ = releases;
+      for (const path of paths) {
+        gates[path] = new Promise((resolve) => {
+          releases[path] = resolve;
+        });
+      }
     });
-
-    const skeleton = $(".cm-skr-embed-loading");
-    await skeleton.waitForExist({ timeout: 10000 });
-    expect(await $$(".cm-skr-embed").length).toBe(2);
-    expect(await $$(".cm-skr-embed-skeleton-bar").length).toBe(6);
-    const motion = await browser.execute(() => {
-      const bar = document.querySelector(".cm-skr-embed-skeleton-bar");
-      if (!(bar instanceof HTMLElement)) return null;
-      const style = getComputedStyle(bar, "::after");
-      return {
-        duration: Number.parseFloat(style.animationDuration) * 1000,
-        iterations: style.animationIterationCount,
-      };
-    });
-    expect(motion?.duration).toBeLessThanOrEqual(50);
-    expect(motion?.iterations).toBe("1");
-    const staticMotion = await browser.execute(() => {
-      document.documentElement.dataset.animations = "false";
-      const bar = document.querySelector(".cm-skr-embed-skeleton-bar");
-      return bar instanceof HTMLElement
-        ? getComputedStyle(bar, "::after").animationName
-        : null;
-    });
-    expect(staticMotion).toBe("none");
-    await browser.execute(() => {
-      sessionStorage.removeItem("skribeum.e2e.note-gates");
-      window.dispatchEvent(new Event("skribeum:e2e-release-notes"));
-    });
-
-    await browser.waitUntil(
-      async () => (await $$(".cm-skr-embed-loading")).length === 0,
-      {
-        timeout: 5000,
-        timeoutMsg: "embedded content did not replace skeletons",
-      },
-    );
-    const embeds = await $$(".cm-skr-embed");
-    expect(await embeds[0]?.getText()).toContain(
-      "Preserve a clear window-side route",
-    );
-    await embeds[1]?.scrollIntoView({ block: "center" });
+    await browser.keys([modifierKey, "k"]);
+    const commandInput = await overlayInput();
+    await browser.keys("embeds");
     await browser.waitUntil(
       async () =>
-        (await embeds[1]?.getText())?.includes(
-          "Photograph the drainage channel after rain.",
-        ) === true,
-      { timeout: 5000, timeoutMsg: "section embed content did not render" },
+        browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              '[role="option"][data-result-kind="file"]',
+            ),
+          ].some((option) =>
+            (option.textContent ?? "").toLocaleLowerCase().includes("embeds"),
+          ),
+        ),
+      { timeout: 10000, timeoutMsg: "embed fixture result did not appear" },
     );
+    expect(await commandInput.getValue()).toBe("embeds");
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      async () =>
+        new URL(await browser.getUrl()).searchParams.get("note") ===
+        "Features/embeds.md",
+      { timeout: 15000, timeoutMsg: "embed fixture note did not open" },
+    );
+
+    let released = false;
+    try {
+      const skeleton = $(".cm-skr-embed-loading");
+      await skeleton.waitForExist({ timeout: 10000 });
+      expect(await $$(".cm-skr-embed").length).toBe(2);
+      expect(await $$(".cm-skr-embed-skeleton-bar").length).toBe(6);
+      const motion = await browser.execute(() => {
+        const bar = document.querySelector(".cm-skr-embed-skeleton-bar");
+        if (!(bar instanceof HTMLElement)) return null;
+        const style = getComputedStyle(bar, "::after");
+        return {
+          duration: Number.parseFloat(style.animationDuration) * 1000,
+          iterations: style.animationIterationCount,
+        };
+      });
+      expect(motion?.duration).toBeLessThanOrEqual(50);
+      expect(motion?.iterations).toBe("1");
+      const staticMotion = await browser.execute(() => {
+        document.documentElement.dataset.animations = "false";
+        const bar = document.querySelector(".cm-skr-embed-skeleton-bar");
+        return bar instanceof HTMLElement
+          ? getComputedStyle(bar, "::after").animationName
+          : null;
+      });
+      expect(staticMotion).toBe("none");
+      await browser.execute(() => {
+        type GateWindow = Window & {
+          __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
+          __SKRIBEUM_E2E_NOTE_RELEASES__?: Record<string, () => void>;
+        };
+        const target = window as GateWindow;
+        for (const release of Object.values(
+          target.__SKRIBEUM_E2E_NOTE_RELEASES__ ?? {},
+        )) {
+          release();
+        }
+        delete target.__SKRIBEUM_E2E_NOTE_GATES__;
+        delete target.__SKRIBEUM_E2E_NOTE_RELEASES__;
+      });
+      released = true;
+
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-embed-loading")).length === 0,
+        {
+          timeout: 5000,
+          timeoutMsg: "embedded content did not replace skeletons",
+        },
+      );
+      const embeds = await $$(".cm-skr-embed");
+      expect(await embeds[0]?.getText()).toContain(
+        "Preserve a clear window-side route",
+      );
+      await embeds[1]?.scrollIntoView({ block: "center" });
+      await browser.waitUntil(
+        async () =>
+          (await embeds[1]?.getText())?.includes(
+            "Photograph the drainage channel after rain.",
+          ) === true,
+        { timeout: 5000, timeoutMsg: "section embed content did not render" },
+      );
+    } finally {
+      if (!released) {
+        await browser.execute(() => {
+          type GateWindow = Window & {
+            __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
+            __SKRIBEUM_E2E_NOTE_RELEASES__?: Record<string, () => void>;
+          };
+          const target = window as GateWindow;
+          for (const release of Object.values(
+            target.__SKRIBEUM_E2E_NOTE_RELEASES__ ?? {},
+          )) {
+            release();
+          }
+          delete target.__SKRIBEUM_E2E_NOTE_GATES__;
+          delete target.__SKRIBEUM_E2E_NOTE_RELEASES__;
+        });
+      }
+    }
   });
 
   it("browser_demo_serves_scheme_aware_favicon_metadata", async () => {

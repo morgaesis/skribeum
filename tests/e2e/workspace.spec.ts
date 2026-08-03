@@ -111,13 +111,21 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       `[role="treeitem"][data-path="${TREE_FOLDER_NAME}"]`,
     );
     await treeFocusTarget.waitForDisplayed({ timeout: 10000 });
-    await treeFocusTarget.click();
+    await browser.execute((path: string) => {
+      document
+        .querySelector<HTMLElement>(
+          `[role="treeitem"][data-path="${CSS.escape(path)}"]`,
+        )
+        ?.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    }, TREE_FOLDER_NAME);
     await browser.waitUntil(
       () =>
         browser.execute(() => {
           const actions = document.querySelector(".skr-sidebar-header-actions");
           return (
-            document.activeElement?.getAttribute("role") === "treeitem" &&
+            document
+              .querySelector(".skr-desktop-sidebar")
+              ?.classList.contains("skr-sidebar-focused") === true &&
             actions !== null &&
             getComputedStyle(actions).opacity === "1"
           );
@@ -140,6 +148,23 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await tooltip.waitForDisplayed({ timeout: 10000 });
     expect(await tooltip.getText()).toMatch(/new note/iu);
     expect(await tooltip.getText()).toMatch(/Ctrl\+N|⌘N/u);
+    await browser.execute((path: string) => {
+      document
+        .querySelector<HTMLElement>(
+          `[role="treeitem"][data-path="${CSS.escape(path)}"]`,
+        )
+        ?.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    }, TREE_FOLDER_NAME);
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          () =>
+            !document
+              .querySelector(".skr-desktop-sidebar")
+              ?.classList.contains("skr-sidebar-focused"),
+        ),
+      { timeoutMsg: "sidebar header focus state did not clear" },
+    );
 
     await expandTreeFolder();
     const first = sidebar.$(

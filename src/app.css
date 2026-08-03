@@ -236,6 +236,7 @@ select {
 .skr-sidebar:hover .skr-sidebar-header-actions,
 .skr-sidebar-header:hover .skr-sidebar-header-actions,
 .skr-sidebar-header-hovered .skr-sidebar-header-actions,
+.skr-sidebar-focused .skr-sidebar-header-actions,
 .skr-sidebar:focus-within .skr-sidebar-header-actions {
   opacity: 1;
 }

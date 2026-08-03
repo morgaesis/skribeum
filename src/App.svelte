@@ -208,6 +208,7 @@ let workspaceHost = $state<HTMLElement>();
 let splitDragging = $state(false);
 let splitDropPaneId = $state<string | null>(null);
 let sidebarHeaderHovered = $state(false);
+let sidebarFocused = $state(false);
 
 let nextBannerId = 0;
 // Journal-recovered deltas for notes that are not open yet, applied as
@@ -2714,7 +2715,15 @@ onMount(() => {
       <div
         class="skr-sidebar skr-desktop-sidebar skr-panel-motion"
         class:skr-sidebar-header-hovered={sidebarHeaderHovered}
+        class:skr-sidebar-focused={sidebarFocused}
         style={`width: ${workspace.sidebarCollapsed ? 0 : workspace.sidebarWidthRem}rem`}
+        onfocusin={() => (sidebarFocused = true)}
+        onfocusout={(event) => {
+          const next = event.relatedTarget;
+          if (!(next instanceof Node) || !event.currentTarget.contains(next)) {
+            sidebarFocused = false;
+          }
+        }}
       >
         {#if !workspace.sidebarCollapsed}
         <nav class="skr-sidebar-content" aria-label={STRINGS.sidebarHeaderLabel}>

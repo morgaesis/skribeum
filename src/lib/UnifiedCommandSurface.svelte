@@ -237,6 +237,9 @@ onDestroy(() => {
               {#each item.titleSegments as segment, segmentIndex (segmentIndex)}
                 {#if segment.highlighted}<mark class="skr-match rounded">{segment.text}</mark>{:else}{segment.text}{/if}
               {/each}
+              {#if item.titleSuffix !== undefined}
+                <span class="skr-muted"> {item.titleSuffix}</span>
+              {/if}
             </span>
             {#if item.keybinding !== undefined}
               <kbd class="skr-muted shrink-0 rounded border px-1 text-xs">{item.keybinding}</kbd>

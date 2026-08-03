@@ -48,6 +48,38 @@ export type CommandContext = {
   followLink(view?: EditorView | null): boolean;
   /** Copies a link to the active note. */
   copyNoteLink?(): Promise<void>;
+  /** Tree row targeted by a contextual command. */
+  treePath?: string;
+  /** Folder targeted by a tree move, or null for the vault root. */
+  treeDestination?: string | null;
+  /** Creates a note inside a named folder. */
+  createTreeNote?(folder: string): Promise<void>;
+  /** Creates a folder inside a named folder. */
+  createTreeFolder?(folder: string): Promise<void>;
+  /** Renames one vault entry. */
+  renameTreeEntry?(path: string): Promise<void>;
+  /** Deletes one vault entry after confirmation. */
+  deleteTreeEntry?(path: string): Promise<void>;
+  /** Moves one vault entry into a folder or the vault root. */
+  moveTreeEntry?(path: string, destination: string | null): Promise<void>;
+  /** Copies a stable link to a tree note. */
+  copyTreeNoteLink?(path: string): Promise<void>;
+  /** Reveals one vault entry in the system file manager. */
+  revealTreeEntry?(path: string): Promise<void>;
+  /** Toggles one wide-viewport panel. */
+  togglePanel?(panel: "sidebar" | "outline"): void;
+  /** Opens a new untitled tab. */
+  createTab?(): Promise<void>;
+  /** Closes or reopens the active tab. */
+  closeTab?(): void | Promise<void>;
+  reopenClosedTab?(): Promise<void>;
+  /** Cycles or activates tabs in the focused pane. */
+  cycleTab?(direction: -1 | 1): void;
+  activateTab?(index: number | "last"): void;
+  /** Creates and controls the second editor pane. */
+  splitPane?(): void | Promise<void>;
+  focusPane?(direction: "left" | "right"): void;
+  moveTabToOtherPane?(): void | Promise<void>;
   /** Copies a link to a named heading, or the heading nearest the caret. */
   copyHeadingLink?(heading?: string): Promise<void>;
   /** Toggles the active note's transient whole-document source presentation. */

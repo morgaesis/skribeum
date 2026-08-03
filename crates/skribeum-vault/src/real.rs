@@ -175,6 +175,10 @@ impl FileSystem for RealFs {
         std::fs::remove_file(path).map_err(|e| map_io(&e))
     }
 
+    fn remove_dir_all(&self, path: &Path) -> Result<(), FsError> {
+        std::fs::remove_dir_all(path).map_err(|e| map_io(&e))
+    }
+
     fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
         std::fs::create_dir_all(path).map_err(|e| map_io(&e))
     }

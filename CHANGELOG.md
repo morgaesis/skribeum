@@ -34,6 +34,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The file tree uses display titles, collision suffixes, authored note icons,
+  indent guides, persistent expansion, a vault header, drag moves, and
+  pointer, keyboard, context-menu, and touch routes to registered row actions.
+- Sidebar and outline panels resize by pointer or keyboard, reset on divider
+  double-click, collapse fully, and persist their geometry per vault.
+- Note-link previews preload during hover intent, preserve pointer travel
+  through a safe triangle, and render through the same reading pipeline as
+  embeds. Both surfaces share delayed skeleton, timeout, and failure behavior.
+- Wide workspaces support ordered note tabs and a two-pane split with focused
+  command targeting, per-pane navigation history, and per-vault restoration.
+
 - The desktop application handles `.md`, `.markdown`, and `.txt` files from
   operating-system open-with actions, including requests forwarded from a
   second launch.

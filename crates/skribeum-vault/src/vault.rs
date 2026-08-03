@@ -34,6 +34,12 @@ pub enum VaultError {
     /// A new note path already exists.
     #[error("note already exists in vault")]
     NoteAlreadyExists,
+    /// A requested tree entry is not indexed.
+    #[error("vault entry not found")]
+    EntryNotFound,
+    /// A tree mutation would replace an existing entry.
+    #[error("vault entry already exists")]
+    EntryAlreadyExists,
     /// The requested path exists in the index but is not an editable note.
     #[error("path is not a note")]
     NotANote,
@@ -328,6 +334,108 @@ impl Vault {
         self.refresh(fs)?;
         self.lock_notes().insert(path.clone(), classify(Vec::new()));
         Ok(())
+    }
+
+    /// Creates a directory inside the indexed vault and refreshes the tree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VaultError::EntryNotFound`] for a path outside the index,
+    /// [`VaultError::EntryAlreadyExists`] when the path is occupied, and
+    /// propagates filesystem and refresh failures.
+    pub fn create_directory(
+        &mut self,
+        fs: &dyn FileSystem,
+        path: &VaultPath,
+    ) -> Result<(), VaultError> {
+        if !is_indexed_path(path) {
+            return Err(VaultError::EntryNotFound);
+        }
+        let absolute = self.root.join(path.as_str());
+        if fs.metadata(&absolute).is_ok() {
+            return Err(VaultError::EntryAlreadyExists);
+        }
+        let parent = absolute.parent().ok_or(FsError::NotADirectory)?;
+        let canonical_parent = fs.canonicalize(parent)?;
+        if !canonical_parent.starts_with(&self.root) {
+            return Err(VaultPathError::Absolute.into());
+        }
+        fs.create_dir_all(&absolute)?;
+        fs.fsync_dir(&canonical_parent)?;
+        self.refresh(fs)
+    }
+
+    /// Moves or renames one indexed entry without replacing another entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VaultError::EntryNotFound`] when the source is not indexed,
+    /// [`VaultError::EntryAlreadyExists`] when the destination is occupied,
+    /// and propagates filesystem and refresh failures.
+    pub fn move_entry(
+        &mut self,
+        fs: &dyn FileSystem,
+        from: &VaultPath,
+        to: &VaultPath,
+    ) -> Result<(), VaultError> {
+        if !self.tree.iter().any(|entry| &entry.path == from) {
+            return Err(VaultError::EntryNotFound);
+        }
+        if self.tree.iter().any(|entry| &entry.path == to) {
+            return Err(VaultError::EntryAlreadyExists);
+        }
+        let from_absolute = self.root.join(from.as_str());
+        let to_absolute = self.root.join(to.as_str());
+        let to_parent = to_absolute.parent().ok_or(FsError::NotADirectory)?;
+        let canonical_parent = fs.canonicalize(to_parent)?;
+        if !canonical_parent.starts_with(&self.root) {
+            return Err(VaultPathError::Absolute.into());
+        }
+        fs.rename(&from_absolute, &to_absolute)?;
+        fs.fsync_dir(&canonical_parent)?;
+        if let Some(from_parent) = from_absolute.parent()
+            && from_parent != canonical_parent
+        {
+            fs.fsync_dir(from_parent)?;
+        }
+        self.lock_notes().retain(|path, _| {
+            path != from && !path.as_str().starts_with(&format!("{}/", from.as_str()))
+        });
+        self.refresh(fs)
+    }
+
+    /// Removes one indexed file or directory and refreshes the tree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VaultError::EntryNotFound`] when the path is not indexed and
+    /// propagates filesystem and refresh failures.
+    pub fn delete_entry(
+        &mut self,
+        fs: &dyn FileSystem,
+        path: &VaultPath,
+    ) -> Result<(), VaultError> {
+        let entry = self
+            .tree
+            .iter()
+            .find(|entry| &entry.path == path)
+            .ok_or(VaultError::EntryNotFound)?;
+        let absolute = self.root.join(path.as_str());
+        if entry.kind == EntryKind::Directory {
+            fs.remove_dir_all(&absolute)?;
+        } else {
+            fs.remove_file(&absolute)?;
+        }
+        if let Some(parent) = absolute.parent() {
+            fs.fsync_dir(parent)?;
+        }
+        self.lock_notes().retain(|candidate, _| {
+            candidate != path
+                && !candidate
+                    .as_str()
+                    .starts_with(&format!("{}/", path.as_str()))
+        });
+        self.refresh(fs)
     }
 
     /// Reads any indexed regular file without creating note editing state.
@@ -658,5 +766,46 @@ mod tests {
             vault.create_note(&fs, &path),
             Err(VaultError::NoteAlreadyExists)
         );
+    }
+
+    #[test]
+    fn tree_mutations_refresh_directories_and_descendants() {
+        let fs = SimFs::new();
+        let root = PathBuf::from("vault");
+        fs.external_create_dir(&root);
+        let mut vault = Vault::open(&fs, &root).expect("vault opens");
+        let draft = VaultPath::new("Drafts/one.md").expect("path is valid");
+        let archive = VaultPath::new("Archive").expect("path is valid");
+        let moved = VaultPath::new("Archive/Drafts").expect("path is valid");
+
+        vault.create_note(&fs, &draft).expect("note is created");
+        vault
+            .create_directory(&fs, &archive)
+            .expect("folder is created");
+        vault
+            .move_entry(
+                &fs,
+                &VaultPath::new("Drafts").expect("path is valid"),
+                &moved,
+            )
+            .expect("folder is moved");
+        assert!(
+            vault
+                .tree()
+                .iter()
+                .any(|entry| entry.path.as_str() == "Archive/Drafts/one.md")
+        );
+        assert!(!vault.tree().iter().any(|entry| entry.path == draft));
+
+        vault
+            .delete_entry(&fs, &archive)
+            .expect("folder is deleted recursively");
+        assert!(
+            vault
+                .tree()
+                .iter()
+                .all(|entry| !entry.path.as_str().starts_with("Archive"))
+        );
+        assert!(fs.metadata(&root.join("Archive")).is_err());
     }
 }

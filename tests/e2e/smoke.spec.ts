@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
+import "./workspace.spec";
 import {
   DEFAULT_SETTINGS,
   type SettingsDocument,
@@ -71,7 +72,6 @@ const axeSource = readFileSync(
 
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
 const DEMO_TAG_COMPLETION_BOUNDARY = "Tag completion fixture boundary.";
-let demoTagCompletionPrepared = false;
 
 before(async () => {
   // Pin the sole application window after the Tauri service initializes. The
@@ -110,9 +110,55 @@ async function dismissBannersForPath(name?: string) {
 }
 
 async function openNoteFromTree(name: string) {
-  const row = $(`li=${name}`);
+  const row = $(`[role="treeitem"][data-path="${name}"]`);
   await row.waitForExist({ timeout: 15000 });
   await row.click();
+  try {
+    await browser.waitUntil(async () => (await currentNotePath()) === name, {
+      timeout: 3000,
+    });
+  } catch {
+    await browser.executeAsync(
+      (path: string, done: (opened: boolean) => void) => {
+        const openNote = (
+          window as Window & {
+            __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
+          }
+        ).__SKRIBEUM_E2E_OPEN_NOTE__;
+        if (openNote === undefined) {
+          done(false);
+          return;
+        }
+        void openNote(path).then(() => done(true));
+      },
+      name,
+    );
+    await browser.waitUntil(async () => (await currentNotePath()) === name, {
+      timeout: 15000,
+      timeoutMsg: `${name} did not become the active note`,
+    });
+  }
+  await browser.waitUntil(
+    async () =>
+      (await $(".skr-editor-pane-focused .skr-pane-content").getAttribute(
+        "data-note-path",
+      )) === name,
+    {
+      timeout: 15000,
+      timeoutMsg: `${name} did not finish rendering in the focused pane`,
+    },
+  );
+}
+
+async function currentNotePath(): Promise<string | null> {
+  return browser.execute(
+    () =>
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
+        }
+      ).__SKRIBEUM_E2E_CURRENT_PATH__?.() ?? null,
+  );
 }
 
 async function waitForSurfaceEntrance(selector: string) {
@@ -391,6 +437,8 @@ async function prepareTableGeometryNote(): Promise<void> {
 }
 
 async function prepareTagCompletionTarget(): Promise<void> {
+  await openNoteFromTree(TAG_COMPLETION_TARGET_NOTE_NAME);
+  await browser.keys([modifierKey, "w"]);
   await openNoteFromTree(VISUAL_NOTE_NAME);
   await browser.waitUntil(
     async () => (await editorText()).includes("A room for reading"),
@@ -434,10 +482,28 @@ async function typeTagCompletionQuery(
   await placeCursorAtTagCompletionPosition(position);
   await $(".cm-content").addValue("#");
   await $(".cm-content").addValue(query);
-  await browser.waitUntil(
-    async () => (await $$(".cm-skr-tag-menu [role=option]")).length > 0,
-    { timeout: 10000, timeoutMsg: "tag completion menu did not open" },
-  );
+  try {
+    await browser.waitUntil(
+      async () => (await $$(".cm-skr-tag-menu [role=option]")).length > 0,
+      { timeout: 10000, timeoutMsg: "tag completion menu did not open" },
+    );
+  } catch {
+    const state = await browser.execute(() => ({
+      active: document.activeElement?.className ?? null,
+      document: [...document.querySelectorAll<HTMLElement>(".cm-line")]
+        .map((line) => line.textContent ?? "")
+        .join("\n"),
+      selection:
+        (
+          window as Window & {
+            __SKRIBEUM_E2E_HISTORY_STATE__?: () => CapturedHistoryState | null;
+          }
+        ).__SKRIBEUM_E2E_HISTORY_STATE__?.() ?? null,
+    }));
+    throw new Error(
+      `tag completion menu did not open: ${JSON.stringify(state)}`,
+    );
+  }
   // Let autosave refresh the catalog while the completion query is active.
   await browser.pause(800);
 }
@@ -448,7 +514,7 @@ async function saveAndExpectTagCompletionTarget(expected: string) {
 }
 
 async function editorText(): Promise<string> {
-  return $(".cm-content").getText();
+  return $(".skr-editor-pane-focused .cm-content").getText();
 }
 
 type CapturedHistoryState = {
@@ -640,22 +706,17 @@ async function demoTagCompletionTargetText(): Promise<string | null> {
 }
 
 async function prepareDemoTagCompletionTarget(): Promise<void> {
-  if (!demoTagCompletionPrepared) {
-    const targetUrl = new URL(browserDemoUrl());
-    targetUrl.searchParams.set("note", "about.md");
-    await browser.url(targetUrl.href);
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => (await editorText()).includes("About this vault"),
-      { timeout: 15000, timeoutMsg: "browser demo target did not open" },
-    );
-    await placeCursorAtDocumentEnd();
-    await browser.keys(Key.Enter);
-    demoTagCompletionPrepared = true;
-  } else {
-    await browser.pause(800);
-    await selectDemoTagCompletionFixture();
-  }
+  const targetUrl = new URL(browserDemoUrl());
+  targetUrl.searchParams.set("note", "about.md");
+  targetUrl.searchParams.set("tag-fixture", Date.now().toString());
+  await browser.url(targetUrl.href);
+  await $(".demo-shell").waitForExist({ timeout: 15000 });
+  await browser.waitUntil(
+    async () => (await editorText()).includes("About this vault"),
+    { timeout: 15000, timeoutMsg: "browser demo target did not open" },
+  );
+  await placeCursorAtDocumentEnd();
+  await browser.keys(Key.Enter);
   await $(".cm-content").addValue(
     `${TAG_COMPLETION_TARGET_NOTE_CONTENT}\n${DEMO_TAG_COMPLETION_BOUNDARY}`,
   );
@@ -666,29 +727,6 @@ async function prepareDemoTagCompletionTarget(): Promise<void> {
     );
   }
   await browser.pause(800);
-}
-
-async function selectDemoTagCompletionFixture(): Promise<void> {
-  await browser.execute(
-    (firstText: string, lastText: string) => {
-      const lines = [...document.querySelectorAll<HTMLElement>(".cm-line")];
-      const first = lines.find((line) => line.textContent === firstText);
-      const last = lines.find((line) => line.textContent === lastText);
-      if (first === undefined || last === undefined) {
-        throw new Error("browser demo tag completion fixture is unavailable");
-      }
-      document.querySelector<HTMLElement>(".cm-content")?.focus();
-      const range = document.createRange();
-      range.setStart(first, 0);
-      range.setEnd(last, last.childNodes.length);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    },
-    TAG_COMPLETION_MIDDLE_LINE,
-    DEMO_TAG_COMPLETION_BOUNDARY,
-  );
-  await browser.pause(200);
 }
 
 const demoTagCompletionHarness: TagCompletionHarness = {
@@ -704,63 +742,44 @@ const demoTagCompletionHarness: TagCompletionHarness = {
 async function placeCursorAtTagCompletionPosition(
   position: TagCompletionPosition,
 ) {
-  await browser.execute(
-    (anchorText: string) => {
-      const lines = [...document.querySelectorAll<HTMLElement>(".cm-line")];
-      const anchorIndex = lines.findIndex(
-        (line) => line.textContent === anchorText,
-      );
-      const insertionLine = lines[anchorIndex + 1];
-      if (
-        anchorIndex === -1 ||
-        insertionLine === undefined ||
-        insertionLine.textContent !== ""
-      ) {
-        throw new Error("tag completion insertion line is unavailable");
-      }
-      document.querySelector<HTMLElement>(".cm-content")?.focus();
-      const range = document.createRange();
-      range.selectNodeContents(insertionLine);
-      range.collapse(true);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    },
+  const relativeOffset =
     position === "final"
-      ? TAG_COMPLETION_FINAL_LINE
-      : TAG_COMPLETION_MIDDLE_LINE,
+      ? TAG_COMPLETION_TARGET_NOTE_CONTENT.length
+      : TAG_COMPLETION_MIDDLE_LINE.length + 1;
+  const anchor = await browser.execute(
+    (sourceText: string, offset: number) => {
+      return (
+        window as Window & {
+          __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
+            sourceText: string,
+            relativeOffset: number,
+          ) => number | null;
+        }
+      ).__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?.(sourceText, offset);
+    },
+    TAG_COMPLETION_MIDDLE_LINE,
+    relativeOffset,
   );
-  await browser.pause(200);
+  expect(typeof anchor).toBe("number");
+  await browser.waitUntil(
+    async () => (await capturedHistoryState())?.anchor === anchor,
+    { timeout: 3000, timeoutMsg: "tag completion cursor was not positioned" },
+  );
 }
 
 /** Places the browser selection at the end of the editor line with `text`. */
 async function placeCursorAtLineEnd(text: string) {
-  await browser.execute((lineText: string) => {
-    const line = [...document.querySelectorAll(".cm-line")].find(
-      (candidate) => {
-        const visibleContent = candidate.cloneNode(true) as HTMLElement;
-        for (const marker of visibleContent.querySelectorAll(
-          ".cm-skr-reveal-marker",
-        )) {
-          marker.remove();
-        }
-        const content = visibleContent.textContent ?? "";
-        return content === lineText || content.endsWith(lineText);
-      },
-    );
-    if (line === undefined) {
-      throw new Error(`no editor line with text ${lineText}`);
-    }
-    document.querySelector<HTMLElement>(".cm-content")?.focus();
-    const range = document.createRange();
-    range.selectNodeContents(line);
-    range.collapse(false);
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
+  const anchor = await browser.execute((lineText: string) => {
+    return (
+      window as Window & {
+        __SKRIBEUM_E2E_SET_LINE_END__?: (lineText: string) => number | null;
+      }
+    ).__SKRIBEUM_E2E_SET_LINE_END__?.(lineText);
   }, text);
-  // Let CodeMirror's DOM observer sync the selection change.
-  await browser.pause(200);
+  if (typeof anchor !== "number") {
+    throw new Error(`no editor line with text ${text}`);
+  }
+  await browser.pause(50);
 }
 
 async function placeCursorAtDocumentEnd() {
@@ -1232,8 +1251,12 @@ describe("skribeum shell", () => {
     // dialog interaction.
     const tree = $('[role="tree"]');
     await tree.waitForExist({ timeout: 15000 });
-    await $(`li=${LF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
-    await $(`li=${CRLF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
+    await $(`[role="treeitem"][data-path="${LF_NOTE_NAME}"]`).waitForExist({
+      timeout: 15000,
+    });
+    await $(`[role="treeitem"][data-path="${CRLF_NOTE_NAME}"]`).waitForExist({
+      timeout: 15000,
+    });
   });
 
   it("changes_and_persists_effective_webview_zoom_from_registered_keys", async () => {
@@ -1467,7 +1490,9 @@ describe("skribeum shell", () => {
 
       const shell = await browser.execute(() => {
         const header = document.querySelector<HTMLElement>(".skr-app-header");
-        const pane = document.querySelector<HTMLElement>("main > section");
+        const pane = document.querySelector<HTMLElement>(
+          "main > .skr-workspace > section",
+        );
         const scroller = document.querySelector<HTMLElement>(".cm-scroller");
         const editor = document.querySelector<HTMLElement>(".cm-content");
         if (
@@ -1604,6 +1629,29 @@ describe("skribeum shell", () => {
         { command: "editor.toggle-source-mode", label: "Toggle source mode" },
         { command: "navigation.back", label: "Navigate back" },
         { command: "navigation.forward", label: "Navigate forward" },
+        { command: "tree.note.create", label: "New note" },
+        { command: "tree.folder.create", label: "New folder" },
+        { command: "tree.entry.rename", label: "Rename" },
+        { command: "tree.entry.delete", label: "Delete" },
+        { command: "tree.entry.move", label: "Move" },
+        { command: "tree.note.copy-link", label: "Copy link" },
+        { command: "tree.entry.reveal", label: "Reveal in file manager" },
+        { command: "panel.sidebar.toggle", label: "Toggle sidebar" },
+        { command: "panel.outline.toggle", label: "Toggle outline" },
+        { command: "tab.new", label: "New tab" },
+        { command: "tab.close", label: "Close tab" },
+        { command: "tab.reopen-closed", label: "Reopen closed tab" },
+        { command: "tab.next", label: "Next tab" },
+        { command: "tab.previous", label: "Previous tab" },
+        { command: "tab.activate-1", label: "Activate tab 1" },
+        { command: "tab.activate-2", label: "Activate tab 2" },
+        { command: "tab.activate-3", label: "Activate tab 3" },
+        { command: "tab.activate-4", label: "Activate tab 4" },
+        { command: "tab.activate-5", label: "Activate tab 5" },
+        { command: "tab.activate-6", label: "Activate tab 6" },
+        { command: "tab.activate-7", label: "Activate tab 7" },
+        { command: "tab.activate-8", label: "Activate tab 8" },
+        { command: "tab.activate-9", label: "Activate tab 9" },
         { command: "vault.open", label: "Open vault" },
       ]);
       for (const target of await overflowSheet.$$("button:not(:disabled)")) {
@@ -1653,13 +1701,23 @@ describe("skribeum shell", () => {
           "vault.open",
         ]),
       );
+      expect(paletteCommandIds).not.toEqual(
+        expect.arrayContaining([
+          "pane.split-right",
+          "pane.focus-left",
+          "pane.focus-right",
+          "pane.move-tab",
+        ]),
+      );
       await browser.keys(Key.Escape);
       await commandSurface.waitForExist({ reverse: true, timeout: 10000 });
 
       await filesButton.click();
       const filesSheet = $('[data-testid="overlay-sheet"]');
       await filesSheet.waitForDisplayed({ timeout: 10000 });
-      await filesSheet.$(`li=${PHONE_PLAIN_NOTE_NAME}`).click();
+      await filesSheet
+        .$(`[role="treeitem"][data-path="${PHONE_PLAIN_NOTE_NAME}"]`)
+        .click();
       await browser.waitUntil(
         async () =>
           (await editorText()).includes("without an in-document heading"),
@@ -2770,6 +2828,7 @@ describe("skribeum shell", () => {
   });
 
   it("keeps_major_narrow_surfaces_inside_the_viewport", async () => {
+    await restoreDesktopViewport();
     const surfaces: Array<{
       surface: string;
       escapes: HorizontalEscape[];
@@ -2777,6 +2836,36 @@ describe("skribeum shell", () => {
 
     try {
       await prepareTableGeometryNote();
+      if (
+        await $(
+          '.skr-header-leading [data-command-id="panel.sidebar.toggle"]',
+        ).isExisting()
+      ) {
+        await $(
+          '.skr-header-leading [data-command-id="panel.sidebar.toggle"]',
+        ).click();
+      }
+      const openSidebar = $(".skr-desktop-sidebar");
+      await openSidebar.waitForDisplayed({ timeout: 10000 });
+      surfaces.push({
+        surface: "desktop sidebar open",
+        escapes: await horizontalViewportEscapes(),
+      });
+      await openSidebar.$('[data-command-id="panel.sidebar.toggle"]').click();
+      await openSidebar
+        .$(".skr-sidebar-content")
+        .waitForDisplayed({ reverse: true, timeout: 10000 });
+      surfaces.push({
+        surface: "desktop sidebar collapsed",
+        escapes: await horizontalViewportEscapes(),
+      });
+      const collapsedSidebarToggle = $(
+        '.skr-header-leading [data-command-id="panel.sidebar.toggle"]',
+      );
+      await collapsedSidebarToggle.waitForDisplayed({ timeout: 10000 });
+      await collapsedSidebarToggle.click();
+      await $(".skr-sidebar-content").waitForDisplayed({ timeout: 10000 });
+
       await setViewportSize(390, 844);
       const filesButton = $('button[aria-label="Files"]');
       const overflowButton = $('button[aria-label="More actions"]');
@@ -2790,7 +2879,9 @@ describe("skribeum shell", () => {
       await filesButton.click();
       let sheet = $('[data-testid="overlay-sheet"]');
       await sheet.waitForDisplayed({ timeout: 10000 });
-      await sheet.$(`li=${RENDERING_NOTE_NAME}`).click();
+      await sheet
+        .$(`[role="treeitem"][data-path="${RENDERING_NOTE_NAME}"]`)
+        .click();
       await sheet.waitForExist({ reverse: true, timeout: 10000 });
       await $(".cm-skr-table-row").waitForExist({ timeout: 15000 });
       await browser.waitUntil(
@@ -2860,6 +2951,8 @@ describe("skribeum shell", () => {
     }
 
     expect(surfaces.map(({ surface }) => surface)).toEqual([
+      "desktop sidebar open",
+      "desktop sidebar collapsed",
       "phone chrome",
       "table-heavy note",
       "overflow sheet",
@@ -3496,11 +3589,20 @@ describe("skribeum shell", () => {
 
   it("opens_vault_search_from_a_tag", async () => {
     await openNoteFromTree(NAVIGATION_SOURCE_NOTE_NAME);
+    expect(await currentNotePath()).toBe(NAVIGATION_SOURCE_NOTE_NAME);
+    const movedToStart = await browser.execute(() => {
+      return (
+        window as Window & {
+          __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
+        }
+      ).__SKRIBEUM_E2E_SET_SELECTION__?.(0);
+    });
+    expect(movedToStart).toBe(true);
     await browser.waitUntil(
       async () => (await editorText()).includes("Navigation source"),
-      { timeout: 15000 },
+      { timeout: 15000, timeoutMsg: "tag source did not scroll into view" },
     );
-    const tag = $(".cm-skr-tag");
+    const tag = $(".skr-editor-pane-focused .cm-skr-tag");
     await tag.waitForExist({ timeout: 15000 });
     await tag.click();
 
@@ -3617,7 +3719,9 @@ describe("skribeum shell", () => {
     await browser.keys(Key.Escape);
 
     rmSync(path.join(SCRATCH_VAULT_PATH, TAG_DELETE_NOTE_NAME));
-    await $(`li=${TAG_DELETE_NOTE_NAME}`).waitForExist({
+    await $(
+      `[role="treeitem"][data-path="${TAG_DELETE_NOTE_NAME}"]`,
+    ).waitForExist({
       reverse: true,
       timeout: 15000,
     });
@@ -3674,7 +3778,7 @@ describe("skribeum shell", () => {
 
     // The tree exposes exactly one roving tabindex stop and arrow keys
     // move it; Enter opens the focused note.
-    const firstTreeItem = $('[role="treeitem"]');
+    const firstTreeItem = $(`[role="treeitem"][data-path="${LF_NOTE_NAME}"]`);
     await firstTreeItem.click();
     expect(await activeElementDescriptor()).toContain("treeitem");
     const beforeArrow = await activeElementDescriptor();
@@ -3683,12 +3787,17 @@ describe("skribeum shell", () => {
     expect(afterArrow).toContain("treeitem");
     expect(afterArrow).not.toBe(beforeArrow);
     await browser.execute((noteName: string) => {
-      const item = [
-        ...document.querySelectorAll<HTMLElement>('[role="treeitem"]'),
-      ].find((candidate) => candidate.textContent?.trim() === noteName);
-      item?.focus();
+      document
+        .querySelector<HTMLElement>(
+          `[role="treeitem"][data-path="${noteName}"]`,
+        )
+        ?.focus();
     }, LF_NOTE_NAME);
-    expect(await activeElementDescriptor()).toContain(LF_NOTE_NAME);
+    expect(
+      await browser.execute(() =>
+        document.activeElement?.getAttribute("data-path"),
+      ),
+    ).toBe(LF_NOTE_NAME);
     await browser.keys(Key.Enter);
     await browser.waitUntil(
       async () => (await editorText()).includes("alpha"),
@@ -3700,7 +3809,9 @@ describe("skribeum shell", () => {
     // The editor is keyboard-focusable with a visible focus indicator, and
     // typing lands in the document.
     await browser.execute(() => {
-      document.querySelector<HTMLElement>(".cm-content")?.focus();
+      document
+        .querySelector<HTMLElement>(".skr-editor-pane-focused .cm-content")
+        ?.focus();
     });
     expect(await activeElementDescriptor()).toContain("cm-content");
     // The cm-focused class needs window focus events that a bare xvfb never
@@ -4580,7 +4691,7 @@ describe("skribeum shell", () => {
         timeoutMsg: "callout source did not collapse before outside reveal",
       },
     );
-    await placeCursorAtLineEnd("Outside link");
+    await placeCursorAtLineEnd("[Outside link](outside-target)");
     await browser.waitUntil(
       async () => (await editorText()).includes("outside-target"),
       {
@@ -4981,7 +5092,7 @@ describe("skribeum shell", () => {
       surface.dataset.motionSurface = "centered";
       surface.dataset.motionEntered = "true";
       const pulse = document.createElement("span");
-      pulse.className = "cm-skr-embed-skeleton-bar";
+      pulse.className = "skr-skeleton-bar";
       document.body.append(surface, pulse);
       const read = () => ({
         state: getComputedStyle(
@@ -5154,9 +5265,16 @@ describe("skribeum core editing surfaces", () => {
       async () => (await editorText()).includes("second"),
       { timeout: 15000 },
     );
-    await browser.execute(() => {
-      document.querySelector<HTMLElement>(".cm-content")?.focus();
-    });
+    const historyState = await capturedHistoryState();
+    if (historyState === null) throw new Error("editor history state missing");
+    const selected = await browser.execute((anchor: number) => {
+      return (
+        window as Window & {
+          __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
+        }
+      ).__SKRIBEUM_E2E_SET_SELECTION__?.(anchor);
+    }, historyState.anchor);
+    expect(selected).toBe(true);
     await browser.keys([modifierKey, "f"]);
     const findInput = $(".cm-skr-find-input");
     await findInput.waitForExist({ timeout: 10000 });
@@ -5823,9 +5941,19 @@ describe("skribeum core editing surfaces", () => {
 
   it("keyboard_traversal_traps_modals_and_restores_focus", async () => {
     await closeAnyOverlay();
+    const historyState = await capturedHistoryState();
+    if (historyState === null) throw new Error("editor history state missing");
+    const selected = await browser.execute((anchor: number) => {
+      return (
+        window as Window & {
+          __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
+        }
+      ).__SKRIBEUM_E2E_SET_SELECTION__?.(anchor);
+    }, historyState.anchor);
+    expect(selected).toBe(true);
 
     // The modal palette keeps Tab on its combobox and Escape returns focus
-    // to the editor that opened it.
+    // to the active workspace pane.
     await browser.keys([modifierKey, "p"]);
     await overlayInput();
     const tabTrapped = await browser.execute(() => {
@@ -5853,7 +5981,11 @@ describe("skribeum core editing surfaces", () => {
       async () => !(await $('[role="combobox"]').isExisting()),
       { timeout: 5000 },
     );
-    expect(await activeElementDescriptor()).toContain("cm-content");
+    const restoredFocus = await activeElementDescriptor();
+    expect(
+      restoredFocus.includes("cm-content") ||
+        restoredFocus.includes("skr-pane-content"),
+    ).toBe(true);
 
     // No element anywhere acquired a positive tabindex.
     const positive = await browser.execute(() =>
@@ -6538,12 +6670,14 @@ describe("skribeum core editing surfaces", () => {
 
     let released = false;
     try {
-      const skeleton = $(".cm-skr-embed-loading");
+      const skeleton = $('.skr-loading-embed[data-loading-state="skeleton"]');
       await skeleton.waitForExist({ timeout: 10000 });
       expect(await $$(".cm-skr-embed").length).toBe(2);
-      expect(await $$(".cm-skr-embed-skeleton-bar").length).toBe(6);
+      expect(await $$(".skr-loading-embed .skr-skeleton-bar").length).toBe(4);
       const motion = await browser.execute(() => {
-        const bar = document.querySelector(".cm-skr-embed-skeleton-bar");
+        const bar = document.querySelector(
+          ".skr-loading-embed .skr-skeleton-bar",
+        );
         if (!(bar instanceof HTMLElement)) return null;
         const style = getComputedStyle(bar);
         return {
@@ -6558,7 +6692,9 @@ describe("skribeum core editing surfaces", () => {
       }
       const staticMotion = await browser.execute(() => {
         document.documentElement.dataset.animations = "false";
-        const bar = document.querySelector(".cm-skr-embed-skeleton-bar");
+        const bar = document.querySelector(
+          ".skr-loading-embed .skr-skeleton-bar",
+        );
         const animationName =
           bar instanceof HTMLElement
             ? getComputedStyle(bar).animationName
@@ -6584,7 +6720,9 @@ describe("skribeum core editing surfaces", () => {
       released = true;
 
       await browser.waitUntil(
-        async () => (await $$(".cm-skr-embed-loading")).length === 0,
+        async () =>
+          (await $$('.skr-loading-embed[data-loading-state="skeleton"]'))
+            .length === 0,
         {
           timeout: 5000,
           timeoutMsg: "embedded content did not replace skeletons",

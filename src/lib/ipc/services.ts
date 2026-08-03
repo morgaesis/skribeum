@@ -108,6 +108,39 @@ export async function openSystemUrl(url: string): Promise<void> {
   await openUrl(url);
 }
 
+/** Creates a folder and returns the refreshed tree. */
+export async function treeFolderCreate(
+  handle: VaultHandle,
+  path: string,
+): Promise<TreeEntry[]> {
+  return unwrap(await commands.treeFolderCreate(handle, path));
+}
+
+/** Moves or renames an entry and returns the refreshed tree. */
+export async function treeEntryMove(
+  handle: VaultHandle,
+  fromPath: string,
+  toPath: string,
+): Promise<TreeEntry[]> {
+  return unwrap(await commands.treeEntryMove(handle, fromPath, toPath));
+}
+
+/** Deletes an entry and returns the refreshed tree. */
+export async function treeEntryDelete(
+  handle: VaultHandle,
+  path: string,
+): Promise<TreeEntry[]> {
+  return unwrap(await commands.treeEntryDelete(handle, path));
+}
+
+/** Reveals an indexed entry in the system file manager. */
+export async function treeEntryReveal(
+  handle: VaultHandle,
+  path: string,
+): Promise<void> {
+  unwrap(await commands.treeEntryReveal(handle, path));
+}
+
 /**
  * Converts UTF-8 byte ranges over a string (the IPC offset space) into
  * UTF-16 character ranges (the DOM offset space). Out-of-bounds or

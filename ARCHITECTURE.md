@@ -150,6 +150,13 @@ complete frame with input and scrolling available throughout. A fresh note open 
 starts at the top with the form-factor panel default, and leaves its parked
 caret unfocused.
 
+`workspaceState.ts` stores one normalized workspace document per vault. It
+contains sidebar and outline geometry, tree expansion and selection, up to two
+panes, each pane's ordered tabs and active path, closed-tab state, the split
+ratio, and each pane's bounded navigation stack. Tab switches restore the
+tab's view state without pushing history. Tree, command-surface, and link opens
+target the focused pane and push only that pane's stack.
+
 Paths are NFC-normalized, slash-separated, vault-root-relative values. A path
 is the durable address because vault handles are session-local and notes do
 not carry stable identifiers. Renaming a note therefore changes its address.
@@ -207,6 +214,15 @@ renderer for their bodies, with typed icon and accent metadata and native fold
 controls. Block replacements live in a decoration state field because they
 affect vertical layout; ordinary marks and inline widgets remain
 viewport-windowed.
+
+Resolved note links preload through the same vault reader during the hover
+intent delay. Their preview body mounts the same nested decoration engine used
+by an embed, with a preview context that removes frontmatter and limits nested
+embeds to their header. A shared asynchronous-content runner gives previews
+and embeds the same 150ms skeleton grace, opacity-only bars, bounded timeout,
+failure state, and late-result cleanup. The preview controller owns geometry,
+Escape dismissal, and a safe triangle from the link leave point to the nearest
+panel edge, so pointer travel does not create a parallel rendering path.
 
 Wikilink display resolution honors `.obsidian/app.json` read through the
 `vault_config_read` command, resolves targets against the vault tree

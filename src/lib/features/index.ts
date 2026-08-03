@@ -16,6 +16,7 @@ import { registerSurfaces } from "./surfaces";
 import { registerTableEditing } from "./tableEditing";
 import { registerTags } from "./tags";
 import { registerTaskStatusCommands } from "./taskCommands";
+import { registerWorkspaceCommands } from "./workspace";
 
 /** Builds the registry with every built-in feature registered. */
 export function createAppRegistry(
@@ -33,6 +34,7 @@ export function createAppRegistry(
   registerSlashMenu(registry);
   registerSourceMode(registry);
   registerNavigation(registry);
+  registerWorkspaceCommands(registry, desktop);
   registerTableEditing(registry);
   registerTaskStatusCommands(registry, taskStatuses);
   return registry;

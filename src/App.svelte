@@ -3,6 +3,10 @@ import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
 import { onMount, tick } from "svelte";
 import tauriConfig from "../src-tauri/tauri.conf.json";
 import Banners, { type BannerItem } from "./lib/Banners.svelte";
+import {
+  type CommandTooltipOptions,
+  commandTooltip,
+} from "./lib/commandTooltip";
 import Editor from "./lib/Editor.svelte";
 import {
   currentWikilinkContext,
@@ -94,6 +98,10 @@ import {
   searchQuery,
   settingsPath,
   tagCatalog,
+  treeEntryDelete,
+  treeEntryMove,
+  treeEntryReveal,
+  treeFolderCreate,
   vaultTreeRefresh,
   zoomSet,
 } from "./lib/ipc/services";
@@ -111,6 +119,7 @@ import {
 import type { PaneSwitchKind } from "./lib/motion";
 import { resolveNoteTitle } from "./lib/noteTitles";
 import OutlinePanel from "./lib/OutlinePanel.svelte";
+import PanelDivider from "./lib/PanelDivider.svelte";
 import {
   type CommandContext,
   formatKeybinding,
@@ -122,10 +131,12 @@ import {
   canvasFilePaths,
   parseCanvas,
 } from "./lib/rendering/canvas";
+import ReadOnlyNote from "./lib/rendering/ReadOnlyNote.svelte";
 import { NARROW_BREAKPOINT_REM } from "./lib/responsive";
 import SettingsView from "./lib/SettingsView.svelte";
 import Sheet from "./lib/Sheet.svelte";
 import { STRINGS } from "./lib/strings";
+import TabStrip from "./lib/TabStrip.svelte";
 import {
   applyAppearance,
   isCodeFontName,
@@ -136,6 +147,22 @@ import {
 } from "./lib/themes/theme";
 import UnifiedCommandSurface from "./lib/UnifiedCommandSurface.svelte";
 import { bindVisualViewportCss } from "./lib/visualViewport";
+import {
+  defaultWorkspaceState,
+  loadWorkspaceState,
+  OUTLINE_DEFAULT_REM,
+  OUTLINE_MAX_REM,
+  OUTLINE_MIN_REM,
+  remapWorkspacePath,
+  removeWorkspacePath,
+  SIDEBAR_DEFAULT_REM,
+  SIDEBAR_MAX_REM,
+  SIDEBAR_MIN_REM,
+  SPLIT_MIN_REM,
+  saveWorkspaceState,
+  type WorkspacePane,
+  type WorkspaceTab,
+} from "./lib/workspaceState";
 
 let {
   openVaultDisabledReason = null,
@@ -148,6 +175,7 @@ let {
 let vault = $state<VaultHandle | null>(null);
 let activeVaultPath = $state<string | null>(null);
 let tree = $state<TreeEntry[]>([]);
+let treeTitleSources = $state<Record<string, string>>({});
 let selectedPath = $state<string | null>(null);
 let note = $state<LoadedNote | null>(null);
 let collisionGroups = $state<string[][]>([]);
@@ -173,6 +201,13 @@ let navigationState = $state<NavigationState>({
 });
 let navigation: NoteNavigator | null = null;
 let historyViewState = $state<NoteViewState | null>(null);
+let workspace = $state(defaultWorkspaceState());
+let workspaceIdentity = $state<string | null>(null);
+let titleLoadGeneration = 0;
+let workspaceHost = $state<HTMLElement>();
+let splitDragging = $state(false);
+let splitDropPaneId = $state<string | null>(null);
+let sidebarHeaderHovered = $state(false);
 
 let nextBannerId = 0;
 // Journal-recovered deltas for notes that are not open yet, applied as
@@ -315,6 +350,403 @@ function commandSurfacePathsOf(entries: TreeEntry[]): string[] {
     .map((entry) => entry.path);
 }
 
+const vaultName = $derived(
+  activeVaultPath
+    ?.replace(/[\\/]+$/u, "")
+    .split(/[\\/]/u)
+    .at(-1) ?? STRINGS.appTitle,
+);
+
+$effect(() => {
+  const identity = workspaceIdentity;
+  if (identity === null) return;
+  workspace.selectedPath = selectedPath;
+  workspace.outlineCollapsed = !outlineOpen;
+  void JSON.stringify(workspace);
+  saveWorkspaceState(identity, workspace);
+});
+
+async function loadTreeTitles(handle: VaultHandle, entries: TreeEntry[]) {
+  const generation = ++titleLoadGeneration;
+  const paths = entries
+    .filter((entry) => entry.kind === "note")
+    .map((entry) => entry.path);
+  const next: Record<string, string> = {};
+  for (let start = 0; start < paths.length; start += 16) {
+    const batch = paths.slice(start, start + 16);
+    const loaded = await Promise.all(
+      batch.map(async (path) => {
+        try {
+          const bytes = await readVaultFile(handle, path);
+          return [
+            path,
+            new TextDecoder("utf-8", { fatal: false }).decode(bytes),
+          ] as const;
+        } catch {
+          return [path, ""] as const;
+        }
+      }),
+    );
+    if (generation !== titleLoadGeneration || vault?.id !== handle.id) return;
+    for (const [path, source] of loaded) next[path] = source;
+    treeTitleSources = { ...next };
+  }
+}
+
+function togglePanel(panel: "sidebar" | "outline") {
+  if (narrowViewport) {
+    if (panel === "sidebar") {
+      if (activeSheet === "file-tree") closeSheet();
+      else openSheet("file-tree");
+    } else if (activeSheet === "outline") closeSheet();
+    else {
+      refreshOutline();
+      openSheet("outline");
+    }
+    return;
+  }
+  if (panel === "sidebar") {
+    workspace.sidebarCollapsed = !workspace.sidebarCollapsed;
+  } else {
+    outlineOpen = !outlineOpen;
+    workspace.outlineCollapsed = !outlineOpen;
+    if (outlineOpen) refreshOutline();
+  }
+}
+
+function focusedWorkspacePane(): WorkspacePane {
+  return (
+    workspace.panes.find((pane) => pane.id === workspace.focusedPaneId) ??
+    workspace.panes[0] ?? {
+      id: "pane-1",
+      tabs: [],
+      activePath: null,
+      history: [],
+      historyIndex: -1,
+    }
+  );
+}
+
+function updatePaneNavigationState() {
+  if (navigationSurface === "browser") return;
+  const pane = focusedWorkspacePane();
+  const current = pane.history[pane.historyIndex]?.address ?? null;
+  navigationState = {
+    address: current,
+    canGoBack: pane.historyIndex > 0,
+    canGoForward:
+      pane.historyIndex >= 0 && pane.historyIndex < pane.history.length - 1,
+  };
+}
+
+function captureFocusedTabState() {
+  const pane = focusedWorkspacePane();
+  const tab = pane.tabs.find((candidate) => candidate.path === pane.activePath);
+  if (tab !== undefined)
+    tab.viewState = editor?.captureHistoryState() ?? tab.viewState;
+  const entry = pane.history[pane.historyIndex];
+  if (entry !== undefined) {
+    entry.viewState = editor?.captureHistoryState() ?? entry.viewState;
+  }
+  if (selectedPath !== null && currentNoteSource.length > 0) {
+    treeTitleSources = {
+      ...treeTitleSources,
+      [selectedPath]: currentNoteSource,
+    };
+  }
+}
+
+function ensurePaneTab(pane: WorkspacePane, path: string): WorkspaceTab {
+  const existing = pane.tabs.find((tab) => tab.path === path);
+  if (existing !== undefined) return existing;
+  const tab = { path, viewState: null } satisfies WorkspaceTab;
+  pane.tabs.push(tab);
+  return tab;
+}
+
+function pushPaneHistory(
+  pane: WorkspacePane,
+  address: NoteAddress,
+  viewState: NoteViewState | null = null,
+) {
+  const current = pane.history[pane.historyIndex]?.address;
+  if (current?.path === address.path && current.fragment === address.fragment) {
+    pane.history[pane.historyIndex] = { address, viewState };
+  } else {
+    pane.history = [
+      ...pane.history.slice(0, pane.historyIndex + 1),
+      { address, viewState },
+    ].slice(-100);
+    pane.historyIndex = pane.history.length - 1;
+  }
+  updatePaneNavigationState();
+}
+
+async function activateWorkspaceTab(path: string) {
+  const pane = focusedWorkspacePane();
+  if (pane.activePath === path && selectedPath === path) return;
+  captureFocusedTabState();
+  const tab = ensurePaneTab(pane, path);
+  pane.activePath = path;
+  await openNote(path, tab.viewState, "tab");
+  updatePaneNavigationState();
+}
+
+async function focusWorkspacePane(id: string) {
+  if (workspace.focusedPaneId === id) return;
+  if ((await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
+  captureFocusedTabState();
+  workspace.focusedPaneId = id;
+  await tick();
+  contentHost =
+    document.querySelector<HTMLElement>(
+      `[data-pane-id="${CSS.escape(id)}"] .skr-pane-content`,
+    ) ?? undefined;
+  const pane = focusedWorkspacePane();
+  if (pane.activePath === null) {
+    note = null;
+    selectedPath = null;
+    currentNoteSource = "";
+  } else {
+    const tab = ensurePaneTab(pane, pane.activePath);
+    await openNote(pane.activePath, tab.viewState, "tab");
+  }
+  updatePaneNavigationState();
+}
+
+async function closeWorkspaceTab(path = focusedWorkspacePane().activePath) {
+  if (path === null) return;
+  const pane = focusedWorkspacePane();
+  const index = pane.tabs.findIndex((tab) => tab.path === path);
+  if (index < 0) return;
+  const closesActiveEditor = pane.activePath === path && selectedPath === path;
+  if (closesActiveEditor && (await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
+  if (closesActiveEditor) captureFocusedTabState();
+  const [closed] = pane.tabs.splice(index, 1);
+  if (closed !== undefined) {
+    workspace.closedTabs = [...workspace.closedTabs, closed].slice(-20);
+  }
+  if (pane.tabs.length === 0 && workspace.panes.length === 2) {
+    const other = workspace.panes.find((candidate) => candidate.id !== pane.id);
+    workspace.panes = workspace.panes.filter(
+      (candidate) => candidate.id !== pane.id,
+    );
+    if (other !== undefined) {
+      workspace.focusedPaneId = other.id;
+      await tick();
+      contentHost =
+        document.querySelector<HTMLElement>(
+          `[data-pane-id="${CSS.escape(other.id)}"] .skr-pane-content`,
+        ) ?? undefined;
+      if (other.activePath !== null) {
+        const tab = ensurePaneTab(other, other.activePath);
+        await openNote(other.activePath, tab.viewState, "tab");
+      }
+      updatePaneNavigationState();
+    }
+    return;
+  }
+  if (pane.activePath === path) {
+    const next = pane.tabs[Math.min(index, pane.tabs.length - 1)];
+    if (next === undefined) {
+      pane.activePath = null;
+      note = null;
+      selectedPath = null;
+      currentNoteSource = "";
+    } else {
+      await activateWorkspaceTab(next.path);
+    }
+  }
+}
+
+async function reopenClosedWorkspaceTab() {
+  const tab = workspace.closedTabs.at(-1);
+  if (tab === undefined) return;
+  workspace.closedTabs = workspace.closedTabs.slice(0, -1);
+  const pane = focusedWorkspacePane();
+  pane.tabs.push(tab);
+  await activateWorkspaceTab(tab.path);
+}
+
+function cycleWorkspaceTab(direction: -1 | 1) {
+  const pane = focusedWorkspacePane();
+  if (pane.tabs.length === 0) return;
+  const current = pane.tabs.findIndex((tab) => tab.path === pane.activePath);
+  const next = (current + direction + pane.tabs.length) % pane.tabs.length;
+  const tab = pane.tabs[next];
+  if (tab !== undefined) void activateWorkspaceTab(tab.path);
+}
+
+function activateWorkspaceTabIndex(index: number | "last") {
+  const tabs = focusedWorkspacePane().tabs;
+  const tab = index === "last" ? tabs.at(-1) : tabs[index];
+  if (tab !== undefined) void activateWorkspaceTab(tab.path);
+}
+
+function reorderWorkspaceTabs(from: number, to: number) {
+  const pane = focusedWorkspacePane();
+  const [tab] = pane.tabs.splice(from, 1);
+  if (tab === undefined) return;
+  const target = Math.max(
+    0,
+    Math.min(to > from ? to - 1 : to, pane.tabs.length),
+  );
+  pane.tabs.splice(target, 0, tab);
+}
+
+async function splitWorkspaceTab(path = focusedWorkspacePane().activePath) {
+  if (path === null || narrowViewport || workspace.panes.length >= 2) return;
+  captureFocusedTabState();
+  const source = focusedWorkspacePane();
+  if (source.tabs.length <= 1) return;
+  const index = source.tabs.findIndex((tab) => tab.path === path);
+  const [tab] = index < 0 ? [] : source.tabs.splice(index, 1);
+  if (tab === undefined) return;
+  source.activePath =
+    source.tabs[Math.min(index, source.tabs.length - 1)]?.path ?? null;
+  const pane: WorkspacePane = {
+    id: "pane-2",
+    tabs: [tab],
+    activePath: tab.path,
+    history: [{ address: { path: tab.path }, viewState: tab.viewState }],
+    historyIndex: 0,
+  };
+  workspace.panes.push(pane);
+  workspace.focusedPaneId = pane.id;
+  await tick();
+  contentHost =
+    document.querySelector<HTMLElement>(
+      `[data-pane-id="${CSS.escape(pane.id)}"] .skr-pane-content`,
+    ) ?? undefined;
+  if (selectedPath !== tab.path) {
+    await openNote(tab.path, tab.viewState, "tab");
+  } else {
+    selectedPath = tab.path;
+  }
+  updatePaneNavigationState();
+}
+
+async function moveWorkspaceTabToOtherPane() {
+  if (workspace.panes.length === 1) {
+    await splitWorkspaceTab();
+    return;
+  }
+  const source = focusedWorkspacePane();
+  const path = source.activePath;
+  if (path === null) return;
+  captureFocusedTabState();
+  const index = source.tabs.findIndex((tab) => tab.path === path);
+  const [tab] = source.tabs.splice(index, 1);
+  const target = workspace.panes.find((pane) => pane.id !== source.id);
+  if (tab === undefined || target === undefined) return;
+  if (!target.tabs.some((candidate) => candidate.path === tab.path)) {
+    target.tabs.push(tab);
+  }
+  target.activePath = tab.path;
+  pushPaneHistory(target, { path: tab.path }, tab.viewState);
+  source.activePath =
+    source.tabs[Math.min(index, source.tabs.length - 1)]?.path ?? null;
+  if (source.tabs.length === 0) {
+    workspace.panes = workspace.panes.filter(
+      (candidate) => candidate.id !== source.id,
+    );
+  }
+  workspace.focusedPaneId = target.id;
+  await tick();
+  contentHost =
+    document.querySelector<HTMLElement>(
+      `[data-pane-id="${CSS.escape(target.id)}"] .skr-pane-content`,
+    ) ?? undefined;
+  await openNote(tab.path, tab.viewState, "tab");
+  updatePaneNavigationState();
+}
+
+function focusWorkspacePaneDirection(direction: "left" | "right") {
+  if (workspace.panes.length < 2) return;
+  const index = direction === "left" ? 0 : 1;
+  const pane = workspace.panes[index];
+  if (pane !== undefined) void focusWorkspacePane(pane.id);
+}
+
+function paneNavigate(direction: -1 | 1): boolean {
+  if (navigationSurface === "browser") {
+    return direction < 0
+      ? (navigation?.back() ?? false)
+      : (navigation?.forward() ?? false);
+  }
+  const pane = focusedWorkspacePane();
+  const next = pane.historyIndex + direction;
+  const entry = pane.history[next];
+  if (entry === undefined) return false;
+  captureFocusedTabState();
+  pane.historyIndex = next;
+  const tab = ensurePaneTab(pane, entry.address.path);
+  pane.activePath = tab.path;
+  void openNoteAddress(entry.address, entry.viewState, "history");
+  updatePaneNavigationState();
+  return true;
+}
+
+function beginSplitResize(event: PointerEvent) {
+  if (event.button !== 0 || workspaceHost === undefined) return;
+  event.preventDefault();
+  const divider = event.currentTarget as HTMLElement;
+  const pointer = event.pointerId;
+  const bounds = workspaceHost.getBoundingClientRect();
+  const rootSize = Number.parseFloat(
+    getComputedStyle(document.documentElement).fontSize,
+  );
+  const minimum = Math.min(0.5, (SPLIT_MIN_REM * rootSize) / bounds.width);
+  splitDragging = true;
+  divider.setPointerCapture(pointer);
+  const move = (next: PointerEvent) => {
+    if (next.pointerId !== pointer) return;
+    workspace.splitRatio = Math.max(
+      minimum,
+      Math.min(1 - minimum, (next.clientX - bounds.left) / bounds.width),
+    );
+  };
+  const stop = (end: PointerEvent) => {
+    if (end.pointerId !== pointer) return;
+    splitDragging = false;
+    divider.removeEventListener("pointermove", move);
+    divider.removeEventListener("pointerup", stop);
+    divider.removeEventListener("pointercancel", stop);
+  };
+  divider.addEventListener("pointermove", move);
+  divider.addEventListener("pointerup", stop);
+  divider.addEventListener("pointercancel", stop);
+}
+
+// registry-exempt keydown: ARIA separator arrow resizing stays local to the
+// split divider. Pane focus and structural actions remain registry commands.
+function resizeSplitWithKeyboard(event: KeyboardEvent) {
+  if (workspaceHost === undefined) return;
+  const rootSize = Number.parseFloat(
+    getComputedStyle(document.documentElement).fontSize,
+  );
+  const step = rootSize / workspaceHost.getBoundingClientRect().width;
+  if (event.key === "ArrowLeft") workspace.splitRatio -= step;
+  else if (event.key === "ArrowRight") workspace.splitRatio += step;
+  else if (event.key === "Home") workspace.splitRatio = 0.5;
+  else return;
+  const minimum = Math.min(
+    0.5,
+    (SPLIT_MIN_REM * rootSize) / workspaceHost.getBoundingClientRect().width,
+  );
+  workspace.splitRatio = Math.max(
+    minimum,
+    Math.min(1 - minimum, workspace.splitRatio),
+  );
+  event.preventDefault();
+}
+
 function refreshOutline() {
   const view = editor?.getView();
   outlineEntries = view === undefined ? [] : computeOutline(view.state);
@@ -439,6 +871,7 @@ async function refreshTreeIndex(refreshTags = false) {
       }
     }
     tree = refreshedTree;
+    void loadTreeTitles(activeVault, refreshedTree);
     refreshLinkContext();
   } catch {
     // The watcher-maintained tree remains authoritative when the
@@ -467,10 +900,182 @@ async function createNewNote() {
   try {
     await noteCreate(activeVault, path);
     tree = await vaultTreeRefresh(activeVault);
+    void loadTreeTitles(activeVault, tree);
     refreshLinkContext();
-    await openNote(path);
+    await navigateToNote(path);
   } catch (error) {
     errorText = describeError(STRINGS.noteCreateFailed, error);
+  }
+}
+
+function treeParent(path: string): string {
+  return path.split("/").slice(0, -1).join("/");
+}
+
+function treeJoin(parent: string, name: string): string {
+  return parent.length === 0 ? name : `${parent}/${name}`;
+}
+
+function treePathWithin(candidate: string, parent: string): boolean {
+  return candidate === parent || candidate.startsWith(`${parent}/`);
+}
+
+function remapTreePath(candidate: string, from: string, to: string): string {
+  return treePathWithin(candidate, from)
+    ? `${to}${candidate.slice(from.length)}`
+    : candidate;
+}
+
+function reconcileRuntimePaths(from: string, to: string) {
+  workspace = remapWorkspacePath(workspace, from, to);
+  recents = recents.map((path) => remapTreePath(path, from, to));
+  for (const [path, changes] of [...pendingRecovered]) {
+    if (!treePathWithin(path, from)) continue;
+    pendingRecovered.delete(path);
+    pendingRecovered.set(remapTreePath(path, from, to), changes);
+  }
+}
+
+async function createTreeNote(folder: string) {
+  const activeVault = vault;
+  if (activeVault === null) return;
+  const existing = new Set(tree.map((entry) => entry.path.toLocaleLowerCase()));
+  let index = 1;
+  let path = "";
+  do {
+    const suffix = index === 1 ? "" : ` ${index}`;
+    path = treeJoin(folder, `${STRINGS.untitledNoteName}${suffix}.md`);
+    index += 1;
+  } while (existing.has(path.toLocaleLowerCase()));
+  try {
+    await noteCreate(activeVault, path);
+    tree = await vaultTreeRefresh(activeVault);
+    void loadTreeTitles(activeVault, tree);
+    refreshLinkContext();
+    await navigateToNote(path);
+  } catch (error) {
+    errorText = describeError(STRINGS.noteCreateFailed, error);
+  }
+}
+
+async function createTreeFolder(parent: string) {
+  const activeVault = vault;
+  if (activeVault === null) return;
+  const name = window.prompt(STRINGS.treeFolderPrompt)?.trim();
+  if (name === undefined || name === "") return;
+  try {
+    tree = await treeFolderCreate(activeVault, treeJoin(parent, name));
+    refreshLinkContext();
+  } catch (error) {
+    errorText = describeError(STRINGS.treeOperationFailed, error);
+  }
+}
+
+async function renameTreeEntry(path: string) {
+  const activeVault = vault;
+  if (activeVault === null) return;
+  const name = window
+    .prompt(STRINGS.treeRenamePrompt, path.split("/").at(-1))
+    ?.trim();
+  if (name === undefined || name === "") return;
+  const target = treeJoin(treeParent(path), name);
+  if (target === path) return;
+  const activePath = selectedPath;
+  const affectsActive = activePath !== null && treePathWithin(activePath, path);
+  const activeViewState = affectsActive
+    ? (editor?.captureHistoryState() ?? null)
+    : null;
+  if (affectsActive && (await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
+  try {
+    tree = await treeEntryMove(activeVault, path, target);
+    reconcileRuntimePaths(path, target);
+    if (activePath !== null) {
+      selectedPath = remapTreePath(activePath, path, target);
+    }
+    void loadTreeTitles(activeVault, tree);
+    refreshLinkContext();
+    if (affectsActive && selectedPath !== null) {
+      await openNote(selectedPath, activeViewState);
+    }
+  } catch (error) {
+    errorText = describeError(STRINGS.treeOperationFailed, error);
+  }
+}
+
+async function deleteTreeEntry(path: string) {
+  const activeVault = vault;
+  if (activeVault === null || !window.confirm(STRINGS.treeDeleteConfirm))
+    return;
+  const removesActive =
+    selectedPath !== null && treePathWithin(selectedPath, path);
+  if (removesActive && (await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
+  try {
+    tree = await treeEntryDelete(activeVault, path);
+    workspace = removeWorkspacePath(workspace, path);
+    recents = recents.filter((candidate) => !treePathWithin(candidate, path));
+    for (const candidate of [...pendingRecovered.keys()]) {
+      if (treePathWithin(candidate, path)) pendingRecovered.delete(candidate);
+    }
+    const nextPath = focusedWorkspacePane().activePath;
+    selectedPath = nextPath;
+    void loadTreeTitles(activeVault, tree);
+    refreshLinkContext();
+    if (removesActive) {
+      if (nextPath === null) {
+        note = null;
+        currentNoteSource = "";
+      } else {
+        const tab = ensurePaneTab(focusedWorkspacePane(), nextPath);
+        await openNote(nextPath, tab.viewState, "tab");
+      }
+    }
+  } catch (error) {
+    errorText = describeError(STRINGS.treeOperationFailed, error);
+  }
+}
+
+async function moveTreeEntry(path: string, destination: string | null) {
+  const activeVault = vault;
+  if (activeVault === null) return;
+  const target = treeJoin(destination ?? "", path.split("/").at(-1) ?? path);
+  if (target === path) return;
+  const activePath = selectedPath;
+  const affectsActive = activePath !== null && treePathWithin(activePath, path);
+  const activeViewState = affectsActive
+    ? (editor?.captureHistoryState() ?? null)
+    : null;
+  if (affectsActive && (await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
+  try {
+    tree = await treeEntryMove(activeVault, path, target);
+    reconcileRuntimePaths(path, target);
+    if (activePath !== null) {
+      selectedPath = remapTreePath(activePath, path, target);
+    }
+    void loadTreeTitles(activeVault, tree);
+    refreshLinkContext();
+    if (affectsActive && selectedPath !== null) {
+      await openNote(selectedPath, activeViewState);
+    }
+  } catch (error) {
+    errorText = describeError(STRINGS.treeOperationFailed, error);
+  }
+}
+
+async function revealTreeEntry(path: string) {
+  if (vault === null) return;
+  try {
+    await treeEntryReveal(vault, path);
+  } catch (error) {
+    errorText = describeError(STRINGS.treeOperationFailed, error);
   }
 }
 
@@ -484,6 +1089,18 @@ function focusContent() {
 
 function focusReadingSurface() {
   contentHost?.focus({ preventScroll: true });
+}
+
+function captureContentHost(node: HTMLElement, paneId: string) {
+  if (paneId === workspace.focusedPaneId) contentHost = node;
+  return {
+    update(nextPaneId: string) {
+      if (nextPaneId === workspace.focusedPaneId) contentHost = node;
+    },
+    destroy() {
+      if (contentHost === node) contentHost = undefined;
+    },
+  };
 }
 
 function closeOverlay() {
@@ -509,7 +1126,8 @@ function commandContext(): CommandContext {
         if (narrowViewport) {
           openSheet("file-tree");
         } else {
-          focusFileTree();
+          workspace.sidebarCollapsed = false;
+          void tick().then(focusFileTree);
         }
       } else {
         if (id === VIEW_SETTINGS) targetSetting = null;
@@ -545,10 +1163,26 @@ function commandContext(): CommandContext {
     },
     notePaths: () => notePathsOf(tree),
     recentNotePaths: () => recents,
-    navigateBack: () => navigation?.back() ?? false,
-    navigateForward: () => navigation?.forward() ?? false,
+    navigateBack: () => paneNavigate(-1),
+    navigateForward: () => paneNavigate(1),
     followLink: followLinkUnderCursor,
     copyNoteLink,
+    createTreeNote,
+    createTreeFolder,
+    renameTreeEntry,
+    deleteTreeEntry,
+    moveTreeEntry,
+    copyTreeNoteLink: (path) => writeLink({ path }),
+    revealTreeEntry,
+    togglePanel,
+    createTab: createNewNote,
+    closeTab: () => closeWorkspaceTab(),
+    reopenClosedTab: reopenClosedWorkspaceTab,
+    cycleTab: cycleWorkspaceTab,
+    activateTab: activateWorkspaceTabIndex,
+    splitPane: () => splitWorkspaceTab(),
+    focusPane: focusWorkspacePaneDirection,
+    moveTabToOtherPane: () => moveWorkspaceTabToOtherPane(),
     copyHeadingLink,
     toggleSourceMode: () => {
       if (note === null) {
@@ -582,7 +1216,17 @@ function applyApplicationZoom(action: "in" | "out" | "reset"): Promise<void> {
 }
 
 const onGlobalKeydown = globalKeydownHandler(registry, commandContext);
-const actionCommands = $derived(registry.pointerCommands("action-menu"));
+const SPLIT_COMMAND_IDS = new Set([
+  "pane.split-right",
+  "pane.focus-left",
+  "pane.focus-right",
+  "pane.move-tab",
+]);
+const actionCommands = $derived(
+  registry
+    .pointerCommands("action-menu")
+    .filter((command) => !narrowViewport || !SPLIT_COMMAND_IDS.has(command.id)),
+);
 const vaultOpenCommand = registry.command("vault.open");
 const overflowCommands = $derived([
   {
@@ -664,11 +1308,38 @@ function formattedCommandKeybinding(
     : formatKeybinding(binding, macPlatform);
 }
 
+function tooltipForCommand(
+  id: string,
+  fallbackTitle: string,
+): CommandTooltipOptions {
+  const command = registry.command(id);
+  const keybinding = formattedCommandKeybinding(command);
+  return {
+    title: command?.title ?? fallbackTitle,
+    ...(keybinding === undefined ? {} : { keybinding }),
+  };
+}
+
 $effect(() => {
   if (narrowViewport && outlineOpen) {
     outlineOpen = false;
     refreshOutline();
     openSheet("outline");
+  }
+  if (narrowViewport && workspace.panes.length === 2) {
+    const [first, second] = workspace.panes;
+    if (first !== undefined && second !== undefined) {
+      for (const tab of second.tabs) {
+        if (!first.tabs.some((candidate) => candidate.path === tab.path)) {
+          first.tabs.push(tab);
+        }
+      }
+      if (workspace.focusedPaneId === second.id && second.activePath !== null) {
+        first.activePath = second.activePath;
+      }
+      workspace.panes = [first];
+      workspace.focusedPaneId = first.id;
+    }
   }
 });
 
@@ -697,23 +1368,34 @@ function runActionCommand(id: string) {
 // surface take most of a second to appear over a large vault.
 const notePaths = $derived(notePathsOf(tree));
 const commandSurfacePaths = $derived(commandSurfacePathsOf(tree));
+const openWorkspacePaths = $derived(
+  workspace.panes.flatMap((pane) => pane.tabs.map((tab) => tab.path)),
+);
 const parsedOverlayQuery = $derived(parsePickerQuery(overlayQuery));
+
+function visibleCommandItems(query: string): PickerItem[] {
+  return commandItems(registry, query, macPlatform).filter(
+    (item) => !narrowViewport || !SPLIT_COMMAND_IDS.has(item.value),
+  );
+}
 
 const overlayItems = $derived.by((): PickerItem[] => {
   void settingsState.document.task_statuses;
   if (activeOverlay !== VIEW_COMMAND_SURFACE) return [];
   switch (parsedOverlayQuery.mode) {
     case "command":
-      return commandItems(registry, parsedOverlayQuery.query, macPlatform);
+      return visibleCommandItems(parsedOverlayQuery.query);
     case "file":
       return appendBareDiscoveryItems(
         fileItems(
           commandSurfacePaths,
           recents,
-          selectedPath === null ? [] : [selectedPath],
+          openWorkspacePaths,
           parsedOverlayQuery.query,
+          100,
+          treeTitleSources,
         ),
-        commandItems(registry, parsedOverlayQuery.query, macPlatform),
+        visibleCommandItems(parsedOverlayQuery.query),
         tagItems(tagCatalogEntries, parsedOverlayQuery.query),
         parsedOverlayQuery.query,
       );
@@ -942,10 +1624,23 @@ function copyOutlineHeading(heading: string) {
 function onEditorDocChanged(source: string, path: string | null) {
   if (path === selectedPath) {
     currentNoteSource = source;
+    if (path !== null)
+      treeTitleSources = { ...treeTitleSources, [path]: source };
   }
   if (outlineOpen) {
     scheduleOutlineRefresh();
   }
+}
+
+function onEditorDirtyChanged(
+  paneId: string,
+  path: string | null,
+  dirty: boolean,
+) {
+  if (path === null) return;
+  const pane = workspace.panes.find((candidate) => candidate.id === paneId);
+  const tab = pane?.tabs.find((candidate) => candidate.path === path);
+  if (tab !== undefined) tab.dirty = dirty;
 }
 
 function pushBanner(banner: Omit<BannerItem, "id">): number {
@@ -1006,6 +1701,16 @@ function refreshLinkContext() {
       : {
           loadNote: async (path: string) => {
             try {
+              const endToEndDelay = (
+                window as Window & {
+                  __SKRIBEUM_E2E_CONTENT_DELAY_MS__?: number;
+                }
+              ).__SKRIBEUM_E2E_CONTENT_DELAY_MS__;
+              if (typeof endToEndDelay === "number" && endToEndDelay > 0) {
+                await new Promise((resolve) =>
+                  setTimeout(resolve, endToEndDelay),
+                );
+              }
               const bytes = await readVaultFile(activeVault, path);
               const content =
                 bytes.length >= 3 &&
@@ -1113,8 +1818,13 @@ async function openVaultAtPath(path: string, initialNote?: string) {
     }
     vault = handle;
     activeVaultPath = path;
+    workspaceIdentity = path;
+    workspace = loadWorkspaceState(path);
+    outlineOpen = !workspace.outlineCollapsed;
     tree = nextTree;
-    selectedPath = null;
+    selectedPath = workspace.selectedPath;
+    treeTitleSources = {};
+    void loadTreeTitles(handle, nextTree);
     note = null;
     currentNoteSource = "";
     sourceMode = false;
@@ -1131,11 +1841,27 @@ async function openVaultAtPath(path: string, initialNote?: string) {
       .__SKRIBEUM_E2E_NOTE__;
     const addressed = navigation?.state().address ?? null;
     if (initialNote !== undefined) {
-      await navigation?.reset({ path: initialNote });
+      if (navigationSurface === "browser")
+        await navigation?.reset({ path: initialNote });
+      else await navigateToNote(initialNote);
+    } else if (
+      navigationSurface === "desktop" &&
+      focusedWorkspacePane().activePath !== null &&
+      notePathsOf(nextTree).includes(focusedWorkspacePane().activePath ?? "")
+    ) {
+      const pane = focusedWorkspacePane();
+      const path = pane.activePath;
+      if (path !== null) {
+        const tab = ensurePaneTab(pane, path);
+        await openNote(path, tab.viewState);
+        updatePaneNavigationState();
+      }
     } else if (addressed !== null) {
       await navigation?.start(addressed);
     } else if (typeof harnessNote === "string") {
-      await navigation?.start({ path: harnessNote });
+      if (navigationSurface === "browser")
+        await navigation?.start({ path: harnessNote });
+      else await navigateToNote(harnessNote);
     }
   } catch (error) {
     if (!contentRequests.isCurrent(request)) {
@@ -1199,6 +1925,7 @@ async function refreshTree() {
       return;
     }
     tree = nextTree;
+    void loadTreeTitles(currentVault, nextTree);
     refreshLinkContext();
   } catch (error) {
     errorText = describeError(STRINGS.vaultOpenFailed, error);
@@ -1265,6 +1992,9 @@ async function openNote(
     canvas = null;
     canvasError = null;
     selectedPath = path;
+    const pane = focusedWorkspacePane();
+    ensurePaneTab(pane, path);
+    pane.activePath = path;
     refreshLinkContext();
     recents = [path, ...recents.filter((entry) => entry !== path)].slice(0, 50);
     await tick();
@@ -1345,7 +2075,21 @@ async function openNoteAddress(
 
 async function navigateToNote(path: string, fragment?: string): Promise<void> {
   const address = fragment === undefined ? { path } : { path, fragment };
-  await (navigation?.open(address) ?? openNoteAddress(address));
+  if (navigationSurface === "browser") {
+    await (navigation?.open(address) ?? openNoteAddress(address));
+    const pane = focusedWorkspacePane();
+    ensurePaneTab(pane, path);
+    pane.activePath = path;
+    return;
+  }
+  captureFocusedTabState();
+  const pane = focusedWorkspacePane();
+  const tab = ensurePaneTab(pane, path);
+  const opened = await openNoteAddress(address, tab.viewState);
+  if (opened) {
+    pane.activePath = path;
+    pushPaneHistory(pane, address);
+  }
 }
 
 function wikilinkNavigationOptions(): FollowWikilinkOptions {
@@ -1360,7 +2104,7 @@ function wikilinkNavigationOptions(): FollowWikilinkOptions {
     navigate: async (address) => {
       focusReadingSurface();
       try {
-        await (navigation?.open(address) ?? openNoteAddress(address));
+        await navigateToNote(address.path, address.fragment);
       } finally {
         focusReadingSurface();
         requestAnimationFrame(() => focusReadingSurface());
@@ -1523,6 +2267,57 @@ function onWriteError(message: string) {
   errorText = `${STRINGS.noteWriteFailed}: ${message}`;
 }
 
+function setEndToEndSelection(anchor: number): boolean {
+  const view = editor?.getView();
+  if (view === undefined) return false;
+  view.dispatch({
+    selection: {
+      anchor: Math.max(0, Math.min(anchor, view.state.doc.length)),
+    },
+    scrollIntoView: true,
+  });
+  view.focus();
+  return true;
+}
+
+function setEndToEndSelectionAtLineEnd(lineText: string): number | null {
+  const view = editor?.getView();
+  if (view === undefined) return null;
+  for (
+    let lineNumber = 1;
+    lineNumber <= view.state.doc.lines;
+    lineNumber += 1
+  ) {
+    const line = view.state.doc.line(lineNumber);
+    if (line.text === lineText || line.text.endsWith(lineText)) {
+      view.dispatch({
+        selection: { anchor: line.to },
+        scrollIntoView: true,
+      });
+      view.focus();
+      return line.to;
+    }
+  }
+  return null;
+}
+
+function setEndToEndSelectionFromLastMatch(
+  sourceText: string,
+  relativeOffset: number,
+): number | null {
+  const view = editor?.getView();
+  if (view === undefined) return null;
+  const start = view.state.doc.toString().lastIndexOf(sourceText);
+  if (start < 0) return null;
+  const anchor = Math.max(
+    start,
+    Math.min(start + relativeOffset, view.state.doc.length),
+  );
+  view.dispatch({ selection: { anchor }, scrollIntoView: true });
+  view.focus();
+  return anchor;
+}
+
 // The end-to-end seam: webdriver-feature builds announce a scratch vault
 // path on the window object (see the page-load hook in src-tauri); release
 // builds never set it, which keeps this poll inert outside the test
@@ -1535,14 +2330,37 @@ function pollEndToEndVault() {
     const path = (window as { __SKRIBEUM_E2E_VAULT__?: string })
       .__SKRIBEUM_E2E_VAULT__;
     if (typeof path === "string" && vault === null) {
+      const debugWindow = window as Window & {
+        __SKRIBEUM_E2E_RESET_WORKSPACE__?: boolean;
+      };
+      if (debugWindow.__SKRIBEUM_E2E_RESET_WORKSPACE__ === true) {
+        for (const key of Object.keys(localStorage)) {
+          if (key.startsWith("skribeum.workspace.v1.")) {
+            localStorage.removeItem(key);
+          }
+        }
+        delete debugWindow.__SKRIBEUM_E2E_RESET_WORKSPACE__;
+      }
       const target = window as Window & {
         __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
         __SKRIBEUM_E2E_HISTORY_STATE__?: () => NoteViewState | null;
+        __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
+        __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
+        __SKRIBEUM_E2E_SET_LINE_END__?: (lineText: string) => number | null;
+        __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
+          sourceText: string,
+          relativeOffset: number,
+        ) => number | null;
       };
       target.__SKRIBEUM_E2E_OPEN_NOTE__ = (notePath) =>
         navigateToNote(notePath);
       target.__SKRIBEUM_E2E_HISTORY_STATE__ = () =>
         editor?.captureHistoryState() ?? null;
+      target.__SKRIBEUM_E2E_CURRENT_PATH__ = () => selectedPath;
+      target.__SKRIBEUM_E2E_SET_SELECTION__ = setEndToEndSelection;
+      target.__SKRIBEUM_E2E_SET_LINE_END__ = setEndToEndSelectionAtLineEnd;
+      target.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__ =
+        setEndToEndSelectionFromLastMatch;
       clearInterval(timer);
       void openVaultAtPath(path);
     } else if (attempts > 50 || vault !== null) {
@@ -1577,8 +2395,24 @@ onMount(() => {
     __SKRIBEUM_DEBUG_PERF__?: boolean;
     __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
     __SKRIBEUM_E2E_HISTORY_STATE__?: () => NoteViewState | null;
+    __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
+    __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
+    __SKRIBEUM_E2E_SET_LINE_END__?: (lineText: string) => number | null;
+    __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
+      sourceText: string,
+      relativeOffset: number,
+    ) => number | null;
     __SKRIBEUM_E2E_VAULT__?: string;
+    __SKRIBEUM_E2E_RESET_WORKSPACE__?: boolean;
   };
+  if (debugWindow.__SKRIBEUM_E2E_RESET_WORKSPACE__ === true) {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith("skribeum.workspace.v1.")) {
+        localStorage.removeItem(key);
+      }
+    }
+    delete debugWindow.__SKRIBEUM_E2E_RESET_WORKSPACE__;
+  }
   if (debugWindow.__SKRIBEUM_DEBUG_PERF__ === true) {
     debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__ = async (path) => {
       await openNote(path);
@@ -1588,6 +2422,11 @@ onMount(() => {
     debugWindow.__SKRIBEUM_E2E_OPEN_NOTE__ = (path) => navigateToNote(path);
     debugWindow.__SKRIBEUM_E2E_HISTORY_STATE__ = () =>
       editor?.captureHistoryState() ?? null;
+    debugWindow.__SKRIBEUM_E2E_CURRENT_PATH__ = () => selectedPath;
+    debugWindow.__SKRIBEUM_E2E_SET_SELECTION__ = setEndToEndSelection;
+    debugWindow.__SKRIBEUM_E2E_SET_LINE_END__ = setEndToEndSelectionAtLineEnd;
+    debugWindow.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__ =
+      setEndToEndSelectionFromLastMatch;
   }
   const unlisteners = [
     events.vaultCollisionsDetected.listen((event) => {
@@ -1730,6 +2569,10 @@ onMount(() => {
     delete debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__;
     delete debugWindow.__SKRIBEUM_E2E_OPEN_NOTE__;
     delete debugWindow.__SKRIBEUM_E2E_HISTORY_STATE__;
+    delete debugWindow.__SKRIBEUM_E2E_CURRENT_PATH__;
+    delete debugWindow.__SKRIBEUM_E2E_SET_SELECTION__;
+    delete debugWindow.__SKRIBEUM_E2E_SET_LINE_END__;
+    delete debugWindow.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__;
     clearInterval(pollTimer);
     cancelOutlineRefresh?.();
     for (const unlisten of unlisteners) {
@@ -1751,6 +2594,20 @@ onMount(() => {
   <header class="skr-app-header border-b">
     <div class="skr-header-leading">
       <h1 class="sr-only">{STRINGS.appTitle}</h1>
+      {#if vault !== null && workspace.sidebarCollapsed}
+        <button
+          type="button"
+          class="skr-header-icon-button skr-desktop-sidebar-toggle"
+          data-command-id="panel.sidebar.toggle"
+          aria-label={STRINGS.expandSidebar}
+          use:commandTooltip={tooltipForCommand("panel.sidebar.toggle", STRINGS.expandSidebar)}
+          onclick={() => registry.run("panel.sidebar.toggle", commandContext())}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 5.5h16v13H4zM9 5.5v13M14 9l3 3-3 3" />
+          </svg>
+        </button>
+      {/if}
       <button
         type="button"
         class="skr-phone-files skr-header-icon-button"
@@ -1854,88 +2711,76 @@ onMount(() => {
 
   <main class="flex min-h-0 flex-1 overflow-hidden">
     {#if vault !== null}
-      <nav class="skr-sidebar skr-desktop-sidebar w-64 shrink-0 overflow-hidden border-r">
-        <FileTree entries={tree} {selectedPath} onOpenPath={openPath} />
-      </nav>
+      <div
+        class="skr-sidebar skr-desktop-sidebar skr-panel-motion"
+        class:skr-sidebar-header-hovered={sidebarHeaderHovered}
+        style={`width: ${workspace.sidebarCollapsed ? 0 : workspace.sidebarWidthRem}rem`}
+      >
+        {#if !workspace.sidebarCollapsed}
+        <nav class="skr-sidebar-content" aria-label={STRINGS.sidebarHeaderLabel}>
+          <header
+            class="skr-sidebar-header"
+            role="group"
+            aria-label={STRINGS.sidebarHeaderLabel}
+            onpointerenter={() => (sidebarHeaderHovered = true)}
+            onpointerleave={() => (sidebarHeaderHovered = false)}
+          >
+            <span>{vaultName}</span>
+            <div class="skr-sidebar-header-actions">
+              <button
+                type="button"
+                data-command-id="note.create"
+                aria-label={STRINGS.treeCreateNote}
+                use:commandTooltip={tooltipForCommand("note.create", STRINGS.treeCreateNote)}
+                onclick={() => registry.run("note.create", commandContext())}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 3v10M3 8h10" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-command-id="panel.sidebar.toggle"
+                aria-label={STRINGS.collapseSidebar}
+                use:commandTooltip={tooltipForCommand("panel.sidebar.toggle", STRINGS.collapseSidebar)}
+                onclick={() => registry.run("panel.sidebar.toggle", commandContext())}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M2.5 3.5h11v9h-11zM7 3.5v9M5 6l-2 2 2 2" />
+                </svg>
+              </button>
+            </div>
+          </header>
+          <div class="skr-sidebar-tree">
+            <FileTree
+              entries={tree}
+              {selectedPath}
+              titleSources={treeTitleSources}
+              expandedPaths={workspace.expandedFolders}
+              onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
+              onSelectionChange={(path) => (workspace.selectedPath = path)}
+              onOpenPath={openPath}
+              {registry}
+              {commandContext}
+              desktop={hasDesktopRuntime()}
+            />
+          </div>
+        </nav>
+        <PanelDivider
+          value={workspace.sidebarWidthRem}
+          minimum={SIDEBAR_MIN_REM}
+          maximum={SIDEBAR_MAX_REM}
+          defaultValue={SIDEBAR_DEFAULT_REM}
+          edge="right"
+          label={STRINGS.sidebarResize}
+          onResize={(value) => (workspace.sidebarWidthRem = value)}
+          onCollapse={() => togglePanel("sidebar")}
+        />
+        {/if}
+      </div>
     {/if}
-    <section
-      class="min-w-0 flex-1"
-      bind:this={contentHost}
-      tabindex="-1"
-      data-testid="reading-surface"
-    >
-      {#if contentView === VIEW_CANVAS && canvas !== null}
-        <CanvasView
-          bind:this={canvasViewer}
-          {canvas}
-          previews={canvasPreviews}
-          {linkContext}
-          taskStatuses={settingsState.document.task_statuses}
-        />
-      {:else if contentView === VIEW_CANVAS && canvasError !== null}
-        <div class="skr-error m-4 rounded border p-3 text-sm" role="alert" data-testid="canvas-error">
-          {canvasError}
-        </div>
-      {:else if missingAddress !== null}
-        <div
-          class="skr-error m-4 max-w-2xl rounded border p-4 text-sm"
-          role="alert"
-          data-testid="note-not-found"
-        >
-          <h2 class="m-0 text-base font-semibold">{STRINGS.noteNotFoundTitle}</h2>
-          <p class="my-2">{STRINGS.noteNotFoundPrefix}</p>
-          <p class="my-2 font-mono">{missingAddress.path}</p>
-          {#if navigationSurface === "browser"}
-            <p class="mb-0">{STRINGS.noteNotFoundBrowser}</p>
-          {:else}
-            <p>{STRINGS.noteNotFoundDesktop}</p>
-            <button
-              type="button"
-              class="skr-control rounded border px-2 py-1"
-              onclick={refreshMissingNote}
-            >
-              {STRINGS.noteNotFoundRefresh}
-            </button>
-          {/if}
-        </div>
-      {:else if note !== null}
-        <Editor
-          bind:this={editor}
-          {note}
-          {vault}
-          path={selectedPath}
-          {linkContext}
-          {propertyTypes}
-          taskStatuses={settingsState.document.task_statuses}
-          {registry}
-          {commandContext}
-          settings={settingsState.document}
-          {sourceMode}
-          {historyViewState}
-          {onConflict}
-          {onWriteError}
-          onDocChanged={onEditorDocChanged}
-          onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
-          onSaved={() => void refreshTagCatalog()}
-          {wikilinkNavigationOptions}
-          {tagAffordanceOptions}
-        />
-      {:else if vault !== null}
-        <!-- The scaffold fixture stays as the empty-state view. -->
-        <Editor
-          bind:this={editor}
-          doc={M0_FIXTURE}
-          taskStatuses={settingsState.document.task_statuses}
-          {registry}
-          {commandContext}
-          settings={settingsState.document}
-          onDocChanged={onEditorDocChanged}
-          onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
-          onSaved={() => void refreshTagCatalog()}
-          {wikilinkNavigationOptions}
-          {tagAffordanceOptions}
-        />
-      {:else}
+    <div class="skr-workspace" bind:this={workspaceHost}>
+      {#if vault === null}
         <div class="skr-empty-vault">
           <button
             type="button"
@@ -1949,23 +2794,239 @@ onMount(() => {
           </button>
           <p class="sr-only">{STRINGS.emptyStateHint}</p>
         </div>
+      {:else}
+        {#each workspace.panes as pane, paneIndex (pane.id)}
+          {#if paneIndex === 1}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <div
+              class="skr-split-divider"
+              class:skr-split-divider-dragging={splitDragging}
+              role="separator"
+              aria-label={STRINGS.paneResize}
+              aria-orientation="vertical"
+              aria-valuemin="20"
+              aria-valuemax="80"
+              aria-valuenow={Math.round(workspace.splitRatio * 100)}
+              tabindex="0"
+              onpointerdown={beginSplitResize}
+              ondblclick={() => (workspace.splitRatio = 0.5)}
+              onkeydown={resizeSplitWithKeyboard}
+            ></div>
+          {/if}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <section
+            class="skr-editor-pane"
+            class:skr-editor-pane-focused={pane.id === workspace.focusedPaneId}
+            style={workspace.panes.length === 2
+              ? `flex-basis: ${(paneIndex === 0 ? workspace.splitRatio : 1 - workspace.splitRatio) * 100}%`
+              : undefined}
+            data-pane-id={pane.id}
+            aria-label={`${STRINGS.editorPane} ${paneIndex + 1}`}
+            onfocusin={() => void focusWorkspacePane(pane.id)}
+            onpointerdown={() => void focusWorkspacePane(pane.id)}
+            ondragover={(event) => {
+              if (
+                event.dataTransfer?.types.includes(
+                  "application/x-skribeum-tree-path",
+                )
+              ) {
+                event.preventDefault();
+                splitDropPaneId = null;
+                return;
+              }
+              if (workspace.panes.length !== 1) return;
+              const bounds = event.currentTarget.getBoundingClientRect();
+              if (event.clientX >= bounds.left + (bounds.width * 2) / 3) {
+                event.preventDefault();
+                splitDropPaneId = pane.id;
+              } else {
+                splitDropPaneId = null;
+              }
+            }}
+            ondragleave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                splitDropPaneId = null;
+              }
+            }}
+            ondrop={(event) => {
+              const treePath = event.dataTransfer?.getData(
+                "application/x-skribeum-tree-path",
+              );
+              if (treePath) {
+                event.preventDefault();
+                void (async () => {
+                  await focusWorkspacePane(pane.id);
+                  await navigateToNote(treePath);
+                })();
+              } else {
+                const tabPath = event.dataTransfer?.getData(
+                  "application/x-skribeum-tab",
+                );
+                if (tabPath && splitDropPaneId === pane.id) {
+                  event.preventDefault();
+                  void splitWorkspaceTab(tabPath);
+                }
+              }
+              splitDropPaneId = null;
+            }}
+          >
+            <TabStrip
+              tabs={pane.tabs}
+              activePath={pane.activePath}
+              titleSources={treeTitleSources}
+              focused={pane.id === workspace.focusedPaneId}
+              closeTooltip={tooltipForCommand("tab.close", STRINGS.closeTab)}
+              onActivate={(path) => {
+                void focusWorkspacePane(pane.id).then(() => activateWorkspaceTab(path));
+              }}
+              onClose={(path) => {
+                void focusWorkspacePane(pane.id).then(() => closeWorkspaceTab(path));
+              }}
+              onReorder={(from, to) => {
+                if (pane.id === workspace.focusedPaneId) reorderWorkspaceTabs(from, to);
+              }}
+            />
+            <div
+              class="skr-pane-content"
+              use:captureContentHost={pane.id}
+              tabindex="-1"
+              data-testid="reading-surface"
+              data-note-path={pane.id === workspace.focusedPaneId ? selectedPath : pane.activePath}
+            >
+              {#if pane.id !== workspace.focusedPaneId && pane.activePath !== null}
+                <div class="skr-unfocused-note">
+                  <ReadOnlyNote
+                    source={treeTitleSources[pane.activePath] ?? ""}
+                    label={STRINGS.editorLabel}
+                    context={{ ...(linkContext ?? EMPTY_WIKILINK_CONTEXT), currentPath: pane.activePath }}
+                    taskStatuses={settingsState.document.task_statuses}
+                  />
+                </div>
+              {:else if contentView === VIEW_CANVAS && canvas !== null}
+                <CanvasView
+                  bind:this={canvasViewer}
+                  {canvas}
+                  previews={canvasPreviews}
+                  {linkContext}
+                  taskStatuses={settingsState.document.task_statuses}
+                />
+              {:else if contentView === VIEW_CANVAS && canvasError !== null}
+                <div class="skr-error m-4 rounded border p-3 text-sm" role="alert" data-testid="canvas-error">
+                  {canvasError}
+                </div>
+              {:else if missingAddress !== null}
+                <div
+                  class="skr-error m-4 max-w-2xl rounded border p-4 text-sm"
+                  role="alert"
+                  data-testid="note-not-found"
+                >
+                  <h2 class="m-0 text-base font-semibold">{STRINGS.noteNotFoundTitle}</h2>
+                  <p class="my-2">{STRINGS.noteNotFoundPrefix}</p>
+                  <p class="my-2 font-mono">{missingAddress.path}</p>
+                  {#if navigationSurface === "browser"}
+                    <p class="mb-0">{STRINGS.noteNotFoundBrowser}</p>
+                  {:else}
+                    <p>{STRINGS.noteNotFoundDesktop}</p>
+                    <button
+                      type="button"
+                      class="skr-control rounded border px-2 py-1"
+                      onclick={refreshMissingNote}
+                    >
+                      {STRINGS.noteNotFoundRefresh}
+                    </button>
+                  {/if}
+                </div>
+              {:else if note !== null}
+                <Editor
+                  bind:this={editor}
+                  {note}
+                  {vault}
+                  path={selectedPath}
+                  {linkContext}
+                  {propertyTypes}
+                  taskStatuses={settingsState.document.task_statuses}
+                  {registry}
+                  {commandContext}
+                  settings={settingsState.document}
+                  {sourceMode}
+                  {historyViewState}
+                  {onConflict}
+                  {onWriteError}
+                  onDocChanged={onEditorDocChanged}
+                  onDirtyChanged={(dirty) => onEditorDirtyChanged(pane.id, pane.activePath, dirty)}
+                  onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
+                  onSaved={() => void refreshTagCatalog()}
+                  {wikilinkNavigationOptions}
+                  {tagAffordanceOptions}
+                />
+              {:else}
+                <Editor
+                  bind:this={editor}
+                  doc={M0_FIXTURE}
+                  taskStatuses={settingsState.document.task_statuses}
+                  {registry}
+                  {commandContext}
+                  settings={settingsState.document}
+                  onDocChanged={onEditorDocChanged}
+                  onDirtyChanged={(dirty) => onEditorDirtyChanged(pane.id, pane.activePath, dirty)}
+                  onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
+                  onSaved={() => void refreshTagCatalog()}
+                  {wikilinkNavigationOptions}
+                  {tagAffordanceOptions}
+                />
+              {/if}
+            </div>
+            {#if splitDropPaneId === pane.id}
+              <div class="skr-pane-split-target" aria-hidden="true"></div>
+            {/if}
+          </section>
+        {/each}
       {/if}
-    </section>
-    <aside
-      class="skr-panel skr-desktop-outline shrink-0 overflow-hidden"
-      class:skr-desktop-outline-open={outlineOpen}
-      aria-hidden={!outlineOpen}
-      inert={!outlineOpen}
-      data-testid="desktop-outline-panel"
-    >
-      {#if outlineOpen}
-        <OutlinePanel
-          entries={outlineEntries}
-          onNavigate={outlineNavigate}
-          onCopyHeading={copyOutlineHeading}
+    </div>
+    {#if vault !== null}
+      <div
+        class="skr-panel skr-desktop-outline skr-panel-motion"
+        data-testid="desktop-outline-panel"
+        style={`width: ${outlineOpen ? workspace.outlineWidthRem : 0}rem`}
+      >
+        {#if outlineOpen}
+        <PanelDivider
+          value={workspace.outlineWidthRem}
+          minimum={OUTLINE_MIN_REM}
+          maximum={OUTLINE_MAX_REM}
+          defaultValue={OUTLINE_DEFAULT_REM}
+          edge="left"
+          label={STRINGS.outlineResize}
+          onResize={(value) => (workspace.outlineWidthRem = value)}
+          onCollapse={() => togglePanel("outline")}
         />
-      {/if}
-    </aside>
+        <section class="skr-outline-content" aria-label={STRINGS.outlineLabel}>
+          <div class="skr-outline-header">
+            <span>{STRINGS.outlineLabel}</span>
+            <button
+              type="button"
+              data-command-id="panel.outline.toggle"
+              aria-label={STRINGS.collapseOutline}
+              use:commandTooltip={tooltipForCommand("panel.outline.toggle", STRINGS.collapseOutline)}
+              onclick={() => registry.run("panel.outline.toggle", commandContext())}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M2.5 3.5h11v9h-11zM9 3.5v9m2-6 2 2-2 2" />
+              </svg>
+            </button>
+          </div>
+          <div class="skr-outline-body">
+            <OutlinePanel
+              entries={outlineEntries}
+              onNavigate={outlineNavigate}
+              onCopyHeading={copyOutlineHeading}
+            />
+          </div>
+        </section>
+        {/if}
+      </div>
+    {/if}
   </main>
 </div>
 
@@ -1974,7 +3035,14 @@ onMount(() => {
     <FileTree
       entries={tree}
       {selectedPath}
+      titleSources={treeTitleSources}
+      expandedPaths={workspace.expandedFolders}
+      onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
+      onSelectionChange={(path) => (workspace.selectedPath = path)}
       onOpenPath={openPath}
+      {registry}
+      {commandContext}
+      desktop={hasDesktopRuntime()}
       touchMode={true}
     />
   </Sheet>

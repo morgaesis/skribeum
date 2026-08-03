@@ -14,7 +14,14 @@ import type {
   TreeEntry,
   VaultHandle,
 } from "./bindings";
-import { readNote, vaultTree } from "./vault";
+import {
+  readNote,
+  treeEntryDelete,
+  treeEntryMove,
+  treeEntryReveal,
+  treeFolderCreate,
+  vaultTree,
+} from "./vault";
 
 export type SearchResult = SearchHit;
 export type TagCatalogEntry = TagFrequency;
@@ -606,6 +613,8 @@ export async function vaultTreeRefresh(
 export async function openSystemUrl(url: string): Promise<void> {
   globalThis.open(url, "_blank", "noopener");
 }
+
+export { treeEntryDelete, treeEntryMove, treeEntryReveal, treeFolderCreate };
 
 export function byteRangesToCharRanges(
   text: string,

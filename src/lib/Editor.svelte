@@ -88,6 +88,7 @@ let {
   onConflict,
   onWriteError,
   onDocChanged,
+  onDirtyChanged,
   onTitleVisibilityChange,
   onSaved,
   wikilinkNavigationOptions,
@@ -118,6 +119,8 @@ let {
   onWriteError?: (message: string) => void;
   /** Notified after any document-changing transaction (outline refresh). */
   onDocChanged?: (source: string, path: string | null) => void;
+  /** Reports whether the note has pending or in-flight local edits. */
+  onDirtyChanged?: (dirty: boolean) => void;
   /** Reports whether the shell title should be visible for this document. */
   onTitleVisibilityChange?: (visible: boolean) => void;
   /** Notified after pending edits are written and indexed. */
@@ -445,6 +448,10 @@ function scheduleIdleSave() {
   }, settings.autosave_delay_ms);
 }
 
+function notifyDirty() {
+  onDirtyChanged?.(session?.dirty === true || session?.saving === true);
+}
+
 function dispatchTransactions(
   transactions: readonly Transaction[],
   target: EditorView,
@@ -459,6 +466,7 @@ function dispatchTransactions(
       continue;
     }
     session?.recordLocalChanges(transaction.changes);
+    notifyDirty();
     scheduleIdleSave();
   }
   if (transactions.some((transaction) => transaction.docChanged)) {
@@ -591,6 +599,7 @@ async function performSave(): Promise<boolean> {
   let request: ReturnType<NoteSession["beginSave"]>;
   try {
     request = session.beginSave();
+    notifyDirty();
   } catch (error) {
     // A conversion failure means the session state diverged from the
     // document; recover by re-reading the note.
@@ -611,6 +620,7 @@ async function performSave(): Promise<boolean> {
     if (result.result === "written") {
       try {
         session.commitSave(result.projection_hash);
+        notifyDirty();
         onSaved?.();
       } catch {
         await rereadAndReconcile();
@@ -620,12 +630,14 @@ async function performSave(): Promise<boolean> {
       // The on-disk projection moved: never overwrite. Roll the save
       // back, surface the reconciliation state and re-read.
       session.rollbackSave();
+      notifyDirty();
       onConflict?.();
       await rereadAndReconcile();
       return false;
     }
   } catch (error) {
     session.rollbackSave();
+    notifyDirty();
     onWriteError?.(
       error instanceof IpcError ? error.app.message : String(error),
     );
@@ -787,6 +799,7 @@ function initializeForNote(current: LoadedNote | null) {
     historyViewState?.propertiesExpanded ?? defaultPropertiesExpanded();
   if (current === null) {
     session = null;
+    notifyDirty();
     replaceEditorState(doc, false);
     applyLinkContext();
     refreshFrontmatter();
@@ -796,6 +809,7 @@ function initializeForNote(current: LoadedNote | null) {
   }
   if (current.readOnly) {
     session = null;
+    notifyDirty();
     replaceEditorState(current.text, true);
     applyLinkContext();
     refreshFrontmatter();
@@ -822,6 +836,7 @@ function initializeForNote(current: LoadedNote | null) {
     }
   }
   replaceEditorState(text, false);
+  notifyDirty();
   applyLinkContext();
   refreshFrontmatter();
   scheduleTitleVisibilityRefresh();

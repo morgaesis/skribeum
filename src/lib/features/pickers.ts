@@ -3,6 +3,7 @@
 
 import { fuzzyMatch, segmentByPositions, type TextSegment } from "../fuzzy";
 import { byteRangesToCharRanges, type SearchResult } from "../ipc/services";
+import { resolveTitleCollisions } from "../noteTitles";
 import type { CommandRegistry } from "../registry";
 import { formatKeybinding } from "../registry";
 import { STRINGS } from "../strings";
@@ -25,6 +26,8 @@ export type PickerItem = {
   titleSegments: TextSegment[];
   /** Optional secondary line (search snippet) as segments. */
   detailSegments?: TextSegment[];
+  /** Muted file-name suffix used to distinguish colliding display titles. */
+  titleSuffix?: string;
   /** Displayed keybinding, when one exists. */
   keybinding?: string;
   /** Prefix hint shown by discovery rows in bare file mode. */
@@ -116,6 +119,7 @@ export function fileItems(
   openPaths: readonly string[],
   query: string,
   limit = 100,
+  titleSources: Readonly<Record<string, string>> = {},
 ): PickerItem[] {
   const known = new Set(paths);
   const open = [...new Set(openPaths)].filter((path) => known.has(path));
@@ -124,17 +128,30 @@ export function fileItems(
   );
   const reserved = new Set([...open, ...recent]);
   const vault = paths.filter((path) => !reserved.has(path));
-  const ranked = (candidates: readonly string[], group: string) =>
-    candidates
+  const resolvedTitles = resolveTitleCollisions(
+    paths.map((path) => ({
+      path,
+      source: titleSources[path] ?? "",
+    })),
+  );
+  const titles = new Map(
+    paths.map((path, index) => [path, resolvedTitles[index]]),
+  );
+  const ranked = (candidates: readonly string[], group: string) => {
+    return candidates
       .map((path) => {
-        const name = displayName(path);
+        const title = titles.get(path);
+        const name = title?.displayTitle ?? displayName(path);
         const nameMatch = fuzzyMatch(query, name);
+        const fileNameMatch = fuzzyMatch(query, displayName(path));
         const pathMatch = fuzzyMatch(query, path);
         const match =
-          (nameMatch?.score ?? -1) >= (pathMatch?.score ?? -1)
-            ? nameMatch
-            : pathMatch;
-        return { path, name, nameMatch, match };
+          [nameMatch, fileNameMatch, pathMatch]
+            .filter((candidate) => candidate !== null)
+            .sort(
+              (left, right) => (right?.score ?? -1) - (left?.score ?? -1),
+            )[0] ?? null;
+        return { path, name, nameMatch, match, title };
       })
       .filter((entry) => entry.match !== null)
       .sort(
@@ -142,14 +159,18 @@ export function fileItems(
           (b.match?.score ?? 0) - (a.match?.score ?? 0) ||
           a.path.localeCompare(b.path),
       )
-      .map(({ path, name, nameMatch }) => ({
+      .map(({ path, name, nameMatch, title }) => ({
         id: `file:${path}`,
         value: path,
         kind: "file" as const,
         group,
         titleSegments: segmentByPositions(name, nameMatch?.positions ?? []),
+        ...(title?.collisionSuffix === undefined
+          ? {}
+          : { titleSuffix: title.collisionSuffix }),
         detailSegments: plainSegments(path),
       }));
+  };
   const items: PickerItem[] = [
     ...ranked(open, STRINGS.commandSurfaceOpenNotes),
     ...ranked(recent, STRINGS.commandSurfaceRecent),

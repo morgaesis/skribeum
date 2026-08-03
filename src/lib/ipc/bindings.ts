@@ -26,6 +26,14 @@ export const commands = {
 	 *  the vault, and the in-memory tree and search index update immediately.
 	 */
 	noteCreate: (handle: VaultHandle, relPath: string) => typedError<null, AppError>(__TAURI_INVOKE("note_create", { handle, relPath })),
+	/**  Creates a folder inside an open vault and returns the refreshed tree. */
+	treeFolderCreate: (handle: VaultHandle, relPath: string) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("tree_folder_create", { handle, relPath })),
+	/**  Moves or renames one vault entry without replacing an existing entry. */
+	treeEntryMove: (handle: VaultHandle, fromPath: string, toPath: string) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("tree_entry_move", { handle, fromPath, toPath })),
+	/**  Deletes one vault entry and returns the refreshed tree. */
+	treeEntryDelete: (handle: VaultHandle, relPath: string) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("tree_entry_delete", { handle, relPath })),
+	/**  Reveals one indexed entry in the operating system file manager. */
+	treeEntryReveal: (handle: VaultHandle, relPath: string) => typedError<null, AppError>(__TAURI_INVOKE("tree_entry_reveal", { handle, relPath })),
 	/**
 	 *  Reads a note. Metadata returns as JSON; the note bytes are sent over
 	 *  `content` as a single raw-payload message (an `ArrayBuffer` in the

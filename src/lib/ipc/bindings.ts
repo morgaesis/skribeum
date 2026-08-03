@@ -47,6 +47,14 @@ export const commands = {
 	 *  after it.
 	 */
 	noteWrite: (handle: VaultHandle, relPath: string, changeSet: ByteRangeReplace[], expectedProjectionHash: string) => typedError<WriteResult, AppError>(__TAURI_INVOKE("note_write", { handle, relPath, changeSet, expectedProjectionHash })),
+	/**  Reads one note's reachable persistent undo and redo stacks. */
+	editHistoryRead: (handle: VaultHandle, relPath: string) => typedError<EditHistorySnapshot, AppError>(__TAURI_INVOKE("edit_history_read", { handle, relPath })),
+	/**  Appends and fsyncs a batch before the note save it describes begins. */
+	editHistoryAppend: (handle: VaultHandle, relPath: string, batch: string, actions: EditHistoryAction[]) => typedError<null, AppError>(__TAURI_INVOKE("edit_history_append", { handle, relPath, batch, actions })),
+	/**  Appends an external-ingest fence for one note. */
+	editHistoryFence: (handle: VaultHandle, relPath: string, batch: string) => typedError<null, AppError>(__TAURI_INVOKE("edit_history_fence", { handle, relPath, batch })),
+	/**  Physically removes one note's persisted edit history. */
+	editHistoryClear: (handle: VaultHandle, relPath: string) => typedError<null, AppError>(__TAURI_INVOKE("edit_history_clear", { handle, relPath })),
 	/**
 	 *  Subscribes to change events under an open vault. Events arrive as the
 	 *  `VaultChanged` event stream; a second subscription for the same handle is
@@ -169,6 +177,75 @@ export type ByteRangeReplace = {
 	end: number,
 	/**  Replacement bytes. */
 	bytes: number[],
+};
+
+/**  One logical persistent undo-stack mutation. */
+export type EditHistoryAction =
+/**  Adds one transaction and clears the redo branch. */
+{ kind: "entry"; entry: EditHistoryEntry } |
+/**  Moves applied transactions onto the redo stack. */
+{ kind: "undo"; count: number } |
+/**  Moves redo transactions back onto the undo stack. */
+{ kind: "redo"; count: number } |
+/**  Makes every older transaction unreachable. */
+{ kind: "fence" };
+
+/**  One UTF-16 text replacement in a persisted editor transaction. */
+export type EditHistoryChange = {
+	/**  Inclusive UTF-16 offset in the starting document. */
+	from: number,
+	/**  Exclusive UTF-16 offset in the starting document. */
+	to: number,
+	/**  Replacement text. */
+	insert: string,
+};
+
+/**  One reversible editor transaction over typed IPC. */
+export type EditHistoryEntry = {
+	/**  Forward changes from the before state to the after state. */
+	changes: EditHistoryChange[],
+	/**  Inverse changes from the after state to the before state. */
+	inverse: EditHistoryChange[],
+	/**  Selection before the transaction. */
+	selection_before: EditHistorySelection,
+	/**  Selection after the transaction. */
+	selection_after: EditHistorySelection,
+	/**  Required state before applying the forward changes. */
+	before: EditHistoryStateCheck,
+	/**  Required state before applying the inverse changes. */
+	after: EditHistoryStateCheck,
+};
+
+/**  One anchor and head pair in a persisted selection. */
+export type EditHistoryRange = {
+	/**  Selection anchor as a UTF-16 offset. */
+	anchor: number,
+	/**  Selection head as a UTF-16 offset. */
+	head: number,
+};
+
+/**  A complete persisted selection, including its main range. */
+export type EditHistorySelection = {
+	/**  Every selection range. */
+	ranges: EditHistoryRange[],
+	/**  Index of the main range. */
+	main: number,
+};
+
+/**  The reachable edit history for one note. */
+export type EditHistorySnapshot = {
+	/**  Applied entries, oldest first. */
+	undo: EditHistoryEntry[],
+	/**  Undone entries, with the next redo at the end. */
+	redo: EditHistoryEntry[],
+};
+
+/**  The document identity required before replaying a history direction. */
+export type EditHistoryStateCheck = {
+	/**  Document length in UTF-16 code units. */
+	length: number,
+	/**  Lowercase SHA-256 over the UTF-8 editor projection. */
+	projection_hash: string,
 };
 
 /**  An indexed note disappeared from disk. */

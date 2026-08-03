@@ -5,10 +5,15 @@
 // accepts both shapes and reassembles a typed result.
 
 import { Channel } from "@tauri-apps/api/core";
+import type {
+  EditHistoryAction as EditorHistoryAction,
+  EditHistorySnapshot as EditorHistorySnapshot,
+} from "../editor/durableHistory";
 import {
   type AppError,
   type ByteRangeReplace,
   commands,
+  type EditHistoryAction,
   type NoteContent,
   type TreeEntry,
   type VaultHandle,
@@ -36,6 +41,48 @@ export class IpcError extends Error {
     super(`${app.code}: ${app.message}`);
     this.app = app;
   }
+}
+
+/** Reads one note's durable undo and redo stacks. */
+export async function editHistoryRead(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<EditorHistorySnapshot> {
+  return unwrap(await commands.editHistoryRead(handle, relPath));
+}
+
+/** Appends and fsyncs a history batch before its note save begins. */
+export async function editHistoryAppend(
+  handle: VaultHandle,
+  relPath: string,
+  batch: string,
+  actions: EditorHistoryAction[],
+): Promise<void> {
+  unwrap(
+    await commands.editHistoryAppend(
+      handle,
+      relPath,
+      batch,
+      actions as EditHistoryAction[],
+    ),
+  );
+}
+
+/** Makes every older history entry unreachable after an external ingest. */
+export async function editHistoryFence(
+  handle: VaultHandle,
+  relPath: string,
+  batch: string,
+): Promise<void> {
+  unwrap(await commands.editHistoryFence(handle, relPath, batch));
+}
+
+/** Physically removes one note's durable edit history. */
+export async function editHistoryClear(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<void> {
+  unwrap(await commands.editHistoryClear(handle, relPath));
 }
 
 /** Unwraps a generated-binding result, normalizing errors to `IpcError`. */

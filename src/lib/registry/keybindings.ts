@@ -12,6 +12,11 @@ import { taskEditing } from "../editor/taskEditing";
 import type { CommandRegistry } from "./registry";
 import type { CommandContext } from "./types";
 
+export type HistoryCommands = {
+  undo(view: EditorView): boolean;
+  redo(view: EditorView): boolean;
+};
+
 /** A parsed binding: one key plus modifier requirements. */
 export type ParsedKeybinding = {
   /** The `KeyboardEvent.key` value, lowercased for letters. */
@@ -143,6 +148,7 @@ export function globalKeydownHandler(
 export function editorKeymap(
   registry: CommandRegistry,
   contextProvider: () => CommandContext,
+  historyCommands?: HistoryCommands,
 ): Extension {
   const bindings: KeyBinding[] = registry
     .boundCommands("editor")
@@ -153,8 +159,34 @@ export function editorKeymap(
           registry.run(command.id, { ...contextProvider(), view }),
       })),
     );
+  const persistentHistoryBindings: KeyBinding[] =
+    historyCommands === undefined
+      ? []
+      : [
+          {
+            key: "Mod-z",
+            run: historyCommands.undo,
+            preventDefault: true,
+          },
+          {
+            key: "Mod-y",
+            mac: "Mod-Shift-z",
+            run: historyCommands.redo,
+            preventDefault: true,
+          },
+          {
+            linux: "Ctrl-Shift-z",
+            run: historyCommands.redo,
+            preventDefault: true,
+          },
+        ];
   return [
     taskEditing,
-    keymap.of([...bindings, ...defaultKeymap, ...historyKeymap]),
+    keymap.of([
+      ...bindings,
+      ...persistentHistoryBindings,
+      ...defaultKeymap,
+      ...historyKeymap,
+    ]),
   ];
 }

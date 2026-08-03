@@ -66,6 +66,27 @@ the monospace face. A Source chip in the title region is the mode indicator.
 The Syntax reveal setting remains independent and controls caret-based marker
 reveal only in the normal reading presentation.
 
+Undo and redo continue across note switches and desktop application restarts.
+`mod+z` reaches into prior sessions when the current CodeMirror history is
+exhausted, and `mod+shift+z` or the platform redo chord moves forward again.
+Each step restores its recorded selection. An external file edit ends older
+reachable history, and a document-state mismatch stops replay without changing
+the note. `Note: clear edit history` in the command palette removes the active
+note's persisted history after confirmation. The browser demo keeps undo and
+redo only for the current page session because its seeded vault and folder
+handles have no stable identity across reloads.
+
+## Local data and privacy
+
+Desktop edit history is device-local application data in
+`edit-history.jsonl`, outside every vault. It can contain text that no longer
+appears in the note, including deleted text. Each note retains at most 2,000
+transactions and 8 MiB of serialized history, trimming the oldest entries
+first. Deleting a note garbage-collects its history, and the
+`Note: clear edit history` command removes it deliberately without changing the
+note file. The journal is never synced through the vault by Syncthing, git,
+Drive, or another vault-level tool.
+
 ## Tables
 
 Tables remain rendered while the document caret moves through the note. Click

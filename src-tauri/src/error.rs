@@ -4,7 +4,9 @@
 //! content.
 
 use serde::Serialize;
-use skribeum_vault::{FsError, SearchError, SettingsError, VaultError, VaultPathError};
+use skribeum_vault::{
+    EditHistoryError, FsError, SearchError, SettingsError, VaultError, VaultPathError,
+};
 
 /// The one error shape that crosses IPC.
 #[derive(Debug, Clone, Serialize, specta::Type)]
@@ -58,6 +60,16 @@ impl AppError {
         Self {
             code: "settings/unavailable",
             message: "the settings directory could not be resolved".to_owned(),
+            path: None,
+        }
+    }
+
+    /// An error for an unavailable application-data history location.
+    #[must_use]
+    pub fn edit_history_unavailable() -> Self {
+        Self {
+            code: "edit-history/unavailable",
+            message: "the edit-history directory could not be resolved".to_owned(),
             path: None,
         }
     }
@@ -167,6 +179,20 @@ impl From<SettingsError> for AppError {
     }
 }
 
+impl From<EditHistoryError> for AppError {
+    fn from(error: EditHistoryError) -> Self {
+        let code = match &error {
+            EditHistoryError::Fs(fs) => fs_code(fs),
+            EditHistoryError::Serialize => "edit-history/serialize",
+        };
+        Self {
+            code,
+            message: error.to_string(),
+            path: None,
+        }
+    }
+}
+
 impl From<VaultPathError> for AppError {
     fn from(error: VaultPathError) -> Self {
         Self {
@@ -236,6 +262,11 @@ mod tests {
             ),
             (SettingsError::Fs(FsError::NoSpace).into(), "fs/no-space"),
             (AppError::settings_unavailable(), "settings/unavailable"),
+            (
+                AppError::edit_history_unavailable(),
+                "edit-history/unavailable",
+            ),
+            (EditHistoryError::Serialize.into(), "edit-history/serialize"),
             (AppError::update_failed("offline"), "update/check"),
             (AppError::open_file_invalid(), "open-file/invalid"),
             (AppError::window_failed("window"), "window/operation"),

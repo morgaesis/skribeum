@@ -74,7 +74,7 @@ fn plugin_commands_are_deliberate_and_capability_scoped() {
         serde_json::from_slice(&allowlist_bytes).expect("ipc-allowlist.json parses");
     assert_eq!(
         allowlist.plugin_commands,
-        ["plugin:opener|open_url"],
+        ["plugin:dialog|confirm", "plugin:opener|open_url"],
         "the plugin IPC surface is an exact reviewed allowlist"
     );
 
@@ -97,6 +97,12 @@ fn plugin_commands_are_deliberate_and_capability_scoped() {
             { "url": "https://*" }
         ]),
         "the opener capability must allow only HTTP and HTTPS URLs"
+    );
+    assert!(
+        permissions
+            .iter()
+            .any(|permission| permission == "dialog:allow-confirm"),
+        "the clear-history confirmation has a scoped dialog capability"
     );
 }
 

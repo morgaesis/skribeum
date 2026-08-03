@@ -82,6 +82,8 @@ export function keybindingMatches(
   );
 }
 
+const macRedoKeybinding = parseKeybinding("Mod-Shift-z");
+
 /** Renders a binding for display (`"Ctrl+Shift+P"`, `"⌘⇧P"` on macOS). */
 export function formatKeybinding(
   binding: string,
@@ -163,6 +165,11 @@ export function editorKeymap(
     historyCommands === undefined
       ? []
       : [
+          {
+            any: (view, event) =>
+              keybindingMatches(macRedoKeybinding, event, true) &&
+              historyCommands.redo(view),
+          },
           {
             key: "Mod-y",
             mac: "Mod-Shift-z",

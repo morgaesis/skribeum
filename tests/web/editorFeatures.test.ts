@@ -216,6 +216,44 @@ afterEach(() => {
   followLinkCalls = 0;
 });
 
+describe("persistent history keymap", () => {
+  it("routes the macOS redo chord before the unshifted undo fallback", () => {
+    let undoCalls = 0;
+    let redoCalls = 0;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "edited",
+        extensions: [
+          editorKeymap(registry, context, {
+            undo: () => {
+              undoCalls += 1;
+              return true;
+            },
+            redo: () => {
+              redoCalls += 1;
+              return true;
+            },
+          }),
+        ],
+      }),
+      parent: document.body,
+    });
+    activeView = view;
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      code: "KeyZ",
+      key: "z",
+      metaKey: true,
+      shiftKey: true,
+    });
+
+    expect(view.contentDOM.dispatchEvent(event)).toBe(false);
+    expect(redoCalls).toBe(1);
+    expect(undoCalls).toBe(0);
+  });
+});
+
 describe("bulk text input", () => {
   it("applies a large multi-line insertion as one editor transaction", () => {
     const transactions: string[] = [];

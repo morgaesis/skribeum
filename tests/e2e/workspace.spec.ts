@@ -90,24 +90,41 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     expect(
       await header.$('[data-command-id="panel.sidebar.toggle"]').isDisplayed(),
     ).toBe(true);
-    await browser.execute(
-      (element) => {
-        const headerElement = element as HTMLElement;
-        headerElement.dispatchEvent(
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>(".skr-sidebar-header")
+        ?.dispatchEvent(
           new PointerEvent("pointerleave", { bubbles: false, pointerId: 23 }),
         );
-        headerElement
-          .querySelector<HTMLElement>('[data-command-id="note.create"]')
-          ?.focus();
-      },
-      await header.getElement(),
-    );
+    });
     await browser.waitUntil(
-      async () =>
+      () =>
         browser.execute(
-          (element) => getComputedStyle(element as Element).opacity === "1",
-          await header.$(".skr-sidebar-header-actions").getElement(),
+          () =>
+            !document
+              .querySelector(".skr-desktop-sidebar")
+              ?.classList.contains("skr-sidebar-header-hovered"),
         ),
+      { timeoutMsg: "sidebar header hover state did not clear" },
+    );
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>(
+          '.skr-sidebar-header [data-command-id="note.create"]',
+        )
+        ?.focus();
+    });
+    await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          const actions = document.querySelector(".skr-sidebar-header-actions");
+          return (
+            document.activeElement?.getAttribute("data-command-id") ===
+              "note.create" &&
+            actions !== null &&
+            getComputedStyle(actions).opacity === "1"
+          );
+        }),
       { timeoutMsg: "sidebar header controls did not reveal on focus" },
     );
     const tooltip = $(".skr-command-tooltip");

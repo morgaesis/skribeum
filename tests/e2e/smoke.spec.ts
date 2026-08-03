@@ -3605,12 +3605,11 @@ describe("skribeum shell", () => {
       ).__SKRIBEUM_E2E_SET_SELECTION__?.(0);
     });
     expect(movedToStart).toBe(true);
-    await browser.waitUntil(
-      async () => (await editorText()).includes("Navigation source"),
-      { timeout: 15000, timeoutMsg: "tag source did not scroll into view" },
-    );
     const tag = $(".skr-editor-pane-focused .cm-skr-tag");
-    await tag.waitForExist({ timeout: 15000 });
+    await tag.waitForDisplayed({
+      timeout: 15000,
+      timeoutMsg: "tag source did not scroll into view",
+    });
     await tag.click();
 
     const input = $('[role="combobox"]');

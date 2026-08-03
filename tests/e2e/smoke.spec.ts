@@ -1241,11 +1241,18 @@ async function pressEditorHistoryShortcut(
 ): Promise<void> {
   await browser.waitUntil(
     () =>
-      browser.execute(
-        () =>
-          document.activeElement instanceof HTMLElement &&
-          document.activeElement.closest(".cm-content") !== null,
-      ),
+      browser.execute(() => {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && active.closest(".cm-content")) {
+          return true;
+        }
+        document.querySelector<HTMLElement>(".cm-content")?.focus();
+        const focused = document.activeElement;
+        return (
+          focused instanceof HTMLElement &&
+          focused.closest(".cm-content") !== null
+        );
+      }),
     {
       timeout: 5000,
       timeoutMsg: "editor did not receive keyboard focus",

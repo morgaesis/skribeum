@@ -183,6 +183,7 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
     border-right: 1.5px solid var(--skr-text-muted);
     border-bottom: 1.5px solid var(--skr-text-muted);
     transform: rotate(-45deg);
+    transition: none;
   }
 
   .skr-properties-toggle[aria-expanded="true"] .skr-properties-chevron {
@@ -215,6 +216,8 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
   .skr-properties-reveal {
     display: grid;
     grid-template-rows: 0fr;
+    transition: grid-template-rows var(--skr-motion-panel-duration)
+      var(--skr-motion-panel-easing);
   }
 
   .skr-properties-reveal.expanded {
@@ -286,14 +289,11 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
     width: 8rem;
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .skr-properties-chevron,
-    .skr-properties-reveal {
-      transition: none;
-    }
-  }
-
   @media (max-width: 60rem) {
+    .skr-properties-reveal {
+      transition-duration: 0ms;
+    }
+
     .skr-properties-toggle,
     input {
       min-height: 2.75rem;

@@ -53,9 +53,15 @@
     ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, "JetBrains Mono",
     "Noto Sans Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
   --skr-gutter: clamp(1.5rem, 4vw, 3rem);
-  --skr-motion-duration: 49ms;
-  --skr-motion-easing: linear;
+  --skr-motion-state-duration: 50ms;
+  --skr-motion-state-easing: linear;
+  --skr-motion-surface-duration: 120ms;
+  --skr-motion-surface-easing: cubic-bezier(0.2, 0, 0, 1);
+  --skr-motion-panel-duration: 160ms;
+  --skr-motion-panel-easing: cubic-bezier(0.2, 0, 0, 1);
   --skr-motion-distance: 0.25rem;
+  --skr-hover-intent-delay: 450ms;
+  --skr-loading-pulse-duration: 1.2s;
   --skr-preview-manuscript-surface: #fffdf8;
   --skr-preview-manuscript-text: #2a2418;
   --skr-preview-manuscript-accent: #8c3a2b;

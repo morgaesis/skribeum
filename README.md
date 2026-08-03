@@ -132,7 +132,10 @@ a card applies and pins its appearance. Match system appearance follows the
 operating system between the last chosen light and dark palettes. Slider
 readouts accept typed values for font size, line spacing and text column width,
 and Mermaid diagrams use the active palette. Appearance also controls prose and
-code font stacks and motion. Editor settings cover autosave, spell checking,
+code font stacks and motion. Motion uses fast state confirmation, brief
+compositor-only surface entrances, and bounded panel toggles. Disabling
+animations or requesting reduced motion makes these classes instant and stops
+loading pulses. Editor settings cover autosave, spell checking,
 indentation, wrapping, line numbers, visible whitespace, Markdown source
 reveal, link previews and configurable task tracks, statuses, and payloads.
 Files and vault settings control

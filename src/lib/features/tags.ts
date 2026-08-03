@@ -19,6 +19,7 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 import { fuzzyMatch } from "../fuzzy";
+import { enterMotionSurface } from "../motion";
 import type { CommandRegistry } from "../registry";
 import { STRINGS } from "../strings";
 
@@ -373,6 +374,7 @@ function tagTooltip(open: TagMenuState): Tooltip {
     create: (view) => {
       const dom = document.createElement("ul");
       dom.className = "cm-skr-tag-menu";
+      dom.dataset.motionSurface = "anchored-top";
       dom.setAttribute("role", "listbox");
       dom.setAttribute("aria-label", STRINGS.tagMenuLabel);
       const render = (state: EditorState) => {
@@ -412,6 +414,7 @@ function tagTooltip(open: TagMenuState): Tooltip {
         }
       };
       render(view.state);
+      enterMotionSurface(dom);
       return {
         dom,
         update: (update) => render(update.state),

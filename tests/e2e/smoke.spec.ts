@@ -20,7 +20,6 @@ import {
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
-  MOTION_PREVIEW_NOTE_NAME,
   NAVIGATION_SOURCE_NOTE_CONTENT,
   NAVIGATION_SOURCE_NOTE_NAME,
   NAVIGATION_TARGET_NOTE_CONTENT,
@@ -116,7 +115,43 @@ async function openNoteFromTree(name: string) {
   await row.click();
 }
 
+async function waitForSurfaceEntrance(selector: string) {
+  await browser.waitUntil(
+    () =>
+      browser.execute((targetSelector) => {
+        const target = document.querySelector<HTMLElement>(targetSelector);
+        if (target === null) return false;
+        const style = getComputedStyle(target);
+        return (
+          target.dataset.motionEntered === "true" &&
+          style.opacity === "1" &&
+          style.transform === "none"
+        );
+      }, selector),
+    { timeout: 5000, timeoutMsg: `${selector} entrance did not settle` },
+  );
+}
+
 type ViewportSize = { width: number; height: number };
+
+type TransitionSnapshot = {
+  duration: string;
+  properties: string;
+};
+
+function effectiveTransitionDuration(
+  snapshot: TransitionSnapshot,
+  property: string,
+): string {
+  const properties = snapshot.properties
+    .split(",")
+    .map((value) => value.trim());
+  const durations = snapshot.duration.split(",").map((value) => value.trim());
+  const index = properties.findIndex(
+    (candidate) => candidate === property || candidate === "all",
+  );
+  return index < 0 ? "0s" : (durations[index % durations.length] ?? "0s");
+}
 
 async function viewportAfterPaint(): Promise<ViewportSize> {
   return browser.executeAsync<ViewportSize, []>((done) => {
@@ -1573,12 +1608,15 @@ describe("skribeum shell", () => {
       ]);
       for (const target of await overflowSheet.$$("button:not(:disabled)")) {
         const size = await target.getSize();
-        expect(size.height).toBeGreaterThanOrEqual(44);
+        expect(Math.round(size.height)).toBeGreaterThanOrEqual(44);
       }
 
       await overflowSheet.$('[data-command-id="palette.open"]').click();
       const commandSurface = $('[data-testid="unified-command-surface"]');
       await commandSurface.waitForDisplayed({ timeout: 10000 });
+      await waitForSurfaceEntrance(
+        '[data-testid="unified-command-surface"] .command-surface-dialog',
+      );
       const commandInput = commandSurface.$('[role="combobox"]');
       expect(await commandInput.getValue()).toBe(">");
       expect(await commandInput.getAttribute("data-search-mode")).toBe(
@@ -1687,6 +1725,9 @@ describe("skribeum shell", () => {
       await overflowSheet.$('[data-command-id="quick-switcher.open"]').click();
       const picker = $('[data-testid="unified-command-surface"]');
       await picker.waitForDisplayed({ timeout: 10000 });
+      await waitForSurfaceEntrance(
+        '[data-testid="unified-command-surface"] .command-surface-dialog',
+      );
       let bounds = await browser.execute(() => {
         const dialog = document.querySelector<HTMLElement>(
           '[data-testid="unified-command-surface"] .command-surface-dialog',
@@ -3318,6 +3359,55 @@ describe("skribeum shell", () => {
 
     const back = $('button[aria-label="Back"]');
     await back.waitForEnabled({ timeout: 15000 });
+    await browser.execute(() => {
+      type ArrivalFrame = {
+        contentEditable: string | null;
+        duration: string;
+        panelExpanded: string | null;
+        pointerEvents: string;
+        reducedMotion: boolean;
+        scrollTop: number;
+        visibility: string;
+      };
+      const target = window as Window & {
+        __SKRIBEUM_E2E_ARRIVAL_FRAME__?: ArrivalFrame | null;
+      };
+      target.__SKRIBEUM_E2E_ARRIVAL_FRAME__ = null;
+      const shell = document.querySelector<HTMLElement>(".skr-editor-shell");
+      if (shell === null) throw new Error("editor shell missing");
+      const observer = new MutationObserver(() => {
+        if (
+          shell.dataset.motionPreparing === undefined &&
+          shell.dataset.motionEntered === "true"
+        ) {
+          observer.disconnect();
+          requestAnimationFrame(() => {
+            const editor = document.querySelector<HTMLElement>(".cm-editor");
+            const content = document.querySelector<HTMLElement>(".cm-content");
+            const scroller =
+              document.querySelector<HTMLElement>(".cm-scroller");
+            const panel = document.querySelector<HTMLElement>(
+              ".skr-properties-toggle",
+            );
+            if (editor === null || content === null || scroller === null) {
+              throw new Error("arrival frame incomplete");
+            }
+            const shellStyle = getComputedStyle(shell);
+            target.__SKRIBEUM_E2E_ARRIVAL_FRAME__ = {
+              contentEditable: content.getAttribute("contenteditable"),
+              duration: shellStyle.transitionDuration,
+              panelExpanded: panel?.getAttribute("aria-expanded") ?? null,
+              pointerEvents: shellStyle.pointerEvents,
+              reducedMotion: matchMedia("(prefers-reduced-motion: reduce)")
+                .matches,
+              scrollTop: scroller.scrollTop,
+              visibility: getComputedStyle(editor).visibility,
+            };
+          });
+        }
+      });
+      observer.observe(shell, { attributes: true });
+    });
     await back.click();
     if (savedState === null) throw new Error("source history state missing");
     try {
@@ -3346,6 +3436,44 @@ describe("skribeum shell", () => {
     expect(
       await $(".skr-properties-toggle").getAttribute("aria-expanded"),
     ).toBe("false");
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          () =>
+            (
+              window as Window & {
+                __SKRIBEUM_E2E_ARRIVAL_FRAME__?: unknown;
+              }
+            ).__SKRIBEUM_E2E_ARRIVAL_FRAME__ != null,
+        ),
+      { timeout: 5000, timeoutMsg: "arrival frame was not observed" },
+    );
+    const arrivalFrame = await browser.execute(
+      () =>
+        (
+          window as Window & {
+            __SKRIBEUM_E2E_ARRIVAL_FRAME__?: {
+              contentEditable: string | null;
+              duration: string;
+              panelExpanded: string | null;
+              pointerEvents: string;
+              reducedMotion: boolean;
+              scrollTop: number;
+              visibility: string;
+            };
+          }
+        ).__SKRIBEUM_E2E_ARRIVAL_FRAME__,
+    );
+    expect(arrivalFrame).toMatchObject({
+      contentEditable: "true",
+      panelExpanded: "false",
+      pointerEvents: "auto",
+      visibility: "visible",
+    });
+    expect(arrivalFrame?.duration).toBe(
+      arrivalFrame?.reducedMotion ? "0s" : "0.12s",
+    );
+    expect(arrivalFrame?.scrollTop).toBeGreaterThan(0);
 
     const forward = $('button[aria-label="Forward"]');
     await forward.waitForEnabled({ timeout: 15000 });
@@ -3681,10 +3809,7 @@ describe("skribeum shell", () => {
     );
     const hidden = await headingMarkerState();
     expect(hidden?.opacity).toBe("0");
-    expect(hidden?.transform).not.toBe("none");
-    expect(hidden?.transitionDurations.every((duration) => duration < 50)).toBe(
-      true,
-    );
+    expect(hidden?.transform).toBe("none");
     const followingPositionBefore = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -3713,8 +3838,8 @@ describe("skribeum shell", () => {
         revealed.transitionDurations.every((duration) => duration === 0),
       ).toBe(true);
     } else {
-      expect(revealed?.transform).not.toBe(hidden?.transform);
-      expect(revealed?.transitionDurations).toEqual([49, 49]);
+      expect(revealed?.transform).toBe("none");
+      expect(revealed?.transitionDurations).toEqual([50]);
     }
     const followingPositionAfter = await browser.execute(() => {
       const following = [
@@ -4480,93 +4605,361 @@ describe("skribeum shell", () => {
     rmSync(path.join(SCRATCH_VAULT_PATH, REVEAL_NOTE_NAME));
   });
 
-  it("keeps_every_live_preview_transition_below_the_motion_ceiling", async () => {
-    await openNoteFromTree(MOTION_PREVIEW_NOTE_NAME);
-    await browser.waitUntil(
-      async () => (await editorText()).includes("after motion constructs"),
-      { timeout: 15000 },
-    );
+  it("resolves_state_surface_and_panel_motion_from_the_built_theme", async () => {
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await $(".skr-properties-reveal").waitForExist({ timeout: 15000 });
+    await browser.keys([modifierKey, "k"]);
+    await $(".command-surface-dialog").waitForExist({ timeout: 5000 });
+    await browser.pause(140);
 
     const measurements = await browser.execute(() => {
-      const classNames = [
-        "cm-skr-reveal-marker",
-        "cm-skr-reveal-motion cm-skr-reveal-source",
-        "cm-skr-reveal-motion cm-skr-reveal-rendered",
-      ];
-      const prefersReducedMotion = matchMedia(
-        "(prefers-reduced-motion: reduce)",
-      ).matches;
-      return classNames.map((className) => {
-        const element = document.createElement("span");
-        element.className = className;
-        document.body.append(element);
-        const style = getComputedStyle(element);
-        const transitionProperties = style.transitionProperty
-          .split(",")
-          .map((part) => part.trim());
-        const transitionMs = style.transitionDuration.split(",").map((part) => {
-          const duration = part.trim();
-          return duration.endsWith("ms")
-            ? Number.parseFloat(duration)
-            : Number.parseFloat(duration) * 1000;
-        });
-        const measurement = {
-          className,
-          prefersReducedMotion,
-          transitionProperties,
-          transitionMs,
-          effectiveTransitionMs: transitionProperties.map(
-            (_, index) => transitionMs[index % transitionMs.length],
-          ),
-          animationMs: style.animationDuration.split(",").map((part) => {
-            const duration = part.trim();
-            return duration.endsWith("ms")
-              ? Number.parseFloat(duration)
-              : Number.parseFloat(duration) * 1000;
-          }),
-          animationTimingFunction: style.animationTimingFunction,
-          transitionTimingFunction: style.transitionTimingFunction,
-        };
-        element.remove();
-        return measurement;
-      });
+      const state = document.querySelector<HTMLElement>(".skr-header-overflow");
+      const surface = document.querySelector<HTMLElement>(
+        ".command-surface-dialog",
+      );
+      const panel = document.querySelector<HTMLElement>(
+        ".skr-properties-reveal",
+      );
+      const outlinePanel = document.querySelector<HTMLElement>(
+        '[data-testid="desktop-outline-panel"]',
+      );
+      if (
+        state === null ||
+        surface === null ||
+        panel === null ||
+        outlinePanel === null
+      ) {
+        throw new Error("motion class fixture missing");
+      }
+      const stateStyle = getComputedStyle(state);
+      const surfaceStyle = getComputedStyle(surface);
+      const panelStyle = getComputedStyle(panel);
+      const outlinePanelStyle = getComputedStyle(outlinePanel);
+      return {
+        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        state: {
+          duration: stateStyle.transitionDuration,
+          easing: stateStyle.transitionTimingFunction,
+          properties: stateStyle.transitionProperty,
+        },
+        surface: {
+          duration: surfaceStyle.transitionDuration,
+          easing: surfaceStyle.transitionTimingFunction,
+          properties: surfaceStyle.transitionProperty,
+        },
+        panel: {
+          duration: panelStyle.transitionDuration,
+          easing: panelStyle.transitionTimingFunction,
+          properties: panelStyle.transitionProperty,
+        },
+        outlinePanel: {
+          duration: outlinePanelStyle.transitionDuration,
+          easing: outlinePanelStyle.transitionTimingFunction,
+          properties: outlinePanelStyle.transitionProperty,
+        },
+      };
     });
 
-    for (const measurement of measurements) {
-      expect(Math.max(...measurement.transitionMs)).toBeLessThan(50);
-      for (const easing of measurement.transitionTimingFunction.split(",")) {
-        expect(easing.trim()).toBe("linear");
-      }
-      if (measurement.className !== "cm-skr-reveal-marker") {
-        expect(Math.max(...measurement.animationMs)).toBeLessThan(50);
-        expect(measurement.animationTimingFunction).toBe("linear");
-      }
-    }
-    const expectedDuration = measurements[0]?.transitionMs[0] ?? 0;
-    expect(measurements[0]?.effectiveTransitionMs).toEqual([
-      expectedDuration,
-      expectedDuration,
-    ]);
-    expect(measurements[1]?.effectiveTransitionMs).toEqual([
-      expectedDuration,
-      expectedDuration,
-    ]);
-    expect(measurements[2]?.effectiveTransitionMs).toEqual([
-      expectedDuration,
-      expectedDuration,
-    ]);
-    expect(measurements[1]?.animationMs).toEqual([expectedDuration]);
-    expect(measurements[2]?.animationMs).toEqual([expectedDuration]);
+    expect(
+      measurements.state.duration
+        .split(",")
+        .every(
+          (value) =>
+            value.trim() === (measurements.reducedMotion ? "0s" : "0.05s"),
+        ),
+    ).toBe(true);
+    expect(
+      measurements.state.easing
+        .split(",")
+        .every((value) => value.trim() === "linear"),
+    ).toBe(true);
+    expect(
+      measurements.surface.duration
+        .split(",")
+        .every(
+          (value) =>
+            value.trim() === (measurements.reducedMotion ? "0s" : "0.12s"),
+        ),
+    ).toBe(true);
+    expect(measurements.surface.easing).toBe(
+      "cubic-bezier(0.2, 0, 0, 1), cubic-bezier(0.2, 0, 0, 1)",
+    );
+    expect(measurements.surface.properties).toBe("opacity, transform");
+    expect(measurements.panel.duration).toBe(
+      measurements.reducedMotion ? "0s" : "0.16s",
+    );
+    expect(measurements.panel.easing).toBe("cubic-bezier(0.2, 0, 0, 1)");
+    expect(measurements.panel.properties).toBe("grid-template-rows");
+    expect(measurements.outlinePanel.duration).toBe(
+      measurements.reducedMotion ? "0s" : "0.16s",
+    );
+    expect(measurements.outlinePanel.easing).toBe("cubic-bezier(0.2, 0, 0, 1)");
+    expect(measurements.outlinePanel.properties).toBe("width");
+
+    const row = $('.command-surface-results [role="option"]');
+    const rest = await browser.execute(() => {
+      const element = document.querySelector<HTMLElement>(
+        '.command-surface-results [role="option"]',
+      );
+      if (element === null) throw new Error("command row missing");
+      const box = element.getBoundingClientRect();
+      return {
+        box: [box.x, box.y, box.width, box.height],
+        transform: getComputedStyle(element).transform,
+      };
+    });
+    await row.moveTo();
+    const hovered = await browser.execute(() => {
+      const element = document.querySelector<HTMLElement>(
+        '.command-surface-results [role="option"]',
+      );
+      if (element === null) throw new Error("command row missing");
+      const box = element.getBoundingClientRect();
+      return {
+        box: [box.x, box.y, box.width, box.height],
+        transform: getComputedStyle(element).transform,
+      };
+    });
+    expect(hovered).toEqual(rest);
+    await browser.keys(Key.Escape);
+    await $(".command-surface-dialog").waitForExist({
+      reverse: true,
+      timeout: 5000,
+    });
+    await setViewportSize(1000, 700);
+    expect(
+      await browser.execute(
+        () =>
+          getComputedStyle(
+            document.querySelector(
+              '[data-testid="desktop-outline-panel"]',
+            ) as Element,
+          ).transitionDuration,
+      ),
+    ).toBe("0s");
+    await restoreDesktopViewport();
   });
 
-  it("makes_live_preview_motion_instant_under_reduced_motion", async () => {
-    await openNoteFromTree(MOTION_PREVIEW_NOTE_NAME);
-    await browser.waitUntil(
-      async () => (await editorText()).includes("after motion constructs"),
-      { timeout: 15000 },
+  it("uses_only_compositor_motion_during_an_anchored_menu_entrance", async () => {
+    await restoreDesktopViewport();
+    const reducedMotion = await browser.execute(
+      () => matchMedia("(prefers-reduced-motion: reduce)").matches,
     );
+    type MenuFrame = {
+      layout: [number, number];
+      neighbor: [number, number, number, number];
+      opacity: string;
+      properties: string;
+      transform: string;
+      visualTop: number;
+    };
+    const frames = await browser.executeAsync<MenuFrame[], []>((done) => {
+      const trigger = document.querySelector<HTMLButtonElement>(
+        ".skr-header-overflow",
+      );
+      const neighbor = document.querySelector<HTMLElement>(
+        '[data-testid="reading-surface"]',
+      );
+      if (trigger === null || neighbor === null) {
+        throw new Error("menu fixture missing");
+      }
+      const observations: MenuFrame[] = [];
+      let observedAt: number | undefined;
+      const sample = () => {
+        const menu = document.querySelector<HTMLElement>(
+          '[data-sheet-variant="anchored"]',
+        );
+        if (menu === null) {
+          requestAnimationFrame(sample);
+          return;
+        }
+        observedAt ??= performance.now();
+        const neighborBox = neighbor.getBoundingClientRect();
+        const menuBox = menu.getBoundingClientRect();
+        const style = getComputedStyle(menu);
+        observations.push({
+          layout: [menu.offsetWidth, menu.offsetHeight],
+          neighbor: [
+            neighborBox.x,
+            neighborBox.y,
+            neighborBox.width,
+            neighborBox.height,
+          ],
+          opacity: style.opacity,
+          properties: style.transitionProperty,
+          transform: style.transform,
+          visualTop: menuBox.top,
+        });
+        if (performance.now() - observedAt >= 180) {
+          done(observations);
+          return;
+        }
+        requestAnimationFrame(sample);
+      };
+      trigger.click();
+      requestAnimationFrame(sample);
+    });
 
-    const measurements = await browser.execute(() => {
+    expect(frames.length).toBeGreaterThan(3);
+    expect(
+      frames.every((frame) => frame.properties === "opacity, transform"),
+    ).toBe(true);
+    expect(
+      frames.every(
+        (frame) => frame.layout.toString() === frames.at(-1)?.layout.toString(),
+      ),
+    ).toBe(true);
+    expect(
+      frames.every(
+        (frame) =>
+          frame.neighbor.toString() === frames.at(-1)?.neighbor.toString(),
+      ),
+    ).toBe(true);
+    const distinctOpacity = new Set(frames.map((frame) => frame.opacity)).size;
+    const distinctTransform = new Set(frames.map((frame) => frame.transform))
+      .size;
+    const distinctVisualTop = new Set(frames.map((frame) => frame.visualTop))
+      .size;
+    if (reducedMotion) {
+      expect(distinctOpacity).toBe(1);
+      expect(distinctTransform).toBe(1);
+      expect(distinctVisualTop).toBe(1);
+    } else {
+      expect(distinctOpacity).toBeGreaterThan(1);
+      expect(distinctTransform).toBeGreaterThan(1);
+      expect(distinctVisualTop).toBeGreaterThan(1);
+    }
+    await browser.keys(Key.Escape);
+  });
+
+  it("keeps_direct_manipulation_geometry_instant", async () => {
+    await openNoteFromTree(TABLE_EDITING_NOTE_NAME);
+    await $(".cm-skr-table-grid").waitForExist({ timeout: 15000 });
+
+    const snapshots = await browser.execute(() => {
+      const marker = document.createElement("span");
+      marker.className = "cm-skr-reveal-marker";
+      document.body.append(marker);
+      const editor = document.querySelector(".cm-editor");
+      const selection = document.createElement("div");
+      selection.className = "cm-selectionBackground";
+      editor?.append(selection);
+      const caret = document.createElement("div");
+      caret.className = "cm-cursor";
+      editor?.append(caret);
+      const focusRing = document.querySelector(".skr-header-overflow");
+      const sourceMode = document.querySelector(".editor");
+      const treeItem = document.createElement("div");
+      treeItem.setAttribute("role", "treeitem");
+      treeItem.setAttribute("aria-expanded", "true");
+      const treeChevron = document.createElement("span");
+      treeItem.append(treeChevron);
+      document.body.append(treeItem);
+      const tableTrack = document.querySelector(".cm-skr-table-row");
+      const pointerGeometry = document.querySelector(".cm-skr-table-insert");
+      const scroller = document.querySelector(".cm-scroller");
+      if (
+        editor === null ||
+        focusRing === null ||
+        sourceMode === null ||
+        treeChevron === null ||
+        tableTrack === null ||
+        pointerGeometry === null ||
+        scroller === null
+      ) {
+        throw new Error("direct manipulation fixture is incomplete");
+      }
+      document.documentElement.dataset.themeSwitching = "true";
+      const result = {
+        caret: {
+          duration: getComputedStyle(caret).transitionDuration,
+          properties: getComputedStyle(caret).transitionProperty,
+        },
+        selection: {
+          duration: getComputedStyle(selection).transitionDuration,
+          properties: getComputedStyle(selection).transitionProperty,
+        },
+        focusRing: {
+          duration: getComputedStyle(focusRing).transitionDuration,
+          properties: getComputedStyle(focusRing).transitionProperty,
+        },
+        revealGeometry: {
+          duration: getComputedStyle(marker).transitionDuration,
+          properties: getComputedStyle(marker).transitionProperty,
+        },
+        sourceMode: {
+          duration: getComputedStyle(sourceMode).transitionDuration,
+          properties: getComputedStyle(sourceMode).transitionProperty,
+        },
+        treeChevron: {
+          duration: getComputedStyle(treeChevron).transitionDuration,
+          properties: getComputedStyle(treeChevron).transitionProperty,
+        },
+        tableTrack: {
+          duration: getComputedStyle(tableTrack).transitionDuration,
+          properties: getComputedStyle(tableTrack).transitionProperty,
+        },
+        pointerGeometry: {
+          duration: getComputedStyle(pointerGeometry).transitionDuration,
+          properties: getComputedStyle(pointerGeometry).transitionProperty,
+        },
+        scrollBehavior: getComputedStyle(scroller).scrollBehavior,
+        theme: {
+          duration: getComputedStyle(focusRing).transitionDuration,
+          properties: getComputedStyle(focusRing).transitionProperty,
+        },
+      };
+      delete document.documentElement.dataset.themeSwitching;
+      marker.remove();
+      selection.remove();
+      caret.remove();
+      treeItem.remove();
+      return result;
+    });
+
+    const instant = {
+      caret: effectiveTransitionDuration(snapshots.caret, "transform"),
+      selection: effectiveTransitionDuration(
+        snapshots.selection,
+        "background-color",
+      ),
+      focusRing: effectiveTransitionDuration(
+        snapshots.focusRing,
+        "outline-color",
+      ),
+      revealGeometry: effectiveTransitionDuration(
+        snapshots.revealGeometry,
+        "width",
+      ),
+      sourceMode: effectiveTransitionDuration(snapshots.sourceMode, "display"),
+      treeChevron: effectiveTransitionDuration(
+        snapshots.treeChevron,
+        "transform",
+      ),
+      tableTrack: effectiveTransitionDuration(
+        snapshots.tableTrack,
+        "grid-template-columns",
+      ),
+      pointerGeometry: effectiveTransitionDuration(
+        snapshots.pointerGeometry,
+        "inset",
+      ),
+      scrollBehavior: snapshots.scrollBehavior,
+      theme: effectiveTransitionDuration(snapshots.theme, "background-color"),
+    };
+
+    expect(
+      Object.values(instant).every(
+        (value) => value === "0s" || value === "auto",
+      ),
+    ).toBe(true);
+  });
+
+  it("zeros_motion_classes_and_stops_the_pulse_under_both_reduction_routes", async () => {
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await $(".skr-properties-reveal").waitForExist({ timeout: 15000 });
+
+    const reduction = await browser.execute(() => {
       const reducedStyle = document.createElement("style");
       const mediaRules: string[] = [];
       for (const sheet of document.styleSheets) {
@@ -4581,41 +4974,49 @@ describe("skribeum shell", () => {
           }
         }
       }
-      if (mediaRules.length === 0) {
-        throw new Error("prefers-reduced-motion rule missing");
-      }
+      if (mediaRules.length === 0)
+        throw new Error("reduced-motion rules missing");
+
+      const surface = document.createElement("div");
+      surface.dataset.motionSurface = "centered";
+      surface.dataset.motionEntered = "true";
+      const pulse = document.createElement("span");
+      pulse.className = "cm-skr-embed-skeleton-bar";
+      document.body.append(surface, pulse);
+      const read = () => ({
+        state: getComputedStyle(
+          document.querySelector(".skr-header-overflow") as Element,
+        ).transitionDuration,
+        surface: getComputedStyle(surface).transitionDuration,
+        panel: getComputedStyle(
+          document.querySelector(".skr-properties-reveal") as Element,
+        ).transitionDuration,
+        pulse: getComputedStyle(pulse).animationName,
+        pulseOpacity: getComputedStyle(pulse).opacity,
+      });
+
       reducedStyle.textContent = mediaRules.join("\n");
       document.head.append(reducedStyle);
-
-      const classNames = [
-        "cm-skr-reveal-marker",
-        "cm-skr-reveal-motion cm-skr-reveal-source",
-        "cm-skr-reveal-motion cm-skr-reveal-rendered",
-      ];
-      const result = classNames.map((className) => {
-        const element = document.createElement("span");
-        element.className = className;
-        document.body.append(element);
-        const style = getComputedStyle(element);
-        const measurement = {
-          className,
-          transitionDuration: style.transitionDuration,
-          animationDuration: style.animationDuration,
-        };
-        element.remove();
-        return measurement;
-      });
+      const media = read();
       reducedStyle.remove();
-      return result;
+      document.documentElement.dataset.animations = "false";
+      const setting = read();
+      document.documentElement.dataset.animations = "true";
+      surface.remove();
+      pulse.remove();
+      return { media, setting };
     });
 
-    for (const measurement of measurements) {
-      for (const duration of measurement.transitionDuration.split(",")) {
-        expect(Number.parseFloat(duration)).toBe(0);
-      }
-      for (const duration of measurement.animationDuration.split(",")) {
-        expect(Number.parseFloat(duration)).toBe(0);
-      }
+    for (const route of [reduction.media, reduction.setting]) {
+      expect(
+        route.state.split(",").every((value) => value.trim() === "0s"),
+      ).toBe(true);
+      expect(
+        route.surface.split(",").every((value) => value.trim() === "0s"),
+      ).toBe(true);
+      expect(route.panel).toBe("0s");
+      expect(route.pulse).toBe("none");
+      expect(route.pulseOpacity).toBe("0.7");
     }
   });
 
@@ -5906,11 +6307,19 @@ describe("skribeum core editing surfaces", () => {
     await overlayInput();
     await expectNoAxeViolations("command palette");
     await browser.keys(Key.Escape);
+    await $('[data-testid="unified-command-surface"]').waitForExist({
+      reverse: true,
+      timeout: 5000,
+    });
 
     await browser.keys([modifierKey, ","]);
     await $('[data-testid="settings-view"]').waitForExist({ timeout: 10000 });
     await expectNoAxeViolations("settings");
     await browser.keys(Key.Escape);
+    await $('[data-testid="settings-view"]').waitForExist({
+      reverse: true,
+      timeout: 5000,
+    });
 
     await openNoteFromTree(CANVAS_FILE_NAME);
     await $('[data-testid="canvas-view"]').waitForExist({ timeout: 15000 });
@@ -6136,20 +6545,26 @@ describe("skribeum core editing surfaces", () => {
       const motion = await browser.execute(() => {
         const bar = document.querySelector(".cm-skr-embed-skeleton-bar");
         if (!(bar instanceof HTMLElement)) return null;
-        const style = getComputedStyle(bar, "::after");
+        const style = getComputedStyle(bar);
         return {
           duration: Number.parseFloat(style.animationDuration) * 1000,
           iterations: style.animationIterationCount,
+          reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
         };
       });
-      expect(motion?.duration).toBeLessThanOrEqual(50);
-      expect(motion?.iterations).toBe("1");
+      expect(motion?.duration).toBe(motion?.reducedMotion ? 0 : 1200);
+      if (!motion?.reducedMotion) {
+        expect(motion?.iterations).toBe("infinite");
+      }
       const staticMotion = await browser.execute(() => {
         document.documentElement.dataset.animations = "false";
         const bar = document.querySelector(".cm-skr-embed-skeleton-bar");
-        return bar instanceof HTMLElement
-          ? getComputedStyle(bar, "::after").animationName
-          : null;
+        const animationName =
+          bar instanceof HTMLElement
+            ? getComputedStyle(bar).animationName
+            : null;
+        document.documentElement.dataset.animations = "true";
+        return animationName;
       });
       expect(staticMotion).toBe("none");
       await browser.execute(() => {

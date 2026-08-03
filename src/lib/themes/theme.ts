@@ -19,6 +19,8 @@ export type AppearancePreferences = {
   animations: boolean;
 };
 
+const themeSwitchGenerations = new WeakMap<HTMLElement, number>();
+
 export function isThemeName(value: string): value is ThemeName {
   return (THEME_NAMES as readonly string[]).includes(value);
 }
@@ -46,10 +48,25 @@ export function applyTheme(
   darkPalette: DarkPaletteName = "lamplight",
   root = document.documentElement,
 ) {
+  const generation = (themeSwitchGenerations.get(root) ?? 0) + 1;
+  themeSwitchGenerations.set(root, generation);
+  root.dataset.themeSwitching = "true";
   root.dataset.theme = theme;
   root.dataset.lightPalette = lightPalette;
   root.dataset.darkPalette = darkPalette;
   root.style.colorScheme = theme === "system" ? "light dark" : theme;
+  const ownerWindow = root.ownerDocument.defaultView;
+  if (ownerWindow === null) {
+    delete root.dataset.themeSwitching;
+    return;
+  }
+  ownerWindow.requestAnimationFrame(() => {
+    ownerWindow.requestAnimationFrame(() => {
+      if (themeSwitchGenerations.get(root) === generation) {
+        delete root.dataset.themeSwitching;
+      }
+    });
+  });
 }
 
 export function applyProseFont(

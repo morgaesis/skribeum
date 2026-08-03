@@ -1,5 +1,6 @@
 <script lang="ts">
 import { onDestroy, onMount, type Snippet, tick } from "svelte";
+import { enterMotionSurface, exitMotionSurfaces } from "./motion";
 import { STRINGS } from "./strings";
 
 let {
@@ -17,7 +18,9 @@ let {
 } = $props();
 
 let dialog = $state<HTMLElement>();
+let backdrop = $state<HTMLElement>();
 let returnFocus: HTMLElement | null = null;
+let closing = false;
 const titleId = "skr-sheet-title";
 const focusableSelector =
   'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -33,7 +36,7 @@ function focusableElements(): HTMLElement[] {
 function onKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
     event.preventDefault();
-    onClose();
+    void requestClose();
     return;
   }
   if (event.key !== "Tab") {
@@ -54,6 +57,17 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
+function requestClose() {
+  if (closing) return;
+  closing = true;
+  exitMotionSurfaces(
+    [backdrop, dialog].filter(
+      (element): element is HTMLElement => element !== undefined,
+    ),
+    onClose,
+  );
+}
+
 // registry-exempt keydown: modal dialog focus trapping and Escape dismissal
 // are internal to the sheet. Commands only open the registered surface.
 
@@ -65,6 +79,8 @@ onMount(() => {
   void tick().then(() => {
     (focusableElements()[0] ?? dialog)?.focus();
   });
+  if (backdrop !== undefined) enterMotionSurface(backdrop);
+  if (dialog !== undefined) enterMotionSurface(dialog);
 });
 
 onDestroy(() => {
@@ -75,10 +91,13 @@ onDestroy(() => {
 </script>
 
 <div
+  bind:this={backdrop}
   class="sheet-backdrop"
   class:sheet-backdrop-anchored={variant === "anchored"}
   role="presentation"
-  onclick={(event) => event.target === event.currentTarget && onClose()}
+  data-motion-surface="scrim"
+  onclick={(event) =>
+    event.target === event.currentTarget && void requestClose()}
 >
   <div
     bind:this={dialog}
@@ -91,12 +110,15 @@ onDestroy(() => {
     tabindex="-1"
     data-testid="overlay-sheet"
     data-sheet-variant={variant}
+    data-motion-surface={variant === "sheet"
+      ? "anchored-bottom"
+      : "anchored-top"}
     onkeydown={onKeydown}
   >
     {#if variant === "sheet"}
       <header>
         <h2 id={titleId}>{label}</h2>
-        <button type="button" class="sheet-close" onclick={onClose}>
+        <button type="button" class="sheet-close" onclick={requestClose}>
           {STRINGS.closeAction}
         </button>
       </header>

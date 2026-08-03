@@ -4607,21 +4607,49 @@ describe("skribeum shell", () => {
     await browser.pause(140);
 
     const measurements = await browser.execute(() => {
-      const read = (selector: string) => {
-        const element = document.querySelector<HTMLElement>(selector);
-        if (element === null) throw new Error(`${selector} missing`);
-        const style = getComputedStyle(element);
-        return {
-          duration: style.transitionDuration,
-          easing: style.transitionTimingFunction,
-          properties: style.transitionProperty,
-        };
-      };
+      const state = document.querySelector<HTMLElement>(".skr-header-overflow");
+      const surface = document.querySelector<HTMLElement>(
+        ".command-surface-dialog",
+      );
+      const panel = document.querySelector<HTMLElement>(
+        ".skr-properties-reveal",
+      );
+      const outlinePanel = document.querySelector<HTMLElement>(
+        '[data-testid="desktop-outline-panel"]',
+      );
+      if (
+        state === null ||
+        surface === null ||
+        panel === null ||
+        outlinePanel === null
+      ) {
+        throw new Error("motion class fixture missing");
+      }
+      const stateStyle = getComputedStyle(state);
+      const surfaceStyle = getComputedStyle(surface);
+      const panelStyle = getComputedStyle(panel);
+      const outlinePanelStyle = getComputedStyle(outlinePanel);
       return {
-        state: read(".skr-header-overflow"),
-        surface: read(".command-surface-dialog"),
-        panel: read(".skr-properties-reveal"),
-        outlinePanel: read('[data-testid="desktop-outline-panel"]'),
+        state: {
+          duration: stateStyle.transitionDuration,
+          easing: stateStyle.transitionTimingFunction,
+          properties: stateStyle.transitionProperty,
+        },
+        surface: {
+          duration: surfaceStyle.transitionDuration,
+          easing: surfaceStyle.transitionTimingFunction,
+          properties: surfaceStyle.transitionProperty,
+        },
+        panel: {
+          duration: panelStyle.transitionDuration,
+          easing: panelStyle.transitionTimingFunction,
+          properties: panelStyle.transitionProperty,
+        },
+        outlinePanel: {
+          duration: outlinePanelStyle.transitionDuration,
+          easing: outlinePanelStyle.transitionTimingFunction,
+          properties: outlinePanelStyle.transitionProperty,
+        },
       };
     });
 

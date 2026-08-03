@@ -330,17 +330,39 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     );
 
     await browser.refresh();
-    const restored = $('[role="separator"][aria-label="Resize sidebar"]');
-    await restored.waitForDisplayed({ timeout: 15000 });
-    expect(await restored.getAttribute("aria-valuenow")).toBe("24");
-    const restoredOutline = $(
-      '[role="separator"][aria-label="Resize outline"]',
+    const restoredDividerValues = await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          const sidebarSeparator = document.querySelector<HTMLElement>(
+            '[role="separator"][aria-label="Resize sidebar"]',
+          );
+          const outlineSeparator = document.querySelector<HTMLElement>(
+            '[role="separator"][aria-label="Resize outline"]',
+          );
+          const sidebar =
+            sidebarSeparator !== null &&
+            getComputedStyle(sidebarSeparator).display !== "none"
+              ? sidebarSeparator.getAttribute("aria-valuenow")
+              : null;
+          const outline =
+            outlineSeparator !== null &&
+            getComputedStyle(outlineSeparator).display !== "none"
+              ? outlineSeparator.getAttribute("aria-valuenow")
+              : null;
+          return sidebar === "24" && outline === "20"
+            ? { sidebar, outline }
+            : null;
+        }),
+      {
+        timeout: 15000,
+        timeoutMsg: "panel divider values did not restore after reload",
+      },
     );
-    await restoredOutline.waitForDisplayed({ timeout: 15000 });
-    expect(await restoredOutline.getAttribute("aria-valuenow")).toBe("20");
+    expect(restoredDividerValues).toEqual({ sidebar: "24", outline: "20" });
     await $(`[data-path="${TREE_FIRST_NOTE_NAME}"]`).waitForExist({
       timeout: 10000,
     });
+    const restored = $('[role="separator"][aria-label="Resize sidebar"]');
 
     await browser.execute(
       (element) => {

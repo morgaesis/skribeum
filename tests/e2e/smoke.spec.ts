@@ -3843,7 +3843,15 @@ describe("skribeum shell", () => {
       ).__SKRIBEUM_E2E_SET_SELECTION__?.(0);
     });
     expect(editorFocused).toBe(true);
-    expect(await activeElementDescriptor()).toContain("cm-content");
+    expect(
+      await browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(".cm-content");
+        return (
+          content?.getAttribute("contenteditable") === "true" &&
+          content.tabIndex === 0
+        );
+      }),
+    ).toBe(true);
     // The cm-focused class needs window focus events that a bare xvfb never
     // delivers, so the visible-focus contract is asserted by applying the
     // class and reading the computed style; keyboard reachability itself is

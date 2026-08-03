@@ -107,9 +107,11 @@ describe("file tree, previews, panels, and workspace tabs", () => {
         ),
       { timeoutMsg: "sidebar header hover state did not clear" },
     );
-    await browser.execute(() => {
-      document.querySelector<HTMLElement>('[role="treeitem"]')?.focus();
-    });
+    const treeFocusTarget = $(
+      `[role="treeitem"][data-path="${TREE_FOLDER_NAME}"]`,
+    );
+    await treeFocusTarget.waitForDisplayed({ timeout: 10000 });
+    await treeFocusTarget.click();
     await browser.waitUntil(
       () =>
         browser.execute(() => {

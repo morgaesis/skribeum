@@ -150,6 +150,26 @@ function frontmatterTitle(source: string): string | null {
   return title.length > 0 ? title : null;
 }
 
+/** Returns a user-authored single-grapheme tree icon, or null. */
+export function noteIcon(source: string): string | null {
+  const normalizedSource = source.replaceAll("\r\n", "\n");
+  const entry = parseFrontmatter(normalizedSource)?.entries.find(
+    (candidate) => candidate.key === "icon",
+  );
+  if (entry === undefined) return null;
+  const value = scalarTitle(entry.raw);
+  if (value.length === 0) return null;
+  if (typeof Intl.Segmenter === "function") {
+    const segments = [
+      ...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(
+        value,
+      ),
+    ];
+    return segments.length === 1 ? value : null;
+  }
+  return [...value].length === 1 ? value : null;
+}
+
 function firstLineH1(source: string): string | null {
   const [first = "", second = ""] = source.split(/\r?\n/u, 2);
   const atx = /^ {0,3}#(?:[\t ]+|$)(.*)$/u.exec(first);

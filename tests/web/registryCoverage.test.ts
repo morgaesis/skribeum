@@ -47,6 +47,7 @@ const sourceDirectory = path.join(
 const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
   ["App.svelte", "window-level delegation to the registry's global handler"],
   ["lib/FileTree.svelte", "ARIA tree pattern internal navigation"],
+  ["lib/PanelDivider.svelte", "ARIA separator pattern internal resizing"],
   ["lib/OutlinePanel.svelte", "ARIA tree pattern internal navigation"],
   [
     "lib/UnifiedCommandSurface.svelte",

@@ -38,6 +38,7 @@ import {
   type TableCell,
   tableCellRanges,
 } from "../../features/tableOperations";
+import { type AsyncContentKind, runAsyncContent } from "../../loadingStates";
 import {
   enterMotionSurface,
   exitMotionSurface,
@@ -64,6 +65,7 @@ import {
 } from "../../visualViewport";
 import { bulkTextInputAnnotation } from "../bulkInput";
 import { decorationOrigin } from "../decorationGuard";
+import { parseFrontmatter } from "../frontmatter";
 import { codeLanguage } from "../markdown/codeLanguages";
 import {
   obsidianMarkdownExtensionsFor,
@@ -2443,6 +2445,13 @@ function embeddedSection(source: string, fragment: string): string | null {
   return source.slice(heading.from, end).replace(/\n+$/u, "");
 }
 
+function previewSource(source: string): string {
+  const frontmatter = parseFrontmatter(source);
+  return frontmatter === null
+    ? source
+    : source.slice(frontmatter.to).replace(/^\r?\n+/u, "");
+}
+
 function nestedMarkdownView(
   host: HTMLElement,
   source: string,
@@ -2486,6 +2495,8 @@ function renderLinkedNote(
   label: string,
   taskStatuses: readonly TaskStatus[],
   onRendered: () => void,
+  kind: AsyncContentKind = "embed",
+  preload?: PreloadedNote,
 ): () => void {
   const [, fragment = ""] = target.split("#", 2);
   const resolution = resolveWikilinkTarget(target, context);
@@ -2520,67 +2531,75 @@ function renderLinkedNote(
     notice(STRINGS.embedCycle);
     return () => {};
   }
-  const load =
-    resolution.kind === "self"
-      ? Promise.resolve(rootSource)
-      : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null));
   let destroyed = false;
   let visibilityObserver: IntersectionObserver | null = null;
-  host.className = "cm-skr-embed-body cm-skr-embed-loading";
-  host.setAttribute("role", "status");
-  host.setAttribute("aria-label", STRINGS.embedLoading);
-  host.replaceChildren(
-    ...["long", "medium", "short"].map((width) => {
-      const bar = document.createElement("span");
-      bar.className = "cm-skr-embed-skeleton-bar";
-      bar.dataset.width = width;
-      bar.setAttribute("aria-hidden", "true");
-      return bar;
-    }),
-  );
-  void load.then((source) => {
-    if (destroyed || (!host.isConnected && !document.body.contains(host))) {
-      return;
-    }
-    if (source === null) {
-      notice(STRINGS.embedUnavailable);
-      return;
-    }
-    const selected = embeddedSection(source, fragment);
-    if (selected === null) {
-      notice(STRINGS.embedSectionUnavailable);
-      return;
-    }
-    host.className = "cm-skr-embed-body";
-    host.removeAttribute("role");
-    host.removeAttribute("aria-label");
-    host.textContent = "";
-    const nested = nestedMarkdownView(
+  let stopRequest = () => {};
+  const begin = () => {
+    stopRequest();
+    host.className = `cm-skr-embed-body skr-loading-region skr-loading-${kind}`;
+    stopRequest = runAsyncContent({
       host,
-      selected,
-      {
-        ...context,
-        currentPath: resolvedPath,
-        embedDepth: depth + 1,
-        embedAncestry:
-          resolvedPath.length === 0 ? ancestry : [...ancestry, resolvedPath],
-      },
-      label,
-      taskStatuses,
-    );
-    if (typeof IntersectionObserver !== "undefined") {
-      visibilityObserver = new IntersectionObserver((entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          nested.requestMeasure();
-          onRendered();
+      kind,
+      load: () =>
+        preload?.source ??
+        (resolution.kind === "self"
+          ? Promise.resolve(rootSource)
+          : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null))),
+      ...(kind === "preview" && preload?.status === "pending"
+        ? { skeletonDelayMs: 0 }
+        : {}),
+      unavailable: (source) => source === null,
+      ...(kind === "embed" ? { onRetry: begin } : {}),
+      render: (source) => {
+        if (
+          destroyed ||
+          source === null ||
+          (!host.isConnected && !document.body.contains(host))
+        ) {
+          return;
         }
-      });
-      visibilityObserver.observe(host);
-    }
-    onRendered();
-  });
+        const selected = embeddedSection(
+          kind === "preview" ? previewSource(source) : source,
+          fragment,
+        );
+        if (selected === null) {
+          notice(STRINGS.embedSectionUnavailable);
+          return;
+        }
+        host.className = "cm-skr-embed-body";
+        const nested = nestedMarkdownView(
+          host,
+          selected,
+          {
+            ...context,
+            currentPath: resolvedPath,
+            embedDepth: depth + 1,
+            embedAncestry:
+              resolvedPath.length === 0
+                ? ancestry
+                : [...ancestry, resolvedPath],
+            previewMode: kind === "preview",
+          },
+          label,
+          taskStatuses,
+        );
+        if (typeof IntersectionObserver !== "undefined") {
+          visibilityObserver = new IntersectionObserver((entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) {
+              nested.requestMeasure();
+              onRendered();
+            }
+          });
+          visibilityObserver.observe(host);
+        }
+        onRendered();
+      },
+    });
+  };
+  begin();
   return () => {
     destroyed = true;
+    stopRequest();
     visibilityObserver?.disconnect();
     nestedViews.get(host)?.destroy();
   };
@@ -2683,6 +2702,9 @@ class EmbedWidget extends WidgetType {
       activate();
     });
     host.append(header);
+    if (this.context.previewMode === true) {
+      return host;
+    }
     const body = document.createElement("span");
     body.className = "cm-skr-embed-body";
     host.append(body);
@@ -3893,6 +3915,53 @@ const enginePlugin = ViewPlugin.fromClass(
 
 let nextPreviewId = 0;
 
+type PreviewPoint = { x: number; y: number };
+
+type PreloadedNote = {
+  target: string;
+  status: "pending" | "settled";
+  source: Promise<string | null>;
+};
+
+function triangleArea(
+  a: PreviewPoint,
+  b: PreviewPoint,
+  c: PreviewPoint,
+): number {
+  return Math.abs(
+    (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y)) / 2,
+  );
+}
+
+/** Tests the safe-triangle corridor from a departed link to its preview. */
+export function pointInPreviewCone(
+  point: PreviewPoint,
+  origin: PreviewPoint,
+  panel: Pick<DOMRect, "left" | "right" | "top" | "bottom">,
+): boolean {
+  let first: PreviewPoint;
+  let second: PreviewPoint;
+  if (origin.x <= panel.left) {
+    first = { x: panel.left, y: panel.top - 12 };
+    second = { x: panel.left, y: panel.bottom + 12 };
+  } else if (origin.x >= panel.right) {
+    first = { x: panel.right, y: panel.top - 12 };
+    second = { x: panel.right, y: panel.bottom + 12 };
+  } else if (origin.y <= panel.top) {
+    first = { x: panel.left - 12, y: panel.top };
+    second = { x: panel.right + 12, y: panel.top };
+  } else {
+    first = { x: panel.left - 12, y: panel.bottom };
+    second = { x: panel.right + 12, y: panel.bottom };
+  }
+  const whole = triangleArea(origin, first, second);
+  const parts =
+    triangleArea(point, first, second) +
+    triangleArea(origin, point, second) +
+    triangleArea(origin, first, point);
+  return Math.abs(parts - whole) < 0.75;
+}
+
 class LinkPreviewController {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private scheduledLink: HTMLElement | null = null;
@@ -3903,6 +3972,10 @@ class LinkPreviewController {
   private previousControls: string | null = null;
   private previousExpanded: string | null = null;
   private focusedTarget: string | null = null;
+  private leavePoint: PreviewPoint | null = null;
+  private coneTimer: ReturnType<typeof setTimeout> | null = null;
+  private closeTimer: ReturnType<typeof setTimeout> | null = null;
+  private preload: PreloadedNote | null = null;
   private readonly stopObservingViewport: () => void;
 
   constructor(readonly view: EditorView) {
@@ -3916,6 +3989,7 @@ class LinkPreviewController {
       view.dom.ownerDocument.defaultView ?? window,
     );
     window.addEventListener("scroll", this.onScroll, true);
+    window.addEventListener("pointermove", this.onPointerMove, true);
   }
 
   private previewLink(target: EventTarget | null): HTMLElement | null {
@@ -3938,11 +4012,39 @@ class LinkPreviewController {
     this.scheduledLink = null;
   }
 
+  private cancelTravelTimers(): void {
+    if (this.coneTimer !== null) clearTimeout(this.coneTimer);
+    if (this.closeTimer !== null) clearTimeout(this.closeTimer);
+    this.coneTimer = null;
+    this.closeTimer = null;
+  }
+
+  private scheduleClose(): void {
+    if (this.coneTimer !== null) {
+      clearTimeout(this.coneTimer);
+      this.coneTimer = null;
+    }
+    if (this.closeTimer !== null) clearTimeout(this.closeTimer);
+    this.closeTimer = setTimeout(() => {
+      this.closeTimer = null;
+      this.dismiss();
+    }, 100);
+  }
+
+  private keepConeAlive(): void {
+    if (this.coneTimer !== null) clearTimeout(this.coneTimer);
+    this.coneTimer = setTimeout(() => {
+      this.coneTimer = null;
+      this.dismiss();
+    }, 300);
+  }
+
   private schedule(link: HTMLElement): void {
     if (link === this.activeLink || link === this.scheduledLink) {
       return;
     }
     this.dismiss();
+    this.preload = this.preloadNote(link);
     this.scheduledLink = link;
     this.timer = setTimeout(() => {
       this.timer = null;
@@ -3951,12 +4053,41 @@ class LinkPreviewController {
     }, hoverIntentDelay(this.view.dom.ownerDocument.documentElement));
   }
 
+  private preloadNote(link: HTMLElement): PreloadedNote | null {
+    const context = currentWikilinkContext(this.view.state);
+    const target = link.dataset.previewTarget;
+    if (target === undefined) return null;
+    const resolution = resolveWikilinkTarget(target, context);
+    if (resolution.kind === "unresolved") return null;
+    const record: PreloadedNote = {
+      target,
+      status: "pending",
+      source: Promise.resolve(null),
+    };
+    const request =
+      resolution.kind === "self"
+        ? Promise.resolve(this.view.state.doc.toString())
+        : (context.loadNote?.(resolution.path) ?? Promise.resolve(null));
+    record.source = request.then(
+      (source) => {
+        record.status = "settled";
+        return source;
+      },
+      () => {
+        record.status = "settled";
+        return null;
+      },
+    );
+    return record;
+  }
+
   private show(link: HTMLElement): void {
     const context = currentWikilinkContext(this.view.state);
     const target = link.dataset.previewTarget;
     if (context.linkPreviews === false || target === undefined) {
       return;
     }
+    const preload = this.preload?.target === target ? this.preload : undefined;
     this.dismiss();
     const resolution = resolveWikilinkTarget(target, context);
     if (resolution.kind === "unresolved") {
@@ -3969,7 +4100,7 @@ class LinkPreviewController {
         : context.currentPath || pathTarget || STRINGS.currentNote;
     const panel = document.createElement("aside");
     panel.className = "cm-skr-link-preview";
-    panel.setAttribute("role", "dialog");
+    panel.setAttribute("role", "region");
     panel.setAttribute(
       "aria-label",
       `${STRINGS.linkPreviewLabel}: ${sourceName}`,
@@ -3990,8 +4121,11 @@ class LinkPreviewController {
       this.view.dom.ownerDocument.defaultView ?? window,
     );
     const bounds = link.getBoundingClientRect();
+    const rootSize = Number.parseFloat(
+      getComputedStyle(document.documentElement).fontSize,
+    );
     panel.style.maxHeight = `${Math.min(
-      256,
+      18 * rootSize,
       Math.max(0, viewport.height - 24),
     )}px`;
     const panelBounds = panel.getBoundingClientRect();
@@ -4015,6 +4149,7 @@ class LinkPreviewController {
 
     this.activeLink = link;
     this.panel = panel;
+    this.leavePoint = null;
     this.previousDescription = link.getAttribute("aria-describedby");
     this.previousControls = link.getAttribute("aria-controls");
     this.previousExpanded = link.getAttribute("aria-expanded");
@@ -4029,11 +4164,14 @@ class LinkPreviewController {
       `${STRINGS.linkPreviewLabel}: ${sourceName}`,
       this.view.state.facet(taskStatusConfiguration),
       () => this.view.requestMeasure(),
+      "preview",
+      preload,
     );
   }
 
   private dismiss(): void {
     this.cancelTimer();
+    this.cancelTravelTimers();
     const panel = this.panel;
     const cleanupRender = this.cleanupRender;
     this.cleanupRender = null;
@@ -4064,6 +4202,8 @@ class LinkPreviewController {
       );
     }
     this.activeLink = null;
+    this.preload = null;
+    this.leavePoint = null;
     this.previousDescription = null;
     this.previousControls = null;
     this.previousExpanded = null;
@@ -4084,7 +4224,34 @@ class LinkPreviewController {
   private readonly onPointerOver = (event: PointerEvent) => {
     const link = this.previewLink(event.target);
     if (link !== null) {
+      this.cancelTravelTimers();
+      this.leavePoint = null;
       this.schedule(link);
+    } else if (this.panelContains(event.target)) {
+      this.cancelTravelTimers();
+    }
+  };
+
+  private readonly onPointerOut = (event: PointerEvent) => {
+    const link = this.previewLink(event.target);
+    const next = this.previewLink(event.relatedTarget);
+    if (
+      link !== null &&
+      next !== link &&
+      !this.panelContains(event.relatedTarget)
+    ) {
+      if (this.panel === null) {
+        this.cancelTimer();
+        return;
+      }
+      this.leavePoint = { x: event.clientX, y: event.clientY };
+      this.keepConeAlive();
+    } else if (
+      this.panelContains(event.target) &&
+      next !== this.activeLink &&
+      !this.panelContains(event.relatedTarget)
+    ) {
+      this.scheduleClose();
     }
   };
 
@@ -4094,20 +4261,29 @@ class LinkPreviewController {
       this.cancelTimer();
       this.schedule(link);
     }
-  };
-
-  private readonly onPointerOut = (event: PointerEvent) => {
-    const link = this.previewLink(event.target);
-    const next = this.previewLink(event.relatedTarget);
+    if (this.panel === null || this.leavePoint === null) return;
     if (
-      (link !== null &&
-        next !== link &&
-        !this.panelContains(event.relatedTarget)) ||
-      (this.panelContains(event.target) &&
-        next !== this.activeLink &&
-        !this.panelContains(event.relatedTarget))
+      this.panelContains(event.target) ||
+      this.previewLink(event.target) === this.activeLink
     ) {
-      this.dismiss();
+      this.cancelTravelTimers();
+      this.leavePoint = null;
+      return;
+    }
+    if (
+      pointInPreviewCone(
+        { x: event.clientX, y: event.clientY },
+        this.leavePoint,
+        this.panel.getBoundingClientRect(),
+      )
+    ) {
+      if (this.closeTimer !== null) {
+        clearTimeout(this.closeTimer);
+        this.closeTimer = null;
+      }
+      this.keepConeAlive();
+    } else {
+      this.scheduleClose();
     }
   };
 
@@ -4115,7 +4291,6 @@ class LinkPreviewController {
     const link = this.previewLink(event.target);
     if (link?.dataset.previewTarget !== undefined) {
       this.focusedTarget = link.dataset.previewTarget;
-      this.show(link);
     }
   };
 
@@ -4197,6 +4372,7 @@ class LinkPreviewController {
     this.view.dom.removeEventListener("focusout", this.onFocusOut);
     this.stopObservingViewport();
     window.removeEventListener("scroll", this.onScroll, true);
+    window.removeEventListener("pointermove", this.onPointerMove, true);
   }
 }
 
@@ -4539,6 +4715,9 @@ const engineTheme = EditorView.baseTheme({
     backgroundColor: "var(--skr-surface-subtle)",
     verticalAlign: "top",
   },
+  ".cm-skr-embed.cm-skr-embed-failed": {
+    borderLeftColor: "var(--skr-danger)",
+  },
   ".cm-skr-embed-header": {
     display: "block",
     padding: "0.35rem 0.6rem",
@@ -4558,28 +4737,30 @@ const engineTheme = EditorView.baseTheme({
     position: "fixed",
     zIndex: "40",
     boxSizing: "border-box",
-    width: "min(22rem, calc(100vw - 1.5rem))",
-    maxHeight: "16rem",
+    width: "min(24rem, calc(100vw - 1.5rem))",
+    minHeight: "6rem",
+    maxHeight: "18rem",
     overflow: "auto",
     border: "1px solid var(--skr-border)",
-    borderTop: "3px solid var(--skr-accent)",
-    borderRadius: "0.65rem",
+    borderRadius: "0.375rem",
     color: "var(--skr-text)",
     backgroundColor: "var(--skr-surface-raised)",
     boxShadow: "var(--skr-shadow)",
+    fontFamily: "var(--skr-font-prose)",
   },
   ".cm-skr-link-preview-header": {
     position: "sticky",
     top: "0",
     zIndex: "1",
-    padding: "0.45rem 0.65rem",
+    padding: "0.5rem 1rem",
     borderBottom: "1px solid var(--skr-border)",
-    color: "var(--skr-accent)",
-    backgroundColor: "var(--skr-accent-subtle)",
-    fontSize: "0.8125em",
-    fontWeight: "600",
+    color: "var(--skr-text-muted)",
+    backgroundColor: "var(--skr-surface-raised)",
+    fontFamily: "var(--skr-font-interface)",
+    fontSize: "13px",
+    fontWeight: "400",
   },
-  ".cm-skr-link-preview-body": { padding: "0.35rem 0.55rem" },
+  ".cm-skr-link-preview-body": { padding: "0.75rem 1rem" },
   ".cm-skr-list-mark": { color: "var(--skr-accent)" },
   ".cm-skr-task-control": {
     display: "inline-flex",

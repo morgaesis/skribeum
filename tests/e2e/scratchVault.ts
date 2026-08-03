@@ -34,6 +34,20 @@ export const LF_NOTE_CONTENT = "alpha\nbeta\ngamma\n";
 export const CRLF_NOTE_NAME = "crlf.md";
 export const CRLF_NOTE_CONTENT = "first\r\nsecond\r\nthird\r\n";
 
+export const TREE_FOLDER_NAME = "Projects";
+export const TREE_FIRST_NOTE_NAME = `${TREE_FOLDER_NAME}/tree-one.md`;
+export const TREE_SECOND_NOTE_NAME = `${TREE_FOLDER_NAME}/tree-two.md`;
+export const TREE_FIRST_NOTE_CONTENT =
+  "---\ntitle: Shared tree title\nicon: 🧭\n---\n\nFirst tree note.\n";
+export const TREE_SECOND_NOTE_CONTENT =
+  "---\ntitle: Shared tree title\n---\n\nSecond tree note.\n";
+export const PREVIEW_SOURCE_NOTE_NAME = "workspace-preview.md";
+export const PREVIEW_SOURCE_NOTE_CONTENT =
+  "# Preview source\n\n![[workspace-preview-target]]\n\nHover [[workspace-preview-target]].\n";
+export const PREVIEW_TARGET_NOTE_NAME = "workspace-preview-target.md";
+export const PREVIEW_TARGET_NOTE_CONTENT =
+  "# Preview target\n\n**Decorated preview** with `inline code`.\n";
+
 // Named to sort after the other notes so the keyboard-traversal spec's
 // arrow-key expectations over the first two rows stay stable.
 export const LIVE_PREVIEW_NOTE_NAME = "z-live-preview.md";
@@ -279,6 +293,25 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, CRLF_NOTE_NAME),
     CRLF_NOTE_CONTENT,
+  );
+  mkdirSync(path.join(SCRATCH_VAULT_PATH, TREE_FOLDER_NAME), {
+    recursive: true,
+  });
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TREE_FIRST_NOTE_NAME),
+    TREE_FIRST_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, TREE_SECOND_NOTE_NAME),
+    TREE_SECOND_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, PREVIEW_SOURCE_NOTE_NAME),
+    PREVIEW_SOURCE_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, PREVIEW_TARGET_NOTE_NAME),
+    PREVIEW_TARGET_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, LIVE_PREVIEW_NOTE_NAME),

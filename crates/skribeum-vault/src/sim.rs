@@ -798,8 +798,18 @@ impl FileSystem for SimFs {
             return Err(FsError::NotFound);
         }
         state.app_op("rename")?;
-        if let Some(node) = state.live.remove(from) {
-            state.live.insert(to.to_owned(), node);
+        let moved = state
+            .live
+            .iter()
+            .filter(|(path, _)| *path == from || path.starts_with(from))
+            .map(|(path, node)| (path.clone(), node.clone()))
+            .collect::<Vec<_>>();
+        for (path, _) in &moved {
+            state.live.remove(path);
+        }
+        for (path, node) in moved {
+            let suffix = path.strip_prefix(from).unwrap_or(Path::new(""));
+            state.live.insert(to.join(suffix), node);
         }
         state.queue_event(WatchEvent::Renamed {
             from: from.to_owned(),
@@ -828,6 +838,32 @@ impl FileSystem for SimFs {
             Some(EntryRef::Directory) => Err(FsError::NotADirectory),
             None => Err(FsError::NotFound),
         }
+    }
+
+    fn remove_dir_all(&self, path: &Path) -> Result<(), FsError> {
+        let mut state = self.lock();
+        if state.read_only {
+            return Err(FsError::ReadOnly);
+        }
+        if !matches!(state.live.get(path), Some(EntryRef::Directory)) {
+            return Err(FsError::NotADirectory);
+        }
+        state.app_write_count += 1;
+        state.app_op("remove_dir_all")?;
+        let descendants = state
+            .live
+            .keys()
+            .filter(|candidate| candidate.starts_with(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        for descendant in descendants {
+            state.live.remove(&descendant);
+        }
+        state.queue_event(WatchEvent::Removed(path.to_owned()));
+        state
+            .trace
+            .push(format!("app-remove-dir {}", path.display()));
+        Ok(())
     }
 
     fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {

@@ -79,7 +79,29 @@ before(async () => {
   await browser.tauri.switchWindow("main");
 });
 
+async function setDesktopViewport(): Promise<void> {
+  let outerWidth = 1280;
+  let outerHeight = 800;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await browser.setWindowSize(outerWidth, outerHeight);
+    const actual = await browser.executeAsync<
+      { width: number; height: number },
+      []
+    >((done) => {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() =>
+          done({ width: window.innerWidth, height: window.innerHeight }),
+        ),
+      );
+    });
+    if (actual.width === 1280 && actual.height === 800) return;
+    outerWidth += 1280 - actual.width;
+    outerHeight += 800 - actual.height;
+  }
+}
+
 beforeEach(async () => {
+  await setDesktopViewport();
   const demoUrl = process.env.SKRIBEUM_E2E_DEMO_URL;
   if (demoUrl === undefined) throw new Error("browser demo URL is unavailable");
   const target = new URL(demoUrl);
@@ -435,8 +457,8 @@ describe("work package 1 browser behavior", () => {
         ?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
     });
     await browser.pause(300);
-    expect(await $(".cm-skr-toolbar-command-tooltip").isExisting()).toBe(false);
-    const tooltip = $(".cm-skr-toolbar-command-tooltip");
+    expect(await $(".skr-command-tooltip").isExisting()).toBe(false);
+    const tooltip = $(".skr-command-tooltip");
     await tooltip.waitForExist({ timeout: 1000 });
     expect(await tooltip.getText()).toContain("Bold");
     expect(await tooltip.$("kbd").getText()).toBe(displayedBinding);
@@ -449,7 +471,7 @@ describe("work package 1 browser behavior", () => {
       );
       button?.focus();
     });
-    const focusedTooltip = $(".cm-skr-toolbar-command-tooltip");
+    const focusedTooltip = $(".skr-command-tooltip");
     await focusedTooltip.waitForExist({ timeout: 500 });
     expect(await focusedTooltip.$("kbd").getText()).toBe(displayedBinding);
   });

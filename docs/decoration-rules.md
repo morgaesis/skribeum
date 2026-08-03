@@ -213,6 +213,13 @@ without the leading hash, link semantics and an accessible search label.
 `task-status` stamps the configured symbol, category and theme color token on
 the enclosing task.
 
+Resolved note embeds and link previews mount a nested read-only editor with
+this same table and token set. Preview mode omits frontmatter and renders a
+nested embed as its path header only. Both surfaces use the shared delayed
+skeleton runner; preview hover starts the vault read during its intent delay,
+then the preview controller owns placement, safe-triangle pointer travel, and
+Escape dismissal without moving focus.
+
 ## Task status configuration
 
 `settings.json` stores the task vocabulary as an ordered `task_statuses`

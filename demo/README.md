@@ -43,8 +43,18 @@ in the title region indicates this transient mode, and the Syntax reveal
 setting continues to govern caret-based marker reveal in reading presentation.
 
 Rendered note-link previews are enabled by default. Hover a resolved note link
-briefly, or focus it and press `P`, to open a preview. Pointer out and `Escape`
-dismiss it. The Settings view includes an off switch.
+for 450ms, or focus it and press `P`, to open a preview rendered by the same
+reading pipeline as the note. The preview remains open while the pointer
+travels toward it and closes after pointer departure or with `Escape`. Slow
+previews and embeds share delayed skeleton bars. The Settings view includes an
+off switch.
+
+On wide viewports, opening a second note adds tabs beneath the header. Tabs
+reorder by drag and can move into a right-hand split pane. The sidebar and
+outline resize from their dividers and collapse completely; their geometry,
+the tree expansion, tabs, split, and pane histories belong to the vault
+workspace. Narrow viewports keep one pane and expose open notes through the
+command surface.
 
 Run the demo locally with:
 

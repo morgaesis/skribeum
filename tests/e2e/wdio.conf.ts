@@ -123,6 +123,7 @@ async function prepareSuite(): Promise<void> {
 }
 process.env.SKRIBEUM_E2E_VAULT = SCRATCH_VAULT_PATH;
 process.env.SKRIBEUM_E2E_SETTINGS = SCRATCH_SETTINGS_PATH;
+process.env.SKRIBEUM_E2E_RESET_WORKSPACE = "1";
 process.env.SKRIBEUM_E2E_EDIT_HISTORY = SCRATCH_EDIT_HISTORY_PATH;
 
 // The workspace places build output in target/ at the repository root. The
@@ -153,7 +154,10 @@ const capabilities: TauriCapabilities[] = [
 
 export const config: WebdriverIO.Config = {
   runner: "local",
-  specs: [path.join(configDirectory, "*.spec.ts")],
+  specs: [
+    path.join(configDirectory, "smoke.spec.ts"),
+    path.join(configDirectory, "unified-command-surface.spec.ts"),
+  ],
   maxInstances: 1,
   // The embedded driver provider is the @wdio/tauri-service default: the app
   // itself serves WebDriver via tauri-plugin-wdio-webdriver, so no external

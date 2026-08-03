@@ -1094,6 +1094,132 @@ fn note_create(
     Ok(())
 }
 
+/// Creates a folder inside an open vault and returns the refreshed tree.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn tree_folder_create(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    rel_path: String,
+) -> Result<Vec<TreeEntry>, AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let (entries, search, vault) = {
+        let mut vaults = registry.lock();
+        let open = vaults
+            .get_mut(&handle.id)
+            .ok_or_else(AppError::unknown_handle)?;
+        open.vault
+            .create_directory(&RealFs, &path)
+            .map_err(|error| AppError::from(error).with_path(path.as_str()))?;
+        (
+            tree_entries(&open.vault),
+            Arc::clone(&open.search),
+            open.vault.clone(),
+        )
+    };
+    spawn_index_rebuild(&search, vault);
+    Ok(entries)
+}
+
+/// Moves or renames one vault entry without replacing an existing entry.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn tree_entry_move(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    from_path: String,
+    to_path: String,
+) -> Result<Vec<TreeEntry>, AppError> {
+    let from = VaultPath::new(&from_path)?;
+    let to = VaultPath::new(&to_path)?;
+    let (entries, search, vault) = {
+        let mut vaults = registry.lock();
+        let open = vaults
+            .get_mut(&handle.id)
+            .ok_or_else(AppError::unknown_handle)?;
+        open.vault
+            .move_entry(&RealFs, &from, &to)
+            .map_err(|error| AppError::from(error).with_path(from.as_str()))?;
+        (
+            tree_entries(&open.vault),
+            Arc::clone(&open.search),
+            open.vault.clone(),
+        )
+    };
+    spawn_index_rebuild(&search, vault);
+    Ok(entries)
+}
+
+/// Deletes one vault entry and returns the refreshed tree.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn tree_entry_delete(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    rel_path: String,
+) -> Result<Vec<TreeEntry>, AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let (entries, search, vault) = {
+        let mut vaults = registry.lock();
+        let open = vaults
+            .get_mut(&handle.id)
+            .ok_or_else(AppError::unknown_handle)?;
+        open.vault
+            .delete_entry(&RealFs, &path)
+            .map_err(|error| AppError::from(error).with_path(path.as_str()))?;
+        (
+            tree_entries(&open.vault),
+            Arc::clone(&open.search),
+            open.vault.clone(),
+        )
+    };
+    spawn_index_rebuild(&search, vault);
+    Ok(entries)
+}
+
+/// Reveals one indexed entry in the operating system file manager.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn tree_entry_reveal(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    rel_path: String,
+) -> Result<(), AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let absolute = {
+        let vaults = registry.lock();
+        let open = vaults
+            .get(&handle.id)
+            .ok_or_else(AppError::unknown_handle)?;
+        if !open.vault.tree().iter().any(|entry| entry.path == path) {
+            return Err(
+                AppError::from(skribeum_vault::VaultError::EntryNotFound).with_path(path.as_str())
+            );
+        }
+        open.vault.root().join(path.as_str())
+    };
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer")
+        .arg(format!("/select,{}", absolute.display()))
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open")
+        .arg("-R")
+        .arg(&absolute)
+        .spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open")
+        .arg(absolute.parent().unwrap_or(&absolute))
+        .spawn();
+    result
+        .map(|_| ())
+        .map_err(|error| AppError::window_failed(error.to_string()))
+}
+
 /// Reads a note. Metadata returns as JSON; the note bytes are sent over
 /// `content` as a single raw-payload message (an `ArrayBuffer` in the
 /// webview), so large files never cross the bridge as JSON.
@@ -2148,6 +2274,10 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             vault_tree,
             vault_tree_refresh::<tauri::Wry>,
             note_create,
+            tree_folder_create,
+            tree_entry_move,
+            tree_entry_delete,
+            tree_entry_reveal,
             note_read,
             vault_file_read,
             note_write,

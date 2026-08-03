@@ -81,6 +81,7 @@ function seededFiles(): Map<string, Uint8Array> {
 
 type DemoVault = {
   files: Map<string, Uint8Array>;
+  directories: Set<string>;
   fileHandles: Map<string, BrowserFileHandle>;
   readOnlyPaths: Set<string>;
   directoryHandle: BrowserDirectoryHandle | null;
@@ -91,6 +92,7 @@ type DemoVault = {
 function seededVault(): DemoVault {
   return {
     files: seededFiles(),
+    directories: new Set(),
     fileHandles: new Map(),
     readOnlyPaths: new Set(),
     directoryHandle: null,
@@ -278,6 +280,7 @@ export async function useLocalDirectory(
   const selection = `${LOCAL_FOLDER_VAULT}:${nextFolderSelectionId}`;
   folderSelections.set(selection, {
     files: nextFiles,
+    directories: new Set(),
     fileHandles: nextHandles,
     readOnlyPaths,
     directoryHandle: handle,
@@ -353,6 +356,13 @@ async function projectionHash(bytes: Uint8Array): Promise<string> {
 
 function indexedTree(vault: DemoVault): TreeEntry[] {
   const entries = new Map<string, TreeEntry>();
+  for (const directory of vault.directories) {
+    entries.set(directory, {
+      path: directory,
+      kind: "directory",
+      hidden: directory.split("/").at(-1)?.startsWith(".") === true,
+    });
+  }
   for (const path of vault.files.keys()) {
     const segments = path.split("/");
     if (segments.some((segment) => segment.startsWith("."))) {
@@ -412,6 +422,94 @@ export async function noteCreate(
     return fail("note/already-exists", STRINGS.demoNoteAlreadyExists, relPath);
   }
   vault.files.set(relPath, new Uint8Array());
+}
+
+export async function treeFolderCreate(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<TreeEntry[]> {
+  const vault = vaultFor(handle);
+  assertRelativePath(relPath);
+  if (vault.directories.has(relPath) || vault.files.has(relPath)) {
+    return fail(
+      "entry/already-exists",
+      "The demo entry already exists.",
+      relPath,
+    );
+  }
+  vault.directories.add(relPath);
+  return indexedTree(vault);
+}
+
+export async function treeEntryMove(
+  handle: VaultHandle,
+  fromPath: string,
+  toPath: string,
+): Promise<TreeEntry[]> {
+  const vault = vaultFor(handle);
+  assertRelativePath(fromPath);
+  assertRelativePath(toPath);
+  if (vault.files.has(toPath) || vault.directories.has(toPath)) {
+    return fail(
+      "entry/already-exists",
+      "The demo entry already exists.",
+      toPath,
+    );
+  }
+  const fileMoves = [...vault.files.entries()].filter(
+    ([path]) => path === fromPath || path.startsWith(`${fromPath}/`),
+  );
+  const directoryMoves = [...vault.directories].filter(
+    (path) => path === fromPath || path.startsWith(`${fromPath}/`),
+  );
+  if (fileMoves.length === 0 && directoryMoves.length === 0) {
+    return fail("entry/not-found", "The demo entry does not exist.", fromPath);
+  }
+  for (const [path, bytes] of fileMoves) {
+    vault.files.delete(path);
+    vault.files.set(`${toPath}${path.slice(fromPath.length)}`, bytes);
+  }
+  for (const path of directoryMoves) {
+    vault.directories.delete(path);
+    vault.directories.add(`${toPath}${path.slice(fromPath.length)}`);
+  }
+  return indexedTree(vault);
+}
+
+export async function treeEntryDelete(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<TreeEntry[]> {
+  const vault = vaultFor(handle);
+  assertRelativePath(relPath);
+  let removed =
+    vault.files.delete(relPath) || vault.directories.delete(relPath);
+  for (const path of [...vault.files.keys()]) {
+    if (path.startsWith(`${relPath}/`)) {
+      vault.files.delete(path);
+      removed = true;
+    }
+  }
+  for (const path of [...vault.directories]) {
+    if (path.startsWith(`${relPath}/`)) {
+      vault.directories.delete(path);
+      removed = true;
+    }
+  }
+  if (!removed) {
+    return fail("entry/not-found", "The demo entry does not exist.", relPath);
+  }
+  return indexedTree(vault);
+}
+
+export async function treeEntryReveal(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<void> {
+  const vault = vaultFor(handle);
+  if (!vault.files.has(relPath) && !vault.directories.has(relPath)) {
+    return fail("entry/not-found", "The demo entry does not exist.", relPath);
+  }
 }
 
 export async function noteWrite(

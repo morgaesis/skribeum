@@ -68,6 +68,8 @@ export type WikilinkResolutionContext = {
   embedDepth?: number;
   /** Whether note links expose delayed rendered previews. */
   linkPreviews?: boolean;
+  /** Nested embeds render as headers only inside a transient link preview. */
+  previewMode?: boolean;
 };
 
 export const EMPTY_WIKILINK_CONTEXT: WikilinkResolutionContext = {

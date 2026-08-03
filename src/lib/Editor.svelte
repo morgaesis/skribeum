@@ -98,6 +98,7 @@ let {
   onConflict,
   onWriteError,
   onDocChanged,
+  onDirtyChanged,
   onTitleVisibilityChange,
   onSaved,
   wikilinkNavigationOptions,
@@ -128,6 +129,8 @@ let {
   onWriteError?: (message: string) => void;
   /** Notified after any document-changing transaction (outline refresh). */
   onDocChanged?: (source: string, path: string | null) => void;
+  /** Reports whether the note has pending or in-flight local edits. */
+  onDirtyChanged?: (dirty: boolean) => void;
   /** Reports whether the shell title should be visible for this document. */
   onTitleVisibilityChange?: (visible: boolean) => void;
   /** Notified after pending edits are written and indexed. */
@@ -149,6 +152,7 @@ let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let titleVisibilityFrame: number | undefined;
 let restorationGeneration = 0;
 let arrivalPrepared = false;
+let renderedPath = $state<string | null>(null);
 /** Serializes saves so change sets always apply to the base they expect. */
 let saveChain: Promise<boolean> = Promise.resolve(true);
 
@@ -472,6 +476,10 @@ function scheduleIdleSave() {
   }, settings.autosave_delay_ms);
 }
 
+function notifyDirty() {
+  onDirtyChanged?.(session?.dirty === true || session?.saving === true);
+}
+
 function dispatchTransactions(
   transactions: readonly Transaction[],
   target: EditorView,
@@ -487,6 +495,7 @@ function dispatchTransactions(
     }
     durableEditHistory?.record(transaction);
     session?.recordLocalChanges(transaction.changes);
+    notifyDirty();
     scheduleIdleSave();
   }
   if (transactions.some((transaction) => transaction.docChanged)) {
@@ -620,6 +629,7 @@ async function performSave(): Promise<boolean> {
   let request: ReturnType<NoteSession["beginSave"]>;
   try {
     request = session.beginSave();
+    notifyDirty();
   } catch (error) {
     // A conversion failure means the session state diverged from the
     // document; recover by re-reading the note.
@@ -641,6 +651,7 @@ async function performSave(): Promise<boolean> {
     if (result.result === "written") {
       try {
         session.commitSave(result.projection_hash);
+        notifyDirty();
         onSaved?.();
       } catch {
         await rereadAndReconcile();
@@ -650,12 +661,14 @@ async function performSave(): Promise<boolean> {
       // The on-disk projection moved: never overwrite. Roll the save
       // back, surface the reconciliation state and re-read.
       session.rollbackSave();
+      notifyDirty();
       onConflict?.();
       await rereadAndReconcile();
       return false;
     }
   } catch (error) {
     session.rollbackSave();
+    notifyDirty();
     onWriteError?.(
       error instanceof IpcError ? error.app.message : String(error),
     );
@@ -828,21 +841,25 @@ function initializeForNote(current: LoadedNote | null) {
   if (current === null) {
     session = null;
     durableEditHistory = null;
+    notifyDirty();
     replaceEditorState(doc, false);
     applyLinkContext();
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
     onDocChanged?.(view?.state.doc.toString() ?? doc, path);
+    renderedPath = path;
     return;
   }
   if (current.readOnly) {
     session = null;
     durableEditHistory = null;
+    notifyDirty();
     replaceEditorState(current.text, true);
     applyLinkContext();
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
     onDocChanged?.(view?.state.doc.toString() ?? current.text, path);
+    renderedPath = path;
     return;
   }
   session = new NoteSession(current.bytes, current.meta.projection_hash);
@@ -876,10 +893,12 @@ function initializeForNote(current: LoadedNote | null) {
     }
   }
   replaceEditorState(text, false);
+  notifyDirty();
   applyLinkContext();
   refreshFrontmatter();
   scheduleTitleVisibilityRefresh();
   onDocChanged?.(view?.state.doc.toString() ?? text, path);
+  renderedPath = path;
 }
 
 onMount(() => {
@@ -963,6 +982,7 @@ $effect(() => {
   class="skr-editor-shell flex h-full min-h-0 flex-col"
   data-motion-surface="fade"
   data-motion-entered="true"
+  data-note-path={renderedPath}
 >
   {#if !sourceMode && frontmatter !== null && frontmatter.entries.length > 0}
     <PropertiesPanel

@@ -24,6 +24,29 @@ Source indicator, and one overflow button. The anchored overflow menu contains
 the command aliases, file tree, outline, in-note find, settings, note creation,
 saving, copy-link actions, navigation history, and vault opening.
 
+The wide sidebar starts with the vault name, then a compact tree whose note
+rows use frontmatter titles or first-line headings and hide the default `.md`
+extension. Authored single-grapheme `icon` values appear only in the tree.
+Folder chevrons, indent guides, selected-note reveal, and per-folder expansion
+state keep hierarchy visible. Hover or focus a row to open its registered
+Rename, Delete, Copy link, and desktop file-manager actions. Right-click,
+Shift+F10, the context-menu key, and touch hold open the same menu.
+
+Opening a second note adds a tab strip. `ctrl+tab` and `ctrl+shift+tab` cycle
+tabs, `mod+w` closes one, `mod+shift+t` reopens it, and `mod+1` through `mod+9`
+select by strip order. Drag tabs to reorder them. Split right from More actions,
+or drag a tab to the right third of the editor, to create a second pane. Each
+pane keeps its own tabs, Back and Forward stack, caret, scroll position, and
+properties state. Tabs, the split, pane histories, tree expansion, and panel
+geometry restore with the vault workspace.
+
+The sidebar and outline resize from their inner dividers. Drag directly,
+double-click to reset, or focus a divider and use ArrowLeft, ArrowRight, Home,
+or End. Enter collapses the panel. Sidebar width stays between 12 and 24rem;
+outline width stays between 12 and 20rem. `mod+\` toggles the sidebar and
+`mod+shift+\` toggles the outline. A collapsed sidebar leaves one toggle at the
+leading edge of the header.
+
 At 60rem (960 CSS pixels) and narrower, the file tree and outline leave the
 editor column and open as modal bottom sheets. The permanent top bar contains
 a Files button, the current note display title, and an overflow button. The
@@ -58,6 +81,12 @@ content-anchored reading position, and properties-panel state without moving
 keyboard focus into the editor. A newly opened note starts at the top with its
 caret parked and the form-factor panel default. The panel starts expanded on
 wide viewports and collapsed on narrow viewports.
+
+Hovering a resolved note link for 450ms opens a read-only preview. The preview
+uses the same reading-state decoration pipeline as the note and embeds, keeps
+open while the pointer follows its intent corridor, and closes with Escape.
+Focus a link and press `P` for the keyboard route. Slow previews and embeds
+share delayed skeleton bars, timeout in place, and never flash a spinner.
 
 `mod+e` toggles the active note between reading presentation and its complete
 Markdown source. Source mode keeps syntax colouring but shows frontmatter,

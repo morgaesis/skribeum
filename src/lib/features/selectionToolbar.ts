@@ -10,11 +10,8 @@ import {
   type Tooltip,
   EditorView as View,
 } from "@codemirror/view";
-import {
-  enterMotionSurface,
-  exitMotionSurface,
-  hoverIntentDelay,
-} from "../motion";
+import { commandTooltip } from "../commandTooltip";
+import { enterMotionSurface } from "../motion";
 import type { CommandContext, CommandRegistry } from "../registry";
 import { formatKeybinding } from "../registry";
 import { STRINGS } from "../strings";
@@ -39,84 +36,6 @@ const TOOLBAR_BUTTONS: readonly { id: string; glyph: string }[] = [
 
 function isMacPlatform(): boolean {
   return /Mac|iP[ao]d|iPhone/.test(navigator.platform);
-}
-
-function attachCommandTooltip(
-  button: HTMLButtonElement,
-  title: string,
-  keybinding: string,
-): () => void {
-  let hoverTimer: ReturnType<typeof setTimeout> | undefined;
-  let tooltip: HTMLDivElement | null = null;
-  const tooltipId = `skr-toolbar-tooltip-${button.dataset.commandId?.replaceAll(".", "-")}`;
-
-  const hide = () => {
-    clearTimeout(hoverTimer);
-    hoverTimer = undefined;
-    const visibleTooltip = tooltip;
-    if (visibleTooltip !== null) {
-      void exitMotionSurface(visibleTooltip, () => visibleTooltip.remove());
-    }
-    tooltip = null;
-    button.removeAttribute("aria-describedby");
-  };
-  const show = () => {
-    if (tooltip !== null) return;
-    tooltip = document.createElement("div");
-    tooltip.id = tooltipId;
-    tooltip.className = "cm-skr-toolbar-command-tooltip";
-    tooltip.dataset.motionStateSurface = "true";
-    tooltip.setAttribute("role", "tooltip");
-    const label = document.createElement("span");
-    label.textContent = title;
-    const chip = document.createElement("kbd");
-    chip.textContent = keybinding;
-    tooltip.append(label, chip);
-    document.body.append(tooltip);
-    button.setAttribute("aria-describedby", tooltipId);
-
-    const viewport = window.visualViewport;
-    const leftEdge = (viewport?.offsetLeft ?? 0) + 4;
-    const rightEdge = leftEdge + (viewport?.width ?? window.innerWidth) - 8;
-    const topEdge = (viewport?.offsetTop ?? 0) + 4;
-    const buttonBox = button.getBoundingClientRect();
-    const tooltipBox = tooltip.getBoundingClientRect();
-    const left = Math.min(
-      Math.max(
-        leftEdge,
-        buttonBox.left + buttonBox.width / 2 - tooltipBox.width / 2,
-      ),
-      rightEdge - tooltipBox.width,
-    );
-    tooltip.style.left = `${left}px`;
-    tooltip.style.top = `${Math.max(topEdge, buttonBox.top - tooltipBox.height - 6)}px`;
-    enterMotionSurface(tooltip);
-  };
-  const enter = () => {
-    clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(show, hoverIntentDelay());
-  };
-  const move = () => {
-    if (tooltip !== null) return;
-    clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(show, hoverIntentDelay());
-  };
-  const focus = () => {
-    if (button.matches(":focus-visible")) show();
-  };
-  button.addEventListener("pointerenter", enter);
-  button.addEventListener("pointerleave", hide);
-  button.addEventListener("pointermove", move);
-  button.addEventListener("focus", focus);
-  button.addEventListener("blur", hide);
-  return () => {
-    button.removeEventListener("pointerenter", enter);
-    button.removeEventListener("pointerleave", hide);
-    button.removeEventListener("pointermove", move);
-    button.removeEventListener("focus", focus);
-    button.removeEventListener("blur", hide);
-    hide();
-  };
 }
 
 function toolbarTooltip(view: EditorView): Tooltip | null {
@@ -146,11 +65,10 @@ function toolbarTooltip(view: EditorView): Tooltip | null {
         element.setAttribute("aria-label", command.title);
         element.textContent = button.glyph;
         cleanups.push(
-          attachCommandTooltip(
-            element,
-            command.title,
-            formatKeybinding(binding, isMacPlatform()),
-          ),
+          commandTooltip(element, {
+            title: command.title,
+            keybinding: formatKeybinding(binding, isMacPlatform()),
+          }).destroy,
         );
         // Prevent pointer focus from replacing the editor selection. Click
         // still handles both pointer activation and keyboard activation.

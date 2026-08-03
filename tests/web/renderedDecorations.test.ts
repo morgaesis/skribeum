@@ -13,6 +13,7 @@ import {
   explicitTableSource,
   focusedRenderedTableCell,
   focusRenderedTableCell,
+  pointInPreviewCone,
   sourceRevealFocusMode,
   taskStatusConfiguration,
   tokenHighlightStyle,
@@ -1101,12 +1102,13 @@ describe("rendered decoration DOM", () => {
     };
 
     dispatchWikilinkContext(view, context);
-    const loading = await waitForElement(view.dom, ".cm-skr-embed-loading");
-    expect(loading.getAttribute("role")).toBe("status");
-    expect(loading.getAttribute("aria-label")).toBe("Loading embedded note");
-    expect(loading.querySelectorAll(".cm-skr-embed-skeleton-bar")).toHaveLength(
-      3,
+    const loading = await waitForElement(
+      view.dom,
+      '.skr-loading-embed[data-loading-state="skeleton"]',
     );
+    expect(loading.getAttribute("role")).toBe("status");
+    expect(loading.getAttribute("aria-label")).toBe("Loading content");
+    expect(loading.querySelectorAll(".skr-skeleton-bar")).toHaveLength(2);
 
     resolveNote?.("# Other\n\n**Resolved content**");
     const rendered = await waitForElement(
@@ -1114,7 +1116,9 @@ describe("rendered decoration DOM", () => {
       ".cm-skr-embed-body .cm-editor",
     );
     expect(rendered.textContent).toContain("Resolved content");
-    expect(view.dom.querySelector(".cm-skr-embed-loading")).toBeNull();
+    expect(
+      view.dom.querySelector('[data-loading-state="skeleton"]'),
+    ).toBeNull();
   });
 
   it("shows a visible notice for an embed cycle", () => {
@@ -1163,7 +1167,7 @@ describe("rendered decoration DOM", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     const preview = view.dom.querySelector('[data-testid="link-preview"]');
-    expect(preview?.getAttribute("role")).toBe("dialog");
+    expect(preview?.getAttribute("role")).toBe("region");
     expect(preview?.textContent).toContain("Rendered preview");
     expect(preview?.querySelector(".cm-skr-strong")).not.toBeNull();
     link?.dispatchEvent(
@@ -1175,7 +1179,167 @@ describe("rendered decoration DOM", () => {
     preview?.dispatchEvent(
       new MouseEvent("pointerout", { bubbles: true, relatedTarget: view.dom }),
     );
+    await vi.advanceTimersByTimeAsync(100);
     expect(view.dom.querySelector('[data-testid="link-preview"]')).toBeNull();
+  });
+
+  it("keeps the preview open along the intent cone and closes outside it after grace", async () => {
+    vi.useFakeTimers();
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote: async () => "Preview body",
+    };
+    const view = mountedView("See [[Other]].", undefined, context);
+    const link = view.dom.querySelector<HTMLElement>("[data-preview-target]");
+    link?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(450);
+    const preview = view.dom.querySelector<HTMLElement>(
+      '[data-testid="link-preview"]',
+    );
+    expect(preview).not.toBeNull();
+    if (preview === null) return;
+    preview.getBoundingClientRect = () =>
+      ({ left: 100, right: 300, top: 80, bottom: 200 }) as DOMRect;
+    expect(
+      pointInPreviewCone(
+        { x: 75, y: 100 },
+        { x: 50, y: 50 },
+        preview.getBoundingClientRect(),
+      ),
+    ).toBe(true);
+
+    link?.dispatchEvent(
+      new MouseEvent("pointerout", {
+        bubbles: true,
+        clientX: 50,
+        clientY: 50,
+        relatedTarget: view.dom,
+      }),
+    );
+    window.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 75, clientY: 100 }),
+    );
+    await vi.advanceTimersByTimeAsync(299);
+    expect(preview.isConnected).toBe(true);
+    window.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 75, clientY: 110 }),
+    );
+    await vi.advanceTimersByTimeAsync(299);
+    expect(preview.isConnected).toBe(true);
+    window.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 20, clientY: 220 }),
+    );
+    await vi.advanceTimersByTimeAsync(99);
+    expect(preview.isConnected).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(preview.isConnected).toBe(false);
+  });
+
+  it("opens a delayed preview with the shared three-bar skeleton", async () => {
+    vi.useFakeTimers();
+    let resolveNote: ((source: string) => void) | undefined;
+    const source = new Promise<string>((resolve) => {
+      resolveNote = resolve;
+    });
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote: () => source,
+    };
+    const view = mountedView("See [[Other]].", undefined, context);
+    const link = view.dom.querySelector<HTMLElement>("[data-preview-target]");
+    link?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(449);
+    expect(view.dom.querySelector('[data-testid="link-preview"]')).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    const preview = view.dom.querySelector('[data-testid="link-preview"]');
+    expect(preview?.querySelectorAll(".skr-skeleton-bar")).toHaveLength(3);
+    expect(
+      preview?.querySelector('[data-loading-state="skeleton"]'),
+    ).not.toBeNull();
+
+    resolveNote?.("**Resolved preview**");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(preview?.querySelector(".cm-skr-strong")).not.toBeNull();
+    expect(preview?.querySelector(".skr-skeleton-bar")).toBeNull();
+  });
+
+  it("renders preview content with the embed reading pipeline structure", async () => {
+    vi.useFakeTimers();
+    const linkedSource =
+      "# Shared heading\n\n**Decorated content** and `code`.";
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote: async () => linkedSource,
+    };
+    const view = mountedView(
+      "![[Other]]\n\nPreview [[Other]].",
+      undefined,
+      context,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const embedContent = view.dom.querySelector(
+      '.cm-skr-embed .cm-content[aria-label^="Embedded note"]',
+    );
+    const link = view.dom.querySelector<HTMLElement>("[data-preview-target]");
+    link?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(450);
+    const previewContent = view.dom.querySelector(
+      '[data-testid="link-preview"] .cm-content',
+    );
+    expect(embedContent).not.toBeNull();
+    expect(previewContent).not.toBeNull();
+    expect(previewContent?.innerHTML).toBe(embedContent?.innerHTML);
+  });
+
+  it("elides frontmatter and nested embed bodies from previews", async () => {
+    vi.useFakeTimers();
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md", "Nested.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote: async (path) =>
+        path === "Other.md"
+          ? "---\ntitle: Hidden metadata\n---\n# Visible heading\n\n![[Nested]]"
+          : "Nested body must stay hidden.",
+    };
+    const view = mountedView("Preview [[Other]].", undefined, context);
+    const link = view.dom.querySelector<HTMLElement>("[data-preview-target]");
+    link?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(450);
+    const preview = view.dom.querySelector('[data-testid="link-preview"]');
+    expect(preview?.textContent).toContain("Visible heading");
+    expect(preview?.textContent).not.toContain("Hidden metadata");
+    expect(preview?.textContent).not.toContain("Nested body must stay hidden");
+    expect(preview?.querySelector(".cm-skr-embed-header")).not.toBeNull();
+    expect(
+      preview?.querySelector(".cm-skr-embed .cm-skr-embed-body"),
+    ).toBeNull();
   });
 
   it("opens a focused Markdown note link with P and Escape cancels pending or visible previews", async () => {
@@ -1197,6 +1361,7 @@ describe("rendered decoration DOM", () => {
     );
     expect(link?.getAttribute("role")).toBe("link");
     link?.focus();
+    expect(view.dom.querySelector('[data-testid="link-preview"]')).toBeNull();
     link?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
     link?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),

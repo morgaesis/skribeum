@@ -86,6 +86,32 @@ describe("unified command surface modes", () => {
     );
   });
 
+  it("uses display titles and collision suffixes for note rows", () => {
+    const items = fileItems(
+      ["notes/one.md", "notes/two.md"],
+      [],
+      ["notes/two.md"],
+      "shared",
+      100,
+      {
+        "notes/one.md": "---\ntitle: Shared title\n---\nOne",
+        "notes/two.md": "# Shared title\n\nTwo",
+      },
+    );
+
+    const noteItems = items.filter((item) => item.id.startsWith("file:"));
+    expect(noteItems.map((item) => item.value)).toEqual([
+      "notes/two.md",
+      "notes/one.md",
+    ]);
+    expect(
+      noteItems.map((item) =>
+        item.titleSegments.map((segment) => segment.text).join(""),
+      ),
+    ).toEqual(["Shared title", "Shared title"]);
+    expect(noteItems.map((item) => item.titleSuffix)).toEqual(["two", "one"]);
+  });
+
   it("searches setting descriptions without blending other modes", () => {
     const items = commandItems(createAppRegistry(), "line width", false);
     expect(items[0]?.value).toBe("setting.appearance.line-width");

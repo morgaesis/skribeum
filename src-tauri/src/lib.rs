@@ -552,7 +552,12 @@ pub fn run() {
     // hook. The directory-picker dialog cannot be driven headlessly, so the
     // webdriver seam announces `SKRIBEUM_E2E_VAULT` to the webview.
     #[cfg(any(debug_assertions, feature = "webdriver"))]
-    let builder = builder.on_page_load(|webview, _payload| {
+    #[cfg(feature = "webdriver")]
+    let reset_workspace = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    #[cfg(feature = "webdriver")]
+    let page_load_reset_workspace = reset_workspace.clone();
+
+    let builder = builder.on_page_load(move |webview, _payload| {
         #[cfg(debug_assertions)]
         {
             let _ = webview.eval("window.__SKRIBEUM_DEBUG_COLD_START__ = true;");
@@ -563,6 +568,13 @@ pub fn run() {
             && let Ok(encoded) = serde_json::to_string(&vault_path)
         {
             let _ = webview.eval(format!("window.__SKRIBEUM_E2E_VAULT__ = {encoded};"));
+        }
+
+        #[cfg(feature = "webdriver")]
+        if std::env::var("SKRIBEUM_E2E_RESET_WORKSPACE").as_deref() == Ok("1")
+            && page_load_reset_workspace.swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            let _ = webview.eval("window.__SKRIBEUM_E2E_RESET_WORKSPACE__ = true;");
         }
 
         #[cfg(feature = "webdriver")]

@@ -155,6 +155,9 @@ pub trait FileSystem: Send + Sync {
     /// Removes a file.
     fn remove_file(&self, path: &Path) -> Result<(), FsError>;
 
+    /// Removes a directory and all descendants.
+    fn remove_dir_all(&self, path: &Path) -> Result<(), FsError>;
+
     /// Creates a directory, including missing parents.
     fn create_dir_all(&self, path: &Path) -> Result<(), FsError>;
 

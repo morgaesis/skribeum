@@ -164,11 +164,6 @@ export function editorKeymap(
       ? []
       : [
           {
-            key: "Mod-z",
-            run: historyCommands.undo,
-            preventDefault: true,
-          },
-          {
             key: "Mod-y",
             mac: "Mod-Shift-z",
             run: historyCommands.redo,
@@ -177,6 +172,11 @@ export function editorKeymap(
           {
             linux: "Ctrl-Shift-z",
             run: historyCommands.redo,
+            preventDefault: true,
+          },
+          {
+            key: "Mod-z",
+            run: historyCommands.undo,
             preventDefault: true,
           },
         ];

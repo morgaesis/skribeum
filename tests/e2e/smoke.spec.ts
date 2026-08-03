@@ -816,19 +816,31 @@ async function placeCursorAtTagCompletionPosition(
     position === "final"
       ? TAG_COMPLETION_TARGET_NOTE_CONTENT.length
       : TAG_COMPLETION_MIDDLE_LINE.length + 1;
-  const anchor = await browser.execute(
-    (sourceText: string, offset: number) => {
-      return (
-        window as Window & {
-          __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
-            sourceText: string,
-            relativeOffset: number,
-          ) => number | null;
-        }
-      ).__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?.(sourceText, offset);
+  let anchor: number | null = null;
+  await browser.waitUntil(
+    async () => {
+      const value = await browser.execute(
+        (sourceText: string, offset: number) => {
+          return (
+            window as Window & {
+              __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
+                sourceText: string,
+                relativeOffset: number,
+              ) => number | null;
+            }
+          ).__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?.(sourceText, offset);
+        },
+        TAG_COMPLETION_MIDDLE_LINE,
+        relativeOffset,
+      );
+      if (typeof value !== "number") return false;
+      anchor = value;
+      return true;
     },
-    TAG_COMPLETION_MIDDLE_LINE,
-    relativeOffset,
+    {
+      timeout: 5000,
+      timeoutMsg: "tag completion target line was not selectable",
+    },
   );
   expect(typeof anchor).toBe("number");
   await browser.waitUntil(

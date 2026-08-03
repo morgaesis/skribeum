@@ -18,7 +18,7 @@ use crate::fs::{Clock, DirEntry, FileMetadata, FileSystem, FsError, WatchEvent, 
 pub struct RealFs;
 
 /// The production [`Clock`]: monotonic time from [`Instant`].
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct RealClock {
     origin: Instant,
 }

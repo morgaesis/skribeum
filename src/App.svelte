@@ -29,12 +29,13 @@ import {
 import {
   createNoteNavigator,
   type FollowWikilinkOptions,
-  followWikilinkUnderCursor,
+  followLinkUnderCursor as followEditorLinkUnderCursor,
   type NavigationState,
   type NoteAddress,
   type NoteNavigator,
   type NoteViewState,
   noteFragmentPosition,
+  openExternalLink,
 } from "./lib/features/navigation";
 import {
   computeOutline,
@@ -1356,6 +1357,13 @@ function wikilinkNavigationOptions(): FollowWikilinkOptions {
     unresolved: (reason) => {
       pushBanner({ text: reason });
     },
+    openExternal: async (url) => {
+      try {
+        await openExternalLink(url, navigationSurface, window);
+      } catch {
+        pushBanner({ text: STRINGS.externalLinkOpenFailed });
+      }
+    },
   };
 }
 
@@ -1366,7 +1374,7 @@ function followLinkUnderCursor(
   if (view === null) {
     return false;
   }
-  return followWikilinkUnderCursor(view, wikilinkNavigationOptions());
+  return followEditorLinkUnderCursor(view, wikilinkNavigationOptions());
 }
 
 async function refreshMissingNote() {

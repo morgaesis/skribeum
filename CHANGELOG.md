@@ -15,6 +15,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Plain HTTP and HTTPS URLs and Markdown links open in the system browser from
+  the desktop application and in a new `noopener` tab from the browser demo.
+- Desktop watcher events use the same monotonic clock as note saves, so genuine
+  external edits ingest after autosave while matching self-write echoes remain
+  suppressed by projection hash and preserve undo and redo history.
 - Desktop windows remain hidden until the first frontend frame is painted and
   use the active theme surface behind the webview during startup.
 - Note history restores UTF-8 caret offsets, content-anchored reading position,

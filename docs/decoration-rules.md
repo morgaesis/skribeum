@@ -203,11 +203,11 @@ above. `-` means the row applies to every node of that name.
 | `Frontmatter` | `revealScope=node revealDescendants` | `line cm-skr-frontmatter` | cursor-inside |
 
 Context-dependent attributes come from nine documented engine builtins a row
-opts into: `markdown-link-preview` adds preview targets and link semantics to
-supported Markdown links, `wikilink-resolution` stamps `data-resolved` from
-the vault tree (unresolved links style distinctly), `callout-type` stamps
-`data-callout` on source markers and icons inside a typed callout, and
-`plain-blockquote` limits the generic line to untyped blockquotes.
+opts into: `markdown-link-preview` adds preview targets to local note links and
+external-link semantics to HTTP and HTTPS targets, `wikilink-resolution` stamps
+`data-resolved` from the vault tree (unresolved links style distinctly),
+`callout-type` stamps `data-callout` on source markers and icons inside a typed
+callout, and `plain-blockquote` limits the generic line to untyped blockquotes.
 `rich-callout` limits source-backed themed lines to typed callouts and stamps
 canonical type, accent, foldability and line-position attributes.
 `code-language` stamps `data-language` from the fence info string.

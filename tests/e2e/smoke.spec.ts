@@ -13,6 +13,10 @@ import {
   CANVAS_FILE_CONTENT,
   CANVAS_FILE_NAME,
   CRLF_NOTE_NAME,
+  DESKTOP_EXTERNAL_NOTE_CONTENT,
+  DESKTOP_EXTERNAL_NOTE_NAME,
+  DESKTOP_UNDO_NOTE_CONTENT,
+  DESKTOP_UNDO_NOTE_NAME,
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
@@ -1106,6 +1110,36 @@ async function pressFocusedKey(key: string, shiftKey = false): Promise<void> {
     },
   ]);
   await browser.releaseActions();
+}
+
+async function pressEditorHistoryShortcut(
+  direction: "undo" | "redo",
+): Promise<void> {
+  const handled = await browser.execute(
+    ({ isMac, direction }) => {
+      const target = document.activeElement;
+      if (!(target instanceof HTMLElement)) {
+        throw new Error("editor does not own keyboard focus");
+      }
+      const redo = direction === "redo";
+      const key = redo && !isMac ? "y" : "z";
+      const options: KeyboardEventInit = {
+        bubbles: true,
+        cancelable: true,
+        code: key === "y" ? "KeyY" : "KeyZ",
+        ctrlKey: !isMac,
+        key,
+        metaKey: isMac,
+        shiftKey: redo && isMac,
+      };
+      const keyDown = new KeyboardEvent("keydown", options);
+      target.dispatchEvent(keyDown);
+      target.dispatchEvent(new KeyboardEvent("keyup", options));
+      return keyDown.defaultPrevented;
+    },
+    { isMac: process.platform === "darwin", direction },
+  );
+  expect(handled).toBe(true);
 }
 
 async function expectNoAxeViolations(surface: string) {
@@ -5881,6 +5915,71 @@ describe("skribeum core editing surfaces", () => {
     await openNoteFromTree(CANVAS_FILE_NAME);
     await $('[data-testid="canvas-view"]').waitForExist({ timeout: 15000 });
     await expectNoAxeViolations("canvas viewer");
+  });
+
+  it("keeps_undo_and_redo_after_an_autosave_is_observed_on_disk", async () => {
+    await openNoteFromTree(DESKTOP_UNDO_NOTE_NAME);
+    await browser.waitUntil(
+      async () =>
+        (await editorDocumentText()).trimEnd() ===
+        DESKTOP_UNDO_NOTE_CONTENT.trimEnd(),
+      { timeout: 15000, timeoutMsg: "desktop undo fixture did not open" },
+    );
+    await placeCursorAtLineEnd("undo base");
+    await $(".cm-content").addValue("typed");
+    const saved = `${DESKTOP_UNDO_NOTE_CONTENT.trimEnd()}typed\n`;
+    await waitForDisk(DESKTOP_UNDO_NOTE_NAME, saved);
+    await browser.pause(1800);
+
+    expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
+    await pressEditorHistoryShortcut("undo");
+    expect((await editorDocumentText()).trimEnd()).toBe(
+      DESKTOP_UNDO_NOTE_CONTENT.trimEnd(),
+    );
+    await pressEditorHistoryShortcut("redo");
+    expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
+  });
+
+  it("ingests_an_external_edit_and_clears_only_the_pre_ingest_undo_log", async () => {
+    await openNoteFromTree(DESKTOP_EXTERNAL_NOTE_NAME);
+    await browser.waitUntil(
+      async () =>
+        (await editorDocumentText()).trimEnd() ===
+        DESKTOP_EXTERNAL_NOTE_CONTENT.trimEnd(),
+      {
+        timeout: 15000,
+        timeoutMsg: "desktop external-edit fixture did not open",
+      },
+    );
+    await placeCursorAtLineEnd("external base");
+    await $(".cm-content").addValue("local");
+    const saved = `${DESKTOP_EXTERNAL_NOTE_CONTENT.trimEnd()}local\n`;
+    await waitForDisk(DESKTOP_EXTERNAL_NOTE_NAME, saved);
+    await browser.pause(1800);
+
+    const external = `outside ${saved}`;
+    writeFileSync(
+      path.join(SCRATCH_VAULT_PATH, DESKTOP_EXTERNAL_NOTE_NAME),
+      external,
+    );
+    await browser.waitUntil(
+      async () => (await editorDocumentText()).trimEnd() === external.trimEnd(),
+      {
+        timeout: 10000,
+        timeoutMsg: "the genuine external edit did not ingest",
+      },
+    );
+
+    await placeCursorAtLineEnd(external.trimEnd());
+    await $(".cm-content").addValue("post");
+    const postIngest = `${external.trimEnd()}post`;
+    expect((await editorDocumentText()).trimEnd()).toBe(postIngest);
+    await pressEditorHistoryShortcut("undo");
+    expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
+    await pressEditorHistoryShortcut("undo");
+    expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
+    await pressEditorHistoryShortcut("redo");
+    expect((await editorDocumentText()).trimEnd()).toBe(postIngest);
   });
 
   it("browser_demo_restores_default_appearance_and_persists", async () => {

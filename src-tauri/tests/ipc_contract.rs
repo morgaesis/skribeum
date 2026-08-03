@@ -61,6 +61,43 @@ fn command_set(bindings: &str) -> BTreeSet<String> {
 #[derive(serde::Deserialize)]
 struct Allowlist {
     commands: Vec<String>,
+    plugin_commands: Vec<String>,
+}
+
+#[test]
+fn plugin_commands_are_deliberate_and_capability_scoped() {
+    let repository = repository_root();
+    let allowlist_bytes = RealFs
+        .read(&repository.join("ipc-allowlist.json"))
+        .expect("ipc-allowlist.json exists at the repository root");
+    let allowlist: Allowlist =
+        serde_json::from_slice(&allowlist_bytes).expect("ipc-allowlist.json parses");
+    assert_eq!(
+        allowlist.plugin_commands,
+        ["plugin:opener|open_url"],
+        "the plugin IPC surface is an exact reviewed allowlist"
+    );
+
+    let capability_bytes = RealFs
+        .read(&repository.join("src-tauri/capabilities/default.json"))
+        .expect("default capability exists");
+    let capability: serde_json::Value =
+        serde_json::from_slice(&capability_bytes).expect("default capability parses");
+    let permissions = capability["permissions"]
+        .as_array()
+        .expect("capability permissions are an array");
+    let opener = permissions
+        .iter()
+        .find(|permission| permission["identifier"] == "opener:allow-open-url")
+        .expect("the opener URL command has a capability");
+    assert_eq!(
+        opener["allow"],
+        serde_json::json!([
+            { "url": "http://*" },
+            { "url": "https://*" }
+        ]),
+        "the opener capability must allow only HTTP and HTTPS URLs"
+    );
 }
 
 #[test]

@@ -113,6 +113,12 @@ the current absolute note URL, while desktop links use the vault's configured
 note-link form. Outline rows copy heading links from their trailing action, and
 command mode can copy the heading nearest the caret.
 
+Plain HTTP and HTTPS URLs and Markdown links open in the system browser from
+the desktop application. The browser demo opens the same external links in a
+new tab without granting the new page access to its opener. Click a rendered
+link or place the caret in its source and run Follow link. Other URL schemes
+are not opened.
+
 ## Settings
 
 Open Settings from the overflow menu or with `mod+,`. The surface is organized into

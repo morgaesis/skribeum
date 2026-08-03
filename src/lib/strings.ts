@@ -28,6 +28,7 @@ export const STRINGS = {
     "Create the Markdown file at this path in the vault, then refresh the vault index.",
   noteNotFoundRefresh: "Refresh and open",
   noteWriteFailed: "Saving the note failed",
+  externalLinkOpenFailed: "Opening the external link failed",
   contentSwitchUnsaved:
     "The current note could not be saved. Its edits remain open in memory.",
   conflictBanner:

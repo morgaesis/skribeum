@@ -22,6 +22,7 @@
     "file_open_resolve",
     "open_files_take"
   ],
+  "plugin_commands": ["plugin:opener|open_url"],
   "notes": {
     "note_create": "Creates an empty Markdown note at a validated vault-relative path without overwriting an existing file, then refreshes the vault index.",
     "note_write": "Contract addition per design decision 100: change-set based writes verified against the expected projection hash, with a conflict variant carrying the current hash and a reconciliation handle, never a silent overwrite.",
@@ -38,6 +39,7 @@
     "window_warmup": "Lets Linux WebKit commit an offscreen frame without exposing the startup window.",
     "window_ready": "Applies persisted zoom and reveals a hidden or warmed window after the frontend reports its first painted frame.",
     "file_open_resolve": "Resolves an operating-system file-open path to a known vault or the file's containing folder.",
-    "open_files_take": "Drains file-open paths queued by argv, second-instance forwarding, or native open-file events."
+    "open_files_take": "Drains file-open paths queued by argv, second-instance forwarding, or native open-file events.",
+    "plugin:opener|open_url": "Opens validated HTTP and HTTPS links in the system browser. The capability excludes paths and every other URL scheme."
   }
 }

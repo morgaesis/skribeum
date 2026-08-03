@@ -1,7 +1,7 @@
 0..0 line class="cm-skr-heading cm-skr-heading-1"
 0..2 hide node=HeaderMark
 39..40 hide node=LinkMark
-40..65 mark class="cm-skr-url"
+40..65 mark class="cm-skr-url" data-external-url="https://example.com/angle" role="link" tabindex="0"
 65..66 hide node=LinkMark
 99..100 hide node=LinkMark
 100..119 mark class="cm-skr-url"
@@ -9,19 +9,19 @@
 169..170 hide node=LinkMark
 170..196 mark class="cm-skr-url"
 196..197 hide node=LinkMark
-227..251 mark class="cm-skr-url"
+227..251 mark class="cm-skr-url" data-external-url="https://example.com/bare" role="link" tabindex="0"
 307..332 mark class="cm-skr-url"
 386..387 hide node=LinkMark
-387..429 mark class="cm-skr-url"
+387..429 mark class="cm-skr-url" data-external-url="https://example.com/search?q=corpus&page=2" role="link" tabindex="0"
 429..430 hide node=LinkMark
 529..530 hide node=EmphasisMark
 529..572 mark class="cm-skr-emphasis"
 534..535 hide node=LinkMark
-535..565 mark class="cm-skr-url"
+535..565 mark class="cm-skr-url" data-external-url="https://example.com/emphasized" role="link" tabindex="0"
 565..566 hide node=LinkMark
 571..572 hide node=EmphasisMark
 609..609 line class="cm-skr-blockquote"
 609..610 mark class="cm-skr-quote-mark"
 633..634 hide node=LinkMark
-634..665 mark class="cm-skr-url"
+634..665 mark class="cm-skr-url" data-external-url="https://example.com/quoted-link" role="link" tabindex="0"
 665..666 hide node=LinkMark

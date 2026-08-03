@@ -62,6 +62,12 @@ export const MOTION_PREVIEW_NOTE_NAME = "zy-motion-preview.md";
 export const MOTION_PREVIEW_NOTE_CONTENT =
   "# Motion heading\n\n[short link](https://example.com/path)\n\n![[missing-note]]\n\n> [!note]+ Deliberate callout\n> callout body\n\nafter motion constructs\n";
 
+export const DESKTOP_UNDO_NOTE_NAME = "zz-desktop-undo.md";
+export const DESKTOP_UNDO_NOTE_CONTENT = "undo base\n";
+
+export const DESKTOP_EXTERNAL_NOTE_NAME = "zz-desktop-external.md";
+export const DESKTOP_EXTERNAL_NOTE_CONTENT = "external base\n";
+
 export const RENDERING_NOTE_NAME = "zz-rendering.md";
 export const RENDERING_NOTE_CONTENT =
   "# Rendered content\n\nInline $a^2 + b^2 = c^2$.\n\n$$\nE = mc^2\n$$\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\nthis is not valid mermaid\n```\n";
@@ -275,6 +281,14 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, MOTION_PREVIEW_NOTE_NAME),
     MOTION_PREVIEW_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, DESKTOP_UNDO_NOTE_NAME),
+    DESKTOP_UNDO_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, DESKTOP_EXTERNAL_NOTE_NAME),
+    DESKTOP_EXTERNAL_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),

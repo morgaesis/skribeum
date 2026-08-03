@@ -3,13 +3,13 @@
 35..35 line class="cm-skr-heading cm-skr-heading-2"
 35..38 hide node=HeaderMark
 55..56 hide node=LinkMark
-55..94 mark class="cm-skr-link"
+55..94 mark class="cm-skr-link" data-external-url="https://example.com/path" role="link" tabindex="0"
 67..68 hide node=LinkMark
 68..69 hide node=LinkMark
 69..93 hide node=URL
 93..94 hide node=LinkMark
 113..114 hide node=LinkMark
-113..180 mark class="cm-skr-link"
+113..180 mark class="cm-skr-link" data-external-url="https://example.com/other" role="link" tabindex="0"
 136..137 hide node=LinkMark
 137..138 hide node=LinkMark
 138..163 hide node=URL
@@ -55,17 +55,17 @@
 955..958 hide node=HeaderMark
 971..979 mark class="cm-skr-link-label"
 979..980 hide node=LinkMark
-981..1007 mark class="cm-skr-url"
+981..1007 mark class="cm-skr-url" data-external-url="https://example.com/refone" role="link" tabindex="0"
 1008..1029 mark class="cm-skr-link-label"
 1029..1030 hide node=LinkMark
-1031..1060 mark class="cm-skr-url"
+1031..1060 mark class="cm-skr-url" data-external-url="https://example.com/collapsed" role="link" tabindex="0"
 1061..1071 mark class="cm-skr-link-label"
 1071..1072 hide node=LinkMark
-1073..1101 mark class="cm-skr-url"
+1073..1101 mark class="cm-skr-url" data-external-url="https://example.com/refthree" role="link" tabindex="0"
 1102..1126 hide node=LinkTitle
 1127..1132 mark class="cm-skr-link-label"
 1132..1133 hide node=LinkMark
-1134..1168 mark class="cm-skr-url"
+1134..1168 mark class="cm-skr-url" data-external-url="https://example.com/foo-definition" role="link" tabindex="0"
 1170..1189 mark class="cm-skr-link-label"
 1189..1190 hide node=LinkMark
-1191..1227 mark class="cm-skr-url"
+1191..1227 mark class="cm-skr-url" data-external-url="https://example.com/never-referenced" role="link" tabindex="0"

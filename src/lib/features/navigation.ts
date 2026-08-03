@@ -8,6 +8,7 @@ import { syntaxTree } from "@codemirror/language";
 import { type EditorState, Facet } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import { openSystemUrl } from "../ipc/services";
 import { isNotePath, withoutNoteExtension } from "../noteTitles";
 import type { CommandRegistry } from "../registry";
 import { STRINGS } from "../strings";
@@ -800,7 +801,83 @@ export type FollowWikilinkOptions = {
   currentPath: string | null;
   navigate(address: NoteAddress): Promise<void> | void;
   unresolved(reason: string): void;
+  /** Opens an external HTTP or HTTPS URL outside the note navigator. */
+  openExternal?: (url: string) => Promise<void> | void;
 };
+
+/** Returns a source URL only when it uses an explicitly supported scheme. */
+export function externalHttpUrl(rawTarget: string): string | null {
+  const unwrapped =
+    rawTarget.startsWith("<") && rawTarget.endsWith(">")
+      ? rawTarget.slice(1, -1)
+      : rawTarget;
+  let parsed: URL;
+  try {
+    parsed = new URL(unwrapped);
+  } catch {
+    return null;
+  }
+  return parsed.protocol === "http:" || parsed.protocol === "https:"
+    ? unwrapped
+    : null;
+}
+
+function externalLinkFromNode(
+  state: EditorState,
+  node: SyntaxNode | null,
+): string | null {
+  let current = node;
+  while (current !== null) {
+    if (current.name === "Image") {
+      return null;
+    }
+    if (current.name === "Link") {
+      const url = current.getChild("URL");
+      return url === null
+        ? null
+        : externalHttpUrl(state.doc.sliceString(url.from, url.to));
+    }
+    if (current.name === "URL") {
+      return externalHttpUrl(state.doc.sliceString(current.from, current.to));
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+/** Returns the external HTTP or HTTPS link at a document offset. */
+export function externalLinkAt(
+  state: EditorState,
+  position: number,
+): string | null {
+  const bounded = Math.max(0, Math.min(position, state.doc.length));
+  for (const side of [1, -1] as const) {
+    const target = externalLinkFromNode(
+      state,
+      syntaxTree(state).resolveInner(bounded, side),
+    );
+    if (target !== null) {
+      return target;
+    }
+  }
+  return null;
+}
+
+/** Opens an external link through the platform-appropriate browser route. */
+export async function openExternalLink(
+  url: string,
+  mode: NavigationMode,
+  browserWindow: Window = window,
+): Promise<void> {
+  if (externalHttpUrl(url) === null) {
+    return;
+  }
+  if (mode === "desktop") {
+    await openSystemUrl(url);
+    return;
+  }
+  browserWindow.open(url, "_blank", "noopener");
+}
 
 /** Navigation capabilities available to rendered editor widgets. */
 export const wikilinkNavigationOptionsFacet = Facet.define<
@@ -868,6 +945,21 @@ export function followWikilinkAt(
   return followed;
 }
 
+/** Follows an external URL or wikilink at an editor offset. */
+export function followLinkAt(
+  view: EditorView,
+  position: number,
+  options: FollowWikilinkOptions,
+): boolean {
+  const external = externalLinkAt(view.state, position);
+  if (external !== null && options.openExternal !== undefined) {
+    void options.openExternal(external);
+    view.contentDOM.blur();
+    return true;
+  }
+  return followWikilinkAt(view, position, options);
+}
+
 /** Finds a wikilink position from a decorated DOM descendant. */
 export function wikilinkPositionFromElement(
   view: EditorView,
@@ -875,6 +967,23 @@ export function wikilinkPositionFromElement(
 ): number | null {
   const element = target instanceof Element ? target : null;
   const link = element?.closest(".cm-skr-wikilink");
+  if (link === null || link === undefined || !view.dom.contains(link)) {
+    return null;
+  }
+  try {
+    return view.posAtDOM(link, 0);
+  } catch {
+    return null;
+  }
+}
+
+/** Finds an external or internal link position from a decorated descendant. */
+export function linkPositionFromElement(
+  view: EditorView,
+  target: EventTarget | null,
+): number | null {
+  const element = target instanceof Element ? target : null;
+  const link = element?.closest(".cm-skr-wikilink, [data-external-url]");
   if (link === null || link === undefined || !view.dom.contains(link)) {
     return null;
   }
@@ -896,6 +1005,15 @@ export function followWikilinkUnderCursor(
     focused ?? view.state.selection.main.head,
     options,
   );
+}
+
+/** Follows the external URL or wikilink at the cursor or focused widget. */
+export function followLinkUnderCursor(
+  view: EditorView,
+  options: FollowWikilinkOptions,
+): boolean {
+  const focused = linkPositionFromElement(view, document.activeElement);
+  return followLinkAt(view, focused ?? view.state.selection.main.head, options);
 }
 
 /** Registers history movement and cursor-link following through the registry. */

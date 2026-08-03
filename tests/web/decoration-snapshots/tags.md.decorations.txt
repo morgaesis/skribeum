@@ -14,7 +14,7 @@
 380..384 mark class="cm-skr-tag" aria-label="Search for tag: #two" data-tag="two" role="link" tabindex="0"
 385..391 mark class="cm-skr-tag" aria-label="Search for tag: #three" data-tag="three" role="link" tabindex="0"
 467..473 mark class="cm-skr-tag" aria-label="Search for tag: #y2024" data-tag="y2024" role="link" tabindex="0"
-504..536 mark class="cm-skr-url"
+504..536 mark class="cm-skr-url" data-external-url="https://example.com/page#section" role="link" tabindex="0"
 629..629 line class="cm-skr-heading cm-skr-heading-1"
 629..631 hide node=HeaderMark
 682..683 mark class="cm-skr-list-mark"

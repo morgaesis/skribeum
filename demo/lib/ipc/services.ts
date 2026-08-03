@@ -603,6 +603,10 @@ export async function vaultTreeRefresh(
   return vaultTree(handle);
 }
 
+export async function openSystemUrl(url: string): Promise<void> {
+  globalThis.open(url, "_blank", "noopener");
+}
+
 export function byteRangesToCharRanges(
   text: string,
   byteRanges: readonly [number, number][],

@@ -8,37 +8,39 @@ use skribeum_vault::{
 fn entry(index: usize) -> EditHistoryEntry {
     let before = format!("text {index}");
     let after = format!("text {}", index + 1);
+    let before_length = u32::try_from(before.len()).expect("test text length fits u32");
+    let after_length = u32::try_from(after.len()).expect("test text length fits u32");
     EditHistoryEntry {
         changes: vec![EditHistoryChange {
             from: 5,
-            to: before.len() as u32,
+            to: before_length,
             insert: (index + 1).to_string(),
         }],
         inverse: vec![EditHistoryChange {
             from: 5,
-            to: after.len() as u32,
+            to: after_length,
             insert: index.to_string(),
         }],
         selection_before: EditHistorySelection {
             ranges: vec![EditHistoryRange {
-                anchor: before.len() as u32,
-                head: before.len() as u32,
+                anchor: before_length,
+                head: before_length,
             }],
             main: 0,
         },
         selection_after: EditHistorySelection {
             ranges: vec![EditHistoryRange {
-                anchor: after.len() as u32,
-                head: after.len() as u32,
+                anchor: after_length,
+                head: after_length,
             }],
             main: 0,
         },
         before: EditHistoryStateCheck {
-            length: before.len() as u32,
+            length: before_length,
             projection_hash: format!("before-{index}"),
         },
         after: EditHistoryStateCheck {
-            length: after.len() as u32,
+            length: after_length,
             projection_hash: format!("after-{index}"),
         },
     }
@@ -170,7 +172,13 @@ fn duplicate_batches_are_idempotent() {
     let action = EditHistoryAction::Entry { entry: entry(0) };
     for _ in 0..2 {
         journal
-            .append(&fs, &root, "note.md", "same-batch", &[action.clone()])
+            .append(
+                &fs,
+                &root,
+                "note.md",
+                "same-batch",
+                std::slice::from_ref(&action),
+            )
             .expect("batch appends");
     }
     assert_eq!(journal.read(&fs, &root, "note.md").undo, [entry(0)]);

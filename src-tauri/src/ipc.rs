@@ -1368,6 +1368,29 @@ fn edit_history_clear(
         .map_err(|error| AppError::from(error).with_path(path.as_str()))
 }
 
+fn apply_external_recon_state(
+    vault: &Vault,
+    edit_history: Option<&EditHistoryJournal>,
+    root: &Path,
+    event: &ReconEvent,
+) {
+    match event {
+        ReconEvent::ExternalUpdate {
+            path,
+            projection_hash,
+            change_set,
+        } => {
+            let _ = vault.ingest_external_note(path, change_set, projection_hash);
+        }
+        ReconEvent::ExternalRemove { path } => {
+            if let Some(journal) = edit_history {
+                let _ = journal.remove_note(&RealFs, root, path.as_str());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Subscribes to change events under an open vault. Events arrive as the
 /// `VaultChanged` event stream; a second subscription for the same handle is
 /// a no-op.
@@ -1470,19 +1493,7 @@ fn watch_subscribe<R: Runtime>(
                 recon.poll(&RealFs, &root, clock.now())
             };
             for event in events {
-                if let ReconEvent::ExternalUpdate {
-                    path,
-                    projection_hash,
-                    change_set,
-                } = &event
-                {
-                    let _ = vault.ingest_external_note(path, change_set, projection_hash);
-                }
-                if let ReconEvent::ExternalRemove { path } = &event
-                    && let Some(journal) = &edit_history
-                {
-                    let _ = journal.remove_note(&RealFs, &root, path.as_str());
-                }
+                apply_external_recon_state(&vault, edit_history.as_ref(), &root, &event);
                 // External changes update the search index incrementally:
                 // updates re-read and re-index, removals drop the row.
                 if let Some(index) = search

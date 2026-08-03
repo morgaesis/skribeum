@@ -34,7 +34,7 @@ pub enum EditHistoryError {
     Serialize,
 }
 
-/// One UTF-16 text replacement in a CodeMirror document.
+/// One UTF-16 text replacement in a `CodeMirror` document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditHistoryChange {
     /// Inclusive UTF-16 offset in the starting document.
@@ -45,7 +45,7 @@ pub struct EditHistoryChange {
     pub insert: String,
 }
 
-/// One anchor and head pair in a CodeMirror selection.
+/// One anchor and head pair in a `CodeMirror` selection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditHistoryRange {
     /// Selection anchor as a UTF-16 offset.
@@ -54,7 +54,7 @@ pub struct EditHistoryRange {
     pub head: u32,
 }
 
-/// A complete CodeMirror selection, including its main range.
+/// A complete `CodeMirror` selection, including its main range.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditHistorySelection {
     /// Every selection range.
@@ -261,7 +261,7 @@ impl EditHistoryJournal {
         if folded.snapshot.undo.len() + folded.snapshot.redo.len() > self.entry_cap
             || note_bytes > self.note_cap_bytes
         {
-            self.compact_records(fs, records)?;
+            self.compact_records(fs, &records)?;
         }
         Ok(())
     }
@@ -339,10 +339,10 @@ impl EditHistoryJournal {
     fn compact_records(
         &self,
         fs: &dyn FileSystem,
-        records: Vec<StoredRecord>,
+        records: &[StoredRecord],
     ) -> Result<(), EditHistoryError> {
         let mut grouped: BTreeMap<(String, String), Vec<&StoredRecord>> = BTreeMap::new();
-        for record in &records {
+        for record in records {
             grouped
                 .entry((record.root.clone(), record.path.clone()))
                 .or_default()
@@ -351,7 +351,7 @@ impl EditHistoryJournal {
         let mut compacted = Vec::new();
         for ((root, path), note_records) in grouped {
             let folded = fold_records(note_records.into_iter());
-            if let Some(record) = self.compacted_record(root, path, folded)? {
+            if let Some(record) = self.compacted_record(&root, &path, &folded)? {
                 compacted.push(record);
             }
         }
@@ -360,9 +360,9 @@ impl EditHistoryJournal {
 
     fn compacted_record(
         &self,
-        root: String,
-        path: String,
-        folded: FoldedHistory,
+        root: &str,
+        path: &str,
+        folded: &FoldedHistory,
     ) -> Result<Option<StoredRecord>, EditHistoryError> {
         let mut timeline = folded.snapshot.undo.clone();
         timeline.extend(folded.snapshot.redo.iter().rev().cloned());
@@ -377,8 +377,8 @@ impl EditHistoryJournal {
                 return Ok(None);
             }
             let record = StoredRecord {
-                root: root.clone(),
-                path: path.clone(),
+                root: root.to_owned(),
+                path: path.to_owned(),
                 batch: "compacted".to_owned(),
                 seen_batches: folded.recent_batches.iter().cloned().collect(),
                 actions,

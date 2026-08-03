@@ -108,25 +108,32 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       { timeoutMsg: "sidebar header hover state did not clear" },
     );
     await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>(
-          '.skr-sidebar-header [data-command-id="note.create"]',
-        )
-        ?.focus();
+      document.querySelector<HTMLElement>('[role="treeitem"]')?.focus();
     });
     await browser.waitUntil(
       () =>
         browser.execute(() => {
           const actions = document.querySelector(".skr-sidebar-header-actions");
           return (
-            document.activeElement?.getAttribute("data-command-id") ===
-              "note.create" &&
+            document.activeElement?.getAttribute("role") === "treeitem" &&
             actions !== null &&
             getComputedStyle(actions).opacity === "1"
           );
         }),
       { timeoutMsg: "sidebar header controls did not reveal on focus" },
     );
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>(
+          '.skr-sidebar-header [data-command-id="note.create"]',
+        )
+        ?.dispatchEvent(
+          new PointerEvent("pointerenter", {
+            bubbles: false,
+            pointerId: 24,
+          }),
+        );
+    });
     const tooltip = $(".skr-command-tooltip");
     await tooltip.waitForDisplayed({ timeout: 10000 });
     expect(await tooltip.getText()).toMatch(/new note/iu);

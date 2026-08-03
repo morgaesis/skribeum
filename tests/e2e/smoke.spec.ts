@@ -3461,12 +3461,14 @@ describe("skribeum shell", () => {
     await back.waitForEnabled({ timeout: 15000 });
     await browser.execute(() => {
       type ArrivalFrame = {
+        animationsEnabled: boolean;
         contentEditable: string | null;
         duration: string;
         panelExpanded: string | null;
         pointerEvents: string;
         reducedMotion: boolean;
         scrollTop: number;
+        themeSwitching: boolean;
         visibility: string;
       };
       const target = window as Window & {
@@ -3494,6 +3496,8 @@ describe("skribeum shell", () => {
             }
             const shellStyle = getComputedStyle(shell);
             target.__SKRIBEUM_E2E_ARRIVAL_FRAME__ = {
+              animationsEnabled:
+                document.documentElement.dataset.animations !== "false",
               contentEditable: content.getAttribute("contenteditable"),
               duration: shellStyle.transitionDuration,
               panelExpanded: panel?.getAttribute("aria-expanded") ?? null,
@@ -3501,6 +3505,8 @@ describe("skribeum shell", () => {
               reducedMotion: matchMedia("(prefers-reduced-motion: reduce)")
                 .matches,
               scrollTop: scroller.scrollTop,
+              themeSwitching:
+                document.documentElement.dataset.themeSwitching === "true",
               visibility: getComputedStyle(editor).visibility,
             };
           });
@@ -3553,12 +3559,14 @@ describe("skribeum shell", () => {
         (
           window as Window & {
             __SKRIBEUM_E2E_ARRIVAL_FRAME__?: {
+              animationsEnabled: boolean;
               contentEditable: string | null;
               duration: string;
               panelExpanded: string | null;
               pointerEvents: string;
               reducedMotion: boolean;
               scrollTop: number;
+              themeSwitching: boolean;
               visibility: string;
             };
           }
@@ -3571,7 +3579,11 @@ describe("skribeum shell", () => {
       visibility: "visible",
     });
     expect(arrivalFrame?.duration).toBe(
-      arrivalFrame?.reducedMotion ? "0s" : "0.12s",
+      arrivalFrame?.reducedMotion === true ||
+        arrivalFrame?.animationsEnabled === false ||
+        arrivalFrame?.themeSwitching === true
+        ? "0s"
+        : "0.12s",
     );
     expect(arrivalFrame?.scrollTop).toBeGreaterThan(0);
 

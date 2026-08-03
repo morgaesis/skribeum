@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { TauriCapabilities } from "@wdio/tauri-service";
 import {
   createScratchVault,
+  SCRATCH_EDIT_HISTORY_PATH,
   SCRATCH_SETTINGS_PATH,
   SCRATCH_VAULT_PATH,
 } from "./scratchVault";
@@ -113,13 +114,17 @@ async function stopDemoServer(): Promise<void> {
   ]);
 }
 
-// Both the launcher and the worker evaluate this module before any app
-// session starts, so the scratch vault exists and the seam variable is in
-// the environment the app binary inherits.
-createScratchVault();
+async function prepareSuite(): Promise<void> {
+  // The configuration module is evaluated again for workers and reloaded
+  // sessions. The launcher calls onPrepare once, so reset here to preserve
+  // the note and app-data state across a deliberate binary relaunch.
+  createScratchVault();
+  await startDemoServer();
+}
 process.env.SKRIBEUM_E2E_VAULT = SCRATCH_VAULT_PATH;
 process.env.SKRIBEUM_E2E_SETTINGS = SCRATCH_SETTINGS_PATH;
 process.env.SKRIBEUM_E2E_RESET_WORKSPACE = "1";
+process.env.SKRIBEUM_E2E_EDIT_HISTORY = SCRATCH_EDIT_HISTORY_PATH;
 
 // The workspace places build output in target/ at the repository root. The
 // e2e suite runs against the debug binary built with the webdriver feature
@@ -169,6 +174,6 @@ export const config: WebdriverIO.Config = {
     timeout: 300000,
   },
   reporters: ["spec"],
-  onPrepare: startDemoServer,
+  onPrepare: prepareSuite,
   onComplete: stopDemoServer,
 };

@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Desktop undo and redo history persists across note switches and application
+  restarts in a per-note application-data journal. External ingests and state
+  mismatches fence older history, each replay restores its recorded selection,
+  and `Note: clear edit history` removes one note's journal after confirmation.
+
 ### Security
 
 - Rust advisory checks reject unsound transitive dependencies, and JavaScript

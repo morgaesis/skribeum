@@ -4,6 +4,7 @@
 //! real filesystem ([`real`]). Direct `std::fs` use is confined to [`real`]
 //! and enforced by a committed guard test.
 
+pub mod edit_history;
 pub mod fs;
 pub mod journal;
 pub mod path;
@@ -15,6 +16,11 @@ pub mod sim;
 pub mod vault;
 pub mod write;
 
+pub use edit_history::{
+    DEFAULT_EDIT_HISTORY_ENTRY_CAP, DEFAULT_EDIT_HISTORY_NOTE_CAP_BYTES, EDIT_HISTORY_FILE_NAME,
+    EditHistoryAction, EditHistoryChange, EditHistoryEntry, EditHistoryError, EditHistoryJournal,
+    EditHistoryRange, EditHistorySelection, EditHistorySnapshot, EditHistoryStateCheck,
+};
 pub use fs::{Clock, DirEntry, FileMetadata, FileSystem, FsError, WatchEvent, Watcher};
 pub use journal::{JOURNAL_FILE_NAME, Journal, JournalError, ReplayOutcome};
 pub use path::{PathCollision, VaultPath, VaultPathError, detect_collisions};

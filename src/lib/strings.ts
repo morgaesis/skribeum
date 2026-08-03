@@ -402,6 +402,13 @@ export const STRINGS = {
   demoNoteNotMarkdown: "The requested demo file is not a note.",
   demoNoteAlreadyExists: "The requested demo note already exists.",
   commandSaveNote: "Save note",
+  commandClearEditHistory: "Note: clear edit history",
+  clearEditHistoryConfirmation:
+    "Clear this note's edit history? Past edits, including deleted text, will be removed from this device. This cannot be undone.",
+  clearEditHistoryConfirmAction: "Clear history",
+  clearEditHistoryCancelAction: "Cancel",
+  clearEditHistorySaveFailed:
+    "The note could not be saved before clearing its edit history.",
   commandToggleSourceMode: "Toggle source mode",
   navigationHistoryLabel: "Note history",
   navigationBack: "Back",

@@ -128,6 +128,15 @@ export function registerSurfaces(
     },
   });
   if (!desktop) return;
+  registry.register({
+    id: "note.clear-edit-history",
+    title: STRINGS.commandClearEditHistory,
+    pointer: ["command-palette"],
+    run: (context) => {
+      if (context.clearEditHistory === undefined) return false;
+      return context.clearEditHistory();
+    },
+  });
   for (const command of [
     {
       id: "application.zoom-in",

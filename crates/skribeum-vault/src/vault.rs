@@ -575,6 +575,29 @@ impl Vault {
         self.lock_notes().get(path).cloned()
     }
 
+    /// Advances a previously read note's write base from the same validated
+    /// delta emitted by the reconciler for an external ingest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VaultError::NoteNotRead`] when no write base exists, or
+    /// [`VaultError::BaseMismatch`] when the delta does not produce the
+    /// reconciler's projection hash.
+    pub fn ingest_external_note(
+        &self,
+        path: &VaultPath,
+        change_set: &[ByteRangeReplace],
+        projection_hash: &str,
+    ) -> Result<(), VaultError> {
+        let base = self.note_base(path).ok_or(VaultError::NoteNotRead)?;
+        let note = classify(apply_change_set(&base.bytes, change_set)?);
+        if note.projection_hash != projection_hash {
+            return Err(VaultError::BaseMismatch);
+        }
+        self.lock_notes().insert(path.clone(), note);
+        Ok(())
+    }
+
     /// Looks up a registered write conflict by reconciliation handle.
     #[must_use]
     pub fn conflict(&self, reconciliation: u32) -> Option<ConflictInfo> {

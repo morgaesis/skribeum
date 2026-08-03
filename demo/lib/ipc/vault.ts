@@ -1,4 +1,8 @@
 import { applyByteChangeSet } from "../../../src/lib/editor/byteChangeSet";
+import type {
+  EditHistoryAction,
+  EditHistorySnapshot,
+} from "../../../src/lib/editor/durableHistory";
 import { isNotePath } from "../../../src/lib/noteTitles";
 import { STRINGS } from "../../../src/lib/strings";
 import { DEMO_FILES } from "../vault/seed";
@@ -633,6 +637,35 @@ export async function noteWrite(
     projection_hash: await projectionHash(next),
   };
 }
+
+/** The demo intentionally keeps edit history in the current session only. */
+export async function editHistoryRead(
+  _handle: VaultHandle,
+  _relPath: string,
+): Promise<EditHistorySnapshot> {
+  return { undo: [], redo: [] };
+}
+
+/** The demo has no stable vault identity across page reloads. */
+export async function editHistoryAppend(
+  _handle: VaultHandle,
+  _relPath: string,
+  _batch: string,
+  _actions: EditHistoryAction[],
+): Promise<void> {}
+
+/** External-ingest fencing is inert because the demo has no watcher. */
+export async function editHistoryFence(
+  _handle: VaultHandle,
+  _relPath: string,
+  _batch: string,
+): Promise<void> {}
+
+/** No persistent demo history exists to clear. */
+export async function editHistoryClear(
+  _handle: VaultHandle,
+  _relPath: string,
+): Promise<void> {}
 
 export async function readVaultConfigFile(
   handle: VaultHandle,

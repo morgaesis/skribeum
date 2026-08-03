@@ -601,6 +601,26 @@ pub fn run() {
                 skribeum_vault::Journal::new(dir.join(skribeum_vault::JOURNAL_FILE_NAME))
             });
             app.manage(ipc::JournalState(journal));
+            // Edit history follows the crash journal's app-data convention,
+            // with an isolated path in WebDriver builds.
+            #[cfg(feature = "webdriver")]
+            let edit_history_path = std::env::var_os("SKRIBEUM_E2E_EDIT_HISTORY")
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    app.path()
+                        .app_data_dir()
+                        .ok()
+                        .map(|dir| dir.join(skribeum_vault::EDIT_HISTORY_FILE_NAME))
+                });
+            #[cfg(not(feature = "webdriver"))]
+            let edit_history_path = app
+                .path()
+                .app_data_dir()
+                .ok()
+                .map(|dir| dir.join(skribeum_vault::EDIT_HISTORY_FILE_NAME));
+            app.manage(ipc::EditHistoryState(
+                edit_history_path.map(skribeum_vault::EditHistoryJournal::new),
+            ));
             // Settings live in the OS app-config directory, never in any
             // vault, with unknown keys preserved on every write. WebDriver
             // builds accept an isolated store so concurrent suites cannot

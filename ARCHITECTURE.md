@@ -364,6 +364,31 @@ as a delta event, a matching result means the save completed, and anything
 else surfaces the reconciliation banner instead of applying, because a
 file that changed while the app was dead is an external edit.
 
+## Durable edit history
+
+CodeMirror remains the current-session undo and redo engine. Each local
+document transaction is mirrored as a forward change set, inverse change set,
+complete selection before and after, and document-state checks over UTF-16
+length plus SHA-256 of the normalized UTF-8 editor projection. Undo and redo
+movements append stack-position records instead of becoming new edits.
+
+The desktop journal lives at `edit-history.jsonl` in OS app data and uses the
+crash journal's JSON Lines, append, fsync, torn-tail, and `FileSystem`
+conventions. Records are keyed by canonical vault root and vault-relative note
+path. The webview batches transaction records until save, then sends them
+through typed IPC and waits for the fsync before the corresponding note write
+can report success. No webview code accesses the filesystem directly.
+
+When CodeMirror reaches the beginning of its current-session stack, the editor
+checks the live document against the persisted entry and applies the inverse as
+a non-CodeMirror-history transaction. Redo applies the forward change. A
+mismatch appends a fence and changes no text. Every genuine external ingest
+uses the same path that clears the CodeMirror compartment and appends a durable
+fence, so older entries are unreachable even after restart. The command-palette
+clear action physically removes one note's records, and watcher removals
+garbage-collect deleted notes. Retention is 2,000 transactions and 8 MiB per
+note with oldest-first trimming.
+
 ## Reconciliation
 
 Watchers are treated as lossy: overflow means rescan, and a watcher whose

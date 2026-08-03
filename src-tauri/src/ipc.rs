@@ -11,8 +11,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use skribeum_vault::{
-    Clock, Encoding, EntryKind, FileSystem, Journal, RealClock, RealFs, ReconEvent, Reconciler,
-    ReplayOutcome, SearchIndex, Settings, SettingsStore, Vault, VaultPath, is_indexed_path,
+    Clock, EditHistoryJournal, Encoding, EntryKind, FileSystem, Journal, RealClock, RealFs,
+    ReconEvent, Reconciler, ReplayOutcome, SearchIndex, Settings, SettingsStore, Vault, VaultPath,
+    is_indexed_path,
 };
 use tauri::ipc::InvokeResponseBody;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
@@ -73,6 +74,202 @@ impl From<&ByteRangeReplace> for skribeum_core::ByteRangeReplace {
             start: change.start as usize,
             end: change.end as usize,
             bytes: change.bytes.clone(),
+        }
+    }
+}
+
+/// One UTF-16 text replacement in a persisted editor transaction.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct EditHistoryChange {
+    /// Inclusive UTF-16 offset in the starting document.
+    pub from: u32,
+    /// Exclusive UTF-16 offset in the starting document.
+    pub to: u32,
+    /// Replacement text.
+    pub insert: String,
+}
+
+/// One anchor and head pair in a persisted selection.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct EditHistoryRange {
+    /// Selection anchor as a UTF-16 offset.
+    pub anchor: u32,
+    /// Selection head as a UTF-16 offset.
+    pub head: u32,
+}
+
+/// A complete persisted selection, including its main range.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct EditHistorySelection {
+    /// Every selection range.
+    pub ranges: Vec<EditHistoryRange>,
+    /// Index of the main range.
+    pub main: u32,
+}
+
+/// The document identity required before replaying a history direction.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct EditHistoryStateCheck {
+    /// Document length in UTF-16 code units.
+    pub length: u32,
+    /// Lowercase SHA-256 over the UTF-8 editor projection.
+    pub projection_hash: String,
+}
+
+/// One reversible editor transaction over typed IPC.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct EditHistoryEntry {
+    /// Forward changes from the before state to the after state.
+    pub changes: Vec<EditHistoryChange>,
+    /// Inverse changes from the after state to the before state.
+    pub inverse: Vec<EditHistoryChange>,
+    /// Selection before the transaction.
+    pub selection_before: EditHistorySelection,
+    /// Selection after the transaction.
+    pub selection_after: EditHistorySelection,
+    /// Required state before applying the forward changes.
+    pub before: EditHistoryStateCheck,
+    /// Required state before applying the inverse changes.
+    pub after: EditHistoryStateCheck,
+}
+
+/// One logical persistent undo-stack mutation.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum EditHistoryAction {
+    /// Adds one transaction and clears the redo branch.
+    Entry { entry: EditHistoryEntry },
+    /// Moves applied transactions onto the redo stack.
+    Undo { count: u32 },
+    /// Moves redo transactions back onto the undo stack.
+    Redo { count: u32 },
+    /// Makes every older transaction unreachable.
+    Fence,
+}
+
+/// The reachable edit history for one note.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct EditHistorySnapshot {
+    /// Applied entries, oldest first.
+    pub undo: Vec<EditHistoryEntry>,
+    /// Undone entries, with the next redo at the end.
+    pub redo: Vec<EditHistoryEntry>,
+}
+
+impl From<EditHistoryChange> for skribeum_vault::EditHistoryChange {
+    fn from(change: EditHistoryChange) -> Self {
+        Self {
+            from: change.from,
+            to: change.to,
+            insert: change.insert,
+        }
+    }
+}
+
+impl From<skribeum_vault::EditHistoryChange> for EditHistoryChange {
+    fn from(change: skribeum_vault::EditHistoryChange) -> Self {
+        Self {
+            from: change.from,
+            to: change.to,
+            insert: change.insert,
+        }
+    }
+}
+
+impl From<EditHistorySelection> for skribeum_vault::EditHistorySelection {
+    fn from(selection: EditHistorySelection) -> Self {
+        Self {
+            ranges: selection
+                .ranges
+                .into_iter()
+                .map(|range| skribeum_vault::EditHistoryRange {
+                    anchor: range.anchor,
+                    head: range.head,
+                })
+                .collect(),
+            main: selection.main,
+        }
+    }
+}
+
+impl From<skribeum_vault::EditHistorySelection> for EditHistorySelection {
+    fn from(selection: skribeum_vault::EditHistorySelection) -> Self {
+        Self {
+            ranges: selection
+                .ranges
+                .into_iter()
+                .map(|range| EditHistoryRange {
+                    anchor: range.anchor,
+                    head: range.head,
+                })
+                .collect(),
+            main: selection.main,
+        }
+    }
+}
+
+impl From<EditHistoryStateCheck> for skribeum_vault::EditHistoryStateCheck {
+    fn from(check: EditHistoryStateCheck) -> Self {
+        Self {
+            length: check.length,
+            projection_hash: check.projection_hash,
+        }
+    }
+}
+
+impl From<skribeum_vault::EditHistoryStateCheck> for EditHistoryStateCheck {
+    fn from(check: skribeum_vault::EditHistoryStateCheck) -> Self {
+        Self {
+            length: check.length,
+            projection_hash: check.projection_hash,
+        }
+    }
+}
+
+impl From<EditHistoryEntry> for skribeum_vault::EditHistoryEntry {
+    fn from(entry: EditHistoryEntry) -> Self {
+        Self {
+            changes: entry.changes.into_iter().map(Into::into).collect(),
+            inverse: entry.inverse.into_iter().map(Into::into).collect(),
+            selection_before: entry.selection_before.into(),
+            selection_after: entry.selection_after.into(),
+            before: entry.before.into(),
+            after: entry.after.into(),
+        }
+    }
+}
+
+impl From<skribeum_vault::EditHistoryEntry> for EditHistoryEntry {
+    fn from(entry: skribeum_vault::EditHistoryEntry) -> Self {
+        Self {
+            changes: entry.changes.into_iter().map(Into::into).collect(),
+            inverse: entry.inverse.into_iter().map(Into::into).collect(),
+            selection_before: entry.selection_before.into(),
+            selection_after: entry.selection_after.into(),
+            before: entry.before.into(),
+            after: entry.after.into(),
+        }
+    }
+}
+
+impl From<EditHistoryAction> for skribeum_vault::EditHistoryAction {
+    fn from(action: EditHistoryAction) -> Self {
+        match action {
+            EditHistoryAction::Entry { entry } => Self::Entry {
+                entry: entry.into(),
+            },
+            EditHistoryAction::Undo { count } => Self::Undo { count },
+            EditHistoryAction::Redo { count } => Self::Redo { count },
+            EditHistoryAction::Fence => Self::Fence,
+        }
+    }
+}
+
+impl From<skribeum_vault::EditHistorySnapshot> for EditHistorySnapshot {
+    fn from(snapshot: skribeum_vault::EditHistorySnapshot) -> Self {
+        Self {
+            undo: snapshot.undo.into_iter().map(Into::into).collect(),
+            redo: snapshot.redo.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -551,6 +748,9 @@ impl VaultRegistry {
 /// directory could not be resolved, in which case saves proceed without
 /// journal protection.
 pub struct JournalState(pub Option<Journal>);
+
+/// Durable per-note undo history in the OS app-data directory.
+pub struct EditHistoryState(pub Option<EditHistoryJournal>);
 
 /// The settings store, at `settings.json` in the OS app-config directory.
 /// Absent only when that directory could not be resolved.
@@ -1199,6 +1399,124 @@ fn note_write(
     Ok(response)
 }
 
+/// Reads one note's reachable persistent undo and redo stacks.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn edit_history_read(
+    registry: State<'_, VaultRegistry>,
+    history: State<'_, EditHistoryState>,
+    handle: VaultHandle,
+    rel_path: String,
+) -> Result<EditHistorySnapshot, AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let vaults = registry.lock();
+    let open = vaults
+        .get(&handle.id)
+        .ok_or_else(AppError::unknown_handle)?;
+    let snapshot = history
+        .0
+        .as_ref()
+        .map_or_else(skribeum_vault::EditHistorySnapshot::default, |journal| {
+            journal.read(&RealFs, open.vault.root(), path.as_str())
+        });
+    Ok(snapshot.into())
+}
+
+/// Appends and fsyncs a batch before the note save it describes begins.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn edit_history_append(
+    registry: State<'_, VaultRegistry>,
+    history: State<'_, EditHistoryState>,
+    handle: VaultHandle,
+    rel_path: String,
+    batch: String,
+    actions: Vec<EditHistoryAction>,
+) -> Result<(), AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let vaults = registry.lock();
+    let open = vaults
+        .get(&handle.id)
+        .ok_or_else(AppError::unknown_handle)?;
+    let journal = history
+        .0
+        .as_ref()
+        .ok_or_else(AppError::edit_history_unavailable)?;
+    let actions = actions.into_iter().map(Into::into).collect::<Vec<_>>();
+    journal
+        .append(&RealFs, open.vault.root(), path.as_str(), &batch, &actions)
+        .map_err(|error| AppError::from(error).with_path(path.as_str()))
+}
+
+/// Appends an external-ingest fence for one note.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn edit_history_fence(
+    registry: State<'_, VaultRegistry>,
+    history: State<'_, EditHistoryState>,
+    handle: VaultHandle,
+    rel_path: String,
+    batch: String,
+) -> Result<(), AppError> {
+    edit_history_append(
+        registry,
+        history,
+        handle,
+        rel_path,
+        batch,
+        vec![EditHistoryAction::Fence],
+    )
+}
+
+/// Physically removes one note's persisted edit history.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn edit_history_clear(
+    registry: State<'_, VaultRegistry>,
+    history: State<'_, EditHistoryState>,
+    handle: VaultHandle,
+    rel_path: String,
+) -> Result<(), AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let vaults = registry.lock();
+    let open = vaults
+        .get(&handle.id)
+        .ok_or_else(AppError::unknown_handle)?;
+    let Some(journal) = &history.0 else {
+        return Ok(());
+    };
+    journal
+        .remove_note(&RealFs, open.vault.root(), path.as_str())
+        .map_err(|error| AppError::from(error).with_path(path.as_str()))
+}
+
+fn apply_external_recon_state(
+    vault: &Vault,
+    edit_history: Option<&EditHistoryJournal>,
+    root: &Path,
+    event: &ReconEvent,
+) {
+    match event {
+        ReconEvent::ExternalUpdate {
+            path,
+            projection_hash,
+            change_set,
+        } => {
+            let _ = vault.ingest_external_note(path, change_set, projection_hash);
+        }
+        ReconEvent::ExternalRemove { path } => {
+            if let Some(journal) = edit_history {
+                let _ = journal.remove_note(&RealFs, root, path.as_str());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Subscribes to change events under an open vault. Events arrive as the
 /// `VaultChanged` event stream; a second subscription for the same handle is
 /// a no-op.
@@ -1209,15 +1527,17 @@ fn watch_subscribe<R: Runtime>(
     app: AppHandle<R>,
     registry: State<'_, VaultRegistry>,
     journal: State<'_, JournalState>,
+    edit_history: State<'_, EditHistoryState>,
     handle: VaultHandle,
 ) -> Result<(), AppError> {
-    let (root, watching, reconciler, search, clock) = {
+    let (root, vault, watching, reconciler, search, clock) = {
         let vaults = registry.lock();
         let open = vaults
             .get(&handle.id)
             .ok_or_else(AppError::unknown_handle)?;
         (
             open.vault.root().to_owned(),
+            open.vault.clone(),
             Arc::clone(&open.watching),
             Arc::clone(&open.reconciler),
             Arc::clone(&open.search),
@@ -1235,6 +1555,9 @@ fn watch_subscribe<R: Runtime>(
     if let Some(journal) = &journal.0 {
         replay_journal(&app, journal, handle.id, &root);
     }
+    if let Some(journal) = &edit_history.0 {
+        let _ = journal.garbage_collect(&RealFs, &root);
+    }
 
     let watcher = RealFs.watch(&root).map_err(|error| AppError {
         code: "fs/io",
@@ -1243,6 +1566,7 @@ fn watch_subscribe<R: Runtime>(
     })?;
 
     let vault_id = handle.id;
+    let edit_history = edit_history.0.clone();
     std::thread::spawn(move || {
         let mut watcher = watcher;
         loop {
@@ -1271,12 +1595,19 @@ fn watch_subscribe<R: Runtime>(
                     change.change,
                     VaultChangeKind::Removed | VaultChangeKind::Renamed
                 ) && let Some(path) = &change.path
-                    && let Some(index) = search
+                {
+                    if let Some(index) = search
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .as_ref()
-                {
-                    let _ = index.remove_note(path);
+                    {
+                        let _ = index.remove_note(path);
+                    }
+                    if matches!(change.change, VaultChangeKind::Renamed)
+                        && let Some(journal) = &edit_history
+                    {
+                        let _ = journal.remove_note(&RealFs, &root, path);
+                    }
                 }
                 if change.emit(&app).is_err() {
                     // The app is shutting down; end the watch thread.
@@ -1288,6 +1619,7 @@ fn watch_subscribe<R: Runtime>(
                 recon.poll(&RealFs, &root, clock.now())
             };
             for event in events {
+                apply_external_recon_state(&vault, edit_history.as_ref(), &root, &event);
                 // External changes update the search index incrementally:
                 // updates re-read and re-index, removals drop the row.
                 if let Some(index) = search
@@ -1949,6 +2281,10 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             note_read,
             vault_file_read,
             note_write,
+            edit_history_read,
+            edit_history_append,
+            edit_history_fence,
+            edit_history_clear,
             watch_subscribe::<tauri::Wry>,
             search_query,
             tag_catalog,

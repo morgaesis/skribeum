@@ -12,6 +12,11 @@ import { taskEditing } from "../editor/taskEditing";
 import type { CommandRegistry } from "./registry";
 import type { CommandContext } from "./types";
 
+export type HistoryCommands = {
+  undo(view: EditorView): boolean;
+  redo(view: EditorView): boolean;
+};
+
 /** A parsed binding: one key plus modifier requirements. */
 export type ParsedKeybinding = {
   /** The `KeyboardEvent.key` value, lowercased for letters. */
@@ -76,6 +81,8 @@ export function keybindingMatches(
     event.altKey === binding.alt
   );
 }
+
+const macRedoKeybinding = parseKeybinding("Mod-Shift-z");
 
 /** Renders a binding for display (`"Ctrl+Shift+P"`, `"⌘⇧P"` on macOS). */
 export function formatKeybinding(
@@ -143,6 +150,7 @@ export function globalKeydownHandler(
 export function editorKeymap(
   registry: CommandRegistry,
   contextProvider: () => CommandContext,
+  historyCommands?: HistoryCommands,
 ): Extension {
   const bindings: KeyBinding[] = registry
     .boundCommands("editor")
@@ -153,8 +161,39 @@ export function editorKeymap(
           registry.run(command.id, { ...contextProvider(), view }),
       })),
     );
+  const persistentHistoryBindings: KeyBinding[] =
+    historyCommands === undefined
+      ? []
+      : [
+          {
+            any: (view, event) =>
+              keybindingMatches(macRedoKeybinding, event, true) &&
+              historyCommands.redo(view),
+          },
+          {
+            key: "Mod-y",
+            mac: "Mod-Shift-z",
+            run: historyCommands.redo,
+            preventDefault: true,
+          },
+          {
+            linux: "Ctrl-Shift-z",
+            run: historyCommands.redo,
+            preventDefault: true,
+          },
+          {
+            key: "Mod-z",
+            run: historyCommands.undo,
+            preventDefault: true,
+          },
+        ];
   return [
     taskEditing,
-    keymap.of([...bindings, ...defaultKeymap, ...historyKeymap]),
+    keymap.of([
+      ...bindings,
+      ...persistentHistoryBindings,
+      ...defaultKeymap,
+      ...historyKeymap,
+    ]),
   ];
 }

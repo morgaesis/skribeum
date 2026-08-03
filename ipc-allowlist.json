@@ -12,6 +12,10 @@
     "note_read",
     "vault_file_read",
     "note_write",
+    "edit_history_read",
+    "edit_history_append",
+    "edit_history_fence",
+    "edit_history_clear",
     "watch_subscribe",
     "search_query",
     "tag_catalog",
@@ -26,7 +30,7 @@
     "file_open_resolve",
     "open_files_take"
   ],
-  "plugin_commands": ["plugin:opener|open_url"],
+  "plugin_commands": ["plugin:dialog|confirm", "plugin:opener|open_url"],
   "notes": {
     "note_create": "Creates an empty Markdown note at a validated vault-relative path without overwriting an existing file, then refreshes the vault index.",
     "tree_folder_create": "Creates a folder at a validated vault-relative path and refreshes the vault and search indexes.",
@@ -34,6 +38,10 @@
     "tree_entry_delete": "Deletes one indexed vault entry and refreshes the vault and search indexes.",
     "tree_entry_reveal": "Reveals one indexed vault entry in the operating system file manager.",
     "note_write": "Contract addition per design decision 100: change-set based writes verified against the expected projection hash, with a conflict variant carrying the current hash and a reconciliation handle, never a silent overwrite.",
+    "edit_history_read": "Reads one note's reachable durable undo and redo stacks from application data.",
+    "edit_history_append": "Appends and fsyncs an idempotent edit-history batch before the corresponding note save begins.",
+    "edit_history_fence": "Appends an external-ingest boundary that makes older edit-history entries unreachable.",
+    "edit_history_clear": "Physically removes one note's persisted edit-history journal after user confirmation.",
     "vault_tree_refresh": "Contract addition per design decision 100: on-demand re-index of the vault tree from current filesystem state, the recovery path for tree staleness after external bulk changes or watcher overflow.",
     "search_query": "Contract addition per design decision 100: ranked snippeted full-text search (the decision 79 alpha floor). The index lives in the OS app-data directory, never in the vault; match positions are byte ranges into the snippet so highlighting needs no HTML injection.",
     "tag_catalog": "Returns tags from the derived search index with note and occurrence counts for completion ranking.",
@@ -48,6 +56,7 @@
     "window_ready": "Applies persisted zoom and reveals a hidden or warmed window after the frontend reports its first painted frame.",
     "file_open_resolve": "Resolves an operating-system file-open path to a known vault or the file's containing folder.",
     "open_files_take": "Drains file-open paths queued by argv, second-instance forwarding, or native open-file events.",
+    "plugin:dialog|confirm": "Shows the destructive-action confirmation before clearing one note's edit history.",
     "plugin:opener|open_url": "Opens validated HTTP and HTTPS links in the system browser. The capability excludes paths and every other URL scheme."
   }
 }

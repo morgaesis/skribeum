@@ -23,6 +23,10 @@ export const SCRATCH_SETTINGS_PATH = path.join(
   os.tmpdir(),
   `skribeum-e2e-settings-${checkoutKey}.json`,
 );
+export const SCRATCH_EDIT_HISTORY_PATH = path.join(
+  os.tmpdir(),
+  `skribeum-e2e-edit-history-${checkoutKey}.jsonl`,
+);
 
 export const LF_NOTE_NAME = "note.md";
 export const LF_NOTE_CONTENT = "alpha\nbeta\ngamma\n";
@@ -81,6 +85,15 @@ export const DESKTOP_UNDO_NOTE_CONTENT = "undo base\n";
 
 export const DESKTOP_EXTERNAL_NOTE_NAME = "zz-desktop-external.md";
 export const DESKTOP_EXTERNAL_NOTE_CONTENT = "external base\n";
+
+export const DURABLE_UNDO_NOTE_NAME = "zz-durable-undo.md";
+export const DURABLE_UNDO_NOTE_CONTENT = "durable base\n";
+
+export const DURABLE_EXTERNAL_NOTE_NAME = "zz-durable-external.md";
+export const DURABLE_EXTERNAL_NOTE_CONTENT = "durable external base\n";
+
+export const DURABLE_CLEAR_NOTE_NAME = "zz-durable-clear.md";
+export const DURABLE_CLEAR_NOTE_CONTENT = "durable clear base\n";
 
 export const RENDERING_NOTE_NAME = "zz-rendering.md";
 export const RENDERING_NOTE_CONTENT =
@@ -268,6 +281,7 @@ export const CANVAS_FILE_CONTENT = JSON.stringify({
  */
 export function createScratchVault(): void {
   rmSync(SCRATCH_SETTINGS_PATH, { force: true });
+  rmSync(SCRATCH_EDIT_HISTORY_PATH, { force: true });
   mkdirSync(SCRATCH_VAULT_PATH, { recursive: true });
   for (const entry of readdirSync(SCRATCH_VAULT_PATH)) {
     rmSync(path.join(SCRATCH_VAULT_PATH, entry), {
@@ -322,6 +336,18 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, DESKTOP_EXTERNAL_NOTE_NAME),
     DESKTOP_EXTERNAL_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, DURABLE_UNDO_NOTE_NAME),
+    DURABLE_UNDO_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, DURABLE_EXTERNAL_NOTE_NAME),
+    DURABLE_EXTERNAL_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, DURABLE_CLEAR_NOTE_NAME),
+    DURABLE_CLEAR_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, RENDERING_NOTE_NAME),

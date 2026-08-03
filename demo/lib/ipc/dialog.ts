@@ -10,3 +10,7 @@ export async function open(): Promise<string | null> {
   }
   return selectLocalDirectory();
 }
+
+export async function confirm(message: string): Promise<boolean> {
+  return window.confirm(message);
+}

@@ -1,5 +1,8 @@
 <script lang="ts">
-import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
+import {
+  confirm as confirmDialog,
+  open as openDirectoryDialog,
+} from "@tauri-apps/plugin-dialog";
 import { onMount, tick } from "svelte";
 import tauriConfig from "../src-tauri/tauri.conf.json";
 import Banners, { type BannerItem } from "./lib/Banners.svelte";
@@ -1162,6 +1165,7 @@ function commandContext(): CommandContext {
     requestSave: () => {
       void editor?.requestSave();
     },
+    clearEditHistory,
     notePaths: () => notePathsOf(tree),
     recentNotePaths: () => recents,
     navigateBack: () => paneNavigate(-1),
@@ -1197,6 +1201,27 @@ function commandContext(): CommandContext {
       ? { changeApplicationZoom: applyApplicationZoom }
       : {}),
   };
+}
+
+async function clearEditHistory(): Promise<void> {
+  if (editor === undefined || note === null || selectedPath === null) return;
+  const testConfirmed = (
+    window as Window & { __SKRIBEUM_E2E_CONFIRM_EDIT_HISTORY__?: boolean }
+  ).__SKRIBEUM_E2E_CONFIRM_EDIT_HISTORY__;
+  const confirmed =
+    testConfirmed === true ||
+    (await confirmDialog(STRINGS.clearEditHistoryConfirmation, {
+      title: STRINGS.commandClearEditHistory,
+      kind: "warning",
+      okLabel: STRINGS.clearEditHistoryConfirmAction,
+      cancelLabel: STRINGS.clearEditHistoryCancelAction,
+    }));
+  if (!confirmed) return;
+  try {
+    await editor.clearEditHistory();
+  } catch (error) {
+    onWriteError(error instanceof IpcError ? error.app.message : String(error));
+  }
 }
 
 let applicationZoomQueue = Promise.resolve();

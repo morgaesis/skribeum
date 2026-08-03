@@ -10,6 +10,11 @@ import {
   type SettingsState,
 } from "./features/settingsStore";
 import { describeUpdateState, type UpdateState } from "./features/updates";
+import {
+  enterMotionSurface,
+  exitMotionSurface,
+  exitMotionSurfaces,
+} from "./motion";
 import { STRINGS } from "./strings";
 import {
   TASK_COLOR_TOKENS,
@@ -210,9 +215,11 @@ let {
 } = $props();
 
 let dialogElement = $state<HTMLElement | undefined>();
+let backdropElement = $state<HTMLElement | undefined>();
 let contentElement = $state<HTMLElement | undefined>();
 let jumpButtonElement = $state<HTMLButtonElement | undefined>();
 let jumpMenuElement = $state<HTMLElement | undefined>();
+let closing = false;
 const returnFocusElement =
   typeof document !== "undefined" &&
   document.activeElement instanceof HTMLElement
@@ -286,6 +293,11 @@ onMount(() => {
   };
   query.addEventListener("change", onChange);
   return () => query.removeEventListener("change", onChange);
+});
+
+onMount(() => {
+  if (backdropElement !== undefined) enterMotionSurface(backdropElement);
+  if (dialogElement !== undefined) enterMotionSurface(dialogElement);
 });
 
 $effect(() => {
@@ -724,8 +736,15 @@ function restorePreview() {
 }
 
 function closeSettings() {
+  if (closing) return;
+  closing = true;
   restorePreview();
-  onClose();
+  exitMotionSurfaces(
+    [backdropElement, dialogElement].filter(
+      (element): element is HTMLElement => element !== undefined,
+    ),
+    onClose,
+  );
 }
 
 onDestroy(() => {
@@ -771,6 +790,7 @@ function hasMatches(section: SectionId): boolean {
 async function openJumpMenu() {
   jumpMenuOpen = true;
   await tick();
+  if (jumpMenuElement !== undefined) enterMotionSurface(jumpMenuElement);
   jumpMenuElement
     ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
     ?.focus();
@@ -782,24 +802,38 @@ function onJumpButtonKeydown(event: KeyboardEvent) {
   void openJumpMenu();
 }
 
-async function closeJumpMenu() {
-  jumpMenuOpen = false;
-  await tick();
-  jumpButtonElement?.focus();
+function closeJumpMenu() {
+  const finish = () => {
+    jumpMenuOpen = false;
+    void tick().then(() => jumpButtonElement?.focus());
+  };
+  if (jumpMenuElement != null) {
+    void exitMotionSurface(jumpMenuElement, finish);
+  } else {
+    finish();
+  }
 }
 
-async function jumpToSection(section: SectionId) {
-  jumpMenuOpen = false;
-  await tick();
-  const target = contentElement?.querySelector<HTMLElement>(
-    `[data-settings-section="${section}"]`,
-  );
-  if (contentElement !== undefined && target !== null && target !== undefined) {
-    const contentBox = contentElement.getBoundingClientRect();
-    const targetBox = target.getBoundingClientRect();
-    contentElement.scrollTop += targetBox.top - contentBox.top;
+function jumpToSection(section: SectionId) {
+  const finish = () => {
+    jumpMenuOpen = false;
+    void tick().then(() => {
+      const target = contentElement?.querySelector<HTMLElement>(
+        `[data-settings-section="${section}"]`,
+      );
+      if (contentElement != null && target != null) {
+        const contentBox = contentElement.getBoundingClientRect();
+        const targetBox = target.getBoundingClientRect();
+        contentElement.scrollTop += targetBox.top - contentBox.top;
+      }
+      jumpButtonElement?.focus();
+    });
+  };
+  if (jumpMenuElement != null) {
+    void exitMotionSurface(jumpMenuElement, finish);
+  } else {
+    finish();
   }
-  jumpButtonElement?.focus();
 }
 
 function onJumpMenuKeydown(event: KeyboardEvent) {
@@ -1008,9 +1042,12 @@ function onKeydown(event: KeyboardEvent) {
 {/snippet}
 
 <div
+  bind:this={backdropElement}
   class="settings-backdrop"
   role="presentation"
-  onclick={(event) => event.target === event.currentTarget && closeSettings()}
+  data-motion-surface="scrim"
+  onclick={(event) =>
+    event.target === event.currentTarget && void closeSettings()}
 >
   <div
     bind:this={dialogElement}
@@ -1020,6 +1057,7 @@ function onKeydown(event: KeyboardEvent) {
     aria-label={STRINGS.settingsLabel}
     tabindex="-1"
     data-testid="settings-view"
+    data-motion-surface="centered"
     onkeydown={onKeydown}
   >
     <div class="settings-header" inert={jumpMenuOpen ? true : undefined}>
@@ -1072,6 +1110,7 @@ function onKeydown(event: KeyboardEvent) {
           class="settings-jump-menu"
           tabindex="-1"
           data-testid="settings-jump-menu"
+          data-motion-surface="anchored-top"
         >
           <div class="settings-jump-heading">
             <span>{STRINGS.settingsJumpSections}</span>
@@ -2775,7 +2814,8 @@ function onKeydown(event: KeyboardEvent) {
     border-radius: 1rem;
     display: block;
     height: 1.25rem;
-    transition: background-color 50ms linear;
+    transition: background-color var(--skr-motion-state-duration)
+      var(--skr-motion-state-easing);
     width: 2.25rem;
   }
 

@@ -10,6 +10,11 @@ import {
   type Tooltip,
   EditorView as View,
 } from "@codemirror/view";
+import {
+  enterMotionSurface,
+  exitMotionSurface,
+  hoverIntentDelay,
+} from "../motion";
 import type { CommandContext, CommandRegistry } from "../registry";
 import { formatKeybinding } from "../registry";
 import { STRINGS } from "../strings";
@@ -48,7 +53,10 @@ function attachCommandTooltip(
   const hide = () => {
     clearTimeout(hoverTimer);
     hoverTimer = undefined;
-    tooltip?.remove();
+    const visibleTooltip = tooltip;
+    if (visibleTooltip !== null) {
+      void exitMotionSurface(visibleTooltip, () => visibleTooltip.remove());
+    }
     tooltip = null;
     button.removeAttribute("aria-describedby");
   };
@@ -57,6 +65,7 @@ function attachCommandTooltip(
     tooltip = document.createElement("div");
     tooltip.id = tooltipId;
     tooltip.className = "cm-skr-toolbar-command-tooltip";
+    tooltip.dataset.motionStateSurface = "true";
     tooltip.setAttribute("role", "tooltip");
     const label = document.createElement("span");
     label.textContent = title;
@@ -81,22 +90,29 @@ function attachCommandTooltip(
     );
     tooltip.style.left = `${left}px`;
     tooltip.style.top = `${Math.max(topEdge, buttonBox.top - tooltipBox.height - 6)}px`;
-    requestAnimationFrame(() => tooltip?.classList.add("visible"));
+    enterMotionSurface(tooltip);
   };
   const enter = () => {
     clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(show, 450);
+    hoverTimer = setTimeout(show, hoverIntentDelay());
+  };
+  const move = () => {
+    if (tooltip !== null) return;
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(show, hoverIntentDelay());
   };
   const focus = () => {
     if (button.matches(":focus-visible")) show();
   };
   button.addEventListener("pointerenter", enter);
   button.addEventListener("pointerleave", hide);
+  button.addEventListener("pointermove", move);
   button.addEventListener("focus", focus);
   button.addEventListener("blur", hide);
   return () => {
     button.removeEventListener("pointerenter", enter);
     button.removeEventListener("pointerleave", hide);
+    button.removeEventListener("pointermove", move);
     button.removeEventListener("focus", focus);
     button.removeEventListener("blur", hide);
     hide();
@@ -114,6 +130,7 @@ function toolbarTooltip(view: EditorView): Tooltip | null {
     create: (tooltipView) => {
       const dom = document.createElement("div");
       dom.className = "cm-skr-selection-toolbar";
+      dom.dataset.motionSurface = "anchored-bottom";
       dom.setAttribute("role", "toolbar");
       dom.setAttribute("aria-label", STRINGS.selectionToolbarLabel);
       const config = tooltipView.state.facet(toolbarConfig);
@@ -150,6 +167,7 @@ function toolbarTooltip(view: EditorView): Tooltip | null {
         });
         dom.append(element);
       }
+      enterMotionSurface(dom);
       return {
         dom,
         destroy: () => {

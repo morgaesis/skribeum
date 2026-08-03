@@ -57,6 +57,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shortcuts open the same surface with their corresponding mode preloaded.
 - Selection toolbar buttons expose registry-derived command titles and
   keybindings after hover intent or immediately on keyboard focus.
+- Interface motion uses shared state, surface, and panel classes. Note arrivals
+  fade over their restored frame, transient surfaces use compositor-only
+  entrances, panel toggles preserve content measure, and both reduction routes
+  make class motion instant while stopping loading pulses.
 - Narrow viewports use a three-region top bar for Files, the scroll-aware note
   title, and an overflow sheet containing every shell command available to
   touch. The editor occupies the remaining note area.

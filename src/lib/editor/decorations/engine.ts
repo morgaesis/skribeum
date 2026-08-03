@@ -38,6 +38,11 @@ import {
   type TableCell,
   tableCellRanges,
 } from "../../features/tableOperations";
+import {
+  enterMotionSurface,
+  exitMotionSurface,
+  hoverIntentDelay,
+} from "../../motion";
 import { renderMath } from "../../rendering/math";
 import { renderMermaid } from "../../rendering/mermaid";
 import { STRINGS } from "../../strings";
@@ -123,7 +128,6 @@ export const tokenHighlightStyle = HighlightStyle.define([
  */
 export const LONG_LINE_DECORATION_LIMIT = 10_000;
 export const EMBED_DEPTH_LIMIT = 4;
-export const LINK_PREVIEW_DELAY = 450;
 
 /**
  * The decoration table as an editor facet. With no provider the committed
@@ -668,8 +672,10 @@ class TaskCheckboxWidget extends WidgetType {
       )}px`;
       const spaceAbove = paletteAnchor.y - fingerGap - viewport.top;
       if (spaceAbove >= bounds.height) {
+        palette.dataset.motionSurface = "anchored-bottom";
         palette.style.top = `${paletteAnchor.y - fingerGap - bounds.height}px`;
       } else {
+        palette.dataset.motionSurface = "anchored-top";
         const top = paletteAnchor.y + fingerGap;
         palette.style.top = `${top}px`;
         palette.style.maxHeight = `${Math.max(
@@ -679,9 +685,10 @@ class TaskCheckboxWidget extends WidgetType {
       }
     };
 
+    let closeGeneration = 0;
     const closePalette = (returnFocus: boolean) => {
-      palette.hidden = true;
-      palette.replaceChildren();
+      if (palette.hidden) return;
+      const generation = ++closeGeneration;
       palette.removeAttribute("aria-activedescendant");
       entries = [];
       options = [];
@@ -696,6 +703,16 @@ class TaskCheckboxWidget extends WidgetType {
       if (returnFocus) {
         box.focus();
       }
+      if (palette.dataset.motionInstant === "true") {
+        palette.hidden = true;
+        palette.replaceChildren();
+        return;
+      }
+      void exitMotionSurface(palette, () => {
+        if (generation !== closeGeneration) return;
+        palette.hidden = true;
+        palette.replaceChildren();
+      });
     };
 
     const focusReplacementCheckbox = () => {
@@ -881,6 +898,13 @@ class TaskCheckboxWidget extends WidgetType {
       mode: "hold" | "hover" | "keyboard" | "tap",
       anchor?: { x: number; y: number },
     ) => {
+      closeGeneration += 1;
+      delete palette.dataset.motionExiting;
+      if (mode === "hold") {
+        palette.dataset.motionInstant = "true";
+      } else {
+        delete palette.dataset.motionInstant;
+      }
       if (entries.length === 0) {
         buildOptions();
       }
@@ -905,6 +929,11 @@ class TaskCheckboxWidget extends WidgetType {
         y: bounds.bottom,
       };
       positionPalette();
+      if (mode === "hold") {
+        palette.dataset.motionEntered = "true";
+      } else {
+        enterMotionSurface(palette);
+      }
       updateActiveOption(keyboardOperable);
       stopObservingViewport?.();
       stopObservingViewport = observeVisualViewport(
@@ -3879,6 +3908,7 @@ class LinkPreviewController {
   constructor(readonly view: EditorView) {
     view.dom.addEventListener("pointerover", this.onPointerOver);
     view.dom.addEventListener("pointerout", this.onPointerOut);
+    view.dom.addEventListener("pointermove", this.onPointerMove);
     view.dom.addEventListener("focusin", this.onFocusIn);
     view.dom.addEventListener("focusout", this.onFocusOut);
     this.stopObservingViewport = observeVisualViewport(
@@ -3918,7 +3948,7 @@ class LinkPreviewController {
       this.timer = null;
       this.scheduledLink = null;
       this.show(link);
-    }, LINK_PREVIEW_DELAY);
+    }, hoverIntentDelay(this.view.dom.ownerDocument.documentElement));
   }
 
   private show(link: HTMLElement): void {
@@ -3972,11 +4002,16 @@ class LinkPreviewController {
     panel.style.left = `${left}px`;
     const below = bounds.bottom + 8;
     const above = bounds.top - panelBounds.height - 8;
+    const placedBelow = below + panelBounds.height <= viewport.bottom - 12;
     panel.style.top = `${
-      below + panelBounds.height <= viewport.bottom - 12
+      placedBelow
         ? Math.max(viewport.top + 12, below)
         : Math.max(viewport.top + 12, above)
     }px`;
+    panel.dataset.motionSurface = placedBelow
+      ? "anchored-top"
+      : "anchored-bottom";
+    enterMotionSurface(panel);
 
     this.activeLink = link;
     this.panel = panel;
@@ -3999,10 +4034,18 @@ class LinkPreviewController {
 
   private dismiss(): void {
     this.cancelTimer();
-    this.cleanupRender?.();
+    const panel = this.panel;
+    const cleanupRender = this.cleanupRender;
     this.cleanupRender = null;
-    this.panel?.remove();
     this.panel = null;
+    if (panel !== null) {
+      void exitMotionSurface(panel, () => {
+        cleanupRender?.();
+        panel.remove();
+      });
+    } else {
+      cleanupRender?.();
+    }
     if (this.activeLink !== null) {
       this.restoreAttribute(
         this.activeLink,
@@ -4045,6 +4088,14 @@ class LinkPreviewController {
     }
   };
 
+  private readonly onPointerMove = (event: PointerEvent) => {
+    const link = this.previewLink(event.target);
+    if (link !== null && link === this.scheduledLink) {
+      this.cancelTimer();
+      this.schedule(link);
+    }
+  };
+
   private readonly onPointerOut = (event: PointerEvent) => {
     const link = this.previewLink(event.target);
     const next = this.previewLink(event.relatedTarget);
@@ -4064,6 +4115,7 @@ class LinkPreviewController {
     const link = this.previewLink(event.target);
     if (link?.dataset.previewTarget !== undefined) {
       this.focusedTarget = link.dataset.previewTarget;
+      this.show(link);
     }
   };
 
@@ -4140,6 +4192,7 @@ class LinkPreviewController {
     this.focusedTarget = null;
     this.view.dom.removeEventListener("pointerover", this.onPointerOver);
     this.view.dom.removeEventListener("pointerout", this.onPointerOut);
+    this.view.dom.removeEventListener("pointermove", this.onPointerMove);
     this.view.dom.removeEventListener("focusin", this.onFocusIn);
     this.view.dom.removeEventListener("focusout", this.onFocusOut);
     this.stopObservingViewport();
@@ -4547,6 +4600,8 @@ const engineTheme = EditorView.baseTheme({
     borderRadius: "3px",
     cursor: "pointer",
     userSelect: "none",
+    transition:
+      "color var(--skr-motion-state-duration) var(--skr-motion-state-easing), background-color var(--skr-motion-state-duration) var(--skr-motion-state-easing), border-color var(--skr-motion-state-duration) var(--skr-motion-state-easing), opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
   },
   ".cm-skr-task-control-pressing": {
     userSelect: "none",
@@ -4634,7 +4689,8 @@ const engineTheme = EditorView.baseTheme({
     padding: "0.375rem 0.5rem",
     borderRadius: "0.3rem",
     cursor: "pointer",
-    transition: "background-color 50ms linear, color 50ms linear",
+    transition:
+      "background-color var(--skr-motion-state-duration) var(--skr-motion-state-easing), color var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
   },
   ".cm-skr-task-option:hover, .cm-skr-task-option-active": {
     backgroundColor: "var(--skr-accent-subtle)",
@@ -4779,7 +4835,8 @@ const engineTheme = EditorView.baseTheme({
     border: "0",
     opacity: "0",
     cursor: "pointer",
-    transition: "opacity var(--skr-motion-duration) linear",
+    transition:
+      "opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
   },
   ".cm-skr-table-insert:hover, .cm-skr-table-insert:focus-visible": {
     opacity: "1",
@@ -4846,6 +4903,8 @@ const engineTheme = EditorView.baseTheme({
     borderRadius: "0.3rem",
     opacity: "0",
     pointerEvents: "none",
+    transition:
+      "opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
   },
   ".cm-skr-code-block:hover .cm-skr-code-copy, .cm-skr-code-copy:focus-visible":
     {

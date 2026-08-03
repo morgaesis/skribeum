@@ -19,6 +19,7 @@ import {
   EditorView as View,
 } from "@codemirror/view";
 import { fuzzyMatch } from "../fuzzy";
+import { enterMotionSurface } from "../motion";
 import type { Command, CommandContext, CommandRegistry } from "../registry";
 import { STRINGS } from "../strings";
 
@@ -234,6 +235,7 @@ function slashTooltip(open: SlashState): Tooltip {
     create: (view) => {
       const dom = document.createElement("ul");
       dom.className = "cm-skr-slash-menu";
+      dom.dataset.motionSurface = "anchored-top";
       dom.setAttribute("role", "listbox");
       dom.setAttribute("aria-label", STRINGS.slashMenuLabel);
       const render = (renderState: EditorState) => {
@@ -275,6 +277,7 @@ function slashTooltip(open: SlashState): Tooltip {
         }
       };
       render(view.state);
+      enterMotionSurface(dom);
       return {
         dom,
         update: (update) => {

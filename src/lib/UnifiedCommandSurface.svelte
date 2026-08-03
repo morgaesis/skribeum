@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onDestroy, onMount } from "svelte";
 import type { PickerItem, PickerMode } from "./features/pickers";
+import { enterMotionSurface, exitMotionSurfaces } from "./motion";
 import { STRINGS } from "./strings";
 
 let {
@@ -26,6 +27,9 @@ const initialViewportHeight = () =>
 let active = $state(0);
 let inputElement = $state<HTMLInputElement | undefined>();
 let closeElement = $state<HTMLButtonElement | undefined>();
+let backdropElement = $state<HTMLElement | undefined>();
+let dialogElement = $state<HTMLElement | undefined>();
+let closing = false;
 let visualTop = $state(0);
 let visualLeft = $state(0);
 let visualWidth = $state(typeof window === "undefined" ? 0 : window.innerWidth);
@@ -113,7 +117,7 @@ function onKeydown(event: KeyboardEvent) {
 function onDialogKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
     event.preventDefault();
-    onClose();
+    void requestClose();
   } else if (event.key === "Tab") {
     event.preventDefault();
     if (event.shiftKey) {
@@ -130,6 +134,22 @@ function onDialogKeydown(event: KeyboardEvent) {
   }
 }
 
+function requestClose() {
+  if (closing) return;
+  closing = true;
+  exitMotionSurfaces(
+    [backdropElement, dialogElement].filter(
+      (element): element is HTMLElement => element !== undefined,
+    ),
+    onClose,
+  );
+}
+
+onMount(() => {
+  if (backdropElement !== undefined) enterMotionSurface(backdropElement);
+  if (dialogElement !== undefined) enterMotionSurface(dialogElement);
+});
+
 onDestroy(() => {
   if (restoreFocus && returnFocusElement?.isConnected) {
     returnFocusElement.focus();
@@ -138,18 +158,23 @@ onDestroy(() => {
 </script>
 
 <div
+  bind:this={backdropElement}
   class="skr-overlay command-surface-backdrop"
   role="presentation"
   data-testid="unified-command-surface"
   style={`--skr-visual-top: ${visualTop}px; --skr-visual-left: ${visualLeft}px; --skr-visual-width: ${visualWidth}px; --skr-visual-height: ${visualHeight}px; --skr-command-height-cap: ${heightCap}px`}
-  onclick={(event) => event.target === event.currentTarget && onClose()}
+  data-motion-surface="scrim"
+  onclick={(event) =>
+    event.target === event.currentTarget && void requestClose()}
 >
   <div
+    bind:this={dialogElement}
     class="command-surface-dialog"
     role="dialog"
     aria-modal="true"
     aria-label={STRINGS.commandSurfaceLabel}
     tabindex="-1"
+    data-motion-surface="centered"
     onkeydown={onDialogKeydown}
   >
     <div class="command-surface-input-row">
@@ -174,7 +199,7 @@ onDestroy(() => {
         bind:this={closeElement}
         type="button"
         class="command-surface-close"
-        onclick={onClose}
+        onclick={requestClose}
       >{STRINGS.closeAction}</button>
     </div>
     <ul

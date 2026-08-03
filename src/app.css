@@ -8,6 +8,11 @@ body,
   margin: 0;
 }
 
+html,
+.cm-scroller {
+  scroll-behavior: auto;
+}
+
 :root {
   --skr-visual-viewport-top: 0px;
   --skr-visual-viewport-left: 0px;
@@ -40,7 +45,8 @@ body {
   border-radius: 0.3125rem;
   background-clip: content-box;
   background-color: var(--skr-border);
-  transition: background-color 50ms linear;
+  transition: background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
 }
 
 *::-webkit-scrollbar-thumb:hover,
@@ -67,9 +73,10 @@ button:hover {
 
 button {
   transition:
-    color 50ms linear,
-    background-color 50ms linear,
-    border-color 50ms linear;
+    color var(--skr-motion-state-duration) var(--skr-motion-state-easing),
+    background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing),
+    border-color var(--skr-motion-state-duration) var(--skr-motion-state-easing);
 }
 
 input,
@@ -130,7 +137,8 @@ select {
   font-weight: 600;
   opacity: 1;
   text-overflow: ellipsis;
-  transition: opacity 50ms linear;
+  transition: opacity var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
   white-space: nowrap;
 }
 
@@ -278,6 +286,36 @@ html body .settings-dialog {
   background: var(--skr-accent-subtle);
 }
 
+[role="treeitem"],
+[role="option"] {
+  transition:
+    color var(--skr-motion-state-duration) var(--skr-motion-state-easing),
+    background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+.skr-desktop-outline {
+  width: 0;
+  border-left: 0 solid var(--skr-border);
+  transition: width var(--skr-motion-panel-duration)
+    var(--skr-motion-panel-easing);
+}
+
+.skr-desktop-outline-open {
+  width: 15rem;
+  border-left-width: 1px;
+}
+
+.skr-desktop-outline > * {
+  width: 15rem;
+}
+
+@media (min-width: 60.001rem) and (max-width: 64rem) {
+  .skr-desktop-outline {
+    transition-duration: 0ms;
+  }
+}
+
 .skr-control {
   border-color: var(--skr-border-strong);
   background: var(--skr-surface);
@@ -360,93 +398,29 @@ html body .settings-dialog {
 .cm-skr-reveal-marker {
   display: inline-block;
   opacity: 0;
-  transform: translateX(calc(-1 * var(--skr-motion-distance)));
-  transition:
-    opacity var(--skr-motion-duration) var(--skr-motion-easing),
-    transform var(--skr-motion-duration) var(--skr-motion-easing);
+  transition: opacity var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
 }
 
 .cm-skr-reveal-marker-active {
   opacity: 1;
-  transform: translateX(0);
-}
-
-.cm-skr-reveal-motion {
-  animation-duration: var(--skr-motion-duration);
-  animation-fill-mode: both;
-  animation-timing-function: var(--skr-motion-easing);
-  transition:
-    opacity var(--skr-motion-duration) var(--skr-motion-easing),
-    transform var(--skr-motion-duration) var(--skr-motion-easing);
-}
-
-.cm-skr-reveal-source {
-  animation-name: skr-reveal-source;
-}
-
-.cm-skr-reveal-rendered {
-  animation-name: skr-reveal-rendered;
-}
-
-@keyframes skr-reveal-source {
-  from {
-    opacity: 0.68;
-    transform: translateX(calc(-1 * var(--skr-motion-distance)));
-  }
-
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes skr-reveal-rendered {
-  from {
-    opacity: 0.68;
-    transform: translateX(var(--skr-motion-distance));
-  }
-
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   :root {
-    --skr-motion-duration: 0ms;
-    --skr-motion-distance: 0px;
-  }
-
-  *,
-  *::before,
-  *::after {
-    scroll-behavior: auto;
-    transition-duration: 0ms;
-    animation-duration: 0ms;
-    animation-iteration-count: 1;
-  }
-
-  html body button,
-  html body .cm-skr-reveal-marker,
-  html body .cm-skr-reveal-motion {
-    transition-duration: 0ms;
-    animation-duration: 0ms;
-  }
-
-  .cm-editor .cm-cursorLayer {
-    /* biome-ignore lint/complexity/noImportantStyles: CodeMirror writes cursor timing inline. */
-    animation-duration: 0ms !important;
+    --skr-motion-state-duration: 0ms;
+    --skr-motion-surface-duration: 0ms;
+    --skr-motion-panel-duration: 0ms;
   }
 }
 
-@keyframes skr-embed-shimmer {
+@keyframes skr-loading-pulse {
   from {
-    transform: translateX(-100%);
+    opacity: 1;
   }
 
   to {
-    transform: translateX(100%);
+    opacity: 0.55;
   }
 }
 
@@ -459,13 +433,13 @@ html body .settings-dialog {
 }
 
 .cm-skr-embed-skeleton-bar {
-  position: relative;
   display: block;
   width: 100%;
   height: 0.65rem;
-  overflow: hidden;
   border-radius: 0.2rem;
   background: var(--skr-surface-subtle);
+  animation: skr-loading-pulse var(--skr-loading-pulse-duration) linear infinite
+    alternate;
 }
 
 .cm-skr-embed-skeleton-bar[data-width="medium"] {
@@ -476,40 +450,101 @@ html body .settings-dialog {
   width: 54%;
 }
 
-.cm-skr-embed-skeleton-bar::after {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--skr-surface-raised),
-    transparent
-  );
-  content: "";
-  animation: skr-embed-shimmer var(--skr-motion-duration)
-    var(--skr-motion-easing) 1 both;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .cm-skr-embed-skeleton-bar::after {
+  .cm-skr-embed-skeleton-bar {
     animation: none;
+    opacity: 0.7;
   }
 }
 
-:root[data-animations="false"] .cm-skr-embed-skeleton-bar::after {
-  animation: none;
+:root[data-animations="false"] {
+  --skr-motion-state-duration: 0ms;
+  --skr-motion-surface-duration: 0ms;
+  --skr-motion-panel-duration: 0ms;
 }
 
-:root[data-animations="false"] *,
-:root[data-animations="false"] *::before,
-:root[data-animations="false"] *::after {
-  scroll-behavior: auto;
+:root[data-animations="false"] .cm-skr-embed-skeleton-bar {
+  animation: none;
+  opacity: 0.7;
+}
+
+:root[data-theme-switching="true"] *,
+:root[data-theme-switching="true"] *::before,
+:root[data-theme-switching="true"] *::after {
   transition-duration: 0ms;
-  animation-duration: 0ms;
-  animation-iteration-count: 1;
+}
+
+[data-motion-surface] {
+  opacity: 0;
+  transition:
+    opacity var(--skr-motion-surface-duration) var(--skr-motion-surface-easing),
+    transform var(--skr-motion-surface-duration)
+    var(--skr-motion-surface-easing);
+  will-change: opacity, transform;
+}
+
+[data-motion-surface="centered"] {
+  transform: scale(0.98);
+}
+
+[data-motion-surface="anchored-top"] {
+  transform: translateY(calc(-1 * var(--skr-motion-distance)));
+}
+
+[data-motion-surface="anchored-bottom"] {
+  transform: translateY(var(--skr-motion-distance));
+}
+
+[data-motion-surface="fade"],
+[data-motion-surface="scrim"] {
+  transform: none;
+  transition: opacity var(--skr-motion-surface-duration)
+    var(--skr-motion-surface-easing);
+}
+
+[data-motion-surface][data-motion-entered="true"] {
+  opacity: 1;
+  transform: none;
+}
+
+[data-motion-surface][data-motion-exiting="true"] {
+  opacity: 0;
+  transform: none;
+  transition: opacity var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+[data-motion-surface][data-motion-instant="true"] {
+  opacity: 1;
+  transform: none;
+  transition-duration: 0ms;
+}
+
+[data-motion-surface][data-motion-preparing="true"] {
+  opacity: 0;
+  transform: none;
+  transition-duration: 0ms;
+}
+
+[data-motion-state-surface] {
+  opacity: 0;
+  transition: opacity var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+[data-motion-state-surface][data-motion-entered="true"] {
+  opacity: 1;
+}
+
+[data-motion-state-surface][data-motion-exiting="true"] {
+  opacity: 0;
 }
 
 @media (max-width: 60rem) {
+  .settings-jump-menu[data-motion-entered="false"] {
+    transform: translateY(var(--skr-motion-distance));
+  }
+
   .skr-app-header {
     box-sizing: border-box;
     display: grid;
@@ -610,11 +645,6 @@ html body .settings-dialog {
   line-height: 1.2;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 50ms linear;
-}
-
-.cm-skr-toolbar-command-tooltip.visible {
-  opacity: 1;
 }
 
 .cm-skr-toolbar-command-tooltip kbd {

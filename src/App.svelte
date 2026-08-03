@@ -108,6 +108,7 @@ import {
   vaultTree,
   watchSubscribe,
 } from "./lib/ipc/vault";
+import type { PaneSwitchKind } from "./lib/motion";
 import { resolveNoteTitle } from "./lib/noteTitles";
 import OutlinePanel from "./lib/OutlinePanel.svelte";
 import {
@@ -1215,6 +1216,7 @@ function isMissingNoteError(error: unknown): boolean {
 async function openNote(
   path: string,
   restoration: NoteViewState | null = null,
+  switchKind: PaneSwitchKind = "note",
 ): Promise<boolean> {
   const currentVault = vault;
   if (currentVault === null) {
@@ -1246,6 +1248,13 @@ async function openNote(
       pendingRecovered.delete(path);
       loaded.recoveredChangeSet = recovered;
       pushBanner({ text: STRINGS.noteRecoveredNotice });
+    }
+    if (
+      (switchKind !== "note" || selectedPath !== path) &&
+      note !== null &&
+      editor !== undefined
+    ) {
+      editor.preparePaneSwitch(switchKind);
     }
     noteTitleVisible = !noteOpensWithHeading(loaded.text);
     currentNoteSource = loaded.text;
@@ -1294,7 +1303,11 @@ async function openNoteAddress(
 ): Promise<boolean> {
   const editorWasFocused = editor?.getView()?.hasFocus === true;
   if (editorWasFocused || source === "history") focusReadingSurface();
-  const opened = await openNote(address.path, restoration);
+  const opened = await openNote(
+    address.path,
+    restoration,
+    source === "history" ? "history" : "note",
+  );
   if (!opened) {
     if (missingAddress !== null) {
       missingAddress = address;
@@ -1938,15 +1951,21 @@ onMount(() => {
         </div>
       {/if}
     </section>
-    {#if outlineOpen}
-      <aside class="skr-panel skr-desktop-outline w-60 shrink-0 overflow-y-auto border-l">
+    <aside
+      class="skr-panel skr-desktop-outline shrink-0 overflow-hidden"
+      class:skr-desktop-outline-open={outlineOpen}
+      aria-hidden={!outlineOpen}
+      inert={!outlineOpen}
+      data-testid="desktop-outline-panel"
+    >
+      {#if outlineOpen}
         <OutlinePanel
           entries={outlineEntries}
           onNavigate={outlineNavigate}
           onCopyHeading={copyOutlineHeading}
         />
-      </aside>
-    {/if}
+      {/if}
+    </aside>
   </main>
 </div>
 

@@ -168,6 +168,8 @@ function onKeydown(event: KeyboardEvent) {
     font-size: 0.75rem;
     line-height: 1;
     opacity: 0;
+    transition: opacity var(--skr-motion-state-duration)
+      var(--skr-motion-state-easing);
   }
 
   .outline-row:hover .outline-copy,

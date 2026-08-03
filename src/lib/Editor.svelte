@@ -53,6 +53,11 @@ import { tableCellRanges } from "./features/tableOperations";
 import { type TagAffordanceOptions, tagAffordances } from "./features/tags";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
+import {
+  enterMotionSurface,
+  type PaneSwitchKind,
+  paneSwitchUsesArrivalMotion,
+} from "./motion";
 import PropertiesPanel from "./PropertiesPanel.svelte";
 import { type CommandContext, CommandRegistry, editorKeymap } from "./registry";
 import { NARROW_BREAKPOINT_REM } from "./responsive";
@@ -124,6 +129,7 @@ let {
 } = $props();
 
 let host: HTMLDivElement;
+let shell: HTMLDivElement;
 let view: EditorView | undefined;
 let session: NoteSession | null = null;
 /** Set when the open note disappeared from disk; saving pauses. */
@@ -131,6 +137,7 @@ let removed = false;
 let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let titleVisibilityFrame: number | undefined;
 let restorationGeneration = 0;
+let arrivalPrepared = false;
 /** Serializes saves so change sets always apply to the base they expect. */
 let saveChain: Promise<boolean> = Promise.resolve(true);
 
@@ -353,6 +360,13 @@ function stateFor(
   });
 }
 
+function finishPreparedArrival(): void {
+  if (!arrivalPrepared) return;
+  arrivalPrepared = false;
+  delete shell.dataset.motionPreparing;
+  enterMotionSurface(shell);
+}
+
 function replaceEditorState(content: string, locked: boolean): void {
   const target = view;
   if (target === undefined) return;
@@ -364,6 +378,7 @@ function replaceEditorState(content: string, locked: boolean): void {
   if (restoration === null) {
     target.dom.style.removeProperty("visibility");
     target.scrollDOM.scrollTop = 0;
+    queueMicrotask(finishPreparedArrival);
     return;
   }
   const scrollAnchor = characterOffsetForByte(
@@ -392,6 +407,7 @@ function replaceEditorState(content: string, locked: boolean): void {
       correctScrollOffset();
       if (view === target && restorationGeneration === generation) {
         target.dom.style.removeProperty("visibility");
+        finishPreparedArrival();
       }
     });
   });
@@ -701,6 +717,14 @@ export function getView(): EditorView | undefined {
   return view;
 }
 
+/** Hides the outgoing frame only when the pane switch needs arrival motion. */
+export function preparePaneSwitch(kind: PaneSwitchKind): void {
+  if (!paneSwitchUsesArrivalMotion(kind)) return;
+  arrivalPrepared = true;
+  shell.dataset.motionPreparing = "true";
+  delete shell.dataset.motionExiting;
+}
+
 /** Captures byte-exact selection offsets and the current reading position. */
 export function captureHistoryState(): NoteViewState | null {
   if (view === undefined) return null;
@@ -880,7 +904,12 @@ $effect(() => {
 });
 </script>
 
-<div class="skr-editor-shell flex h-full min-h-0 flex-col">
+<div
+  bind:this={shell}
+  class="skr-editor-shell flex h-full min-h-0 flex-col"
+  data-motion-surface="fade"
+  data-motion-entered="true"
+>
   {#if !sourceMode && frontmatter !== null && frontmatter.entries.length > 0}
     <PropertiesPanel
       {frontmatter}

@@ -11,6 +11,33 @@ async function overlayInput() {
   return input;
 }
 
+async function waitForCommandSurfaceEntrance() {
+  await browser.waitUntil(
+    () =>
+      browser.execute(() => {
+        const dialog = document.querySelector<HTMLElement>(
+          ".command-surface-dialog",
+        );
+        if (dialog === null) return false;
+        const style = getComputedStyle(dialog);
+        return (
+          dialog.dataset.motionEntered === "true" &&
+          style.opacity === "1" &&
+          style.transform === "none"
+        );
+      }),
+    { timeout: 5000, timeoutMsg: "command surface entrance did not settle" },
+  );
+}
+
+async function closeCommandSurface() {
+  await browser.keys(Key.Escape);
+  await $('[data-testid="unified-command-surface"]').waitForExist({
+    reverse: true,
+    timeout: 5000,
+  });
+}
+
 async function readClipboardText() {
   if (process.platform === "win32") {
     return execFileSync(
@@ -226,7 +253,7 @@ describe("work package 1 browser behavior", () => {
     await input.addValue(">");
     expect(await input.getAttribute("data-search-mode")).toBe("command");
     await assertResultKind("command");
-    await browser.keys(Key.Escape);
+    await closeCommandSurface();
 
     for (const [keys, expected] of [
       [[modifierKey, "o"], ""],
@@ -240,7 +267,7 @@ describe("work package 1 browser behavior", () => {
       expect(
         await $('[data-testid="unified-command-surface"]').isExisting(),
       ).toBe(true);
-      await browser.keys(Key.Escape);
+      await closeCommandSurface();
     }
 
     await browser.keys([modifierKey, "k"]);
@@ -300,6 +327,7 @@ describe("work package 1 browser behavior", () => {
       );
       await browser.keys([modifierKey, "k"]);
       await overlayInput();
+      await waitForCommandSurfaceEntrance();
       const geometry = await browser.execute(() => {
         const backdrop = document.querySelector<HTMLElement>(
           '[data-testid="unified-command-surface"]',
@@ -350,7 +378,7 @@ describe("work package 1 browser behavior", () => {
       expect(geometry.bottomRadius).not.toBe("0px");
       expect(geometry.resultOverflow).toBe("auto");
     } finally {
-      await browser.keys(Key.Escape);
+      await closeCommandSurface();
       await browser.setWindowSize(1100, 750);
     }
   });
@@ -391,7 +419,7 @@ describe("work package 1 browser behavior", () => {
     const paletteBold = $('[data-command-id="format.bold"]');
     await paletteBold.waitForExist({ timeout: 10000 });
     const displayedBinding = await paletteBold.$("kbd").getText();
-    await browser.keys(Key.Escape);
+    await closeCommandSurface();
 
     await selectEditorText("Quickstart");
     const toolbar = $(".cm-skr-selection-toolbar");

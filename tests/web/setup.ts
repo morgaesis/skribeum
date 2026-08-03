@@ -15,6 +15,8 @@ const emptyRect: DOMRect = {
   toJSON: () => ({}),
 };
 
+document.documentElement.style.setProperty("--skr-hover-intent-delay", "450ms");
+
 Range.prototype.getBoundingClientRect = () => emptyRect;
 Range.prototype.getClientRects = () => {
   const rects = [] as unknown as DOMRectList;

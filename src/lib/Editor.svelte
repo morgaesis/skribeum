@@ -141,6 +141,7 @@ let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let titleVisibilityFrame: number | undefined;
 let restorationGeneration = 0;
 let arrivalPrepared = false;
+let renderedPath = $state<string | null>(null);
 /** Serializes saves so change sets always apply to the base they expect. */
 let saveChain: Promise<boolean> = Promise.resolve(true);
 
@@ -805,6 +806,7 @@ function initializeForNote(current: LoadedNote | null) {
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
     onDocChanged?.(view?.state.doc.toString() ?? doc, path);
+    renderedPath = path;
     return;
   }
   if (current.readOnly) {
@@ -815,6 +817,7 @@ function initializeForNote(current: LoadedNote | null) {
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
     onDocChanged?.(view?.state.doc.toString() ?? current.text, path);
+    renderedPath = path;
     return;
   }
   session = new NoteSession(current.bytes, current.meta.projection_hash);
@@ -841,6 +844,7 @@ function initializeForNote(current: LoadedNote | null) {
   refreshFrontmatter();
   scheduleTitleVisibilityRefresh();
   onDocChanged?.(view?.state.doc.toString() ?? text, path);
+  renderedPath = path;
 }
 
 onMount(() => {
@@ -924,6 +928,7 @@ $effect(() => {
   class="skr-editor-shell flex h-full min-h-0 flex-col"
   data-motion-surface="fade"
   data-motion-entered="true"
+  data-note-path={renderedPath}
 >
   {#if !sourceMode && frontmatter !== null && frontmatter.entries.length > 0}
     <PropertiesPanel

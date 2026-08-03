@@ -102,12 +102,14 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       },
       await header.getElement(),
     );
-    expect(
-      await browser.execute(
-        (element) => getComputedStyle(element as Element).opacity === "1",
-        await header.$(".skr-sidebar-header-actions").getElement(),
-      ),
-    ).toBe(true);
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          (element) => getComputedStyle(element as Element).opacity === "1",
+          await header.$(".skr-sidebar-header-actions").getElement(),
+        ),
+      { timeoutMsg: "sidebar header controls did not reveal on focus" },
+    );
     const tooltip = $(".skr-command-tooltip");
     await tooltip.waitForDisplayed({ timeout: 10000 });
     expect(await tooltip.getText()).toMatch(/new note/iu);

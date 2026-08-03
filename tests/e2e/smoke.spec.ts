@@ -138,11 +138,18 @@ async function openNoteFromTree(name: string) {
       timeoutMsg: `${name} did not become the active note`,
     });
   }
+  const renderedSurfaceSelector = name.toLowerCase().endsWith(".canvas")
+    ? ".skr-editor-pane-focused .skr-pane-content"
+    : ".skr-editor-pane-focused .skr-editor-shell";
   await browser.waitUntil(
-    async () =>
-      (await $(".skr-editor-pane-focused .skr-pane-content").getAttribute(
-        "data-note-path",
-      )) === name,
+    () =>
+      browser.execute(
+        (selector, expectedPath) =>
+          document.querySelector(selector)?.getAttribute("data-note-path") ===
+          expectedPath,
+        renderedSurfaceSelector,
+        name,
+      ),
     {
       timeout: 15000,
       timeoutMsg: `${name} did not finish rendering in the focused pane`,
@@ -3800,7 +3807,10 @@ describe("skribeum shell", () => {
     ).toBe(LF_NOTE_NAME);
     await browser.keys(Key.Enter);
     await browser.waitUntil(
-      async () => (await editorText()).includes("alpha"),
+      async () =>
+        (await $(".skr-editor-pane-focused .skr-editor-shell").getAttribute(
+          "data-note-path",
+        )) === LF_NOTE_NAME && (await editorText()).includes("alpha"),
       {
         timeout: 15000,
       },
@@ -3808,11 +3818,14 @@ describe("skribeum shell", () => {
 
     // The editor is keyboard-focusable with a visible focus indicator, and
     // typing lands in the document.
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>(".skr-editor-pane-focused .cm-content")
-        ?.focus();
+    const editorFocused = await browser.execute(() => {
+      return (
+        window as Window & {
+          __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
+        }
+      ).__SKRIBEUM_E2E_SET_SELECTION__?.(0);
     });
+    expect(editorFocused).toBe(true);
     expect(await activeElementDescriptor()).toContain("cm-content");
     // The cm-focused class needs window focus events that a bare xvfb never
     // delivers, so the visible-focus contract is asserted by applying the

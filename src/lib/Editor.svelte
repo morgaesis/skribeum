@@ -1,5 +1,5 @@
 <script lang="ts">
-import { history } from "@codemirror/commands";
+import { history, redo, undo } from "@codemirror/commands";
 import { indentUnit, syntaxTree } from "@codemirror/language";
 import {
   Annotation,
@@ -10,7 +10,7 @@ import {
   type Extension,
   Transaction,
 } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { EditorView, lineNumbers } from "@codemirror/view";
 import { onMount } from "svelte";
 import { bulkTextInput } from "./editor/bulkInput";
 import type { ByteChange } from "./editor/byteChangeSet";
@@ -25,6 +25,7 @@ import {
   type WikilinkResolutionContext,
   wikilinkPointerNavigation,
 } from "./editor/decorations/wikilinks";
+import { DurableEditHistory } from "./editor/durableHistory";
 import {
   applyTypeOverrides,
   type Frontmatter,
@@ -52,7 +53,16 @@ import { tableEditingExtension } from "./features/tableEditing";
 import { tableCellRanges } from "./features/tableOperations";
 import { type TagAffordanceOptions, tagAffordances } from "./features/tags";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
-import { IpcError, type LoadedNote, noteWrite, readNote } from "./ipc/vault";
+import {
+  editHistoryAppend,
+  editHistoryClear,
+  editHistoryFence,
+  editHistoryRead,
+  IpcError,
+  type LoadedNote,
+  noteWrite,
+  readNote,
+} from "./ipc/vault";
 import {
   enterMotionSurface,
   type PaneSwitchKind,
@@ -132,6 +142,7 @@ let host: HTMLDivElement;
 let shell: HTMLDivElement;
 let view: EditorView | undefined;
 let session: NoteSession | null = null;
+let durableEditHistory: DurableEditHistory | null = null;
 /** Set when the open note disappeared from disk; saving pauses. */
 let removed = false;
 let idleSaveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -258,7 +269,7 @@ function registryExtensions(): Extension[] {
   if (activeRegistry === null) {
     const emptyRegistry = new CommandRegistry();
     return [
-      editorKeymap(emptyRegistry, provider),
+      editorKeymap(emptyRegistry, provider, durableHistoryCommands()),
       tableEditingExtension(emptyRegistry, provider),
       ...(tagAffordanceOptions === undefined
         ? []
@@ -266,7 +277,7 @@ function registryExtensions(): Extension[] {
     ];
   }
   return [
-    editorKeymap(activeRegistry, provider),
+    editorKeymap(activeRegistry, provider, durableHistoryCommands()),
     tableEditingExtension(activeRegistry, provider),
     ...(tagAffordanceOptions === undefined
       ? []
@@ -275,6 +286,22 @@ function registryExtensions(): Extension[] {
     selectionToolbar(activeRegistry, provider),
     findExtension(),
   ];
+}
+
+function durableHistoryCommands() {
+  const runUndo = (target: EditorView): boolean => {
+    if (undo(target)) return true;
+    if (durableEditHistory === null) return false;
+    durableEditHistory.undo(target);
+    return true;
+  };
+  const runRedo = (target: EditorView): boolean => {
+    if (redo(target)) return true;
+    if (durableEditHistory === null) return false;
+    durableEditHistory.redo(target);
+    return true;
+  };
+  return { undo: runUndo, redo: runRedo };
 }
 
 function characterOffsetForByte(content: string, byteOffset: number): number {
@@ -458,6 +485,7 @@ function dispatchTransactions(
     ) {
       continue;
     }
+    durableEditHistory?.record(transaction);
     session?.recordLocalChanges(transaction.changes);
     scheduleIdleSave();
   }
@@ -562,7 +590,7 @@ function clearUndoHistory(target: EditorView) {
  * local edits, and the selection maps through the changes rather than
  * resetting.
  */
-function dispatchSessionChanges(changes: ChangeSet) {
+function dispatchSessionChanges(changes: ChangeSet, fenceHistory = false) {
   if (view === undefined) {
     return;
   }
@@ -574,8 +602,9 @@ function dispatchSessionChanges(changes: ChangeSet) {
         Transaction.addToHistory.of(false),
       ],
     });
-    clearUndoHistory(view);
   }
+  if (!changes.empty || fenceHistory) clearUndoHistory(view);
+  if (fenceHistory) durableEditHistory?.fence();
 }
 
 async function performSave(): Promise<boolean> {
@@ -598,10 +627,11 @@ async function performSave(): Promise<boolean> {
     await rereadAndReconcile();
     return false;
   }
-  if (request === null) {
-    return true;
-  }
   try {
+    await durableEditHistory?.flush();
+    if (request === null) {
+      return true;
+    }
     const result = await noteWrite(
       vault,
       path,
@@ -678,6 +708,7 @@ export async function ingestExternal(
   try {
     dispatchSessionChanges(
       session.ingestDelta(fromIpcChanges(changeSet), projectionHash),
+      true,
     );
   } catch {
     await rereadAndReconcile();
@@ -704,7 +735,16 @@ export function reconcileWith(loaded: LoadedNote): void {
   removed = false;
   dispatchSessionChanges(
     session.reconcile(loaded.bytes, loaded.meta.projection_hash),
+    true,
   );
+}
+
+/** Removes the open note's persisted edit-history journal. */
+export async function clearEditHistory(): Promise<void> {
+  if (!(await flush())) {
+    throw new Error(STRINGS.clearEditHistorySaveFailed);
+  }
+  await durableEditHistory?.clear();
 }
 
 /** Marks the open note as removed from disk: the buffer stays, saving pauses. */
@@ -787,6 +827,7 @@ function initializeForNote(current: LoadedNote | null) {
     historyViewState?.propertiesExpanded ?? defaultPropertiesExpanded();
   if (current === null) {
     session = null;
+    durableEditHistory = null;
     replaceEditorState(doc, false);
     applyLinkContext();
     refreshFrontmatter();
@@ -796,6 +837,7 @@ function initializeForNote(current: LoadedNote | null) {
   }
   if (current.readOnly) {
     session = null;
+    durableEditHistory = null;
     replaceEditorState(current.text, true);
     applyLinkContext();
     refreshFrontmatter();
@@ -804,6 +846,18 @@ function initializeForNote(current: LoadedNote | null) {
     return;
   }
   session = new NoteSession(current.bytes, current.meta.projection_hash);
+  const currentVault = vault;
+  const currentPath = path;
+  durableEditHistory =
+    currentVault === null || currentPath === null
+      ? null
+      : new DurableEditHistory({
+          read: () => editHistoryRead(currentVault, currentPath),
+          append: (batch, actions) =>
+            editHistoryAppend(currentVault, currentPath, batch, actions),
+          fence: (batch) => editHistoryFence(currentVault, currentPath, batch),
+          clear: () => editHistoryClear(currentVault, currentPath),
+        });
   let text = session.base.text;
   if (current.recoveredChangeSet !== undefined) {
     // Journal recovery delivered before the note was opened: the delta

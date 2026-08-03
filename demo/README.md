@@ -19,6 +19,12 @@ crash-safe atomic write path or filesystem watcher. The browser API cannot make
 the conflict check and file replacement one atomic operation, so an external
 edit that lands in the final replacement window can be overwritten.
 
+Undo and redo remain available through CodeMirror for the current page
+session. The demo does not persist edit history because the seeded vault resets
+on reload and browser folder handles do not provide a stable vault identity to
+this build. The desktop application stores durable history in device-local
+application data outside the vault.
+
 `mod+k` opens the unified command surface. Plain queries find notes, while `>`,
 `#`, and `?` select commands and settings, tags, and note text. The familiar
 switcher, palette, and search shortcuts open this surface with the matching

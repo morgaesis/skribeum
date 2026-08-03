@@ -7,9 +7,9 @@
 
 use std::path::PathBuf;
 
-use skribeum_core::{BufferEdit, LineEndingMap, buffer_from_bytes};
+use skribeum_core::{BufferEdit, ByteRangeReplace, LineEndingMap, buffer_from_bytes};
 use skribeum_vault::{
-    Encoding, FileSystem, RealFs, SimFs, Vault, VaultError, VaultPath, WriteResult,
+    Encoding, FileSystem, RealFs, SimFs, Vault, VaultError, VaultPath, WriteResult, classify,
 };
 
 fn corpus_files() -> Vec<(String, Vec<u8>)> {
@@ -169,6 +169,45 @@ fn scripted_edit_preserves_bytes_outside_the_edited_span() {
         assert_ne!(on_disk, bytes, "{name}: the edit must change the file");
         assert_outside_span_identical(&bytes, &on_disk, (span_start, span_end), &name);
     }
+}
+
+#[test]
+fn external_ingest_advances_the_next_write_base() {
+    let (fs, vault, path) = vault_with(b"base\n");
+    let base = vault.read_note(&fs, &path).expect("note reads");
+    let external = b"outside\n".to_vec();
+    fs.external_write(&PathBuf::from("vault/note.md"), &external);
+    let external_note = classify(external.clone());
+    vault
+        .ingest_external_note(
+            &path,
+            &[ByteRangeReplace {
+                start: 0,
+                end: base.bytes.len(),
+                bytes: external,
+            }],
+            &external_note.projection_hash,
+        )
+        .expect("external delta advances the base");
+
+    let result = vault
+        .write_note(
+            &fs,
+            &path,
+            &[ByteRangeReplace {
+                start: 7,
+                end: 7,
+                bytes: b" local".to_vec(),
+            }],
+            &external_note.projection_hash,
+        )
+        .expect("post-ingest edit writes");
+    assert!(matches!(result, WriteResult::Written { .. }));
+    assert_eq!(
+        fs.read(&PathBuf::from("vault/note.md"))
+            .expect("post-ingest note reads"),
+        b"outside local\n"
+    );
 }
 
 /// Mutation companion: the untouched-span checker must reject a deliberately

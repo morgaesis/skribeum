@@ -36,6 +36,8 @@ export type CommandContext = {
   closeSurfaces(): void;
   /** Saves the open note's pending edits. */
   requestSave(): void;
+  /** Confirms and clears the open note's persisted edit history. */
+  clearEditHistory?(): Promise<void>;
   /** Vault-relative paths of every note in the open vault. */
   notePaths(): readonly string[];
   /** Recently opened note paths, most recent first. */

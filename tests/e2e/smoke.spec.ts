@@ -17,6 +17,12 @@ import {
   DESKTOP_EXTERNAL_NOTE_NAME,
   DESKTOP_UNDO_NOTE_CONTENT,
   DESKTOP_UNDO_NOTE_NAME,
+  DURABLE_CLEAR_NOTE_CONTENT,
+  DURABLE_CLEAR_NOTE_NAME,
+  DURABLE_EXTERNAL_NOTE_CONTENT,
+  DURABLE_EXTERNAL_NOTE_NAME,
+  DURABLE_UNDO_NOTE_CONTENT,
+  DURABLE_UNDO_NOTE_NAME,
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
@@ -30,6 +36,7 @@ import {
   RENDERING_NOTE_NAME,
   REVEAL_NOTE_CONTENT,
   REVEAL_NOTE_NAME,
+  SCRATCH_EDIT_HISTORY_PATH,
   SCRATCH_SETTINGS_PATH,
   SCRATCH_VAULT_PATH,
   TABLE_EDITING_NOTE_CONTENT,
@@ -99,6 +106,38 @@ async function waitForDisk(name: string, expected: string) {
   );
 }
 
+async function waitForEditorDocument(expected: string, message: string) {
+  try {
+    await browser.waitUntil(
+      async () => (await editorDocumentText()).trimEnd() === expected.trimEnd(),
+      { timeout: 10000 },
+    );
+  } catch {
+    throw new Error(
+      `${message}; got ${JSON.stringify(await editorDocumentText())}`,
+    );
+  }
+}
+
+function editHistoryRecords(name: string): unknown[] {
+  try {
+    return readFileSync(SCRATCH_EDIT_HISTORY_PATH, "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { path?: string })
+      .filter((record) => record.path === name);
+  } catch {
+    return [];
+  }
+}
+
+async function relaunchPackagedApplication(): Promise<void> {
+  await browser.reloadSession();
+  await browser.tauri.switchWindow("main");
+  await $('[role="tree"]').waitForExist({ timeout: 15000 });
+  await $(`li=${CRLF_NOTE_NAME}`).waitForExist({ timeout: 15000 });
+}
+
 async function dismissBannersForPath(name?: string) {
   await browser.pause(250);
   for (const banner of await $$('aside[role="alert"]')) {
@@ -113,6 +152,28 @@ async function openNoteFromTree(name: string) {
   const row = $(`li=${name}`);
   await row.waitForExist({ timeout: 15000 });
   await row.click();
+}
+
+async function openNoteFromQuickSwitcher(name: string) {
+  await $('button[aria-label="More actions"]').click();
+  const overflow = $('[data-testid="overlay-sheet"]');
+  await overflow.waitForDisplayed({ timeout: 10000 });
+  await overflow.$('[data-command-id="quick-switcher.open"]').click();
+  const input = $('[role="combobox"]');
+  await input.waitForDisplayed({ timeout: 10000 });
+  await input.addValue(name);
+  await browser.waitUntil(
+    async () => {
+      const selected = $('[role="option"][aria-selected="true"]');
+      return (
+        (await selected.isExisting()) &&
+        (await selected.getText()).toLocaleLowerCase().includes(name)
+      );
+    },
+    { timeout: 10000, timeoutMsg: `${name} was not selected` },
+  );
+  await browser.keys(Key.Enter);
+  await input.waitForExist({ reverse: true, timeout: 10000 });
 }
 
 async function waitForSurfaceEntrance(selector: string) {
@@ -6389,6 +6450,149 @@ describe("skribeum core editing surfaces", () => {
     expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
     await pressEditorHistoryShortcut("redo");
     expect((await editorDocumentText()).trimEnd()).toBe(postIngest);
+  });
+
+  it("undoes_and_redoes_a_saved_edit_after_relaunch_with_recorded_selection", async () => {
+    await openNoteFromQuickSwitcher(DURABLE_UNDO_NOTE_NAME);
+    await browser.waitUntil(
+      async () =>
+        (await editorDocumentText()).trimEnd() ===
+        DURABLE_UNDO_NOTE_CONTENT.trimEnd(),
+      { timeout: 15000, timeoutMsg: "durable undo fixture did not open" },
+    );
+    await placeCursorAtLineEnd("durable base");
+    const beforeSelection = await capturedHistoryState();
+    await $(".cm-content").addValue(" session");
+    const saved = `${DURABLE_UNDO_NOTE_CONTENT.trimEnd()} session\n`;
+    await waitForDisk(DURABLE_UNDO_NOTE_NAME, saved);
+    await browser.pause(1800);
+    const afterSelection = await capturedHistoryState();
+
+    await relaunchPackagedApplication();
+    await openNoteFromQuickSwitcher(DURABLE_UNDO_NOTE_NAME);
+    await waitForEditorDocument(
+      saved,
+      "saved durable undo fixture did not reopen",
+    );
+    await placeCursorAtLineEnd(saved.trimEnd());
+    await pressEditorHistoryShortcut("undo");
+    await browser.waitUntil(
+      async () =>
+        (await editorDocumentText()).trimEnd() ===
+        DURABLE_UNDO_NOTE_CONTENT.trimEnd(),
+      { timeoutMsg: "persisted undo did not restore the prior document" },
+    );
+    const restoredBefore = await capturedHistoryState();
+    expect(restoredBefore?.anchor).toBe(beforeSelection?.anchor);
+    expect(restoredBefore?.head).toBe(beforeSelection?.head);
+
+    await pressEditorHistoryShortcut("redo");
+    await browser.waitUntil(
+      async () => (await editorDocumentText()).trimEnd() === saved.trimEnd(),
+      { timeoutMsg: "persisted redo did not restore the saved edit" },
+    );
+    const restoredAfter = await capturedHistoryState();
+    expect(restoredAfter?.anchor).toBe(afterSelection?.anchor);
+    expect(restoredAfter?.head).toBe(afterSelection?.head);
+  });
+
+  it("persists_the_external_ingest_fence_across_relaunch", async () => {
+    await openNoteFromQuickSwitcher(DURABLE_EXTERNAL_NOTE_NAME);
+    await browser.waitUntil(
+      async () =>
+        (await editorDocumentText()).trimEnd() ===
+        DURABLE_EXTERNAL_NOTE_CONTENT.trimEnd(),
+      { timeout: 15000, timeoutMsg: "durable fence fixture did not open" },
+    );
+    await placeCursorAtLineEnd("durable external base");
+    await $(".cm-content").addValue(" local");
+    const local = `${DURABLE_EXTERNAL_NOTE_CONTENT.trimEnd()} local\n`;
+    await waitForDisk(DURABLE_EXTERNAL_NOTE_NAME, local);
+    await browser.pause(1800);
+
+    const external = `outside ${local}`;
+    writeFileSync(
+      path.join(SCRATCH_VAULT_PATH, DURABLE_EXTERNAL_NOTE_NAME),
+      external,
+    );
+    await browser.waitUntil(
+      async () => (await editorDocumentText()).trimEnd() === external.trimEnd(),
+      { timeoutMsg: "external durable-fence edit did not ingest" },
+    );
+    await placeCursorAtLineEnd(external.trimEnd());
+    await $(".cm-content").addValue(" post");
+    const postIngest = `${external.trimEnd()} post\n`;
+    expect((await editorDocumentText()).trimEnd()).toBe(postIngest.trimEnd());
+    await waitForDisk(DURABLE_EXTERNAL_NOTE_NAME, postIngest);
+    await browser.pause(1800);
+
+    await relaunchPackagedApplication();
+    await openNoteFromQuickSwitcher(DURABLE_EXTERNAL_NOTE_NAME);
+    await waitForEditorDocument(
+      postIngest,
+      "post-ingest durable fixture did not reopen",
+    );
+    await placeCursorAtLineEnd(postIngest.trimEnd());
+    await pressEditorHistoryShortcut("undo");
+    await browser.waitUntil(
+      async () => (await editorDocumentText()).trimEnd() === external.trimEnd(),
+      { timeoutMsg: "post-ingest durable step did not undo" },
+    );
+    await pressEditorHistoryShortcut("undo");
+    await browser.pause(250);
+    expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
+    expect((await editorDocumentText()).trimEnd()).toContain("outside ");
+    await pressEditorHistoryShortcut("redo");
+    await browser.waitUntil(
+      async () =>
+        (await editorDocumentText()).trimEnd() === postIngest.trimEnd(),
+      { timeoutMsg: "post-ingest durable step did not redo" },
+    );
+  });
+
+  it("clear_edit_history_removes_the_note_journal", async () => {
+    await openNoteFromQuickSwitcher(DURABLE_CLEAR_NOTE_NAME);
+    await browser.waitUntil(
+      async () =>
+        (await editorDocumentText()).trimEnd() ===
+        DURABLE_CLEAR_NOTE_CONTENT.trimEnd(),
+      { timeout: 15000, timeoutMsg: "clear-history fixture did not open" },
+    );
+    await placeCursorAtLineEnd("durable clear base");
+    await $(".cm-content").addValue(" sensitive");
+    const saved = `${DURABLE_CLEAR_NOTE_CONTENT.trimEnd()} sensitive\n`;
+    await waitForDisk(DURABLE_CLEAR_NOTE_NAME, saved);
+    await browser.pause(1800);
+    expect(editHistoryRecords(DURABLE_CLEAR_NOTE_NAME).length).toBeGreaterThan(
+      0,
+    );
+
+    await browser.execute(() => {
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_CONFIRM_EDIT_HISTORY__?: boolean;
+        }
+      ).__SKRIBEUM_E2E_CONFIRM_EDIT_HISTORY__ = true;
+    });
+    await browser.keys([modifierKey, "p"]);
+    await overlayInput();
+    await browser.keys("clear edit history");
+    await browser.keys(Key.Enter);
+    await browser.waitUntil(
+      () => editHistoryRecords(DURABLE_CLEAR_NOTE_NAME).length === 0,
+      { timeoutMsg: "clear-history command did not remove the note journal" },
+    );
+
+    await relaunchPackagedApplication();
+    await openNoteFromQuickSwitcher(DURABLE_CLEAR_NOTE_NAME);
+    await waitForEditorDocument(
+      saved,
+      "cleared durable fixture did not reopen",
+    );
+    await placeCursorAtLineEnd(saved.trimEnd());
+    await pressEditorHistoryShortcut("undo");
+    await browser.pause(250);
+    expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
   });
 
   it("browser_demo_restores_default_appearance_and_persists", async () => {

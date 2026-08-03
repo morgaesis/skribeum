@@ -3365,6 +3365,7 @@ describe("skribeum shell", () => {
         duration: string;
         panelExpanded: string | null;
         pointerEvents: string;
+        reducedMotion: boolean;
         scrollTop: number;
         visibility: string;
       };
@@ -3397,6 +3398,8 @@ describe("skribeum shell", () => {
               duration: shellStyle.transitionDuration,
               panelExpanded: panel?.getAttribute("aria-expanded") ?? null,
               pointerEvents: shellStyle.pointerEvents,
+              reducedMotion: matchMedia("(prefers-reduced-motion: reduce)")
+                .matches,
               scrollTop: scroller.scrollTop,
               visibility: getComputedStyle(editor).visibility,
             };
@@ -3454,6 +3457,7 @@ describe("skribeum shell", () => {
               duration: string;
               panelExpanded: string | null;
               pointerEvents: string;
+              reducedMotion: boolean;
               scrollTop: number;
               visibility: string;
             };
@@ -3462,11 +3466,13 @@ describe("skribeum shell", () => {
     );
     expect(arrivalFrame).toMatchObject({
       contentEditable: "true",
-      duration: "0.12s",
       panelExpanded: "false",
       pointerEvents: "auto",
       visibility: "visible",
     });
+    expect(arrivalFrame?.duration).toBe(
+      arrivalFrame?.reducedMotion ? "0s" : "0.12s",
+    );
     expect(arrivalFrame?.scrollTop).toBeGreaterThan(0);
 
     const forward = $('button[aria-label="Forward"]');
@@ -4630,6 +4636,7 @@ describe("skribeum shell", () => {
       const panelStyle = getComputedStyle(panel);
       const outlinePanelStyle = getComputedStyle(outlinePanel);
       return {
+        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
         state: {
           duration: stateStyle.transitionDuration,
           easing: stateStyle.transitionTimingFunction,
@@ -4653,25 +4660,39 @@ describe("skribeum shell", () => {
       };
     });
 
-    expect(measurements.state.duration.split(",")).toEqual([
-      "0.05s",
-      " 0.05s",
-      " 0.05s",
-    ]);
+    expect(
+      measurements.state.duration
+        .split(",")
+        .every(
+          (value) =>
+            value.trim() === (measurements.reducedMotion ? "0s" : "0.05s"),
+        ),
+    ).toBe(true);
     expect(
       measurements.state.easing
         .split(",")
         .every((value) => value.trim() === "linear"),
     ).toBe(true);
-    expect(measurements.surface.duration).toBe("0.12s, 0.12s");
+    expect(
+      measurements.surface.duration
+        .split(",")
+        .every(
+          (value) =>
+            value.trim() === (measurements.reducedMotion ? "0s" : "0.12s"),
+        ),
+    ).toBe(true);
     expect(measurements.surface.easing).toBe(
       "cubic-bezier(0.2, 0, 0, 1), cubic-bezier(0.2, 0, 0, 1)",
     );
     expect(measurements.surface.properties).toBe("opacity, transform");
-    expect(measurements.panel.duration).toBe("0.16s");
+    expect(measurements.panel.duration).toBe(
+      measurements.reducedMotion ? "0s" : "0.16s",
+    );
     expect(measurements.panel.easing).toBe("cubic-bezier(0.2, 0, 0, 1)");
     expect(measurements.panel.properties).toBe("grid-template-rows");
-    expect(measurements.outlinePanel.duration).toBe("0.16s");
+    expect(measurements.outlinePanel.duration).toBe(
+      measurements.reducedMotion ? "0s" : "0.16s",
+    );
     expect(measurements.outlinePanel.easing).toBe("cubic-bezier(0.2, 0, 0, 1)");
     expect(measurements.outlinePanel.properties).toBe("width");
 
@@ -4721,6 +4742,9 @@ describe("skribeum shell", () => {
 
   it("uses_only_compositor_motion_during_an_anchored_menu_entrance", async () => {
     await restoreDesktopViewport();
+    const reducedMotion = await browser.execute(
+      () => matchMedia("(prefers-reduced-motion: reduce)").matches,
+    );
     type MenuFrame = {
       layout: [number, number];
       neighbor: [number, number, number, number];
@@ -4791,15 +4815,20 @@ describe("skribeum shell", () => {
           frame.neighbor.toString() === frames.at(-1)?.neighbor.toString(),
       ),
     ).toBe(true);
-    expect(new Set(frames.map((frame) => frame.opacity)).size).toBeGreaterThan(
-      1,
-    );
-    expect(
-      new Set(frames.map((frame) => frame.transform)).size,
-    ).toBeGreaterThan(1);
-    expect(
-      new Set(frames.map((frame) => frame.visualTop)).size,
-    ).toBeGreaterThan(1);
+    const distinctOpacity = new Set(frames.map((frame) => frame.opacity)).size;
+    const distinctTransform = new Set(frames.map((frame) => frame.transform))
+      .size;
+    const distinctVisualTop = new Set(frames.map((frame) => frame.visualTop))
+      .size;
+    if (reducedMotion) {
+      expect(distinctOpacity).toBe(1);
+      expect(distinctTransform).toBe(1);
+      expect(distinctVisualTop).toBe(1);
+    } else {
+      expect(distinctOpacity).toBeGreaterThan(1);
+      expect(distinctTransform).toBeGreaterThan(1);
+      expect(distinctVisualTop).toBeGreaterThan(1);
+    }
     await browser.keys(Key.Escape);
   });
 
@@ -6520,10 +6549,13 @@ describe("skribeum core editing surfaces", () => {
         return {
           duration: Number.parseFloat(style.animationDuration) * 1000,
           iterations: style.animationIterationCount,
+          reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
         };
       });
-      expect(motion?.duration).toBe(1200);
-      expect(motion?.iterations).toBe("infinite");
+      expect(motion?.duration).toBe(motion?.reducedMotion ? 0 : 1200);
+      if (!motion?.reducedMotion) {
+        expect(motion?.iterations).toBe("infinite");
+      }
       const staticMotion = await browser.execute(() => {
         document.documentElement.dataset.animations = "false";
         const bar = document.querySelector(".cm-skr-embed-skeleton-bar");

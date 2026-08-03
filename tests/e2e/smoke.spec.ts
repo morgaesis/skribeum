@@ -1239,6 +1239,18 @@ async function pressFocusedKey(key: string, shiftKey = false): Promise<void> {
 async function pressEditorHistoryShortcut(
   direction: "undo" | "redo",
 ): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        () =>
+          document.activeElement instanceof HTMLElement &&
+          document.activeElement.closest(".cm-content") !== null,
+      ),
+    {
+      timeout: 5000,
+      timeoutMsg: "editor did not receive keyboard focus",
+    },
+  );
   const handled = await browser.execute(
     ({ isMac, direction }) => {
       const target = document.activeElement;

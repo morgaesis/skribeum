@@ -107,6 +107,21 @@ async function waitForDisk(name: string, expected: string) {
   );
 }
 
+/**
+ * Clears the window CodeMirror's history extension groups adjacent local
+ * edits within: @codemirror/commands' `history()` (configured with its
+ * default `newGroupDelay: 500`) folds a transaction into the previous undo
+ * step whenever it arrives within that window of the last one, and decides
+ * this lazily from elapsed wall-clock time when the next transaction
+ * lands rather than exposing any "group closed" state to poll. Tests that
+ * exercise undo/redo as discrete steps after a local edit call this once
+ * the edit's own save has landed (`waitForDisk`), so the following
+ * undo/redo lands as its own step instead of merging with the edit.
+ */
+async function waitForUndoGroupSettle(): Promise<void> {
+  await browser.pause(1800);
+}
+
 async function waitForEditorDocument(expected: string, message: string) {
   try {
     await browser.waitUntil(
@@ -142,7 +157,20 @@ async function relaunchPackagedApplication(): Promise<void> {
 }
 
 async function dismissBannersForPath(name?: string) {
-  await browser.pause(250);
+  // A banner here is triggered by an external change (a direct fs write
+  // or a conflicting save) and is optional: it may already be showing, it
+  // may still be in flight, or none may be coming at all. Poll for one to
+  // appear instead of assuming a fixed delay is long enough, but do not
+  // treat a timeout as an error since "no banner ever arrives" is a valid
+  // outcome this helper must also handle.
+  try {
+    await browser.waitUntil(
+      async () => (await $$('aside[role="alert"]')).length > 0,
+      { timeout: 2000, interval: 20 },
+    );
+  } catch {
+    // No banner appeared within the wait window; nothing to dismiss.
+  }
   for (const banner of await $$('aside[role="alert"]')) {
     if (name === undefined || (await banner.getText()).includes(name)) {
       const controls = await banner.$$("button");
@@ -611,8 +639,13 @@ async function typeTagCompletionQuery(
       `tag completion menu did not open: ${JSON.stringify(state)}`,
     );
   }
-  // Let autosave refresh the catalog while the completion query is active.
-  await browser.pause(800);
+  // Exercise the tag menu surviving a concurrent catalog refresh: typing
+  // the query dirties the note, autosave's onSaved callback triggers
+  // refreshTagCatalog(), and the menu must not be disrupted by that
+  // refresh while it is open. Wait for the autosave itself to land (the
+  // event that triggers the refresh) rather than a fixed duration guessed
+  // to outlast the debounce.
+  await waitForActiveTabSaved();
 }
 
 async function saveAndExpectTagCompletionTarget(expected: string) {
@@ -820,6 +853,29 @@ async function demoTagCompletionTargetText(): Promise<string | null> {
   return start === -1 || end === -1 ? null : text.slice(start, end);
 }
 
+/**
+ * Waits for the focused pane's active tab to leave the dirty/saving state,
+ * i.e. for autosave to have actually landed. The browser demo persists to
+ * browser storage rather than a filesystem path `waitForDisk` can read, so
+ * this polls the same dirty/saving signal TabStrip's unsaved indicator
+ * renders from, exposed directly because the tab strip itself only shows
+ * that indicator once a pane holds more than one tab.
+ */
+async function waitForActiveTabSaved(): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        () =>
+          (
+            window as Window & {
+              __SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?: () => boolean | null;
+            }
+          ).__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?.() === false,
+      ),
+    { timeout: 5000, timeoutMsg: "autosave did not settle" },
+  );
+}
+
 async function prepareDemoTagCompletionTarget(): Promise<void> {
   const targetUrl = new URL(browserDemoUrl());
   targetUrl.searchParams.set("note", "about.md");
@@ -841,7 +897,10 @@ async function prepareDemoTagCompletionTarget(): Promise<void> {
       `browser demo target was not prepared: ${JSON.stringify(prepared)}`,
     );
   }
-  await browser.pause(800);
+  // The next call navigates away (a fresh browser.url() for the next
+  // prepare() cycle); wait for this edit to actually reach persistent
+  // storage first so that navigation cannot race an in-flight write.
+  await waitForActiveTabSaved();
 }
 
 const demoTagCompletionHarness: TagCompletionHarness = {
@@ -894,7 +953,43 @@ async function placeCursorAtTagCompletionPosition(
   );
 }
 
-/** Places the browser selection at the end of the editor line with `text`. */
+/**
+ * Confirms the editor content DOM actually holds document focus after a
+ * cursor-placement dispatch's own `view.focus()` call. That call updates
+ * `document.activeElement` synchronously in the page's own script realm,
+ * but WebKitGTK can deliver the underlying native focus change to the
+ * embedded webview asynchronously, the same class of race
+ * activeElementDescriptor's callers poll for after a click-triggered focus
+ * elsewhere in this file. Under CPU contention the gap is wide enough that
+ * a following addValue's synthesized keystrokes can arrive before the
+ * webview treats the editor as focused and are silently dropped rather
+ * than inserted into the document, so cursor placement waits for this
+ * before returning instead of assuming the script-realm focus is enough.
+ */
+async function waitForEditorFocus(): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        () => document.activeElement?.classList.contains("cm-content") ?? false,
+      ),
+    {
+      timeout: 2000,
+      timeoutMsg: "editor did not receive focus after cursor placement",
+    },
+  );
+}
+
+/**
+ * Places the browser selection at the end of the editor line with `text`,
+ * through the same __SKRIBEUM_E2E_SET_LINE_END__ dispatch as before (an
+ * earlier version of this helper polled capturedHistoryState()'s anchor to
+ * confirm the position landed, but that reports a UTF-8 byte offset
+ * (captureHistoryState in src/lib/Editor.svelte converts through
+ * byteOffsetForCharacter) while this dispatch's returned anchor is a
+ * CodeMirror UTF-16 code-unit position; the two only coincide for
+ * documents with no multibyte characters before the target line, which
+ * made the wait fail once a table or emoji appeared earlier in the note).
+ */
 async function placeCursorAtLineEnd(text: string) {
   const anchor = await browser.execute((lineText: string) => {
     return (
@@ -906,24 +1001,25 @@ async function placeCursorAtLineEnd(text: string) {
   if (typeof anchor !== "number") {
     throw new Error(`no editor line with text ${text}`);
   }
-  await browser.pause(50);
+  await waitForEditorFocus();
 }
 
 async function placeCursorAtDocumentEnd() {
-  await browser.execute(() => {
-    const line = [...document.querySelectorAll<HTMLElement>(".cm-line")].at(-1);
-    if (line === undefined) {
-      throw new Error("editor has no final line");
-    }
-    document.querySelector<HTMLElement>(".cm-content")?.focus();
-    const range = document.createRange();
-    range.selectNodeContents(line);
-    range.collapse(false);
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-  });
-  await browser.pause(200);
+  // Routes through the same __SKRIBEUM_E2E_SET_SELECTION__ dispatch the
+  // other cursor-placement helpers use (an anchor beyond the document
+  // clamps to its end) instead of writing the native browser Selection
+  // directly.
+  const placed = await browser.execute(() =>
+    (
+      window as Window & {
+        __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
+      }
+    ).__SKRIBEUM_E2E_SET_SELECTION__?.(Number.MAX_SAFE_INTEGER),
+  );
+  if (placed !== true) {
+    throw new Error("editor has no document to place a cursor in");
+  }
+  await waitForEditorFocus();
 }
 
 type RevealClickPoint = "top" | "title" | "body" | "bottom";
@@ -1010,7 +1106,9 @@ async function clickRevealPoint(point: RevealClickPoint) {
     },
   ]);
   await browser.releaseActions();
-  await browser.pause(200);
+  // The caller polls for the callout's data-revealed attribute right
+  // after this returns; that wait already covers the click's async
+  // reveal, so no extra settle time is needed here.
 }
 
 async function editorCursor() {
@@ -1104,93 +1202,56 @@ async function applyVisualTheme(value: "light" | "dark") {
   );
 }
 
-async function selectEditorText(text: string) {
-  await browser.execute((needle: string) => {
-    const root = document.querySelector(".cm-content");
-    if (root === null) {
-      throw new Error("editor content missing");
-    }
-    (root as HTMLElement).focus();
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (
-      let node = walker.nextNode();
-      node !== null;
-      node = walker.nextNode()
-    ) {
-      const start = node.textContent?.indexOf(needle) ?? -1;
-      if (start < 0) {
-        continue;
-      }
-      const range = document.createRange();
-      range.setStart(node, start);
-      range.setEnd(node, start + needle.length);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      document.dispatchEvent(new Event("selectionchange"));
-      return;
-    }
-    throw new Error(`text not found: ${needle}`);
-  }, text);
-  await browser.pause(250);
+/**
+ * Places (or extends) the editor selection relative to the last match of
+ * `text` in the document, through the same __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__
+ * dispatch placeCursorAtTagCompletionPosition uses. A CodeMirror dispatch
+ * updates the content DOM selection synchronously as part of applying the
+ * transaction, and the selection-toolbar and callout-reveal UI react to
+ * CodeMirror's own update cycle rather than a native `selectionchange`
+ * listener, so no wait for those is needed afterward (this replaced a raw
+ * `window.getSelection()` walk that manually dispatched a synthetic
+ * `selectionchange` event to nudge that UI and then paused for it to catch
+ * up, which was both slower and less reliable than dispatching through
+ * CodeMirror directly). Callers that follow this with typed input still
+ * need waitForEditorFocus: see its docstring for why.
+ */
+async function dispatchSelectionFromLastMatch(
+  text: string,
+  relativeOffset: number,
+  relativeSelectionLength?: number,
+): Promise<void> {
+  const anchor = await browser.execute(
+    (needle: string, offset: number, selectionLength?: number) =>
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
+            sourceText: string,
+            relativeOffset: number,
+            relativeSelectionLength?: number,
+          ) => number | null;
+        }
+      ).__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?.(needle, offset, selectionLength),
+    text,
+    relativeOffset,
+    relativeSelectionLength,
+  );
+  if (typeof anchor !== "number") {
+    throw new Error(`text not found: ${text}`);
+  }
+  await waitForEditorFocus();
 }
 
-async function placeCursorInsideEditorText(text: string) {
-  await browser.execute((needle: string) => {
-    const root = document.querySelector(".cm-content");
-    if (root === null) {
-      throw new Error("editor content missing");
-    }
-    (root as HTMLElement).focus();
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (
-      let node = walker.nextNode();
-      node !== null;
-      node = walker.nextNode()
-    ) {
-      const start = node.textContent?.indexOf(needle) ?? -1;
-      if (start < 0) {
-        continue;
-      }
-      const range = document.createRange();
-      range.setStart(node, start + Math.floor(needle.length / 2));
-      range.collapse(true);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      document.dispatchEvent(new Event("selectionchange"));
-      return;
-    }
-    throw new Error(`text not found: ${needle}`);
-  }, text);
-  await browser.pause(250);
+async function selectEditorText(text: string): Promise<void> {
+  await dispatchSelectionFromLastMatch(text, 0, text.length);
 }
 
-async function placeCursorAtEditorTextStart(text: string) {
-  await browser.execute((needle: string) => {
-    const root = document.querySelector(".cm-content");
-    if (root === null) throw new Error("editor content missing");
-    (root as HTMLElement).focus();
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (
-      let node = walker.nextNode();
-      node !== null;
-      node = walker.nextNode()
-    ) {
-      const start = node.textContent?.indexOf(needle) ?? -1;
-      if (start < 0) continue;
-      const range = document.createRange();
-      range.setStart(node, start);
-      range.collapse(true);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      document.dispatchEvent(new Event("selectionchange"));
-      return;
-    }
-    throw new Error(`text not found: ${needle}`);
-  }, text);
-  await browser.pause(200);
+async function placeCursorInsideEditorText(text: string): Promise<void> {
+  await dispatchSelectionFromLastMatch(text, Math.floor(text.length / 2));
+}
+
+async function placeCursorAtEditorTextStart(text: string): Promise<void> {
+  await dispatchSelectionFromLastMatch(text, 0);
 }
 
 async function clearEditorSelection() {
@@ -1340,6 +1401,34 @@ async function pressEditorHistoryShortcut(
     { isMac: process.platform === "darwin", direction },
   );
   expect(handled).toBe(true);
+}
+
+/**
+ * Waits for a [data-motion-surface] element's entrance transition to reach
+ * its settled state (see enterMotionSurface in src/lib/motion.ts) before an
+ * axe scan runs against it. axe's color-contrast rule reads the actually
+ * rendered opacity: a scan mid-fade can see text still translucent against
+ * its background and report a violation that clears on its own well
+ * before a human ever perceives it.
+ */
+async function waitForMotionSurfaceEntered(selector: string): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute((target: string) => {
+        const element = document.querySelector<HTMLElement>(target);
+        if (element === null) return false;
+        const style = getComputedStyle(element);
+        return (
+          element.dataset.motionEntered === "true" &&
+          style.opacity === "1" &&
+          style.transform === "none"
+        );
+      }, selector),
+    {
+      timeout: 5000,
+      timeoutMsg: `${selector} entrance did not settle before an axe scan`,
+    },
+  );
 }
 
 async function expectNoAxeViolations(surface: string) {
@@ -3257,7 +3346,15 @@ describe("skribeum shell", () => {
               1000;
       });
       expect(revealDuration).toBeLessThan(200);
-      await browser.pause(180);
+      // Wait out the measured transition itself (plus a small margin)
+      // rather than a duration guessed to outlast it: a reduced-motion
+      // environment can legitimately report a near-zero
+      // transitionDuration, at which point this resolves immediately
+      // instead of over- or under-shooting a hardcoded constant. A
+      // `transitionend` listener was considered instead, but that same
+      // reduced-motion case can suppress the transition (and its event)
+      // entirely, which would hang the wait rather than skip it.
+      await browser.pause(revealDuration + 50);
       await dismissBannersForPath();
       await browser.saveScreenshot(
         path.join(screenshotDirectory, `after-frontmatter-${theme}.png`),
@@ -4316,6 +4413,10 @@ describe("skribeum shell", () => {
     await taskRoute.click();
     const listbox = $(".cm-skr-task-palette");
     await listbox.waitForDisplayed({ timeout: 10000 });
+    // Confirms the palette does not close itself and nothing writes to
+    // disk on its own within a short window; there is no condition to
+    // wait for here since the assertions are checking that nothing
+    // happens, not that something does.
     await browser.pause(100);
     expect(await listbox.isDisplayed()).toBe(true);
     expect(noteOnDisk(LIVE_PREVIEW_NOTE_NAME)).toBe(LIVE_PREVIEW_NOTE_CONTENT);
@@ -4508,6 +4609,10 @@ describe("skribeum shell", () => {
       reverse: true,
       timeout: 5000,
     });
+    // Confirms the cancelled gesture never triggers a write: waits past
+    // the 400ms autosave debounce (settings.autosave_delay_ms) with
+    // margin, since there is no pending-edit signal to poll for an
+    // action that correctly produced no edit.
     await browser.pause(700);
     expect(noteOnDisk(LIVE_PREVIEW_NOTE_NAME)).toBe(LIVE_PREVIEW_NOTE_CONTENT);
   });
@@ -4872,7 +4977,25 @@ describe("skribeum shell", () => {
       const text = await editorText();
       expect(text).toContain("inside-target");
       expect(text).not.toContain("outside-target");
-      const revealedIdentity = await calloutVisualIdentity();
+      // calloutVisualIdentity reads the first `.cm-skr-rich-callout` line
+      // in DOM order, not specifically the one the waitForExist above
+      // just confirmed carries data-revealed="true": a multi-line callout
+      // reveals its lines one at a time, so the first line in DOM order
+      // can still be mid-reveal for a moment after some other line in the
+      // callout has already flipped. Poll this read instead of taking it
+      // once immediately after the DOM-existence wait above.
+      let revealedIdentity: Awaited<ReturnType<typeof calloutVisualIdentity>> =
+        null;
+      await browser.waitUntil(
+        async () => {
+          revealedIdentity = await calloutVisualIdentity();
+          return revealedIdentity?.revealed === true;
+        },
+        {
+          timeout: 5000,
+          timeoutMsg: `${testCase.point} click did not settle the callout's revealed identity`,
+        },
+      );
       expect(revealedIdentity?.accent).toBe(renderedIdentity?.accent);
       expect(revealedIdentity?.borderLeftColor).toBe(
         renderedIdentity?.borderLeftColor,
@@ -4921,7 +5044,29 @@ describe("skribeum shell", () => {
     await $(".skr-properties-reveal").waitForExist({ timeout: 15000 });
     await browser.keys([modifierKey, "k"]);
     await $(".command-surface-dialog").waitForExist({ timeout: 5000 });
-    await browser.pause(140);
+    // The row geometry read below is compared against a second reading
+    // taken after a hover; if this first one lands mid-entrance the
+    // surface is still translating into place, so wait for the same
+    // entrance-complete signal unified-command-surface.spec.ts's
+    // waitForCommandSurfaceEntrance polls (src/lib/motion.ts's
+    // enterMotionSurface only flags the transition as started, so the
+    // opacity/transform values themselves are the completion signal).
+    await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          const dialog = document.querySelector<HTMLElement>(
+            ".command-surface-dialog",
+          );
+          if (dialog === null) return false;
+          const style = getComputedStyle(dialog);
+          return (
+            dialog.dataset.motionEntered === "true" &&
+            style.opacity === "1" &&
+            style.transform === "none"
+          );
+        }),
+      { timeout: 5000, timeoutMsg: "command surface entrance did not settle" },
+    );
 
     const measurements = await browser.execute(() => {
       const state = document.querySelector<HTMLElement>(".skr-header-overflow");
@@ -5339,10 +5484,10 @@ describe("skribeum shell", () => {
         timeout: 15000,
       },
     );
-    // Leave the write-settle window of any preceding save before removing
-    // the note externally, so the removal classifies as an external change
-    // rather than an edit of our own write.
-    await browser.pause(2000);
+    // Wait for any preceding save to actually land before removing the
+    // note externally, so the removal classifies as an external change
+    // rather than racing an edit of our own write.
+    await waitForActiveTabSaved();
     rmSync(path.join(SCRATCH_VAULT_PATH, LF_NOTE_NAME));
     const dismissButton = $('aside[role="alert"] button');
     await dismissButton.waitForExist({ timeout: 20000 });
@@ -6637,6 +6782,7 @@ describe("skribeum core editing surfaces", () => {
 
     await browser.keys([modifierKey, "p"]);
     await overlayInput();
+    await waitForMotionSurfaceEntered(".command-surface-dialog");
     await expectNoAxeViolations("command palette");
     await browser.keys(Key.Escape);
     await $('[data-testid="unified-command-surface"]').waitForExist({
@@ -6646,6 +6792,7 @@ describe("skribeum core editing surfaces", () => {
 
     await browser.keys([modifierKey, ","]);
     await $('[data-testid="settings-view"]').waitForExist({ timeout: 10000 });
+    await waitForMotionSurfaceEntered('[data-testid="settings-view"]');
     await expectNoAxeViolations("settings");
     await browser.keys(Key.Escape);
     await $('[data-testid="settings-view"]').waitForExist({
@@ -6670,7 +6817,7 @@ describe("skribeum core editing surfaces", () => {
     await $(".cm-content").addValue("typed");
     const saved = `${DESKTOP_UNDO_NOTE_CONTENT.trimEnd()}typed\n`;
     await waitForDisk(DESKTOP_UNDO_NOTE_NAME, saved);
-    await browser.pause(1800);
+    await waitForUndoGroupSettle();
 
     expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
     await pressEditorHistoryShortcut("undo");
@@ -6696,7 +6843,7 @@ describe("skribeum core editing surfaces", () => {
     await $(".cm-content").addValue("local");
     const saved = `${DESKTOP_EXTERNAL_NOTE_CONTENT.trimEnd()}local\n`;
     await waitForDisk(DESKTOP_EXTERNAL_NOTE_NAME, saved);
-    await browser.pause(1800);
+    await waitForUndoGroupSettle();
 
     const external = `outside ${saved}`;
     writeFileSync(
@@ -6736,7 +6883,7 @@ describe("skribeum core editing surfaces", () => {
     await $(".cm-content").addValue(" session");
     const saved = `${DURABLE_UNDO_NOTE_CONTENT.trimEnd()} session\n`;
     await waitForDisk(DURABLE_UNDO_NOTE_NAME, saved);
-    await browser.pause(1800);
+    await waitForUndoGroupSettle();
     const afterSelection = await capturedHistoryState();
 
     await relaunchPackagedApplication();
@@ -6779,7 +6926,7 @@ describe("skribeum core editing surfaces", () => {
     await $(".cm-content").addValue(" local");
     const local = `${DURABLE_EXTERNAL_NOTE_CONTENT.trimEnd()} local\n`;
     await waitForDisk(DURABLE_EXTERNAL_NOTE_NAME, local);
-    await browser.pause(1800);
+    await waitForUndoGroupSettle();
 
     const external = `outside ${local}`;
     writeFileSync(
@@ -6795,7 +6942,7 @@ describe("skribeum core editing surfaces", () => {
     const postIngest = `${external.trimEnd()} post\n`;
     expect((await editorDocumentText()).trimEnd()).toBe(postIngest.trimEnd());
     await waitForDisk(DURABLE_EXTERNAL_NOTE_NAME, postIngest);
-    await browser.pause(1800);
+    await waitForUndoGroupSettle();
 
     await relaunchPackagedApplication();
     await openNoteFromQuickSwitcher(DURABLE_EXTERNAL_NOTE_NAME);
@@ -6809,8 +6956,11 @@ describe("skribeum core editing surfaces", () => {
       async () => (await editorDocumentText()).trimEnd() === external.trimEnd(),
       { timeoutMsg: "post-ingest durable step did not undo" },
     );
+    // A second undo here has nothing left to undo past the ingest fence
+    // (see clearUndoHistory in src/lib/Editor.svelte); like the first
+    // undo above, its dispatch is synchronous, so the read below needs no
+    // extra settle time.
     await pressEditorHistoryShortcut("undo");
-    await browser.pause(250);
     expect((await editorDocumentText()).trimEnd()).toBe(external.trimEnd());
     expect((await editorDocumentText()).trimEnd()).toContain("outside ");
     await pressEditorHistoryShortcut("redo");
@@ -6833,7 +6983,7 @@ describe("skribeum core editing surfaces", () => {
     await $(".cm-content").addValue(" sensitive");
     const saved = `${DURABLE_CLEAR_NOTE_CONTENT.trimEnd()} sensitive\n`;
     await waitForDisk(DURABLE_CLEAR_NOTE_NAME, saved);
-    await browser.pause(1800);
+    await waitForUndoGroupSettle();
     expect(editHistoryRecords(DURABLE_CLEAR_NOTE_NAME).length).toBeGreaterThan(
       0,
     );
@@ -6861,8 +7011,10 @@ describe("skribeum core editing surfaces", () => {
       "cleared durable fixture did not reopen",
     );
     await placeCursorAtLineEnd(saved.trimEnd());
+    // The cleared journal leaves nothing to undo; the dispatch is
+    // synchronous (see the fence undo above), so no settle time is needed
+    // before confirming the document did not change.
     await pressEditorHistoryShortcut("undo");
-    await browser.pause(250);
     expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
   });
 

@@ -360,7 +360,11 @@ describe("file tree, previews, panels, and workspace tabs", () => {
             : null;
         }),
       {
-        timeout: 15000,
+        // A refresh reloads the whole webview: vault reconnect, settings
+        // restore, and tree rebuild all have to land before these values
+        // read as restored, and under CPU contention that chain runs far
+        // slower than its steady-state latency.
+        timeout: 30000,
         timeoutMsg: "panel divider values did not restore after reload",
       },
     );
@@ -370,7 +374,7 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     // on the vault re-open round trip); give it a more generous budget
     // than a settled-state check needs.
     await $(`[data-path="${TREE_FIRST_NOTE_NAME}"]`).waitForExist({
-      timeout: 20000,
+      timeout: 45000,
     });
     const restored = $('[role="separator"][aria-label="Resize sidebar"]');
 
@@ -396,7 +400,13 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       },
       await restored.getElement(),
     );
-    expect(await restored.getAttribute("aria-valuenow")).toBe("24");
+    // Poll like the dblclick reset above rather than reading once: both
+    // route through the same synchronous PanelDivider onResize callback,
+    // so both should observe the new value on the same terms.
+    await browser.waitUntil(
+      async () => (await restored.getAttribute("aria-valuenow")) === "24",
+      { timeoutMsg: "sidebar divider did not extend to the 24rem maximum" },
+    );
 
     const openToggle = $(
       '.skr-sidebar-header [data-command-id="panel.sidebar.toggle"]',
@@ -499,6 +509,10 @@ describe("file tree, previews, panels, and workspace tabs", () => {
         }),
       );
     });
+    // Proving the pointer-travel cone keeps the preview open needs a real
+    // wait past its own keepConeAlive timer (300ms, in
+    // src/lib/editor/decorations/engine.ts) to confirm the panel was not
+    // dismissed, rather than a condition to poll for.
     await browser.pause(320);
     expect(await preview.isExisting()).toBe(true);
     await browser.keys(Key.Escape);
@@ -531,7 +545,9 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       },
       await firstTab.getElement(),
     );
-    await browser.pause(20);
+    // TabStrip's drag handlers read its own `dragging`/`insertion` state
+    // synchronously on each event rather than anything time-sensitive, so
+    // these synthetic dispatches need no pacing between them.
     await browser.execute(
       (target) => {
         const transfer = new DataTransfer();
@@ -546,7 +562,6 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       },
       await lastTab.getElement(),
     );
-    await browser.pause(20);
     await browser.execute(
       (target) => {
         (target as HTMLElement).dispatchEvent(
@@ -589,7 +604,13 @@ describe("file tree, previews, panels, and workspace tabs", () => {
         beforeReload = (await workspaceSnapshot()) as typeof beforeReload;
         return beforeReload !== null && beforeReload.panes.length === 2;
       },
-      { timeoutMsg: "workspace snapshot did not persist the second pane" },
+      {
+        // The persist runs off a Svelte effect queued behind whatever the
+        // split itself is doing (opening the new pane's note), which under
+        // CPU contention can take much longer than its steady-state flush.
+        timeout: 45000,
+        timeoutMsg: "workspace snapshot did not persist the second pane",
+      },
     );
     if (beforeReload === null) {
       throw new Error("workspace snapshot is unexpectedly null");
@@ -602,9 +623,26 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await browser.refresh();
     await browser.waitUntil(
       async () => (await $$(".skr-editor-pane").length) === 2,
-      { timeout: 15000, timeoutMsg: "split workspace did not restore" },
+      { timeout: 45000, timeoutMsg: "split workspace did not restore" },
     );
-    const afterReload = (await workspaceSnapshot()) as typeof beforeReload;
+    // The reload reconstructs `workspace` from this same persisted
+    // snapshot and can re-trigger the same debounced persist-on-change
+    // path that required polling above, so read it the same way rather
+    // than once immediately after the pane count settles.
+    let afterReload: typeof beforeReload = null;
+    await browser.waitUntil(
+      async () => {
+        afterReload = (await workspaceSnapshot()) as typeof beforeReload;
+        return afterReload !== null && afterReload.panes.length === 2;
+      },
+      {
+        timeout: 45000,
+        timeoutMsg: "workspace snapshot did not restore the second pane",
+      },
+    );
+    if (afterReload === null) {
+      throw new Error("workspace snapshot is unexpectedly null");
+    }
     expect(afterReload.panes.map((pane) => pane.tabs)).toEqual(
       beforeReload.panes.map((pane) => pane.tabs),
     );

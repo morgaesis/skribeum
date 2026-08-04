@@ -49,30 +49,31 @@ async function readClipboardText() {
   return browser.execute(() => navigator.clipboard.readText());
 }
 
-async function selectEditorText(text: string) {
-  await browser.execute((needle: string) => {
-    const root = document.querySelector(".cm-content");
-    if (root === null) throw new Error("editor content missing");
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (
-      let node = walker.nextNode();
-      node !== null;
-      node = walker.nextNode()
-    ) {
-      const start = node.textContent?.indexOf(needle) ?? -1;
-      if (start < 0) continue;
-      const range = document.createRange();
-      range.setStart(node, start);
-      range.setEnd(node, start + needle.length);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      document.dispatchEvent(new Event("selectionchange"));
-      return;
-    }
-    throw new Error(`text not found: ${needle}`);
-  }, text);
-  await browser.pause(250);
+/**
+ * Selects the last match of `text` through the same
+ * __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__ dispatch smoke.spec.ts's cursor
+ * helpers use, rather than a raw `window.getSelection()` walk plus a
+ * synthetic `selectionchange` event: a CodeMirror dispatch updates the
+ * content DOM selection and its own selection-toolbar reactively as part
+ * of applying the transaction, so no settle wait is needed afterward.
+ */
+async function selectEditorText(text: string): Promise<void> {
+  const anchor = await browser.execute(
+    (needle: string) =>
+      (
+        window as Window & {
+          __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
+            sourceText: string,
+            relativeOffset: number,
+            relativeSelectionLength?: number,
+          ) => number | null;
+        }
+      ).__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?.(needle, 0, needle.length),
+    text,
+  );
+  if (typeof anchor !== "number") {
+    throw new Error(`text not found: ${text}`);
+  }
 }
 
 before(async () => {
@@ -456,7 +457,19 @@ describe("work package 1 browser behavior", () => {
         .querySelector<HTMLElement>('[data-command-id="format.bold"]')
         ?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
     });
-    await browser.pause(300);
+    // Proving the tooltip has a hover-intent delay needs a real elapsed
+    // wait shorter than that delay to confirm it has not shown yet; read
+    // the actual configured delay (--skr-hover-intent-delay) instead of
+    // assuming a constant safely under it, so this stays correct if the
+    // token's value changes.
+    const hoverIntentDelayMs = await browser.execute(() =>
+      Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue(
+          "--skr-hover-intent-delay",
+        ),
+      ),
+    );
+    await browser.pause(hoverIntentDelayMs / 2);
     expect(await $(".skr-command-tooltip").isExisting()).toBe(false);
     const tooltip = $(".skr-command-tooltip");
     await tooltip.waitForExist({ timeout: 1000 });

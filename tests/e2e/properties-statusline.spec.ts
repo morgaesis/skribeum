@@ -136,7 +136,18 @@ async function clearWorkspaceStorage(): Promise<void> {
 }
 
 async function dismissBanners() {
-  await browser.pause(250);
+  // A banner here is optional and its arrival is not otherwise observed
+  // by the caller: poll for one instead of assuming a fixed delay is
+  // long enough, but a timeout is not an error since "no banner ever
+  // arrives" is a valid outcome this helper must also handle.
+  try {
+    await browser.waitUntil(
+      async () => (await $$('aside[role="alert"]')).length > 0,
+      { timeout: 2000, interval: 20 },
+    );
+  } catch {
+    // No banner appeared within the wait window; nothing to dismiss.
+  }
   for (const banner of await $$('aside[role="alert"]')) {
     const controls = await banner.$$("button");
     await controls.at(-1)?.click();
@@ -577,8 +588,24 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
       async () => (await currentNotePath()) === PROPERTIES_NOTE_NAME,
       { timeout: 15000, timeoutMsg: "Back did not return to the note" },
     );
-    // Cover the full 160ms panel-motion window plus settling.
-    await browser.pause(500);
+    // The recorder above is what catches an intermediate expanded frame,
+    // so wait for the panel's own settled condition (collapsed, zero
+    // content height) rather than a duration guessed to outlast the
+    // motion: reading the recorded frames before the panel truly settles
+    // would cut off the observation window the recorder exists to cover.
+    await browser.waitUntil(
+      async () =>
+        (await toggle.getAttribute("aria-expanded")) === "false" &&
+        (await browser.execute(
+          () =>
+            document.querySelector<HTMLElement>(".skr-properties-content")
+              ?.offsetHeight ?? null,
+        )) === 0,
+      {
+        timeout: 5000,
+        timeoutMsg: "panel motion did not settle back to collapsed after Back",
+      },
+    );
     const frames = await browser.execute(() => {
       const recorder = window as Window & {
         __PANEL_FRAMES__?: Array<{ expanded: string | null; height: number }>;

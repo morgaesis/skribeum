@@ -164,16 +164,10 @@ export const config: WebdriverIO.Config = {
     // desktop-mode window for these two files to find.
     path.join(configDirectory, "properties-statusline.spec.ts"),
     path.join(configDirectory, "windowChrome.spec.ts"),
+    path.join(configDirectory, "workspace.spec.ts"),
     path.join(configDirectory, "smoke.spec.ts"),
     path.join(configDirectory, "unified-command-surface.spec.ts"),
     path.join(configDirectory, "palette.spec.ts"),
-    // Both switch back to the main window and establish their own state
-    // in a `before` hook (clearing workspace storage and refreshing, or
-    // skipping outright on macOS), the same way palette.spec.ts recovers
-    // the desktop window after the browser-demo specs above it, so either
-    // is safe to run in any position after those.
-    path.join(configDirectory, "workspace.spec.ts"),
-    path.join(configDirectory, "windowChrome.spec.ts"),
   ],
   maxInstances: 1,
   // The embedded driver provider is the @wdio/tauri-service default: the app

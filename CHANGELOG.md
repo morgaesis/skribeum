@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The desktop window draws its own chrome: the header is the titlebar, with a
+  drag region, double-click-to-maximize, and a right-click window menu. macOS
+  keeps the native hidden-titlebar style with the traffic lights and menu bar;
+  Windows and Linux draw Minimize, Maximize or Restore, and Close caption
+  buttons. An unmaximized window keeps a 1px border, with an 8px corner radius
+  on Linux; every window dims its header to 60% opacity while unfocused.
 - Desktop undo and redo history persists across note switches and application
   restarts in a per-note application-data journal. External ingests and state
   mismatches fence older history, each replay restores its recorded selection,

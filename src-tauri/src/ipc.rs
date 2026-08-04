@@ -773,6 +773,15 @@ pub struct SettingsZoomChanged {
     pub zoom_percent: u32,
 }
 
+/// A native macOS menu bar item registered against a command registry id was
+/// clicked (design system section 4.13); the frontend runs the matching
+/// command through the same registry every other surface uses.
+#[derive(Debug, Clone, Serialize, specta::Type, Event)]
+pub struct MenuCommandInvoked {
+    /// The command registry id carried by the clicked menu item.
+    pub command: String,
+}
+
 /// Vault and note selected for one operating-system open-with path.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct OpenFileTarget {
@@ -1999,6 +2008,34 @@ fn window_ready<R: Runtime>(
     Ok(())
 }
 
+/// Shows a system-style window menu (Minimize, Maximize or Restore, Close)
+/// at the pointer, for the header's drag-region right-click (design system
+/// section 4.13: "Right-clicking it opens the system window menu where the
+/// platform provides one"). Built fresh per call from predefined menu items
+/// so it always reflects the window's current state; nothing is cached.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn window_show_system_menu<R: Runtime>(window: tauri::Window<R>) -> Result<(), AppError> {
+    use tauri::menu::{ContextMenu, Menu, PredefinedMenuItem};
+
+    let menu = Menu::with_items(
+        &window,
+        &[
+            &PredefinedMenuItem::minimize(&window, None).map_err(|e| window_menu_error(&e))?,
+            &PredefinedMenuItem::maximize(&window, None).map_err(|e| window_menu_error(&e))?,
+            &PredefinedMenuItem::separator(&window).map_err(|e| window_menu_error(&e))?,
+            &PredefinedMenuItem::close_window(&window, None).map_err(|e| window_menu_error(&e))?,
+        ],
+    )
+    .map_err(|e| window_menu_error(&e))?;
+    menu.popup(window).map_err(|e| window_menu_error(&e))
+}
+
+fn window_menu_error(error: &tauri::Error) -> AppError {
+    AppError::window_failed(error.to_string())
+}
+
 fn supported_open_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -2295,6 +2332,7 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             zoom_set::<tauri::Wry>,
             window_warmup::<tauri::Wry>,
             window_ready::<tauri::Wry>,
+            window_show_system_menu::<tauri::Wry>,
             file_open_resolve,
             open_files_take,
             vault_config_read,
@@ -2309,5 +2347,6 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             NoteRecovered,
             OpenFilesAvailable,
             SettingsZoomChanged,
+            MenuCommandInvoked,
         ])
 }

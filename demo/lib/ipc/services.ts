@@ -596,6 +596,10 @@ export async function windowReady(_webviewMilliseconds: number): Promise<void> {
   throw new Error(STRINGS.desktopWindowRequired);
 }
 
+export async function windowShowSystemMenu(): Promise<void> {
+  throw new Error(STRINGS.desktopWindowRequired);
+}
+
 export async function openFilesTake(): Promise<string[]> {
   return [];
 }

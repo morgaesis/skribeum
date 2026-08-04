@@ -1300,3 +1300,27 @@ html body .settings-dialog {
   font-family: var(--skr-font-mono);
   font-size: 11px;
 }
+
+/* Desktop window chrome (design system section 4.13). WindowControls.svelte
+   sets these custom properties from native window state; every property
+   keeps its neutral default (no inset, full opacity, no border) so the
+   browser build and the narrow layout, which own no window chrome, render
+   exactly as they did before this block existed. */
+.skr-shell {
+  border: var(--skr-window-border-width, 0) solid var(--skr-border);
+  border-radius: var(--skr-window-border-radius, 0);
+}
+
+.skr-header-leading {
+  padding-inline-start: var(--skr-window-header-inset, 0);
+  transition: padding-inline-start var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+.skr-header-leading,
+.skr-note-title-region,
+.skr-header-trailing {
+  opacity: var(--skr-window-header-opacity, 1);
+  transition: opacity var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}

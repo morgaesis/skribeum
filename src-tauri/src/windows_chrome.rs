@@ -378,8 +378,13 @@ mod tests {
     fn decodes_the_packed_screen_point_from_lparam() {
         // Screen coordinates can be negative on a multi-monitor layout with
         // a monitor to the left of or above the primary one; both signed
-        // 16-bit halves must round-trip.
-        let packed = (300i16 as u16 as u32) | ((-40i16 as u16 as u32) << 16);
-        assert_eq!(nc_message_screen_point(LPARAM(packed as isize)), (300, -40));
+        // 16-bit halves must round-trip. `0xFFD8_012C` packs y = -40
+        // (0xFFD8 as i16) in the high half and x = 300 (0x012C) in the low
+        // half, the same layout `WM_NCHITTEST` and the other non-client
+        // mouse messages use.
+        assert_eq!(
+            nc_message_screen_point(LPARAM(0xFFD8_012C_u32 as isize)),
+            (300, -40)
+        );
     }
 }

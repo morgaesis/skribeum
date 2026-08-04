@@ -1729,6 +1729,24 @@ function onEditorDocChanged(source: string, path: string | null) {
   }
 }
 
+/**
+ * The dirty/saving state of the focused pane's active tab: `true` while
+ * local edits or an in-flight save exist, `false` once autosave has fully
+ * landed, `null` when no tab is active. This mirrors TabStrip's unsaved
+ * indicator without depending on the tab strip actually rendering it (it
+ * only appears once a pane holds more than one tab), so end-to-end tests
+ * can wait on the same underlying signal in single-tab scenarios.
+ */
+function activeTabDirty(): boolean | null {
+  const pane = workspace.panes.find(
+    (candidate) => candidate.id === workspace.focusedPaneId,
+  );
+  const tab = pane?.tabs.find(
+    (candidate) => candidate.path === pane.activePath,
+  );
+  return tab?.dirty ?? null;
+}
+
 function onEditorDirtyChanged(
   paneId: string,
   path: string | null,
@@ -2509,6 +2527,7 @@ function pollEndToEndVault() {
           relativeOffset: number,
           relativeSelectionLength?: number,
         ) => number | null;
+        __SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?: () => boolean | null;
       };
       target.__SKRIBEUM_E2E_OPEN_NOTE__ = (notePath) =>
         navigateToNote(notePath);
@@ -2519,6 +2538,7 @@ function pollEndToEndVault() {
       target.__SKRIBEUM_E2E_SET_LINE_END__ = setEndToEndSelectionAtLineEnd;
       target.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__ =
         setEndToEndSelectionFromLastMatch;
+      target.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__ = activeTabDirty;
       clearInterval(timer);
       void openVaultAtPath(path);
     } else if (attempts > 50 || vault !== null) {
@@ -2561,6 +2581,7 @@ onMount(() => {
       relativeOffset: number,
       relativeSelectionLength?: number,
     ) => number | null;
+    __SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?: () => boolean | null;
     __SKRIBEUM_E2E_VAULT__?: string;
     __SKRIBEUM_E2E_RESET_WORKSPACE__?: boolean;
   };
@@ -2586,6 +2607,7 @@ onMount(() => {
     debugWindow.__SKRIBEUM_E2E_SET_LINE_END__ = setEndToEndSelectionAtLineEnd;
     debugWindow.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__ =
       setEndToEndSelectionFromLastMatch;
+    debugWindow.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__ = activeTabDirty;
   }
   const unlisteners = [
     events.vaultCollisionsDetected.listen((event) => {
@@ -2732,6 +2754,7 @@ onMount(() => {
     delete debugWindow.__SKRIBEUM_E2E_SET_SELECTION__;
     delete debugWindow.__SKRIBEUM_E2E_SET_LINE_END__;
     delete debugWindow.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__;
+    delete debugWindow.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__;
     clearInterval(pollTimer);
     cancelOutlineRefresh?.();
     for (const unlisten of unlisteners) {

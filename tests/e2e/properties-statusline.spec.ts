@@ -136,7 +136,18 @@ async function clearWorkspaceStorage(): Promise<void> {
 }
 
 async function dismissBanners() {
-  await browser.pause(250);
+  // A banner here is optional and its arrival is not otherwise observed
+  // by the caller: poll for one instead of assuming a fixed delay is
+  // long enough, but a timeout is not an error since "no banner ever
+  // arrives" is a valid outcome this helper must also handle.
+  try {
+    await browser.waitUntil(
+      async () => (await $$('aside[role="alert"]')).length > 0,
+      { timeout: 2000, interval: 20 },
+    );
+  } catch {
+    // No banner appeared within the wait window; nothing to dismiss.
+  }
   for (const banner of await $$('aside[role="alert"]')) {
     const controls = await banner.$$("button");
     await controls.at(-1)?.click();
@@ -579,7 +590,13 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
       async () => (await currentNotePath()) === PROPERTIES_NOTE_NAME,
       { timeout: 15000, timeoutMsg: "Back did not return to the note" },
     );
-    // Cover the full 160ms panel-motion window plus settling.
+    // This pause is an observation window, not a wait for an arrival. The
+    // recorder below reports every frame it saw, and the assertion that it
+    // saw any frames at all is what proves the observation happened; a
+    // condition-based wait satisfies immediately when the panel arrives
+    // already collapsed, so the recorder would be read before it captured
+    // anything and the test would pass by observing nothing. The duration
+    // covers the 160ms panel-motion window of section 5.1 plus settling.
     await browser.pause(500);
     const frames = await browser.execute(() => {
       const recorder = window as Window & {

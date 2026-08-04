@@ -6408,7 +6408,7 @@ describe("skribeum core editing surfaces", () => {
           appearance.codeFont === "modern" &&
           appearance.theme === "system" &&
           appearance.lightPalette === "manuscript" &&
-          appearance.darkPalette === "lamplight" &&
+          appearance.darkPalette === "nightroom" &&
           appearance.proseFont === "serif" &&
           typeof persisted !== "string" &&
           stableJson(persisted) === stableJson(expectedDefaults)
@@ -6862,11 +6862,11 @@ describe("skribeum core editing surfaces", () => {
           return (
             document.documentElement.dataset.theme === "system" &&
             document.documentElement.dataset.lightPalette === "manuscript" &&
-            document.documentElement.dataset.darkPalette === "lamplight" &&
+            document.documentElement.dataset.darkPalette === "nightroom" &&
             document.documentElement.dataset.proseFont === "serif" &&
             persisted.theme === "system" &&
             persisted.light_palette === "manuscript" &&
-            persisted.dark_palette === "lamplight" &&
+            persisted.dark_palette === "nightroom" &&
             persisted.prose_font === "serif"
           );
         }),

@@ -100,7 +100,7 @@ describe("ipc service wrappers", () => {
     await expect(browserSettingsRead()).resolves.toMatchObject({
       theme: "system",
       light_palette: "manuscript",
-      dark_palette: "lamplight",
+      dark_palette: "nightroom",
       prose_font: "serif",
     });
   });

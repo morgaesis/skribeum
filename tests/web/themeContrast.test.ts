@@ -59,6 +59,28 @@ function mix(foreground: string, background: string, weight: number): string {
 }
 
 const SPECIFIED_VARIANTS = {
+  manuscript: {
+    surface: "#fffdf8",
+    "code-surface": "#f1ece1",
+    text: "#24352b",
+    "text-muted": "#5c6b60",
+    heading: "#14251d",
+    accent: "#1e4d3b",
+    link: "#1e4d3b",
+    border: "#d6cdbb",
+    "border-strong": "#7c8c81",
+  },
+  nightroom: {
+    surface: "#182b21",
+    "code-surface": "#1b3024",
+    text: "#dfe8de",
+    "text-muted": "#9fb0a2",
+    heading: "#f3f0e6",
+    accent: "#7fbf9e",
+    link: "#7fbf9e",
+    border: "#24392c",
+    "border-strong": "#628070",
+  },
   studio: {
     canvas: "#f2f5f9",
     surface: "#ffffff",
@@ -191,7 +213,7 @@ describe("theme contrast", () => {
         ...selectorBlock(css, 'data-light-palette="gazette"'),
       ]),
     },
-    { name: "lamplight", mode: "dark", variables: darkBase },
+    { name: "nightroom", mode: "dark", variables: darkBase },
     {
       name: "graphite",
       mode: "dark",

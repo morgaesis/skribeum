@@ -44,7 +44,8 @@ let {
     {#if banner.onReview !== undefined}
       <button
         type="button"
-        class="skr-warning-control shrink-0 rounded border px-2 py-0.5"
+        class="skr-btn-secondary shrink-0"
+        data-btn-role="secondary"
         onclick={banner.onReview}
       >
         {STRINGS.reviewAction}
@@ -52,7 +53,8 @@ let {
     {/if}
     <button
       type="button"
-      class="skr-warning-control shrink-0 rounded border px-2 py-0.5"
+      class="skr-btn-secondary shrink-0"
+      data-btn-role="secondary"
       onclick={() => onDismiss(banner.id)}
     >
       {STRINGS.dismissAction}

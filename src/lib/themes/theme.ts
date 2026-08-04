@@ -1,6 +1,6 @@
 export const THEME_NAMES = ["system", "light", "dark"] as const;
 export const LIGHT_PALETTE_NAMES = ["manuscript", "studio", "gazette"] as const;
-export const DARK_PALETTE_NAMES = ["lamplight", "graphite", "signal"] as const;
+export const DARK_PALETTE_NAMES = ["nightroom", "graphite", "signal"] as const;
 export const PROSE_FONT_NAMES = ["serif", "sans"] as const;
 export const CODE_FONT_NAMES = ["modern", "classic"] as const;
 
@@ -45,7 +45,7 @@ export function isCodeFontName(value: string): value is CodeFontName {
 export function applyTheme(
   theme: ThemeName,
   lightPalette: LightPaletteName = "manuscript",
-  darkPalette: DarkPaletteName = "lamplight",
+  darkPalette: DarkPaletteName = "nightroom",
   root = document.documentElement,
 ) {
   const generation = (themeSwitchGenerations.get(root) ?? 0) + 1;

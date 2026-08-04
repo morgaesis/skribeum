@@ -794,6 +794,21 @@ pub struct MenuCommandInvoked {
     pub command: String,
 }
 
+/// The native hover and press state of the Windows Maximize caption button
+/// (design system section 4.13). Emitted only on Windows: a genuine
+/// `WM_NCHITTEST` result of `HTMAXBUTTON` routes real pointer input away
+/// from the webview entirely, so the button's own CSS `:hover` and
+/// `:active` never fire once native hit-testing answers for that area, and
+/// this event carries the highlight and press state back instead.
+#[derive(Debug, Clone, Copy, Serialize, specta::Type, Event)]
+pub struct MaximizeButtonHitState {
+    /// Whether the cursor is currently over the button's reported
+    /// rectangle.
+    pub hovered: bool,
+    /// Whether the primary button is currently held down over the button.
+    pub pressed: bool,
+}
+
 /// Vault and note selected for one operating-system open-with path.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct OpenFileTarget {
@@ -2066,30 +2081,69 @@ fn window_ready<R: Runtime>(
     Ok(())
 }
 
-/// Shows a system-style window menu (Minimize, Maximize or Restore, Close)
-/// at the pointer, for the header's drag-region right-click (design system
-/// section 4.13: "Right-clicking it opens the system window menu where the
-/// platform provides one"). Built fresh per call from predefined menu items
-/// so it always reflects the window's current state; nothing is cached.
+/// Shows the window menu at the pointer, for the header's drag-region
+/// right-click (design system section 4.13: "Right-clicking it opens the
+/// system window menu where the platform provides one"). On Windows this is
+/// the real platform system menu (`GetSystemMenu` and `TrackPopupMenu`),
+/// carrying Move, Size, and keyboard-driven resize alongside Minimize,
+/// Maximize or Restore, and Close; every other platform keeps the
+/// predefined-item approximation, built fresh per call so it always
+/// reflects the window's current state.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
 fn window_show_system_menu<R: Runtime>(window: tauri::Window<R>) -> Result<(), AppError> {
-    use tauri::menu::{ContextMenu, Menu, PredefinedMenuItem};
+    #[cfg(target_os = "windows")]
+    {
+        crate::windows_chrome::show_system_menu(&window).map_err(AppError::window_failed)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        use tauri::menu::{ContextMenu, Menu, PredefinedMenuItem};
 
-    let menu = Menu::with_items(
-        &window,
-        &[
-            &PredefinedMenuItem::minimize(&window, None).map_err(|e| window_menu_error(&e))?,
-            &PredefinedMenuItem::maximize(&window, None).map_err(|e| window_menu_error(&e))?,
-            &PredefinedMenuItem::separator(&window).map_err(|e| window_menu_error(&e))?,
-            &PredefinedMenuItem::close_window(&window, None).map_err(|e| window_menu_error(&e))?,
-        ],
-    )
-    .map_err(|e| window_menu_error(&e))?;
-    menu.popup(window).map_err(|e| window_menu_error(&e))
+        let menu = Menu::with_items(
+            &window,
+            &[
+                &PredefinedMenuItem::minimize(&window, None).map_err(|e| window_menu_error(&e))?,
+                &PredefinedMenuItem::maximize(&window, None).map_err(|e| window_menu_error(&e))?,
+                &PredefinedMenuItem::separator(&window).map_err(|e| window_menu_error(&e))?,
+                &PredefinedMenuItem::close_window(&window, None)
+                    .map_err(|e| window_menu_error(&e))?,
+            ],
+        )
+        .map_err(|e| window_menu_error(&e))?;
+        menu.popup(window).map_err(|e| window_menu_error(&e))
+    }
 }
 
+/// Reports the Maximize caption button's current rectangle in physical
+/// pixels from the client area's top-left corner (design system section
+/// 4.13), keeping Windows native hit-testing in sync with the webview's own
+/// layout so Windows 11 snap layouts appear on hover and hold over the
+/// button, not somewhere it used to be. The webview calls this whenever the
+/// button's own layout changes and with `None` when it should stop
+/// answering the hit test at all (window teardown). A no-op everywhere
+/// except Windows.
+#[tauri::command]
+#[specta::specta]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::unnecessary_wraps,
+    reason = "the Result shape matches every other void IPC command's typed-error contract, \
+              even though this one happens to be infallible on every platform"
+)]
+fn window_set_maximize_button_rect<R: Runtime>(
+    window: tauri::Window<R>,
+    rect: Option<crate::window_hit_test::MaximizeButtonRect>,
+) -> Result<(), AppError> {
+    #[cfg(target_os = "windows")]
+    crate::windows_chrome::set_maximize_button_rect(&window, rect);
+    #[cfg(not(target_os = "windows"))]
+    let _ = (&window, rect);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
 fn window_menu_error(error: &tauri::Error) -> AppError {
     AppError::window_failed(error.to_string())
 }
@@ -2392,6 +2446,7 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             window_warmup::<tauri::Wry>,
             window_ready::<tauri::Wry>,
             window_show_system_menu::<tauri::Wry>,
+            window_set_maximize_button_rect::<tauri::Wry>,
             file_open_resolve,
             open_files_take,
             vault_config_read,
@@ -2407,5 +2462,6 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             OpenFilesAvailable,
             SettingsZoomChanged,
             MenuCommandInvoked,
+            MaximizeButtonHitState,
         ])
 }

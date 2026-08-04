@@ -145,11 +145,13 @@ async function dismissBanners() {
 
 describe("properties panel (section 4.15) and statusline (section 4.16)", () => {
   before(async () => {
-    // This spec runs first in tests/e2e/wdio.conf.ts specifically so the
-    // shared app window is still on its freshly launched desktop content:
-    // later spec files navigate the same window to the browser demo URL and
-    // never navigate it back, so a desktop-only spec placed after them would
-    // find a demo page instead of the packaged app.
+    // This spec runs before smoke.spec.ts and unified-command-surface.spec.ts
+    // in tests/e2e/wdio.conf.ts specifically so the shared app window is
+    // still on its freshly launched desktop content: those two spec files
+    // navigate the same window to the browser demo URL and never navigate
+    // it back, so a desktop-only spec placed after them would find a demo
+    // page instead of the packaged app. windowChrome.spec.ts shares the
+    // same requirement and runs directly after this file, before either.
     await browser.tauri.switchWindow("main");
     await useDesktopViewport();
     await clearWorkspaceStorage();

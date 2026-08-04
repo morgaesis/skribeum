@@ -23,6 +23,9 @@ use tauri::Manager;
 pub mod error;
 pub mod ipc;
 pub mod menu;
+mod window_hit_test;
+#[cfg(target_os = "windows")]
+mod windows_chrome;
 
 pub use ipc::ipc_builder;
 
@@ -669,6 +672,15 @@ pub fn run() {
             {
                 menu::install(app.handle()).expect("failed to install the native application menu");
                 app.on_menu_event(menu::handle_event);
+            }
+            // Windows-only native hit-testing for the Maximize caption
+            // button (design system section 4.13): a window subclass
+            // answers `WM_NCHITTEST` so Windows 11 snap layouts appear on
+            // hover and hold, which a plain client-area window never gets.
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                windows_chrome::install(&window)
+                    .expect("failed to install the window-chrome hit-test subclass");
             }
             Ok(())
         })

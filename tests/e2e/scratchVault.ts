@@ -219,6 +219,12 @@ export const TASK_TRACKS_NOTE_NAME = "zzzz-task-tracks.md";
 export const TASK_TRACKS_NOTE_CONTENT =
   "# Task track fixture\n\n> [!note] Selection callout\n> Callout body with [a link](target).\n\n- [ ] Editable task\n- [D] Dated item\n- [!] Important item\n- [b] Reference item\n\nselection parking\n";
 
+export const DIALOG_RENAME_NOTE_NAME = "zzzz-dialog-rename.md";
+export const DIALOG_RENAME_NOTE_CONTENT = "# Dialog rename fixture\n";
+
+export const DIALOG_DELETE_NOTE_NAME = "zzzz-dialog-delete.md";
+export const DIALOG_DELETE_NOTE_CONTENT = "# Dialog delete fixture\n";
+
 export const NAVIGATION_SOURCE_NOTE_NAME = "zzz-navigation-source.md";
 export const NAVIGATION_SOURCE_NOTE_CONTENT = [
   "---",
@@ -376,6 +382,14 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, TASK_TRACKS_NOTE_NAME),
     TASK_TRACKS_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, DIALOG_RENAME_NOTE_NAME),
+    DIALOG_RENAME_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, DIALOG_DELETE_NOTE_NAME),
+    DIALOG_DELETE_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, PROPERTIES_NOTE_NAME),

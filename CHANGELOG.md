@@ -57,6 +57,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fenced code resolves the full lazy CodeMirror language registry, loads
   language-specific browser chunks on demand, and applies their tokens without
   reloading the note.
+- The file tree's rename and folder-creation prompts and its delete
+  confirmation use the application's own themed dialog, replacing the
+  browser's native prompt and confirm; the destructive confirm actions (note
+  and vault-entry deletion, clearing a note's edit history) use the
+  destructive button role. Renaming a note now validates the target name
+  before applying it: a name outside `.md`, `.markdown`, or `.txt` is refused
+  with the reason shown inline, rather than silently producing a file the
+  tree can no longer select or open.
+- A tree row's overflow menu trigger and the settings jump-to-section trigger
+  toggle: a second activation while the menu is already open closes it
+  instead of reopening it.
+- A pane that has not navigated no longer re-renders its decorations,
+  including a rendered Mermaid diagram, when a sibling pane in a split view
+  opens a different note.
+- The default Todo task marker renders as an empty checkbox rather than a
+  circled glyph.
+- Mod-F claims the in-note find and replace surface on both the desktop
+  application and the browser demo regardless of which element has focus,
+  instead of falling through to the browser's own find bar before the editor
+  gains focus.
 
 ### Changed
 

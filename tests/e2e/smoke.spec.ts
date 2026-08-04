@@ -19,6 +19,8 @@ import {
   DESKTOP_EXTERNAL_NOTE_NAME,
   DESKTOP_UNDO_NOTE_CONTENT,
   DESKTOP_UNDO_NOTE_NAME,
+  DIALOG_DELETE_NOTE_NAME,
+  DIALOG_RENAME_NOTE_NAME,
   DURABLE_CLEAR_NOTE_CONTENT,
   DURABLE_CLEAR_NOTE_NAME,
   DURABLE_EXTERNAL_NOTE_CONTENT,
@@ -5044,29 +5046,7 @@ describe("skribeum shell", () => {
     await $(".skr-properties-reveal").waitForExist({ timeout: 15000 });
     await browser.keys([modifierKey, "k"]);
     await $(".command-surface-dialog").waitForExist({ timeout: 5000 });
-    // The row geometry read below is compared against a second reading
-    // taken after a hover; if this first one lands mid-entrance the
-    // surface is still translating into place, so wait for the same
-    // entrance-complete signal unified-command-surface.spec.ts's
-    // waitForCommandSurfaceEntrance polls (src/lib/motion.ts's
-    // enterMotionSurface only flags the transition as started, so the
-    // opacity/transform values themselves are the completion signal).
-    await browser.waitUntil(
-      () =>
-        browser.execute(() => {
-          const dialog = document.querySelector<HTMLElement>(
-            ".command-surface-dialog",
-          );
-          if (dialog === null) return false;
-          const style = getComputedStyle(dialog);
-          return (
-            dialog.dataset.motionEntered === "true" &&
-            style.opacity === "1" &&
-            style.transform === "none"
-          );
-        }),
-      { timeout: 5000, timeoutMsg: "command surface entrance did not settle" },
-    );
+    await waitForSurfaceEntrance(".command-surface-dialog");
 
     const measurements = await browser.execute(() => {
       const state = document.querySelector<HTMLElement>(".skr-header-overflow");
@@ -5509,10 +5489,6 @@ describe("skribeum shell", () => {
     );
   });
 });
-
-// The M3a surfaces. These run after the shell suite, so the scratch
-// vault no longer contains the removed note; the specs below use the
-// CRLF and live-preview notes exclusively.
 describe("skribeum core editing surfaces", () => {
   async function overlayInput() {
     const input = $('[role="combobox"]');
@@ -7018,6 +6994,202 @@ describe("skribeum core editing surfaces", () => {
     expect((await editorDocumentText()).trimEnd()).toBe(saved.trimEnd());
   });
 
+  // The application dialog surface. These stay flat `it`s rather than a
+  // nested `describe`, deliberately: Mocha runs every flat test in a suite
+  // before any of that suite's nested suites, regardless of source order,
+  // so a nested `describe` here would run after the browser-demo tests
+  // below despite being declared first. The browser-demo tests navigate the
+  // shared window away to the demo's own URL and never navigate back, so a
+  // relaunch that ran after them would reconnect to that stranded page
+  // instead of the packaged desktop app. Flat tests preserve normal
+  // declaration-order execution, which keeps this trio right after the
+  // last packaged-app spec, before the window is ever redirected there.
+  {
+    async function installNativeDialogSpies(): Promise<void> {
+      await browser.execute(() => {
+        const flagged = window as Window & {
+          __SKRIBEUM_E2E_PROMPT_CALLS__?: number;
+          __SKRIBEUM_E2E_CONFIRM_CALLS__?: number;
+        };
+        flagged.__SKRIBEUM_E2E_PROMPT_CALLS__ = 0;
+        flagged.__SKRIBEUM_E2E_CONFIRM_CALLS__ = 0;
+        window.prompt = () => {
+          flagged.__SKRIBEUM_E2E_PROMPT_CALLS__ =
+            (flagged.__SKRIBEUM_E2E_PROMPT_CALLS__ ?? 0) + 1;
+          return null;
+        };
+        window.confirm = () => {
+          flagged.__SKRIBEUM_E2E_CONFIRM_CALLS__ =
+            (flagged.__SKRIBEUM_E2E_CONFIRM_CALLS__ ?? 0) + 1;
+          return false;
+        };
+      });
+    }
+
+    async function nativeDialogCallCounts(): Promise<{
+      prompt: number;
+      confirm: number;
+    }> {
+      return browser.execute(() => {
+        const flagged = window as Window & {
+          __SKRIBEUM_E2E_PROMPT_CALLS__?: number;
+          __SKRIBEUM_E2E_CONFIRM_CALLS__?: number;
+        };
+        return {
+          prompt: flagged.__SKRIBEUM_E2E_PROMPT_CALLS__ ?? 0,
+          confirm: flagged.__SKRIBEUM_E2E_CONFIRM_CALLS__ ?? 0,
+        };
+      });
+    }
+
+    async function openRowMenu(path: string) {
+      const row = $(`[role="treeitem"][data-path="${path}"]`);
+      if (!(await row.isExisting())) {
+        // The tree virtualizes rows outside its rendered window; a fixture
+        // late in the sort order can sit off whatever scroll position a
+        // prior test left behind. Scrolling the tree to its bottom brings
+        // the alphabetically-late fixture into the rendered window, without
+        // routing through another surface (the quick switcher) that adds its
+        // own timing to wait on.
+        const tree = $('[role="tree"]');
+        await tree.waitForExist({ timeout: 15000 });
+        await browser.execute(
+          (element) => {
+            const list = element as HTMLElement;
+            list.scrollTop = list.scrollHeight;
+            list.dispatchEvent(new Event("scroll"));
+          },
+          await tree.getElement(),
+        );
+        await row.waitForExist({ timeout: 15000 });
+      }
+      await browser.execute(
+        (element) => {
+          (element as HTMLElement).dispatchEvent(
+            new PointerEvent("pointerenter", { bubbles: false, pointerId: 31 }),
+          );
+        },
+        await row.getElement(),
+      );
+      const actions = row.$(".skr-tree-actions");
+      await actions.waitForDisplayed({ timeout: 10000 });
+      await browser.execute(
+        (element) => (element as HTMLButtonElement).click(),
+        await actions.getElement(),
+      );
+      const menu = $(".skr-tree-menu");
+      await menu.waitForDisplayed({ timeout: 10000 });
+      return menu;
+    }
+
+    it("rename_refuses_a_missing_note_extension_through_the_product_dialog", async () => {
+      // A relaunch, the same reset the undo/redo and external-ingest specs
+      // above already rely on, so the row interactions below start from a
+      // known-clean desktop tree rather than whatever scroll position or
+      // dialog state the immediately preceding spec left on screen.
+      await relaunchPackagedApplication();
+      await installNativeDialogSpies();
+      const menu = await openRowMenu(DIALOG_RENAME_NOTE_NAME);
+      await menu.$('[data-command-id="tree.entry.rename"]').click();
+
+      const dialog = $('[data-testid="dialog"]');
+      await dialog.waitForDisplayed({ timeout: 10000 });
+      expect(await dialog.getAttribute("role")).toBe("dialog");
+      expect(await dialog.getAttribute("aria-modal")).toBe("true");
+      await waitForSurfaceEntrance('[data-testid="dialog"]');
+
+      const input = dialog.$('[data-testid="dialog-input"]');
+      await input.waitForDisplayed({ timeout: 10000 });
+      await input.clearValue();
+      await input.setValue("zzzz-dialog-renamed-without-extension");
+      await dialog.$('[data-testid="dialog-confirm"]').click();
+
+      const error = dialog.$('[data-testid="dialog-error"]');
+      await error.waitForDisplayed({ timeout: 10000 });
+      expect(await error.getText()).toContain(".md");
+      // Refused inline, not applied: the dialog stays open and the original
+      // note is still a selectable tree entry under its original name.
+      expect(await dialog.isDisplayed()).toBe(true);
+      expect(
+        await $(
+          `[role="treeitem"][data-path="${DIALOG_RENAME_NOTE_NAME}"]`,
+        ).isExisting(),
+      ).toBe(true);
+
+      await input.clearValue();
+      await input.setValue("zzzz-dialog-renamed.md");
+      await dialog.$('[data-testid="dialog-confirm"]').click();
+      await dialog.waitForExist({ reverse: true, timeout: 10000 });
+
+      const renamed = $(
+        '[role="treeitem"][data-path="zzzz-dialog-renamed.md"]',
+      );
+      await renamed.waitForExist({ timeout: 10000 });
+      await renamed.click();
+      await browser.waitUntil(
+        async () => (await currentNotePath()) === "zzzz-dialog-renamed.md",
+        {
+          timeout: 10000,
+          timeoutMsg: "renamed note did not become selectable",
+        },
+      );
+
+      expect((await nativeDialogCallCounts()).prompt).toBe(0);
+    });
+
+    it("delete_uses_the_product_confirm_dialog_with_the_destructive_role", async () => {
+      await installNativeDialogSpies();
+      const menu = await openRowMenu(DIALOG_DELETE_NOTE_NAME);
+      await menu.$('[data-command-id="tree.entry.delete"]').click();
+
+      const dialog = $('[data-testid="dialog"]');
+      await dialog.waitForDisplayed({ timeout: 10000 });
+      await waitForSurfaceEntrance('[data-testid="dialog"]');
+      const confirm = dialog.$('[data-testid="dialog-confirm"]');
+      expect(await confirm.getAttribute("data-btn-role")).toBe("destructive");
+      expect((await dialog.$$('[data-btn-role="primary"]')).length).toBe(0);
+
+      await confirm.click();
+      await dialog.waitForExist({ reverse: true, timeout: 10000 });
+      await $(
+        `[role="treeitem"][data-path="${DIALOG_DELETE_NOTE_NAME}"]`,
+      ).waitForExist({ reverse: true, timeout: 10000 });
+
+      expect((await nativeDialogCallCounts()).confirm).toBe(0);
+    });
+
+    it("dialog_cancel_leaves_its_action_unapplied", async () => {
+      // A single-mount, low-fixture check that Cancel is inert: reopening
+      // the rename dialog on the already-renamed fixture and cancelling it
+      // leaves the tree entry exactly where it was.
+      const renamedPath = "zzzz-dialog-renamed.md";
+      const menu = await openRowMenu(renamedPath);
+      await menu.$('[data-command-id="tree.entry.rename"]').click();
+
+      const dialog = $('[data-testid="dialog"]');
+      await dialog.waitForDisplayed({ timeout: 10000 });
+      await waitForSurfaceEntrance('[data-testid="dialog"]');
+      const input = dialog.$('[data-testid="dialog-input"]');
+      await input.clearValue();
+      await input.setValue("zzzz-dialog-cancelled-name.md");
+      await dialog.$('[data-testid="dialog-cancel"]').click();
+      await dialog.waitForExist({ reverse: true, timeout: 10000 });
+
+      expect(
+        await $(`[role="treeitem"][data-path="${renamedPath}"]`).isExisting(),
+      ).toBe(true);
+      expect(
+        await $(
+          '[role="treeitem"][data-path="zzzz-dialog-cancelled-name.md"]',
+        ).isExisting(),
+      ).toBe(false);
+    });
+  }
+
+  // The M3a surfaces. These run after the shell suite, so the scratch
+  // vault no longer contains the removed note; the specs below use the
+  // CRLF and live-preview notes exclusively.
+
   it("browser_demo_restores_default_appearance_and_persists", async () => {
     await browser.url(browserDemoUrl());
     await $(".demo-shell").waitForExist({ timeout: 15000 });
@@ -7092,6 +7264,35 @@ describe("skribeum core editing surfaces", () => {
         }),
       { timeout: 10000, timeoutMsg: "browser settings did not restore" },
     );
+  });
+
+  it("browser_demo_claims_mod_f_before_the_editor_has_focus", async () => {
+    await browser.url(browserDemoUrl());
+    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await browser.waitUntil(
+      async () => new URL(await browser.getUrl()).searchParams.has("note"),
+      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
+    );
+    await waitForBrowserDemoNote();
+
+    // Focus lands outside the editor, matching a visitor who opens the
+    // demo and immediately reaches for find without clicking into the
+    // note first, which is exactly when a browser owns Mod-f on any
+    // editor-scoped-only binding.
+    await browser.execute(() => {
+      (document.activeElement as HTMLElement | null)?.blur();
+      document.body.focus();
+    });
+    expect(
+      await browser.execute(
+        () => document.querySelector(".cm-skr-find-panel") !== null,
+      ),
+    ).toBe(false);
+
+    await browser.keys([modifierKey, "f"]);
+    const findPanel = $(".cm-skr-find-panel");
+    await findPanel.waitForExist({ timeout: 10000 });
+    expect(await findPanel.$(".cm-skr-find-input").isDisplayed()).toBe(true);
   });
 
   it("browser_demo_keeps_tag_completion_keys_after_autosave_refresh", async () => {

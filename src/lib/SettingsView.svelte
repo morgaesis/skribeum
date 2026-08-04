@@ -796,10 +796,19 @@ async function openJumpMenu() {
     ?.focus();
 }
 
+/** The trigger toggles: a second activation while open closes the menu. */
+function toggleJumpMenu() {
+  if (jumpMenuOpen) {
+    closeJumpMenu();
+  } else {
+    void openJumpMenu();
+  }
+}
+
 function onJumpButtonKeydown(event: KeyboardEvent) {
   if (event.key !== "Enter" && event.key !== " ") return;
   event.preventDefault();
-  void openJumpMenu();
+  toggleJumpMenu();
 }
 
 function closeJumpMenu() {
@@ -1091,7 +1100,7 @@ function onKeydown(event: KeyboardEvent) {
           aria-haspopup="menu"
           aria-expanded={jumpMenuOpen}
           data-testid="settings-jump"
-          onclick={openJumpMenu}
+          onclick={toggleJumpMenu}
           onkeydown={onJumpButtonKeydown}
         >
           <span aria-hidden="true">⋯</span>

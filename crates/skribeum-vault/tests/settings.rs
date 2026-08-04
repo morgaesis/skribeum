@@ -328,6 +328,27 @@ fn default_task_statuses_assign_tracks_and_payloads() {
 }
 
 #[test]
+fn default_todo_status_carries_no_glyph_and_still_validates() {
+    // Design system section 3.6: the default Todo state is the bare
+    // checkbox box with no glyph layered inside it, matching
+    // `DEFAULT_TASK_STATUSES` in `src/lib/taskStatuses.ts`. An empty glyph
+    // must still pass the same validation every other status glyph does.
+    let todo = default_task_statuses()
+        .into_iter()
+        .find(|status| status.symbol == " ")
+        .expect("default statuses include the Todo row");
+    assert_eq!(todo.category, TaskStatusCategory::Todo);
+    assert_eq!(todo.glyph, "");
+
+    let (fs, store) = store();
+    let settings = Settings::default();
+    store
+        .write(&fs, &settings)
+        .expect("the default settings document, including its empty Todo glyph, writes");
+    assert_eq!(store.read(&fs).expect("read succeeds"), settings);
+}
+
+#[test]
 fn missing_task_metadata_round_trips_without_becoming_null() {
     let (fs, store) = store();
     let path = PathBuf::from("config/settings.json");

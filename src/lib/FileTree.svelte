@@ -607,10 +607,15 @@ function dropOn(destination: string | null) {
           class="skr-tree-actions"
           aria-label={`${STRINGS.rowActions}: ${row.label}`}
           aria-haspopup="menu"
+          aria-expanded={menuPath === row.path}
           use:commandTooltip={{ title: STRINGS.rowActions }}
           onclick={(event) => {
             event.stopPropagation();
-            openMenu(row, event.currentTarget);
+            if (menuPath === row.path) {
+              closeMenu(false);
+            } else {
+              openMenu(row, event.currentTarget);
+            }
           }}
         >
           <svg viewBox="0 0 16 16" aria-hidden="true">

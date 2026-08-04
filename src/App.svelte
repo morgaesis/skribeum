@@ -1,8 +1,5 @@
 <script lang="ts">
-import {
-  confirm as confirmDialog,
-  open as openDirectoryDialog,
-} from "@tauri-apps/plugin-dialog";
+import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
 import { onMount, tick } from "svelte";
 import tauriConfig from "../src-tauri/tauri.conf.json";
 import Banners, { type BannerItem } from "./lib/Banners.svelte";
@@ -10,6 +7,7 @@ import {
   type CommandTooltipOptions,
   commandTooltip,
 } from "./lib/commandTooltip";
+import { showConfirmDialog, showPromptDialog } from "./lib/dialogs";
 import Editor from "./lib/Editor.svelte";
 import {
   currentWikilinkContext,
@@ -126,7 +124,7 @@ import {
 } from "./lib/ipc/vault";
 import type { PaneSwitchKind } from "./lib/motion";
 import NoteInfo from "./lib/NoteInfo.svelte";
-import { resolveNoteTitle } from "./lib/noteTitles";
+import { isNotePath, resolveNoteTitle } from "./lib/noteTitles";
 import OutlinePanel from "./lib/OutlinePanel.svelte";
 import PanelDivider from "./lib/PanelDivider.svelte";
 import {
@@ -998,7 +996,12 @@ async function createTreeNote(folder: string) {
 async function createTreeFolder(parent: string) {
   const activeVault = vault;
   if (activeVault === null) return;
-  const name = window.prompt(STRINGS.treeFolderPrompt)?.trim();
+  const entered = await showPromptDialog({
+    title: STRINGS.treeCreateFolder,
+    inputLabel: STRINGS.treeFolderPrompt,
+    confirmLabel: STRINGS.createAction,
+  });
+  const name = entered?.trim();
   if (name === undefined || name === "") return;
   try {
     tree = await treeFolderCreate(activeVault, treeJoin(parent, name));
@@ -1008,12 +1011,38 @@ async function createTreeFolder(parent: string) {
   }
 }
 
+/**
+ * Validates a rename target before it is applied. A note (an entry the
+ * vault scans as `EntryKind::Note`, matching `NOTE_EXTENSIONS` in
+ * noteTitles.ts) must keep one of those extensions, or the renamed file
+ * becomes an opaque `EntryKind::File` row the tree can no longer select or
+ * open. Folders and other file kinds carry no such restriction.
+ */
+function validateTreeRename(
+  requiresNoteExtension: boolean,
+  value: string,
+): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (requiresNoteExtension && !isNotePath(trimmed)) {
+    return STRINGS.treeRenameInvalidExtension;
+  }
+  return null;
+}
+
 async function renameTreeEntry(path: string) {
   const activeVault = vault;
   if (activeVault === null) return;
-  const name = window
-    .prompt(STRINGS.treeRenamePrompt, path.split("/").at(-1))
-    ?.trim();
+  const requiresNoteExtension =
+    tree.find((entry) => entry.path === path)?.kind === "note";
+  const entered = await showPromptDialog({
+    title: STRINGS.treeRename,
+    inputLabel: STRINGS.treeRenamePrompt,
+    initialValue: path.split("/").at(-1) ?? path,
+    confirmLabel: STRINGS.treeRename,
+    validate: (value) => validateTreeRename(requiresNoteExtension, value),
+  });
+  const name = entered?.trim();
   if (name === undefined || name === "") return;
   const target = treeJoin(treeParent(path), name);
   if (target === path) return;
@@ -1044,8 +1073,14 @@ async function renameTreeEntry(path: string) {
 
 async function deleteTreeEntry(path: string) {
   const activeVault = vault;
-  if (activeVault === null || !window.confirm(STRINGS.treeDeleteConfirm))
-    return;
+  if (activeVault === null) return;
+  const confirmed = await showConfirmDialog({
+    title: STRINGS.treeDelete,
+    message: STRINGS.treeDeleteConfirm,
+    confirmLabel: STRINGS.treeDelete,
+    destructive: true,
+  });
+  if (!confirmed) return;
   const removesActive =
     selectedPath !== null && treePathWithin(selectedPath, path);
   if (removesActive && (await editor?.flush()) === false) {
@@ -1245,11 +1280,12 @@ async function clearEditHistory(): Promise<void> {
   ).__SKRIBEUM_E2E_CONFIRM_EDIT_HISTORY__;
   const confirmed =
     testConfirmed === true ||
-    (await confirmDialog(STRINGS.clearEditHistoryConfirmation, {
+    (await showConfirmDialog({
       title: STRINGS.commandClearEditHistory,
-      kind: "warning",
-      okLabel: STRINGS.clearEditHistoryConfirmAction,
+      message: STRINGS.clearEditHistoryConfirmation,
+      confirmLabel: STRINGS.clearEditHistoryConfirmAction,
       cancelLabel: STRINGS.clearEditHistoryCancelAction,
+      destructive: true,
     }));
   if (!confirmed) return;
   try {

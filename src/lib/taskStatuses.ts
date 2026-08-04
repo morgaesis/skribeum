@@ -77,7 +77,12 @@ function status(
 
 /** Default track vocabulary with the compact Todo, Doing, Done cycle. */
 export const DEFAULT_TASK_STATUSES: readonly TaskStatusDoc[] = [
-  status(" ", "TODO", "○", TODO_COLOR, "/", "task"),
+  // Todo, the default cycle's entry state, is the empty checkbox (design
+  // system section 3.6): the checkbox box itself, drawn from
+  // `--skr-border-strong` by `.cm-skr-task-checkbox`'s base style, with no
+  // glyph layered inside it. A circled or filled default glyph is the
+  // defect that section corrects.
+  status(" ", "TODO", "", TODO_COLOR, "/", "task"),
   status("/", "IN_PROGRESS", "◐", IN_PROGRESS_COLOR, "x", "task"),
   status("x", "DONE", "✓", DONE_COLOR, " ", "task"),
   status("-", "CANCELLED", "✕", CANCELLED_COLOR, " ", "task"),
@@ -156,7 +161,8 @@ function validStatus(value: unknown): value is TaskStatus {
     typeof candidate.category === "string" &&
     CATEGORIES.has(candidate.category) &&
     typeof candidate.glyph === "string" &&
-    [...candidate.glyph].length > 0 &&
+    // Empty is valid: it is how the default Todo state asks the checkbox
+    // to render as its bare box, with no glyph layered inside it.
     [...candidate.glyph].length <= MAX_GLYPH_LENGTH &&
     !/[\p{Cc}]/u.test(candidate.glyph) &&
     typeof candidate.color_token === "string" &&

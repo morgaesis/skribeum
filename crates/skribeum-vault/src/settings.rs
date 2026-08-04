@@ -101,7 +101,11 @@ const DEFAULT_TASK_STATUS_ROWS: &[DefaultTaskStatusRow] = &[
     (
         " ",
         TaskStatusCategory::Todo,
-        "○",
+        // Todo, the default cycle's entry state, is the empty checkbox
+        // (design system section 3.6): the checkbox box itself, with no
+        // glyph layered inside it, matching `DEFAULT_TASK_STATUSES` in
+        // `src/lib/taskStatuses.ts`.
+        "",
         "--skr-accent",
         "/",
         TaskStatusTrack::Task,
@@ -976,9 +980,11 @@ fn valid_task_statuses(statuses: &[TaskStatus]) -> bool {
                         .any(|(symbol, ..)| *symbol == status.symbol)))
             && status.name.chars().count() <= MAX_TASK_STATUS_NAME_LENGTH
             && {
+                // Empty is valid: it is how the default Todo state asks the
+                // checkbox to render as its bare box, with no glyph layered
+                // inside it (design system section 3.6).
                 let glyph_length = status.glyph.chars().count();
-                glyph_length > 0
-                    && glyph_length <= MAX_TASK_STATUS_GLYPH_LENGTH
+                glyph_length <= MAX_TASK_STATUS_GLYPH_LENGTH
                     && !status.glyph.chars().any(char::is_control)
             }
             && valid_color_token(&status.color_token)

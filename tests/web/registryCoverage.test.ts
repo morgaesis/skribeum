@@ -57,6 +57,7 @@ const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
   ["lib/SettingsView.svelte", "ARIA dialog pattern internal dismissal"],
   ["lib/Statusline.svelte", "ARIA dialog pattern internal dismissal"],
   ["lib/Sheet.svelte", "ARIA modal dialog focus trapping and dismissal"],
+  ["lib/Dialog.svelte", "ARIA modal dialog focus trapping and dismissal"],
   [
     "lib/editor/decorations/engine.ts",
     "task checkbox and listbox internal navigation",

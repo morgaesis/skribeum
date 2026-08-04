@@ -235,4 +235,37 @@ describe("designed file tree", () => {
 
     await unmount(component);
   });
+
+  it("toggles the row overflow menu: a second click on the same trigger closes it", async () => {
+    const registry = createAppRegistry(undefined, true);
+    const context = commandContext();
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        onOpenPath: () => {},
+        registry,
+        commandContext: () => context,
+        desktop: true,
+      },
+    });
+    flushSync();
+
+    const row = document.querySelector<HTMLElement>('[data-path="plain.md"]');
+    const actions = row?.querySelector<HTMLButtonElement>(".skr-tree-actions");
+    expect(actions?.getAttribute("aria-expanded")).toBe("false");
+
+    actions?.click();
+    await tick();
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    expect(actions?.getAttribute("aria-expanded")).toBe("true");
+
+    actions?.click();
+    await tick();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(actions?.getAttribute("aria-expanded")).toBe("false");
+
+    await unmount(component);
+  });
 });

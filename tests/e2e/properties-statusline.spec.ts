@@ -246,25 +246,43 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
     // 1px edit-state bottom rule of section 5.12. A WebDriver click's
     // underlying focus assignment can land a tick after the click resolves
     // on some drivers, so poll rather than reading computed style once.
-    let focusedBorder: string | null = null;
-    await browser.waitUntil(
-      async () => {
-        focusedBorder = await browser.execute(() => {
-          const value = document.querySelector<HTMLElement>(
-            '.skr-property-editable[data-property-key="title"]',
+    let diagnostics: {
+      activeTag: string | null;
+      activeClass: string | null;
+      isValue: boolean;
+      border: string | null;
+    } | null = null;
+    try {
+      await browser.waitUntil(
+        async () => {
+          diagnostics = await browser.execute(() => {
+            const value = document.querySelector<HTMLElement>(
+              '.skr-property-editable[data-property-key="title"]',
+            );
+            const active = document.activeElement;
+            return {
+              activeTag: active?.tagName ?? null,
+              activeClass:
+                active instanceof HTMLElement ? active.className : null,
+              isValue: value !== null && active === value,
+              border:
+                value !== null
+                  ? getComputedStyle(value).borderBottomColor
+                  : null,
+            };
+          });
+          return (
+            diagnostics.isValue &&
+            !diagnostics.border?.includes("rgba(0, 0, 0, 0)")
           );
-          if (!value || document.activeElement !== value) return null;
-          return getComputedStyle(value).borderBottomColor;
-        });
-        return (
-          focusedBorder !== null && !focusedBorder.includes("rgba(0, 0, 0, 0)")
-        );
-      },
-      {
-        timeout: 5000,
-        timeoutMsg: "the focused value never carried the edit-state border",
-      },
-    );
+        },
+        { timeout: 5000 },
+      );
+    } catch {
+      throw new Error(
+        `the focused value never carried the edit-state border: ${JSON.stringify(diagnostics)}`,
+      );
+    }
 
     await browser.keys([modifierKey, "a"]);
     // Typed text reaches a contenteditable region through the element's own

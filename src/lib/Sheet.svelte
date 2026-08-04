@@ -154,7 +154,7 @@ onDestroy(() => {
     background: var(--skr-surface-raised);
     border: 1px solid var(--skr-border);
     border-bottom: 0;
-    border-radius: 0.75rem 0.75rem 0 0;
+    border-radius: var(--skr-radius-dialog) var(--skr-radius-dialog) 0 0;
     box-shadow: var(--skr-shadow);
     color: var(--skr-text);
     display: flex;
@@ -179,7 +179,7 @@ onDestroy(() => {
     height: auto;
     max-height: calc(var(--skr-visual-viewport-height) - 2.5rem);
     border-bottom: 1px solid var(--skr-border);
-    border-radius: 0.375rem;
+    border-radius: var(--skr-radius-surface);
   }
 
   header {
@@ -202,7 +202,7 @@ onDestroy(() => {
     min-width: 2.75rem;
     padding: 0.5rem 0.75rem;
     border: 0;
-    border-radius: 0.25rem;
+    border-radius: var(--skr-radius-control);
     background: transparent;
     color: var(--skr-text);
     font-weight: 600;

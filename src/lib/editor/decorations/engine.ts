@@ -4712,6 +4712,11 @@ const engineTheme = EditorView.baseTheme({
     margin: "0.35rem 0",
     paddingLeft: "0.75rem",
     borderLeft: "3px solid var(--skr-accent)",
+    // Right corners only, matching the callout treatment: the accent bar
+    // stays flush with the column edge (design system section 5.12,
+    // embeds are a content block).
+    borderTopRightRadius: "var(--skr-radius-surface)",
+    borderBottomRightRadius: "var(--skr-radius-surface)",
     backgroundColor: "var(--skr-surface-subtle)",
     verticalAlign: "top",
   },
@@ -4742,7 +4747,7 @@ const engineTheme = EditorView.baseTheme({
     maxHeight: "18rem",
     overflow: "auto",
     border: "1px solid var(--skr-border)",
-    borderRadius: "0.375rem",
+    borderRadius: "var(--skr-radius-surface)",
     color: "var(--skr-text)",
     backgroundColor: "var(--skr-surface-raised)",
     boxShadow: "var(--skr-shadow)",
@@ -4843,7 +4848,7 @@ const engineTheme = EditorView.baseTheme({
     color: "var(--skr-text)",
     backgroundColor: "var(--skr-surface-raised)",
     border: "1px solid var(--skr-border)",
-    borderRadius: "0.375rem",
+    borderRadius: "var(--skr-radius-surface)",
     boxShadow: "var(--skr-shadow)",
   },
   ".cm-skr-task-palette[hidden]": { display: "none" },
@@ -4868,7 +4873,7 @@ const engineTheme = EditorView.baseTheme({
     minWidth: "0",
     minHeight: "2.75rem",
     padding: "0.375rem 0.5rem",
-    borderRadius: "0.3rem",
+    borderRadius: "var(--skr-radius-control)",
     cursor: "pointer",
     transition:
       "background-color var(--skr-motion-state-duration) var(--skr-motion-state-easing), color var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
@@ -4904,20 +4909,23 @@ const engineTheme = EditorView.baseTheme({
     fontSize: "0.8125em",
   },
   ".cm-skr-task-payload-footer input": {
+    // De-boxed per design system section 5.12: a flat field with a bottom
+    // rule only, never a boxed outline.
     boxSizing: "border-box",
     minHeight: "2.25rem",
     padding: "0.25rem 0.4rem",
     color: "var(--skr-text)",
     backgroundColor: "var(--skr-surface)",
-    border: "1px solid var(--skr-border-strong)",
-    borderRadius: "0.25rem",
+    border: "0",
+    borderBottom: "1px solid var(--skr-border-strong)",
+    borderRadius: "0",
     fontFamily: "var(--skr-font-interface)",
   },
   ".cm-skr-task-payload": {
     padding: "0.08em 0.3em",
     color: "var(--skr-text-muted)",
     backgroundColor: "var(--skr-surface-subtle)",
-    borderRadius: "0.25rem",
+    borderRadius: "var(--skr-radius-control)",
     fontFamily: "var(--skr-font-interface)",
     fontSize: "0.8125em",
   },
@@ -4929,7 +4937,7 @@ const engineTheme = EditorView.baseTheme({
     fontSize: "0.9em",
     fontWeight: "400",
     backgroundColor: "var(--skr-code-surface)",
-    borderRadius: "3px",
+    borderRadius: "var(--skr-radius-control)",
     padding: "0 2px",
   },
   ".cm-skr-table-shell": {
@@ -5081,7 +5089,7 @@ const engineTheme = EditorView.baseTheme({
     backgroundColor:
       "color-mix(in srgb, var(--skr-surface-raised) 78%, transparent)",
     border: "1px solid var(--skr-border)",
-    borderRadius: "0.3rem",
+    borderRadius: "var(--skr-radius-control)",
     opacity: "0",
     pointerEvents: "none",
     transition:
@@ -5161,7 +5169,7 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-tag": {
     color: "var(--skr-accent)",
     backgroundColor: "var(--skr-accent-subtle)",
-    borderRadius: "8px",
+    borderRadius: "var(--skr-radius-control)",
     padding: "0 4px",
     cursor: "pointer",
   },
@@ -5185,7 +5193,7 @@ const engineTheme = EditorView.baseTheme({
     color: "var(--skr-text)",
     backgroundColor: "var(--skr-surface-subtle)",
     border: "1px solid var(--skr-border)",
-    borderRadius: "0.5rem",
+    borderRadius: "var(--skr-radius-surface)",
   },
   ".cm-skr-mermaid svg": { display: "block", maxWidth: "100%", margin: "auto" },
   ".cm-skr-render-error": {

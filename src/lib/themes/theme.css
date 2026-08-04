@@ -48,6 +48,15 @@
   --skr-syntax-operator: #565664;
   --skr-overlay: rgb(0 0 0 / 30%);
   --skr-shadow: 0 12px 32px rgb(0 0 0 / 20%);
+  /* The section 5.12 radius scale: three values, nothing else. Controls and
+     chips (icon-button hover fills, kbd and payload chips, tooltips,
+     statusline hover fills); floating surfaces and content blocks (menus,
+     popovers, the selection toolbar, option cards, code blocks, callout
+     right corners, tables, embeds); window-scale surfaces (dialogs, sheets).
+     Mode-independent, so it lives once here rather than per palette. */
+  --skr-radius-control: 0.25rem;
+  --skr-radius-surface: 0.375rem;
+  --skr-radius-dialog: 0.75rem;
   --skr-font-prose:
     "Charter", "Sitka Text", Cambria, "Palatino Linotype", "Noto Serif",
     "Liberation Serif", Georgia, serif;

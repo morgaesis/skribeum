@@ -2277,7 +2277,7 @@ function onKeydown(event: KeyboardEvent) {
   .settings-dialog {
     background: var(--skr-surface-raised);
     border: 1px solid var(--skr-border);
-    border-radius: 0.75rem;
+    border-radius: var(--skr-radius-dialog);
     box-shadow: var(--skr-shadow);
     color: var(--skr-text);
     display: flex;
@@ -2398,12 +2398,20 @@ function onKeydown(event: KeyboardEvent) {
   .settings-search input,
   .text-control {
     background: var(--skr-surface);
-    border: 1px solid var(--skr-border-strong);
-    border-radius: 0.35rem;
+    /* De-boxed per design system section 5.12: a flat field on its surface
+       with a bottom rule only, never a boxed outline. */
+    border: 0;
+    border-bottom: 1px solid var(--skr-border);
+    border-radius: 0;
     color: var(--skr-text);
     font: inherit;
     min-width: 0;
     padding: 0.4rem 0.5rem;
+  }
+
+  .settings-search input:focus-visible,
+  .text-control:focus-visible {
+    border-bottom-color: var(--skr-border-strong);
   }
 
   .settings-search input {
@@ -2420,7 +2428,14 @@ function onKeydown(event: KeyboardEvent) {
   .numeric-readout,
   .stepper button {
     background: transparent;
-    border: 1px solid transparent;
+    /* At rest, no control draws a border (design system section 5.12); the
+       palette card and the numeric-entry bottom rule apply their own,
+       more specific border declarations below. A zero-width border still
+       resolves its computed color against `color` unless border-color is
+       named explicitly, so this stays transparent rather than falling back
+       to currentColor. */
+    border: 0;
+    border-color: transparent;
     color: var(--skr-text);
     cursor: pointer;
     font: inherit;
@@ -2428,7 +2443,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .jump-button {
     align-items: center;
-    border-radius: 0.25rem;
+    border-radius: var(--skr-radius-control);
     display: flex;
     flex: 0 0 2.75rem;
     font-size: 1.25rem;
@@ -2454,7 +2469,7 @@ function onKeydown(event: KeyboardEvent) {
   .settings-jump-menu {
     background: var(--skr-surface-raised);
     border: 1px solid var(--skr-border);
-    border-radius: 0.375rem;
+    border-radius: var(--skr-radius-surface);
     box-shadow: var(--skr-shadow);
     display: grid;
     padding: 0.5rem;
@@ -2477,8 +2492,10 @@ function onKeydown(event: KeyboardEvent) {
 
   .settings-jump-heading button,
   .settings-jump-items > button {
-    border: 1px solid transparent;
-    border-radius: 0.35rem;
+    border: 0;
+    /* Menu rows are flat full-width rows: no rounded row cards (design
+       system section 5.12). */
+    border-radius: 0;
     min-height: 2.75rem;
   }
 
@@ -2528,10 +2545,9 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .segmented {
-    border: 1px solid var(--skr-border-strong);
-    border-radius: 0.4rem;
+    /* A row of flat options with no outer box (design system section 5.12);
+       grouping comes from the hairline separators between options. */
     display: inline-flex;
-    overflow: hidden;
   }
 
   .segmented button {
@@ -2551,8 +2567,10 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .segmented button.active {
+    /* The active option carries accent-subtle fill and ordinary text
+       (design system section 5.12), not accent-colored text. */
     background: var(--skr-accent-subtle);
-    color: var(--skr-accent);
+    color: var(--skr-text);
     font-weight: 600;
   }
 
@@ -2574,7 +2592,7 @@ function onKeydown(event: KeyboardEvent) {
     align-items: center;
     background: var(--skr-surface);
     border: 1px solid var(--skr-border);
-    border-radius: 0.375rem;
+    border-radius: var(--skr-radius-surface);
     box-sizing: border-box;
     color: var(--skr-heading);
     display: flex;
@@ -2609,7 +2627,9 @@ function onKeydown(event: KeyboardEvent) {
 
   .palette-card-dot {
     background: var(--skr-accent);
-    border-radius: 50%;
+    /* Larger than half the dot's own box, so it clips to a full circle
+       while the specified value still belongs to the radius scale. */
+    border-radius: var(--skr-radius-control);
     flex: 0 0 0.5rem;
     height: 0.5rem;
     margin-left: 0.5rem;
@@ -2619,7 +2639,7 @@ function onKeydown(event: KeyboardEvent) {
   .palette-live-preview {
     background: var(--skr-surface);
     border: 1px solid var(--skr-border);
-    border-radius: 0.375rem;
+    border-radius: var(--skr-radius-surface);
     color: var(--skr-text);
     display: grid;
     font-family: var(--skr-font-prose);
@@ -2666,7 +2686,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .palette-live-body code {
     background: var(--skr-code-surface);
-    border-radius: 0.2rem;
+    border-radius: var(--skr-radius-control);
     font-family: var(--skr-font-mono);
     padding: 0.1rem 0.25rem;
   }
@@ -2682,7 +2702,9 @@ function onKeydown(event: KeyboardEvent) {
   .palette-live-box {
     align-items: center;
     border: 1px solid var(--skr-border-strong);
-    border-radius: 0.2rem;
+    /* Mirrors the real task checkbox exactly (design system section 3.6),
+       outside the section 5.12 control radius scale. */
+    border-radius: 3px;
     display: flex;
     flex: 0 0 0.875rem;
     font-family: var(--skr-font-interface);
@@ -2718,9 +2740,6 @@ function onKeydown(event: KeyboardEvent) {
 
   .numeric-readout,
   .numeric-entry {
-    background: var(--skr-surface-subtle);
-    border: 1px solid transparent;
-    border-radius: 0.25rem;
     box-sizing: border-box;
     color: var(--skr-text);
     font-family: var(--skr-font-interface);
@@ -2732,6 +2751,11 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .numeric-readout {
+    /* A chip, not a text input: control radius, no border at rest (design
+       system section 5.12). */
+    background: var(--skr-surface-subtle);
+    border: 0;
+    border-radius: var(--skr-radius-control);
     cursor: pointer;
     white-space: nowrap;
   }
@@ -2741,7 +2765,13 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .numeric-entry {
-    border-color: var(--skr-border-strong);
+    /* The entry-mode field: a flat field with a bottom rule, never a boxed
+       outline (design system section 5.12, "the slider readout in entry
+       mode"). */
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--skr-border-strong);
+    border-radius: 0;
     font-variant-numeric: tabular-nums;
     width: 5ch;
   }
@@ -2760,11 +2790,10 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .stepper {
+    /* No outer box (design system section 5.12): the minus, value and plus
+       cells are grouped by the hairlines between them instead. */
     align-items: stretch;
-    border: 1px solid var(--skr-border-strong);
-    border-radius: 0.4rem;
     display: flex;
-    overflow: hidden;
   }
 
   .stepper button {
@@ -2818,6 +2847,10 @@ function onKeydown(event: KeyboardEvent) {
     z-index: 1;
   }
 
+  /* The toggle switch (design system section 7.2, boolean control) is a
+     pill track with a circular thumb, its own literal geometry rather than
+     a member of the section 5.12 control radius scale, the same way the
+     task checkbox's 3px radius sits outside that scale. */
   .switch > span {
     background: var(--skr-border-strong);
     border-radius: 1rem;
@@ -2882,7 +2915,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .task-status-table {
     border: 1px solid var(--skr-border);
-    border-radius: 0.4rem;
+    border-radius: var(--skr-radius-surface);
     overflow: auto;
   }
 
@@ -2933,7 +2966,7 @@ function onKeydown(event: KeyboardEvent) {
   .task-listbox-options {
     background: var(--skr-surface-raised);
     border: 1px solid var(--skr-border-strong);
-    border-radius: 0.35rem;
+    border-radius: var(--skr-radius-surface);
     display: grid;
     margin-top: 0.2rem;
     max-height: 9rem;
@@ -2943,7 +2976,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .task-listbox-options button {
     border: 0;
-    border-radius: 0.25rem;
+    border-radius: var(--skr-radius-control);
     overflow: hidden;
     padding: 0.3rem 0.4rem;
     text-align: left;
@@ -2968,8 +3001,7 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .task-status-actions button {
-    border-color: var(--skr-border-strong);
-    border-radius: 0.25rem;
+    border-radius: var(--skr-radius-control);
     min-width: 1.8rem;
     padding: 0.3rem;
   }
@@ -3008,7 +3040,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .icon-button,
   .secondary-button {
-    border-radius: 0.25rem;
+    border-radius: var(--skr-radius-control);
     font-size: 0.75rem;
     padding: 0.4rem 0.6rem;
   }
@@ -3060,7 +3092,7 @@ function onKeydown(event: KeyboardEvent) {
 
     .settings-jump-menu {
       border-bottom: 0;
-      border-radius: 0.75rem 0.75rem 0 0;
+      border-radius: var(--skr-radius-dialog) var(--skr-radius-dialog) 0 0;
       bottom: 0;
       left: 0;
       max-height: 80%;

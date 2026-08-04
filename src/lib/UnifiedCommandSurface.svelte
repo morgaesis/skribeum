@@ -283,7 +283,7 @@ onDestroy(() => {
     flex-direction: column;
     overflow: hidden;
     border: 1px solid var(--skr-border);
-    border-radius: 0.75rem;
+    border-radius: var(--skr-radius-dialog);
     background: var(--skr-surface-raised);
   }
 
@@ -328,7 +328,7 @@ onDestroy(() => {
 
   .command-surface-results [role="option"] {
     cursor: pointer;
-    border-radius: 0.25rem;
+    border-radius: var(--skr-radius-control);
     padding: 0.25rem 0.5rem;
   }
 
@@ -362,7 +362,7 @@ onDestroy(() => {
       width: 100%;
       max-width: none;
       max-height: var(--skr-command-height-cap);
-      border-radius: 0 0 0.75rem 0.75rem;
+      border-radius: 0 0 var(--skr-radius-dialog) var(--skr-radius-dialog);
     }
 
     .command-surface-results {

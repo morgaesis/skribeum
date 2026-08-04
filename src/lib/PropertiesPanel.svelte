@@ -471,7 +471,7 @@ function additionFocusout(event: FocusEvent) {
 
   .skr-property-chip {
     display: inline-block;
-    border-radius: 0.25rem;
+    border-radius: var(--skr-radius-control);
     padding: 0.0625rem 0.375rem;
     background: var(--skr-surface-subtle);
     font-size: 0.8125em;

@@ -288,7 +288,7 @@ function surfaceEnter(node: HTMLElement) {
     display: inline-flex;
     align-items: center;
     border: 0;
-    border-radius: 0.25rem;
+    border-radius: var(--skr-radius-control);
     padding: 0.0625rem 0.375rem;
     background: transparent;
     color: inherit;
@@ -324,7 +324,7 @@ function surfaceEnter(node: HTMLElement) {
     min-width: 16rem;
     max-width: 24rem;
     border: 1px solid var(--skr-border);
-    border-radius: 0.375rem;
+    border-radius: var(--skr-radius-surface);
     padding: 0.625rem 0.75rem;
     background: var(--skr-surface-raised);
     box-shadow: var(--skr-shadow);

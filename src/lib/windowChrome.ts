@@ -8,7 +8,11 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { hasDesktopRuntime } from "./features/updates";
-import { windowShowSystemMenu } from "./ipc/services";
+import type { MaximizeButtonRect } from "./ipc/bindings";
+import {
+  windowSetMaximizeButtonRect,
+  windowShowSystemMenu,
+} from "./ipc/services";
 
 /** The three desktop platforms Skribeum draws window chrome for. The
  * browser build never reaches this module's rendering paths. */
@@ -159,10 +163,11 @@ export async function minimizeWindow(): Promise<void> {
   await getCurrentWindow().minimize();
 }
 
-/** Toggles between maximized and restored. Windows 11 snap layouts on
- * hover-and-hold need native hit-testing this build does not add (see the
- * pull request description); the button still maximizes and restores on
- * click on every platform. */
+/** Toggles between maximized and restored. On Windows, hovering and holding
+ * the button normally reaches this same toggle through the native
+ * `WM_NCLBUTTONUP` handler instead (design system section 4.13's snap-layout
+ * hit-testing); this click path stays the route on every platform and the
+ * one keyboard activation always uses. */
 export async function toggleMaximizeWindow(): Promise<void> {
   if (!hasDesktopRuntime()) return;
   await getCurrentWindow().toggleMaximize();
@@ -174,11 +179,41 @@ export async function closeWindowChrome(): Promise<void> {
   await getCurrentWindow().close();
 }
 
-/** Shows the drag region's right-click window menu (Minimize, Maximize or
- * Restore, Close), approximating the native system menu the design
- * specifies "where the platform provides one" without new native-binding
- * dependencies (see the pull request description). */
+/** Shows the drag region's right-click window menu: the real platform
+ * system menu on Windows (Move, Size, and the rest `GetSystemMenu`
+ * exposes), a predefined-item approximation (Minimize, Maximize or Restore,
+ * Close) elsewhere. */
 export async function showWindowSystemMenu(): Promise<void> {
   if (!hasDesktopRuntime()) return;
   await windowShowSystemMenu();
+}
+
+/** Converts a CSS-pixel `getBoundingClientRect` result into the
+ * physical-pixel rectangle Windows native hit-testing expects (design
+ * system section 4.13): Chromium reports both the rectangle and
+ * `devicePixelRatio` in the same effective scale, monitor DPI times page
+ * zoom, so multiplying one by the other lands in the same coordinate space
+ * `WM_NCHITTEST` uses after `ScreenToClient`. */
+export function maximizeButtonRectFromDomRect(
+  domRect: { left: number; top: number; width: number; height: number },
+  devicePixelRatio: number,
+): MaximizeButtonRect {
+  return {
+    x: domRect.left * devicePixelRatio,
+    y: domRect.top * devicePixelRatio,
+    width: domRect.width * devicePixelRatio,
+    height: domRect.height * devicePixelRatio,
+  };
+}
+
+/** Reports the Maximize caption button's rectangle to the native side so
+ * Windows hit-testing stays in sync with the webview's own layout and
+ * Windows 11 snap layouts appear over the button's real position (design
+ * system section 4.13). `null` clears the report. A no-op everywhere except
+ * Windows; callers do not need to branch on platform first. */
+export async function reportMaximizeButtonRect(
+  rect: MaximizeButtonRect | null,
+): Promise<void> {
+  if (!hasDesktopRuntime()) return;
+  await windowSetMaximizeButtonRect(rect);
 }

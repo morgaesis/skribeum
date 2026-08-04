@@ -6,6 +6,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   commands,
+  type MaximizeButtonRect,
   type OpenFileTarget,
   type SearchHit,
   type SettingsDoc,
@@ -81,10 +82,20 @@ export async function windowReady(webviewMilliseconds: number): Promise<void> {
   unwrap(await commands.windowReady(webviewMilliseconds));
 }
 
-/** Shows the drag region's right-click window menu (Minimize, Maximize or
- * Restore, Close) at the pointer. */
+/** Shows the drag region's right-click window menu at the pointer: the real
+ * platform system menu on Windows, a predefined-item approximation
+ * elsewhere. */
 export async function windowShowSystemMenu(): Promise<void> {
   unwrap(await commands.windowShowSystemMenu());
+}
+
+/** Reports the Maximize caption button's current rectangle so Windows
+ * native hit-testing can answer `WM_NCHITTEST` for it; a no-op everywhere
+ * except Windows. */
+export async function windowSetMaximizeButtonRect(
+  rect: MaximizeButtonRect | null,
+): Promise<void> {
+  unwrap(await commands.windowSetMaximizeButtonRect(rect));
 }
 
 /** Drains native file-open paths queued by argv or operating-system events. */

@@ -4,6 +4,7 @@ import {
   headerForegroundOpacity,
   linuxWindowRadiusRem,
   macosLeadingInsetRem,
+  maximizeButtonRectFromDomRect,
   platformFromUserAgent,
   showsCaptionButtons,
   showsWindowBorder,
@@ -69,5 +70,27 @@ describe("desktop window chrome platform decisions (design system section 4.13)"
   it("dims the header foreground to 60% only while unfocused", () => {
     expect(headerForegroundOpacity(true)).toBe(1);
     expect(headerForegroundOpacity(false)).toBe(0.6);
+  });
+
+  it("scales the Maximize button's CSS-pixel rectangle to physical pixels for native hit-testing", () => {
+    const domRect = { left: 1000, top: 8, width: 46, height: 40 };
+    expect(maximizeButtonRectFromDomRect(domRect, 1)).toEqual({
+      x: 1000,
+      y: 8,
+      width: 46,
+      height: 40,
+    });
+    expect(maximizeButtonRectFromDomRect(domRect, 1.5)).toEqual({
+      x: 1500,
+      y: 12,
+      width: 69,
+      height: 60,
+    });
+    expect(maximizeButtonRectFromDomRect(domRect, 2)).toEqual({
+      x: 2000,
+      y: 16,
+      width: 92,
+      height: 80,
+    });
   });
 });

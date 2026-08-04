@@ -29,6 +29,7 @@
     "window_warmup",
     "window_ready",
     "window_show_system_menu",
+    "window_set_maximize_button_rect",
     "file_open_resolve",
     "open_files_take"
   ],
@@ -57,7 +58,8 @@
     "zoom_set": "Validates, persists, and applies one application zoom percentage to every webview window.",
     "window_warmup": "Lets Linux WebKit commit an offscreen frame without exposing the startup window.",
     "window_ready": "Applies persisted zoom and reveals a hidden or warmed window after the frontend reports its first painted frame.",
-    "window_show_system_menu": "Shows a system-style window menu (Minimize, Maximize or Restore, Close) at the pointer for the header drag region's right-click, built fresh from predefined menu items on every call.",
+    "window_show_system_menu": "Shows the window menu at the pointer for the header drag region's right-click: the real platform system menu on Windows (GetSystemMenu and TrackPopupMenu, forwarding the chosen command back through WM_SYSCOMMAND), a predefined-item approximation (Minimize, Maximize or Restore, Close) built fresh on every call elsewhere.",
+    "window_set_maximize_button_rect": "Reports the Maximize caption button's current rectangle so Windows native hit-testing can answer WM_NCHITTEST for it and Windows 11 snap layouts appear on hover and hold; a no-op everywhere except Windows.",
     "file_open_resolve": "Resolves an operating-system file-open path to a known vault or the file's containing folder.",
     "open_files_take": "Drains file-open paths queued by argv, second-instance forwarding, or native open-file events.",
     "plugin:dialog|confirm": "Shows the destructive-action confirmation before clearing one note's edit history.",

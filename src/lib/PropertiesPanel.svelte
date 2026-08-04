@@ -107,8 +107,11 @@ function elementText(element: EventTarget | null): string {
 }
 
 /**
- * Clicking a non-form contenteditable element does not reliably move focus
- * to it in every engine, so the click handler focuses it explicitly.
+ * Native focus assignment for a click happens on mousedown, not click, and
+ * a non-form contenteditable element does not reliably receive it in every
+ * engine; focusing explicitly on mousedown (rather than the later click)
+ * matches when the browser itself would assign focus, so it never fights
+ * native caret placement.
  */
 function focusEditable(event: MouseEvent) {
   if (event.currentTarget instanceof HTMLElement) {
@@ -228,7 +231,7 @@ function additionFocusout(event: FocusEvent) {
                 tabindex="0"
                         contenteditable="plaintext-only"
                         aria-label={`${entry.key} ${STRINGS.propertiesListItemLabel} ${itemIndex + 1}`}
-                        onclick={focusEditable}
+                        onmousedown={focusEditable}
                         onkeydown={(event) => editableKeydown(event, item.raw)}
                         onblur={(event) =>
                           commitListItem(item, event.currentTarget)}
@@ -257,7 +260,7 @@ function additionFocusout(event: FocusEvent) {
                     contenteditable="plaintext-only"
                     aria-labelledby={`skr-property-key-${index}`}
                     data-property-key={entry.key}
-                    onclick={focusEditable}
+                    onmousedown={focusEditable}
                     onkeydown={(event) => editableKeydown(event, entry.raw)}
                     onblur={(event) => commitScalar(entry, event.currentTarget)}
                     >{entry.raw}</span
@@ -282,7 +285,7 @@ function additionFocusout(event: FocusEvent) {
                 contenteditable="plaintext-only"
                 aria-label={STRINGS.propertiesAddKeyLabel}
                 bind:this={addKeyElement}
-                onclick={focusEditable}
+                onmousedown={focusEditable}
                 onkeydown={(event) => additionKeydown(event, "key")}
               ></span>
             </span>
@@ -294,7 +297,7 @@ function additionFocusout(event: FocusEvent) {
                 contenteditable="plaintext-only"
                 aria-label={STRINGS.propertiesAddValueLabel}
                 bind:this={addValueElement}
-                onclick={focusEditable}
+                onmousedown={focusEditable}
                 onkeydown={(event) => additionKeydown(event, "value")}
               ></span>
             </div>

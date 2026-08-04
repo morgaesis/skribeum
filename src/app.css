@@ -887,9 +887,66 @@ html body .settings-dialog {
     var(--skr-motion-state-easing);
 }
 
-.skr-control {
-  border-color: var(--skr-border-strong);
-  background: var(--skr-surface);
+/* The labelled-button role system (design system section 5.12). Every
+   labelled button in the product carries exactly one of these three roles,
+   expressed through fill and weight, never through a border. */
+.skr-btn-primary,
+.skr-btn-secondary,
+.skr-btn-destructive {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.875rem;
+  color: var(--skr-text);
+  font-family: var(--skr-font-interface);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing),
+    color var(--skr-motion-state-duration) var(--skr-motion-state-easing),
+    opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing);
+}
+
+.skr-btn-primary {
+  background: var(--skr-accent);
+  color: var(--skr-surface);
+}
+
+.skr-btn-primary:hover {
+  opacity: 90%;
+}
+
+.skr-btn-primary:active {
+  opacity: 80%;
+}
+
+.skr-btn-secondary,
+.skr-btn-destructive {
+  background: transparent;
+  border-radius: 0.25rem;
+}
+
+.skr-btn-secondary:hover {
+  background: var(--skr-surface-subtle);
+}
+
+.skr-btn-destructive {
+  color: var(--skr-danger);
+}
+
+.skr-btn-destructive:hover {
+  background: var(--skr-danger-surface);
+}
+
+.skr-btn-primary:disabled,
+.skr-btn-secondary:disabled,
+.skr-btn-destructive:disabled {
+  cursor: default;
+  opacity: 40%;
 }
 
 .skr-overlay {
@@ -909,16 +966,6 @@ html body .settings-dialog {
   color: var(--skr-accent);
   background: var(--skr-accent-subtle);
   font-weight: 700;
-}
-
-.skr-warning-control {
-  border-color: var(--skr-warning);
-  background: transparent;
-  color: var(--skr-warning);
-}
-
-.skr-warning-control:hover {
-  background: var(--skr-warning-surface);
 }
 
 .skr-warning {
@@ -1218,7 +1265,9 @@ html body .settings-dialog {
     pointer-events: auto;
   }
 
-  .skr-warning-control {
+  .skr-btn-primary,
+  .skr-btn-secondary,
+  .skr-btn-destructive {
     min-width: 2.75rem;
     min-height: 2.75rem;
   }

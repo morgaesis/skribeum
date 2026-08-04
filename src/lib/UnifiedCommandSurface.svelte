@@ -199,6 +199,7 @@ onDestroy(() => {
         bind:this={closeElement}
         type="button"
         class="command-surface-close"
+        data-btn-role="secondary"
         onclick={requestClose}
       >{STRINGS.closeAction}</button>
     </div>
@@ -308,6 +309,11 @@ onDestroy(() => {
     border: 0;
     border-left: 1px solid var(--skr-border);
     padding: 0.5rem 0.75rem;
+    font-weight: 600;
+  }
+
+  .command-surface-close:hover {
+    background: var(--skr-surface-subtle);
   }
 
   .command-surface-results {

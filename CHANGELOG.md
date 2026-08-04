@@ -41,6 +41,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The default dark palette, formerly Lamplight, is renamed Nightroom and
+  retuned to the brand's Night Ink ground with a Jade accent; the default
+  light palette Manuscript keeps its name and takes the brand's Spruce
+  accent. The former warm charcoal-and-amber dark palette is removed rather
+  than kept as an alternative, and a single fixed, mode-independent
+  `--skr-lamplight` token reserves the brand's actual Lamplight glow for a
+  future room-unlocked indicator.
+- Labelled buttons carry one of three roles: primary as an accent fill,
+  secondary as flat text, and destructive as danger text. No labelled button
+  draws a border at rest, and at most one primary button appears per dialog,
+  empty state, or footer.
 - The file tree uses display titles, collision suffixes, authored note icons,
   indent guides, persistent expansion, a vault header, drag moves, and
   pointer, keyboard, context-menu, and touch routes to registered row actions.

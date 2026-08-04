@@ -245,7 +245,7 @@ export function focus() {
     <button type="button" aria-label={STRINGS.canvasZoomOut} onclick={() => setZoom(zoom / 1.2)}>−</button>
     <output aria-label={STRINGS.canvasZoomLevel}>{Math.round(zoom * 100)}%</output>
     <button type="button" aria-label={STRINGS.canvasZoomIn} onclick={() => setZoom(zoom * 1.2)}>+</button>
-    <button type="button" onclick={resetCamera}>{STRINGS.canvasResetView}</button>
+    <button type="button" class="skr-btn-secondary" data-btn-role="secondary" onclick={resetCamera}>{STRINGS.canvasResetView}</button>
   </div>
   <div
     class="canvas-world"
@@ -335,9 +335,19 @@ export function focus() {
   .canvas-toolbar button {
     min-width: 2rem;
     min-height: 2rem;
-    border: 1px solid var(--skr-border);
-    border-radius: 0.35rem;
-    background: var(--skr-surface);
+    border: 0;
+    border-radius: 0.25rem;
+    background: transparent;
+    color: var(--skr-text);
+  }
+
+  .canvas-toolbar button:hover {
+    background: var(--skr-surface-subtle);
+  }
+
+  .canvas-toolbar .skr-btn-secondary {
+    min-width: auto;
+    padding-inline: 0.625rem;
   }
 
   @media (max-width: 60rem) {

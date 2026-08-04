@@ -290,7 +290,7 @@ function applySettings(documentSettings: SettingsState["document"]) {
         : "manuscript",
       dark_palette: isDarkPaletteName(documentSettings.dark_palette)
         ? documentSettings.dark_palette
-        : "lamplight",
+        : "nightroom",
       prose_font: isProseFontName(documentSettings.prose_font)
         ? documentSettings.prose_font
         : "serif",
@@ -2818,10 +2818,11 @@ onMount(() => {
         <div class="skr-empty-vault">
           <button
             type="button"
-            class="skr-control rounded border px-3 py-2"
+            class="skr-btn-primary"
             disabled={openVaultDisabledReason !== null}
             title={openVaultDisabledReason ?? undefined}
             data-command-id="vault.open"
+            data-btn-role="primary"
             onclick={() => registry.run("vault.open", commandContext())}
           >
             {STRINGS.openVault}
@@ -2964,7 +2965,8 @@ onMount(() => {
                     <p>{STRINGS.noteNotFoundDesktop}</p>
                     <button
                       type="button"
-                      class="skr-control rounded border px-2 py-1"
+                      class="skr-btn-secondary"
+                      data-btn-role="secondary"
                       onclick={refreshMissingNote}
                     >
                       {STRINGS.noteNotFoundRefresh}

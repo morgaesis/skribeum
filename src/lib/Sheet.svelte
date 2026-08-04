@@ -118,7 +118,12 @@ onDestroy(() => {
     {#if variant === "sheet"}
       <header>
         <h2 id={titleId}>{label}</h2>
-        <button type="button" class="sheet-close" onclick={requestClose}>
+        <button
+          type="button"
+          class="sheet-close"
+          data-btn-role="secondary"
+          onclick={requestClose}
+        >
           {STRINGS.closeAction}
         </button>
       </header>
@@ -196,6 +201,15 @@ onDestroy(() => {
     min-height: 2.75rem;
     min-width: 2.75rem;
     padding: 0.5rem 0.75rem;
+    border: 0;
+    border-radius: 0.25rem;
+    background: transparent;
+    color: var(--skr-text);
+    font-weight: 600;
+  }
+
+  .sheet-close:hover {
+    background: var(--skr-surface-subtle);
   }
 
   .sheet-content {

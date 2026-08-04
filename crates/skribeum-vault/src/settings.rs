@@ -526,7 +526,7 @@ impl Default for Settings {
             schema_version: SETTINGS_SCHEMA_VERSION,
             theme: "system".to_owned(),
             light_palette: "manuscript".to_owned(),
-            dark_palette: "lamplight".to_owned(),
+            dark_palette: "nightroom".to_owned(),
             prose_font: "serif".to_owned(),
             code_font: "modern".to_owned(),
             zoom_percent: 100,
@@ -560,7 +560,7 @@ const THEMES: &[&str] = &["system", "light", "dark"];
 /// Accepted light palette values.
 const LIGHT_PALETTES: &[&str] = &["manuscript", "studio", "gazette"];
 /// Accepted dark palette values.
-const DARK_PALETTES: &[&str] = &["lamplight", "graphite", "signal"];
+const DARK_PALETTES: &[&str] = &["nightroom", "graphite", "signal"];
 const PROSE_FONTS: &[&str] = &["serif", "sans"];
 const CODE_FONTS: &[&str] = &["modern", "classic"];
 /// Inclusive application zoom range, represented without floating-point drift.

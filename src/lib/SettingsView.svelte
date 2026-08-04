@@ -102,9 +102,9 @@ const paletteCards: PaletteCard[] = [
     label: STRINGS.settingsPaletteGazette,
   },
   {
-    value: "lamplight",
+    value: "nightroom",
     mode: "dark",
-    label: STRINGS.settingsPaletteLamplight,
+    label: STRINGS.settingsPaletteNightroom,
   },
   {
     value: "graphite",
@@ -1067,6 +1067,7 @@ function onKeydown(event: KeyboardEvent) {
           class="icon-button"
           type="button"
           aria-label={STRINGS.closeAction}
+          data-btn-role="secondary"
           onclick={closeSettings}
         >
           <span aria-hidden="true">×</span>
@@ -1114,7 +1115,7 @@ function onKeydown(event: KeyboardEvent) {
         >
           <div class="settings-jump-heading">
             <span>{STRINGS.settingsJumpSections}</span>
-            <button type="button" onclick={closeJumpMenu}
+            <button type="button" data-btn-role="secondary" onclick={closeJumpMenu}
               >{STRINGS.closeAction}</button
             >
           </div>
@@ -1587,7 +1588,7 @@ function onKeydown(event: KeyboardEvent) {
                     <p>{STRINGS.settingsTaskStatusesHelp}</p>
                     <button
                       type="button"
-                      class="secondary-button"
+                      class="secondary-button" data-btn-role="secondary"
                       disabled={availableNewStatusSymbol() === null}
                       onclick={addTaskStatus}
                       data-testid="task-status-add"
@@ -2147,7 +2148,7 @@ function onKeydown(event: KeyboardEvent) {
                   </div>
                   <button
                     type="button"
-                    class="secondary-button"
+                    class="secondary-button" data-btn-role="secondary"
                     data-testid="settings-check-updates"
                     disabled={!desktopAvailable}
                     onclick={onCheckUpdate}
@@ -2234,7 +2235,7 @@ function onKeydown(event: KeyboardEvent) {
     >
       <button
         type="button"
-        class="secondary-button"
+        class="secondary-button" data-btn-role="secondary"
         onclick={restoreDefaults}
         >{STRINGS.settingsRestoreDefaults}</button
       >
@@ -2418,8 +2419,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .jump-button {
     align-items: center;
-    border-color: var(--skr-border-strong);
-    border-radius: 0.35rem;
+    border-radius: 0.25rem;
     display: flex;
     flex: 0 0 2.75rem;
     font-size: 1.25rem;
@@ -2999,10 +2999,13 @@ function onKeydown(event: KeyboardEvent) {
 
   .icon-button,
   .secondary-button {
-    border-color: var(--skr-border-strong);
-    border-radius: 0.35rem;
+    border-radius: 0.25rem;
     font-size: 0.75rem;
     padding: 0.4rem 0.6rem;
+  }
+
+  .secondary-button {
+    font-weight: 600;
   }
 
   a {

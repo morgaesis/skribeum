@@ -55,6 +55,14 @@ function matchCountText(count: number): string {
   return `${count}${count >= MATCH_COUNT_LIMIT ? "+" : ""} ${noun}`;
 }
 
+/** Marks a labelled button with its role for the design system's button
+ * role audit (design system section 5.12); both replace actions are
+ * secondary, flat text with no fill or border at rest. */
+function withBtnRole(element: HTMLElement): HTMLElement {
+  element.dataset.btnRole = "secondary";
+  return element;
+}
+
 function button(
   commandId: string | null,
   label: string,
@@ -151,14 +159,18 @@ function buildFindPanel(view: EditorView): Panel {
     ),
     button("find.next", STRINGS.findNextLabel, "↓", () => findNext(view)),
     replaceInput,
-    button(null, STRINGS.replaceOneLabel, STRINGS.replaceOneLabel, () => {
-      replaceNext(view);
-      refreshCount();
-    }),
-    button(null, STRINGS.replaceAllLabel, STRINGS.replaceAllLabel, () => {
-      replaceAll(view);
-      refreshCount();
-    }),
+    withBtnRole(
+      button(null, STRINGS.replaceOneLabel, STRINGS.replaceOneLabel, () => {
+        replaceNext(view);
+        refreshCount();
+      }),
+    ),
+    withBtnRole(
+      button(null, STRINGS.replaceAllLabel, STRINGS.replaceAllLabel, () => {
+        replaceAll(view);
+        refreshCount();
+      }),
+    ),
     button("find.close", STRINGS.findCloseLabel, "×", () => {
       closeSearchPanel(view);
       view.focus();
@@ -202,12 +214,16 @@ const findTheme = View.baseTheme({
     minWidth: "5em",
   },
   ".cm-skr-find-button": {
-    border: "1px solid var(--skr-border)",
+    border: "0",
     color: "var(--skr-text)",
-    backgroundColor: "var(--skr-surface)",
-    borderRadius: "4px",
+    backgroundColor: "transparent",
+    borderRadius: "0.25rem",
     padding: "1px 6px",
+    fontWeight: "600",
     cursor: "pointer",
+  },
+  ".cm-skr-find-button:hover": {
+    backgroundColor: "var(--skr-surface-subtle)",
   },
 });
 

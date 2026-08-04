@@ -4923,7 +4923,7 @@ describe("skribeum shell", () => {
     await $(".skr-properties-reveal").waitForExist({ timeout: 15000 });
     await browser.keys([modifierKey, "k"]);
     await $(".command-surface-dialog").waitForExist({ timeout: 5000 });
-    await browser.pause(140);
+    await waitForSurfaceEntrance(".command-surface-dialog");
 
     const measurements = await browser.execute(() => {
       const state = document.querySelector<HTMLElement>(".skr-header-overflow");

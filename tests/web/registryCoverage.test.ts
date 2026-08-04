@@ -53,7 +53,9 @@ const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
     "lib/UnifiedCommandSurface.svelte",
     "ARIA combobox pattern internal navigation",
   ],
+  ["lib/PropertiesPanel.svelte", "ARIA textbox pattern internal editing"],
   ["lib/SettingsView.svelte", "ARIA dialog pattern internal dismissal"],
+  ["lib/Statusline.svelte", "ARIA dialog pattern internal dismissal"],
   ["lib/Sheet.svelte", "ARIA modal dialog focus trapping and dismissal"],
   [
     "lib/editor/decorations/engine.ts",

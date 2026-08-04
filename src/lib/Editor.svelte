@@ -31,6 +31,7 @@ import {
   type Frontmatter,
   type FrontmatterValueType,
   parseFrontmatter,
+  propertyInsertion,
 } from "./editor/frontmatter";
 import { showInvisibleCharacters } from "./editor/invisibles";
 import { NoteSession } from "./editor/noteSession";
@@ -39,10 +40,17 @@ import {
   noteSourceExtensions,
 } from "./editor/syntaxPolicy";
 import { findExtension } from "./features/findPanel";
-import type {
-  FollowWikilinkOptions,
-  NoteViewState,
+import {
+  type FollowWikilinkOptions,
+  followWikilinkTarget,
+  type NoteViewState,
 } from "./features/navigation";
+import {
+  countCharacters,
+  countWords,
+  type EditorStatistics,
+  type PersistenceState,
+} from "./features/noteStatistics";
 import { selectionToolbar } from "./features/selectionToolbar";
 import {
   DEFAULT_SETTINGS,
@@ -63,6 +71,7 @@ import {
   noteWrite,
   readNote,
 } from "./ipc/vault";
+import { ASYNC_SKELETON_DELAY_MS } from "./loadingStates";
 import {
   enterMotionSurface,
   type PaneSwitchKind,
@@ -101,6 +110,8 @@ let {
   onDirtyChanged,
   onTitleVisibilityChange,
   onSaved,
+  onStatisticsChanged,
+  onPersistenceChanged,
   wikilinkNavigationOptions,
   tagAffordanceOptions,
 }: {
@@ -135,6 +146,10 @@ let {
   onTitleVisibilityChange?: (visible: boolean) => void;
   /** Notified after pending edits are written and indexed. */
   onSaved?: () => void;
+  /** Reports document, selection, and caret facts for the statusline. */
+  onStatisticsChanged?: (statistics: EditorStatistics) => void;
+  /** Reports the persistence-slot state of the section 4.16 statusline. */
+  onPersistenceChanged?: (state: PersistenceState) => void;
   /** Supplies the shared navigator capabilities for pointer activation. */
   wikilinkNavigationOptions?: () => FollowWikilinkOptions;
   /** Supplies vault tags and the existing search callback. */
@@ -186,6 +201,58 @@ const editorAppearance = EditorView.theme({
 const FRONTMATTER_SCAN_LIMIT = 16384;
 let frontmatter = $state<Frontmatter | null>(null);
 let propertiesExpanded = $state(defaultPropertiesExpanded());
+let addingProperty = $state(false);
+/**
+ * Bumped by every note initialization so the properties panel remounts:
+ * an arrival paints its recorded or default state in the first frame with
+ * no expand or collapse motion (section 6.4).
+ */
+let noteArrivalGeneration = $state(0);
+
+/** Word and character totals for the whole document, cached per change. */
+let documentWords = 0;
+let documentCharacters = 0;
+let statisticsFrame: number | undefined;
+
+function recomputeDocumentStatistics(): void {
+  if (view === undefined) return;
+  const text = view.state.doc.toString();
+  documentWords = countWords(text);
+  documentCharacters = countCharacters(text);
+}
+
+function publishStatistics(): void {
+  const target = view;
+  if (target === undefined || onStatisticsChanged === undefined) return;
+  const selection = target.state.selection.main;
+  const selectionWords = selection.empty
+    ? 0
+    : countWords(target.state.sliceDoc(selection.from, selection.to));
+  const line = target.state.doc.lineAt(selection.head);
+  onStatisticsChanged({
+    words: documentWords,
+    characters: documentCharacters,
+    selectionWords,
+    line: line.number,
+    column:
+      countCharacters(target.state.sliceDoc(line.from, selection.head)) + 1,
+  });
+}
+
+let statisticsRecountPending = false;
+
+function scheduleStatisticsRefresh(recount: boolean): void {
+  statisticsRecountPending = statisticsRecountPending || recount;
+  if (statisticsFrame !== undefined) return;
+  statisticsFrame = requestAnimationFrame(() => {
+    statisticsFrame = undefined;
+    if (statisticsRecountPending) {
+      statisticsRecountPending = false;
+      recomputeDocumentStatistics();
+    }
+    publishStatistics();
+  });
+}
 
 function defaultPropertiesExpanded(): boolean {
   return (
@@ -229,6 +296,42 @@ function refreshFrontmatter() {
  */
 function editFrontmatterValue(from: number, to: number, insert: string) {
   view?.dispatch({ changes: { from, to, insert } });
+}
+
+/** Appends one property line before the closing frontmatter fence. */
+function addFrontmatterProperty(key: string, value: string) {
+  if (view === undefined || frontmatter === null) return;
+  const insertion = propertyInsertion(frontmatter, key, value);
+  if (insertion !== null) {
+    view.dispatch({
+      changes: {
+        from: insertion.from,
+        to: insertion.from,
+        insert: insertion.insert,
+      },
+    });
+  }
+}
+
+/**
+ * Starts the add-property flow: the registered "Note: add property"
+ * command's route into the panel (section 4.15). A note without
+ * frontmatter gains an empty block first.
+ */
+export function startAddProperty(): void {
+  if (view === undefined || sourceMode || note?.readOnly === true) return;
+  if (frontmatter === null) {
+    view.dispatch({ changes: { from: 0, to: 0, insert: "---\n---\n" } });
+  }
+  propertiesExpanded = true;
+  addingProperty = true;
+}
+
+/** Follows a wikilink-shaped property value from the properties panel. */
+function followPanelWikilink(target: string) {
+  if (wikilinkNavigationOptions !== undefined) {
+    followWikilinkTarget(target, wikilinkNavigationOptions());
+  }
 }
 
 function applyLinkContext() {
@@ -498,7 +601,14 @@ function dispatchTransactions(
     notifyDirty();
     scheduleIdleSave();
   }
-  if (transactions.some((transaction) => transaction.docChanged)) {
+  const docChanged = transactions.some((transaction) => transaction.docChanged);
+  if (
+    docChanged ||
+    transactions.some((transaction) => transaction.selection !== undefined)
+  ) {
+    scheduleStatisticsRefresh(docChanged);
+  }
+  if (docChanged) {
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
     onDocChanged?.(target.state.doc.toString(), path);
@@ -616,6 +726,27 @@ function dispatchSessionChanges(changes: ChangeSet, fenceHistory = false) {
   if (fenceHistory) durableEditHistory?.fence();
 }
 
+/**
+ * The statusline persistence contract of section 4.16: silence while
+ * saved, "Saving…" only when a write outlives the section 5.10 grace, a
+ * persisting failure state until a later write succeeds.
+ */
+let persistenceGraceTimer: ReturnType<typeof setTimeout> | undefined;
+
+function reportPersistence(state: PersistenceState): void {
+  clearTimeout(persistenceGraceTimer);
+  persistenceGraceTimer = undefined;
+  onPersistenceChanged?.(state);
+}
+
+function beginPersistenceGrace(): void {
+  clearTimeout(persistenceGraceTimer);
+  persistenceGraceTimer = setTimeout(() => {
+    persistenceGraceTimer = undefined;
+    onPersistenceChanged?.({ kind: "saving" });
+  }, ASYNC_SKELETON_DELAY_MS);
+}
+
 async function performSave(): Promise<boolean> {
   if (
     view === undefined ||
@@ -634,12 +765,17 @@ async function performSave(): Promise<boolean> {
     // A conversion failure means the session state diverged from the
     // document; recover by re-reading the note.
     onWriteError?.(String(error));
+    reportPersistence({ kind: "failed", message: String(error) });
     await rereadAndReconcile();
     return false;
+  }
+  if (request !== null) {
+    beginPersistenceGrace();
   }
   try {
     await durableEditHistory?.flush();
     if (request === null) {
+      reportPersistence({ kind: "saved" });
       return true;
     }
     const result = await noteWrite(
@@ -652,8 +788,10 @@ async function performSave(): Promise<boolean> {
       try {
         session.commitSave(result.projection_hash);
         notifyDirty();
+        reportPersistence({ kind: "saved" });
         onSaved?.();
       } catch {
+        reportPersistence({ kind: "saved" });
         await rereadAndReconcile();
         return false;
       }
@@ -662,6 +800,7 @@ async function performSave(): Promise<boolean> {
       // back, surface the reconciliation state and re-read.
       session.rollbackSave();
       notifyDirty();
+      reportPersistence({ kind: "failed", message: STRINGS.conflictBanner });
       onConflict?.();
       await rereadAndReconcile();
       return false;
@@ -669,9 +808,10 @@ async function performSave(): Promise<boolean> {
   } catch (error) {
     session.rollbackSave();
     notifyDirty();
-    onWriteError?.(
-      error instanceof IpcError ? error.app.message : String(error),
-    );
+    const message =
+      error instanceof IpcError ? error.app.message : String(error);
+    reportPersistence({ kind: "failed", message });
+    onWriteError?.(message);
     return false;
   }
   return true;
@@ -836,6 +976,9 @@ async function rereadAndReconcile(): Promise<void> {
 function initializeForNote(current: LoadedNote | null) {
   clearTimeout(idleSaveTimer);
   removed = false;
+  noteArrivalGeneration += 1;
+  addingProperty = false;
+  reportPersistence({ kind: "saved" });
   propertiesExpanded =
     historyViewState?.propertiesExpanded ?? defaultPropertiesExpanded();
   if (current === null) {
@@ -845,6 +988,7 @@ function initializeForNote(current: LoadedNote | null) {
     replaceEditorState(doc, false);
     applyLinkContext();
     refreshFrontmatter();
+    scheduleStatisticsRefresh(true);
     scheduleTitleVisibilityRefresh();
     onDocChanged?.(view?.state.doc.toString() ?? doc, path);
     renderedPath = path;
@@ -857,6 +1001,7 @@ function initializeForNote(current: LoadedNote | null) {
     replaceEditorState(current.text, true);
     applyLinkContext();
     refreshFrontmatter();
+    scheduleStatisticsRefresh(true);
     scheduleTitleVisibilityRefresh();
     onDocChanged?.(view?.state.doc.toString() ?? current.text, path);
     renderedPath = path;
@@ -896,6 +1041,7 @@ function initializeForNote(current: LoadedNote | null) {
   notifyDirty();
   applyLinkContext();
   refreshFrontmatter();
+  scheduleStatisticsRefresh(true);
   scheduleTitleVisibilityRefresh();
   onDocChanged?.(view?.state.doc.toString() ?? text, path);
   renderedPath = path;
@@ -912,8 +1058,12 @@ onMount(() => {
   initializeForNote(note);
   return () => {
     clearTimeout(idleSaveTimer);
+    clearTimeout(persistenceGraceTimer);
     if (titleVisibilityFrame !== undefined) {
       cancelAnimationFrame(titleVisibilityFrame);
+    }
+    if (statisticsFrame !== undefined) {
+      cancelAnimationFrame(statisticsFrame);
     }
     view?.scrollDOM.removeEventListener(
       "scroll",
@@ -984,14 +1134,18 @@ $effect(() => {
   data-motion-entered="true"
   data-note-path={renderedPath}
 >
-  {#if !sourceMode && frontmatter !== null && frontmatter.entries.length > 0}
-    <PropertiesPanel
-      {frontmatter}
-      onEditValue={editFrontmatterValue}
-      noteIdentity={path}
-      bind:expanded={propertiesExpanded}
-    />
-  {/if}
+  {#key noteArrivalGeneration}
+    {#if !sourceMode && frontmatter !== null && (frontmatter.entries.length > 0 || addingProperty)}
+      <PropertiesPanel
+        {frontmatter}
+        onEditValue={editFrontmatterValue}
+        onAddProperty={addFrontmatterProperty}
+        onFollowWikilink={followPanelWikilink}
+        bind:expanded={propertiesExpanded}
+        bind:adding={addingProperty}
+      />
+    {/if}
+  {/key}
   <div
     class:skr-source-mode={sourceMode}
     class="editor min-h-0 flex-1"

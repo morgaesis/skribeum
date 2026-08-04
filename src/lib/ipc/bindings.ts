@@ -41,6 +41,12 @@ export const commands = {
 	 */
 	noteRead: (handle: VaultHandle, relPath: string, content: Channel<number[]>) => typedError<NoteContent, AppError>(__TAURI_INVOKE("note_read", { handle, relPath, content })),
 	/**
+	 *  Reads the creation and modification timestamps of one indexed note. The
+	 *  path resolves through the vault index exactly like `note_read`, so no
+	 *  unindexed path is ever statted.
+	 */
+	noteStat: (handle: VaultHandle, relPath: string) => typedError<NoteStat, AppError>(__TAURI_INVOKE("note_stat", { handle, relPath })),
+	/**
 	 *  Reads any indexed regular file without creating editor, reconciliation,
 	 *  or search-index state. This is the read path for render-only vault files.
 	 */
@@ -335,6 +341,23 @@ export type NoteRecovered = {
 	change_set: ByteRangeReplace[],
 	/**  Projection hash of the recovered buffer. */
 	projection_hash: string,
+};
+
+/**
+ *  Filesystem timestamps for one indexed note, serving the statusline's
+ *  last-edited segment and the note-info popover.
+ */
+export type NoteStat = {
+	/**
+	 *  Modification time in whole milliseconds since the Unix epoch, absent
+	 *  when the platform reports none.
+	 */
+	modified_ms: number | null,
+	/**
+	 *  Creation time in whole milliseconds since the Unix epoch, absent on
+	 *  filesystems that record none.
+	 */
+	created_ms: number | null,
 };
 
 /**  Vault and note selected for one operating-system open-with path. */

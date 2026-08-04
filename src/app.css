@@ -1301,6 +1301,11 @@ html body .settings-dialog {
   font-size: 11px;
 }
 
+/* The note-info sheet body (the narrow-viewport "Note statistics" route). */
+.skr-note-info-sheet {
+  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+}
+
 /* Desktop window chrome (design system section 4.13). WindowControls.svelte
    sets these custom properties from native window state; every property
    keeps its neutral default (no inset, full opacity, no border) so the

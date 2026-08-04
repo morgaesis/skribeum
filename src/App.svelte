@@ -45,6 +45,10 @@ import {
   openExternalLink,
 } from "./lib/features/navigation";
 import {
+  type EditorStatistics,
+  type PersistenceState,
+} from "./lib/features/noteStatistics";
+import {
   computeOutline,
   headingAtOrBefore,
   type OutlineEntry,
@@ -114,12 +118,14 @@ import {
   noteCreate,
   openVault,
   readNote,
+  readNoteStat,
   readVaultConfigFile,
   readVaultFile,
   vaultTree,
   watchSubscribe,
 } from "./lib/ipc/vault";
 import type { PaneSwitchKind } from "./lib/motion";
+import NoteInfo from "./lib/NoteInfo.svelte";
 import { resolveNoteTitle } from "./lib/noteTitles";
 import OutlinePanel from "./lib/OutlinePanel.svelte";
 import PanelDivider from "./lib/PanelDivider.svelte";
@@ -138,6 +144,7 @@ import ReadOnlyNote from "./lib/rendering/ReadOnlyNote.svelte";
 import { NARROW_BREAKPOINT_REM } from "./lib/responsive";
 import SettingsView from "./lib/SettingsView.svelte";
 import Sheet from "./lib/Sheet.svelte";
+import Statusline from "./lib/Statusline.svelte";
 import { STRINGS } from "./lib/strings";
 import TabStrip from "./lib/TabStrip.svelte";
 import {
@@ -214,6 +221,20 @@ let splitDragging = $state(false);
 let splitDropPaneId = $state<string | null>(null);
 let sidebarHeaderHovered = $state(false);
 let sidebarFocused = $state(false);
+/** Live editor facts for the statusline and note-info surfaces. */
+let editorStatistics = $state<EditorStatistics | null>(null);
+let persistenceState = $state<PersistenceState>({ kind: "saved" });
+/** Filesystem timestamps of the open note, when the platform serves them. */
+let noteTimes = $state<{
+  createdMs: number | null;
+  modifiedMs: number | null;
+} | null>(null);
+let noteTimesGeneration = 0;
+/** The transient center-slot statusline announcement (section 6.2). */
+let statuslineAnnouncement = $state<{ id: number; text: string } | null>(null);
+let nextAnnouncementId = 0;
+/** The note-info popover's open state, shared with the registered command. */
+let noteInfoOpen = $state(false);
 
 let nextBannerId = 0;
 // Journal-recovered deltas for notes that are not open yet, applied as
@@ -234,7 +255,7 @@ const macPlatform =
 
 /** The transient surface currently open (a registered overlay view id). */
 let activeOverlay = $state<string | null>(null);
-type SheetId = "file-tree" | "outline" | "overflow";
+type SheetId = "file-tree" | "outline" | "overflow" | "note-info";
 let activeSheet = $state<SheetId | null>(null);
 let narrowViewport = $state(false);
 let noteTitleVisible = $state(true);
@@ -370,6 +391,16 @@ $effect(() => {
   workspace.outlineCollapsed = !outlineOpen;
   void JSON.stringify(workspace);
   saveWorkspaceState(identity, workspace);
+});
+
+// With no note open the statusline renders empty and carries no state.
+$effect(() => {
+  if (note === null) {
+    noteTimes = null;
+    editorStatistics = null;
+    persistenceState = { kind: "saved" };
+    noteInfoOpen = false;
+  }
 });
 
 async function loadTreeTitles(handle: VaultHandle, entries: TreeEntry[]) {
@@ -1191,6 +1222,8 @@ function commandContext(): CommandContext {
     focusPane: focusWorkspacePaneDirection,
     moveTabToOtherPane: () => moveWorkspaceTabToOtherPane(),
     copyHeadingLink,
+    openNoteStatistics,
+    addProperty: () => editor?.startAddProperty(),
     toggleSourceMode: () => {
       if (note === null) {
         return false;
@@ -1684,12 +1717,65 @@ function dismissBanner(id: number) {
   banners = banners.filter((banner) => banner.id !== id);
 }
 
+/**
+ * Section 6.2 announcement routing: wide viewports use the statusline's
+ * center slot, narrow ones keep the status banner because the phone shell
+ * carries no statusline.
+ */
 function announceLinkCopied() {
+  if (!narrowViewport) {
+    nextAnnouncementId += 1;
+    statuslineAnnouncement = {
+      id: nextAnnouncementId,
+      text: STRINGS.linkCopied,
+    };
+    return;
+  }
   const id = pushBanner({ text: STRINGS.linkCopied, polite: true });
   transientBannerTimers.set(
     id,
     setTimeout(() => dismissBanner(id), 2000),
   );
+}
+
+/** Reads the open note's filesystem timestamps for the statusline. */
+async function refreshNoteTimes(handle: VaultHandle, path: string) {
+  const generation = ++noteTimesGeneration;
+  try {
+    const stat = await readNoteStat(handle, path);
+    if (noteTimesGeneration !== generation || selectedPath !== path) return;
+    noteTimes = { createdMs: stat.created_ms, modifiedMs: stat.modified_ms };
+  } catch {
+    if (noteTimesGeneration === generation) noteTimes = null;
+  }
+}
+
+/** Refreshes derived indexes and the last-edited fact after a note save. */
+function onEditorSaved() {
+  void refreshTagCatalog();
+  const currentVault = vault;
+  const path = selectedPath;
+  if (currentVault !== null && path !== null && hasDesktopRuntime()) {
+    void refreshNoteTimes(currentVault, path);
+  } else {
+    noteTimes = {
+      createdMs: noteTimes?.createdMs ?? null,
+      modifiedMs: Date.now(),
+    };
+  }
+}
+
+/**
+ * The registered "Note statistics" route: the statusline popover on wide
+ * viewports, a sheet with the same facts on narrow ones (section 4.16).
+ */
+function openNoteStatistics() {
+  if (selectedPath === null) return;
+  if (narrowViewport) {
+    openSheet("note-info");
+  } else {
+    noteInfoOpen = true;
+  }
 }
 
 function describeError(context: string, error: unknown): string {
@@ -2015,11 +2101,15 @@ async function openNote(
     currentNoteSource = loaded.text;
     sourceMode = false;
     note = loaded;
+    noteTimes = null;
+    editorStatistics = null;
+    persistenceState = { kind: "saved" };
     missingAddress = null;
     contentView = null;
     canvas = null;
     canvasError = null;
     selectedPath = path;
+    void refreshNoteTimes(currentVault, path);
     const pane = focusedWorkspacePane();
     ensurePaneTab(pane, path);
     pane.activePath = path;
@@ -2332,16 +2422,19 @@ function setEndToEndSelectionAtLineEnd(lineText: string): number | null {
 function setEndToEndSelectionFromLastMatch(
   sourceText: string,
   relativeOffset: number,
+  relativeSelectionLength = 0,
 ): number | null {
   const view = editor?.getView();
   if (view === undefined) return null;
   const start = view.state.doc.toString().lastIndexOf(sourceText);
   if (start < 0) return null;
-  const anchor = Math.max(
-    start,
-    Math.min(start + relativeOffset, view.state.doc.length),
+  const docLength = view.state.doc.length;
+  const anchor = Math.max(start, Math.min(start + relativeOffset, docLength));
+  const head = Math.max(
+    0,
+    Math.min(anchor + relativeSelectionLength, docLength),
   );
-  view.dispatch({ selection: { anchor }, scrollIntoView: true });
+  view.dispatch({ selection: { anchor, head }, scrollIntoView: true });
   view.focus();
   return anchor;
 }
@@ -2378,6 +2471,7 @@ function pollEndToEndVault() {
         __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
           sourceText: string,
           relativeOffset: number,
+          relativeSelectionLength?: number,
         ) => number | null;
       };
       target.__SKRIBEUM_E2E_OPEN_NOTE__ = (notePath) =>
@@ -2429,6 +2523,7 @@ onMount(() => {
     __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
       sourceText: string,
       relativeOffset: number,
+      relativeSelectionLength?: number,
     ) => number | null;
     __SKRIBEUM_E2E_VAULT__?: string;
     __SKRIBEUM_E2E_RESET_WORKSPACE__?: boolean;
@@ -3009,7 +3104,9 @@ onMount(() => {
                   onDocChanged={onEditorDocChanged}
                   onDirtyChanged={(dirty) => onEditorDirtyChanged(pane.id, pane.activePath, dirty)}
                   onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
-                  onSaved={() => void refreshTagCatalog()}
+                  onSaved={onEditorSaved}
+                  onStatisticsChanged={(statistics) => (editorStatistics = statistics)}
+                  onPersistenceChanged={(state) => (persistenceState = state)}
                   {wikilinkNavigationOptions}
                   {tagAffordanceOptions}
                 />
@@ -3081,6 +3178,18 @@ onMount(() => {
       </div>
     {/if}
   </main>
+  {#if !narrowViewport}
+    <Statusline
+      path={note !== null ? selectedPath : null}
+      createdMs={noteTimes?.createdMs ?? null}
+      modifiedMs={noteTimes?.modifiedMs ?? null}
+      statistics={editorStatistics}
+      {sourceMode}
+      persistence={persistenceState}
+      announcement={statuslineAnnouncement}
+      bind:infoOpen={noteInfoOpen}
+    />
+  {/if}
 </div>
 
 {#if activeSheet === "file-tree" && vault !== null}
@@ -3110,6 +3219,17 @@ onMount(() => {
       }}
       touchMode={true}
     />
+  </Sheet>
+{:else if activeSheet === "note-info"}
+  <Sheet label={STRINGS.noteInfoLabel} onClose={closeSheet} restoreFocus={false}>
+    <div class="skr-note-info-sheet">
+      <NoteInfo
+        path={note !== null ? selectedPath : null}
+        createdMs={noteTimes?.createdMs ?? null}
+        modifiedMs={noteTimes?.modifiedMs ?? null}
+        statistics={editorStatistics}
+      />
+    </div>
   </Sheet>
 {:else if activeSheet === "overflow"}
   <Sheet

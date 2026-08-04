@@ -190,6 +190,10 @@ impl FileSystem for RealFs {
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .unwrap_or(Duration::ZERO);
+        let created = meta
+            .created()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok());
         // Permission mode bits are exposed on Unix only.
         #[cfg(unix)]
         let mode = {
@@ -201,6 +205,7 @@ impl FileSystem for RealFs {
         Ok(FileMetadata {
             size: meta.len(),
             mtime,
+            created,
             is_dir: meta.is_dir(),
             mode,
         })

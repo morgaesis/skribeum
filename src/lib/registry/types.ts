@@ -86,6 +86,10 @@ export type CommandContext = {
   copyHeadingLink?(heading?: string): Promise<void>;
   /** Toggles the active note's transient whole-document source presentation. */
   toggleSourceMode?(): boolean;
+  /** Opens the note-statistics surface for the active note. */
+  openNoteStatistics?(): void;
+  /** Starts the add-property flow in the active note's properties panel. */
+  addProperty?(): void;
   /** Task marker selected when a command surface opened, if any. */
   taskStatusMarkerFrom?: number | null;
   /** Applies one persisted desktop webview zoom action. */

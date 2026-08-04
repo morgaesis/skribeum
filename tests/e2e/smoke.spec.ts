@@ -1578,7 +1578,9 @@ describe("skribeum shell", () => {
     expect(await $("[data-testid=note-title]").getText()).toBe(
       "A room for reading",
     );
-    expect(await $(".skr-properties-path").getText()).toBe(VISUAL_NOTE_NAME);
+    // The compact header of section 4.15 carries the caps label and the
+    // property count; note identity lives in the title region and tree.
+    expect(await $(".skr-properties-count").getText()).toBe("4");
     expect(await $("[data-testid=source-mode-chip]").isExisting()).toBe(false);
 
     await browser.keys([modifierKey, "e"]);

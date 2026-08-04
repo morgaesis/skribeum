@@ -210,10 +210,14 @@ describe("file tree, previews, panels, and workspace tabs", () => {
         .isExisting(),
     ).toBe(true);
     await pointerMenu.$('[data-command-id="tree.note.copy-link"]').click();
-    const copied = $('aside[role="status"]');
+    // Wide viewports announce in the statusline's center slot (section
+    // 6.2); the banner strip is the narrow-viewport route.
+    const copied = $(
+      '[data-testid="statusline-announcements"] .skr-statusline-announcement',
+    );
     await copied.waitForDisplayed({ timeout: 10000 });
     expect(await copied.getText()).toContain("Link copied");
-    await copied.$("button").click();
+    await copied.waitForExist({ reverse: true, timeout: 10000 });
 
     await browser.execute(
       (element) => (element as HTMLElement).focus(),
@@ -240,7 +244,9 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await browser.keys(Key.ArrowDown);
     await browser.keys(Key.ArrowDown);
     await browser.keys(Key.Enter);
-    const keyboardCopied = $('aside[role="status"]');
+    const keyboardCopied = $(
+      '[data-testid="statusline-announcements"] .skr-statusline-announcement',
+    );
     await keyboardCopied.waitForDisplayed({ timeout: 10000 });
     expect(await keyboardCopied.getText()).toContain("Link copied");
   });
@@ -359,8 +365,12 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       },
     );
     expect(restoredDividerValues).toEqual({ sidebar: "24", outline: "20" });
+    // The tree can still be mid-rebuild immediately after the divider
+    // values restore (both read from the same reload, but the tree waits
+    // on the vault re-open round trip); give it a more generous budget
+    // than a settled-state check needs.
     await $(`[data-path="${TREE_FIRST_NOTE_NAME}"]`).waitForExist({
-      timeout: 10000,
+      timeout: 20000,
     });
     const restored = $('[role="separator"][aria-label="Resize sidebar"]');
 
@@ -567,10 +577,23 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       async () => (await $$(".skr-editor-pane").length) === 2,
       { timeoutMsg: "split command did not create a second pane" },
     );
-    const beforeReload = (await workspaceSnapshot()) as {
+    // The DOM reflects the new pane before the workspace snapshot persists
+    // to localStorage, so poll rather than reading it once immediately
+    // after the pane count settles.
+    let beforeReload: {
       panes: Array<{ history: unknown[]; tabs: unknown[] }>;
       focusedPaneId: string;
-    };
+    } | null = null;
+    await browser.waitUntil(
+      async () => {
+        beforeReload = (await workspaceSnapshot()) as typeof beforeReload;
+        return beforeReload !== null && beforeReload.panes.length === 2;
+      },
+      { timeoutMsg: "workspace snapshot did not persist the second pane" },
+    );
+    if (beforeReload === null) {
+      throw new Error("workspace snapshot is unexpectedly null");
+    }
     expect(beforeReload.panes).toHaveLength(2);
     expect(beforeReload.panes.every((pane) => pane.history.length > 0)).toBe(
       true,

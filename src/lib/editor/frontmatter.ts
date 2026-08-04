@@ -282,6 +282,54 @@ export function parseFrontmatter(text: string): Frontmatter | null {
   };
 }
 
+export type WikilinkValue = {
+  /** The link target, fragment included when authored. */
+  target: string;
+  /** The display text: the alias when authored, the target otherwise. */
+  label: string;
+};
+
+/**
+ * Reads a property value shaped as a single wikilink. The panel renders
+ * such values as links (section 4.15); anything else stays text.
+ */
+export function wikilinkValue(raw: string): WikilinkValue | null {
+  const match = /^"?\[\[([^[\]|]+)(?:\|([^[\]]+))?\]\]"?$/.exec(raw);
+  if (match === null || match[1] === undefined) {
+    return null;
+  }
+  const target = match[1].trim();
+  if (target.length === 0) {
+    return null;
+  }
+  return { target, label: match[2]?.trim() || target };
+}
+
+/**
+ * Computes the single-range insertion that appends one property line
+ * before the closing fence. Returns null for an unusable key.
+ */
+export function propertyInsertion(
+  frontmatter: Frontmatter,
+  key: string,
+  value: string,
+): { from: number; insert: string } | null {
+  const cleanKey = key
+    .trim()
+    .replace(/[\s:]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (cleanKey.length === 0) {
+    return null;
+  }
+  const cleanValue = value.trim().replace(/[\r\n]+/g, " ");
+  // The closing fence line is exactly three characters ("---" or "..."),
+  // and `frontmatter.to` is its end, so the line starts three earlier.
+  return {
+    from: frontmatter.to - 3,
+    insert: `${cleanKey}: ${cleanValue}\n`,
+  };
+}
+
 /**
  * Applies declared Obsidian property types over the inferred ones. The
  * declared type wins only when the raw value can actually edit as that

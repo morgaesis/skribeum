@@ -9,6 +9,7 @@ import { registerFind } from "./findPanel";
 import { registerFormatting } from "./formattingCommands";
 import { registerInsertions } from "./insertions";
 import { registerNavigation } from "./navigation";
+import { registerNoteStatistics } from "./noteStatistics";
 import { registerSettingActions } from "./settingsCatalog";
 import { registerSlashMenu } from "./slashMenu";
 import { registerSourceMode } from "./sourceMode";
@@ -34,6 +35,7 @@ export function createAppRegistry(
   registerSlashMenu(registry);
   registerSourceMode(registry);
   registerNavigation(registry);
+  registerNoteStatistics(registry);
   registerWorkspaceCommands(registry, desktop);
   registerTableEditing(registry);
   registerTaskStatusCommands(registry, taskStatuses);

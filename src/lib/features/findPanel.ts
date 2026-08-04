@@ -201,12 +201,18 @@ const findTheme = View.baseTheme({
     padding: "4px",
   },
   ".cm-skr-find-input": {
-    border: "1px solid var(--skr-border)",
+    // The section 5.12 palette-field treatment: a flat text field with a
+    // 1px bottom rule only, never a boxed outline.
+    border: "0",
+    borderBottom: "1px solid var(--skr-border)",
     color: "var(--skr-text)",
     backgroundColor: "var(--skr-surface-raised)",
-    borderRadius: "4px",
+    borderRadius: "0",
     padding: "1px 6px",
     font: "inherit",
+  },
+  ".cm-skr-find-input:focus-visible": {
+    borderBottomColor: "var(--skr-border-strong)",
   },
   ".cm-skr-find-count": {
     fontSize: "0.85em",
@@ -217,7 +223,7 @@ const findTheme = View.baseTheme({
     border: "0",
     color: "var(--skr-text)",
     backgroundColor: "transparent",
-    borderRadius: "0.25rem",
+    borderRadius: "var(--skr-radius-control)",
     padding: "1px 6px",
     fontWeight: "600",
     cursor: "pointer",

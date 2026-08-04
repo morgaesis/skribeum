@@ -42,7 +42,7 @@ body {
 *::-webkit-scrollbar-thumb {
   min-height: 2.5rem;
   border: 2px solid transparent;
-  border-radius: 0.3125rem;
+  border-radius: var(--skr-radius-control);
   background-clip: content-box;
   background-color: var(--skr-border);
   transition: background-color var(--skr-motion-state-duration)
@@ -173,7 +173,7 @@ select {
   min-height: 2rem;
   place-items: center;
   border: 0;
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
   padding: 0;
   background: transparent;
   color: var(--skr-text-muted);
@@ -248,7 +248,7 @@ select {
   height: 1.5rem;
   place-items: center;
   border: 0;
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
   padding: 0;
   color: var(--skr-text-muted);
   background: transparent;
@@ -339,7 +339,7 @@ select {
   display: flex;
   align-items: center;
   overflow: hidden;
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
   color: var(--skr-text);
   cursor: pointer;
   white-space: nowrap;
@@ -436,7 +436,7 @@ select {
   margin-left: auto;
   place-items: center;
   border: 0;
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
   padding: 0;
   color: var(--skr-text-muted);
   background: var(--skr-surface);
@@ -462,7 +462,7 @@ select {
   display: grid;
   min-width: 10rem;
   border: 1px solid var(--skr-border);
-  border-radius: 0.375rem;
+  border-radius: var(--skr-radius-surface);
   padding: 0.25rem;
   background: var(--skr-surface-raised);
   box-shadow: var(--skr-shadow);
@@ -616,7 +616,7 @@ select {
   margin-left: auto;
   place-items: center;
   border: 0;
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
   padding: 0;
   color: var(--skr-text-muted);
   background: transparent;
@@ -628,7 +628,10 @@ select {
   height: 0.375rem;
   min-width: 0.375rem;
   margin-inline: 0.3125rem;
-  border-radius: 50%;
+  /* Larger than half the dot's own box, so the browser clips it to a full
+     circle while the specified value still belongs to the section 5.12
+     radius scale. */
+  border-radius: var(--skr-radius-control);
   background: var(--skr-accent);
 }
 
@@ -697,7 +700,7 @@ select {
   max-height: 20rem;
   overflow-y: auto;
   border: 1px solid var(--skr-border);
-  border-radius: 0.375rem;
+  border-radius: var(--skr-radius-surface);
   padding: 0.25rem;
   background: var(--skr-surface-raised);
   box-shadow: var(--skr-shadow);
@@ -710,7 +713,9 @@ select {
   align-items: center;
   gap: 0.35rem;
   border: 0;
-  border-radius: 0.25rem;
+  /* Overflow-menu rows are flat full-width rows: no rounded row cards
+     (design system section 5.12). */
+  border-radius: 0;
   padding: 0.375rem 0.5rem;
   color: var(--skr-text);
   background: transparent;
@@ -778,7 +783,7 @@ select {
 
 .skr-source-chip {
   flex: none;
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
   padding: 0.25rem 0.375rem;
   background: var(--skr-surface-subtle);
   color: var(--skr-text-muted);
@@ -816,7 +821,9 @@ select {
   justify-content: space-between;
   min-height: 2.75rem;
   border: 0;
-  border-radius: 0.375rem;
+  /* Overflow-menu rows are flat full-width rows: no rounded row cards
+     (design system section 5.12). */
+  border-radius: 0;
   padding: 0.625rem 0.75rem;
   background: transparent;
   text-align: start;
@@ -846,7 +853,7 @@ select {
 .skr-action-menu kbd {
   flex: none;
   border: 1px solid var(--skr-border);
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
   padding: 0.125rem 0.25rem;
   color: var(--skr-text-muted);
   font-family: var(--skr-font-interface);
@@ -897,7 +904,7 @@ html body .settings-dialog {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 0.375rem;
+  border-radius: var(--skr-radius-surface);
   padding: 0.5rem 0.875rem;
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
@@ -927,7 +934,7 @@ html body .settings-dialog {
 .skr-btn-secondary,
 .skr-btn-destructive {
   background: transparent;
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
 }
 
 .skr-btn-secondary:hover {
@@ -1059,7 +1066,7 @@ html body .settings-dialog {
   display: block;
   width: 100%;
   height: 0.875em;
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
   background: var(--skr-border);
   animation: skr-loading-pulse var(--skr-loading-pulse-duration) linear infinite
     alternate;
@@ -1281,7 +1288,7 @@ html body .settings-dialog {
   align-items: center;
   gap: 0.375rem;
   border: 1px solid var(--skr-border);
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
   padding: 0.25rem 0.375rem;
   color: var(--skr-text);
   background: var(--skr-surface-raised);
@@ -1294,7 +1301,7 @@ html body .settings-dialog {
 
 .skr-command-tooltip kbd {
   border: 0;
-  border-radius: 0.25rem;
+  border-radius: var(--skr-radius-control);
   padding: 0.125rem 0.25rem;
   background: var(--skr-surface-subtle);
   font-family: var(--skr-font-mono);

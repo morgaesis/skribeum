@@ -328,7 +328,7 @@ export function focus() {
     gap: 0.25rem;
     padding: 0.25rem;
     border: 1px solid var(--skr-border);
-    border-radius: 0.55rem;
+    border-radius: var(--skr-radius-surface);
     background: var(--skr-surface-raised);
     box-shadow: var(--skr-shadow);
   }
@@ -336,7 +336,7 @@ export function focus() {
     min-width: 2rem;
     min-height: 2rem;
     border: 0;
-    border-radius: 0.25rem;
+    border-radius: var(--skr-radius-control);
     background: transparent;
     color: var(--skr-text);
   }
@@ -384,7 +384,7 @@ export function focus() {
     box-sizing: border-box;
     overflow: auto;
     border: 2px solid var(--canvas-node-color);
-    border-radius: 0.6rem;
+    border-radius: var(--skr-radius-surface);
     background: var(--skr-surface-raised);
     box-shadow: var(--skr-shadow);
   }

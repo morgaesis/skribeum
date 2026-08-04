@@ -1,11 +1,13 @@
 <script lang="ts">
 import { onMount } from "svelte";
 import Skribeum from "../src/App.svelte";
+import { formatString } from "../src/lib/strings";
 import {
   demoVaultStatus,
   localFolderAccessSupported,
   subscribeDemoVaultStatus,
 } from "./lib/ipc/vault";
+import { DEMO_STRINGS } from "./lib/strings";
 import { DEMO_INITIAL_NOTE } from "./lib/vault/seed";
 
 let noticeVisible = $state(true);
@@ -13,7 +15,7 @@ let sourceStatus = $state(demoVaultStatus());
 const folderAccessSupported = localFolderAccessSupported();
 const unsupportedReason = folderAccessSupported
   ? null
-  : "This browser does not support local folder access.";
+  : DEMO_STRINGS.folderAccessUnsupported;
 const initialEmptyVaultDemo =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).has("empty-vault");
@@ -23,15 +25,21 @@ const storageMessage = $derived.by(() => {
     const skipped =
       sourceStatus.skipped === 0
         ? ""
-        : ` ${sourceStatus.skipped} unreadable file${sourceStatus.skipped === 1 ? " was" : "s were"} skipped.`;
-    if (sourceStatus.writes === "folder") {
-      return `Reading Markdown from “${sourceStatus.name}”. Edits are written to that folder using the browser permission you granted.${skipped}`;
-    }
-    return `Reading Markdown from “${sourceStatus.name}”. Write permission is unavailable, so edits stay in browser memory and are lost on reload.${skipped}`;
+        : formatString(
+            sourceStatus.skipped === 1
+              ? DEMO_STRINGS.storageSkippedSingular
+              : DEMO_STRINGS.storageSkippedPlural,
+            { count: sourceStatus.skipped },
+          );
+    const template =
+      sourceStatus.writes === "folder"
+        ? DEMO_STRINGS.storageFolderWritable
+        : DEMO_STRINGS.storageFolderReadOnly;
+    return formatString(template, { name: sourceStatus.name }) + skipped;
   }
   return folderAccessSupported
-    ? "The sample vault stays in browser memory until you open a folder. Sample edits are lost on reload."
-    : "This browser does not support local folder access. The sample vault stays in browser memory, and edits are lost on reload.";
+    ? DEMO_STRINGS.storageSampleSupported
+    : DEMO_STRINGS.storageSampleUnsupported;
 });
 
 onMount(() => subscribeDemoVaultStatus((next) => (sourceStatus = next)));
@@ -64,13 +72,17 @@ if (typeof window !== "undefined") {
 
 <div class="demo-shell">
   {#if noticeVisible}
-    <aside class="demo-notice" aria-label="Browser demo notice">
+    <aside
+      class="demo-notice"
+      aria-label={DEMO_STRINGS.noticeLabel}
+      role="status"
+      aria-live="polite"
+    >
       <div class="demo-notice__copy">
         <p>
-          This is a browser demo of the Skribeum editor surface. The product is
-          the desktop application where files on disk are the source of truth.
+          {DEMO_STRINGS.noticeBody}
           <a href="https://github.com/morgaesis/skribeum/releases"
-            >Download the desktop app</a
+            >{DEMO_STRINGS.downloadDesktopApp}</a
           >.
         </p>
         <p>{storageMessage}</p>
@@ -78,7 +90,7 @@ if (typeof window !== "undefined") {
       <button
         type="button"
         class="demo-notice__dismiss"
-        aria-label="Dismiss browser demo notice"
+        aria-label={DEMO_STRINGS.dismissNotice}
         onclick={() => {
           noticeVisible = false;
         }}
@@ -88,7 +100,7 @@ if (typeof window !== "undefined") {
     </aside>
   {/if}
   {#if !noticeVisible}
-    <aside class="demo-storage-status" aria-label="Browser storage status">
+    <aside class="demo-storage-status" aria-label={DEMO_STRINGS.storageStatusLabel}>
       {storageMessage}
     </aside>
   {/if}
@@ -111,20 +123,24 @@ if (typeof window !== "undefined") {
     background: var(--skr-canvas);
   }
 
+  /* Requantified per design system section 4.5: this notice is
+     informational, not an alert, so it never outranks the note beneath it.
+     A muted, hairline-bounded strip replaces the former full-width amber
+     block; the accent tokens match the persistent .demo-storage-status bar
+     below so the notice and its post-dismiss successor read as one system. */
   .demo-notice {
     position: relative;
     z-index: 20;
     display: flex;
     flex: none;
-    align-items: flex-start;
-    gap: 1rem;
+    align-items: center;
+    gap: 0.75rem;
     border-bottom: 1px solid var(--skr-border);
-    padding: 0.65rem 0.8rem 0.7rem 1rem;
-    background: var(--skr-warning-surface);
-    color: var(--skr-warning);
-    box-shadow: var(--skr-shadow);
-    font-size: 0.8125rem;
-    line-height: 1.45;
+    padding: 0.375rem 0.5rem 0.375rem 0.75rem;
+    background: var(--skr-accent-subtle);
+    color: var(--skr-accent);
+    font-size: 0.75rem;
+    line-height: 1.4;
   }
 
   .demo-notice__copy {
@@ -137,34 +153,32 @@ if (typeof window !== "undefined") {
   }
 
   .demo-notice p + p {
-    margin-top: 0.2rem;
-    font-weight: 600;
+    margin-top: 0.15rem;
   }
 
   .demo-notice a {
     color: inherit;
-    font-weight: 700;
+    font-weight: 600;
     text-underline-offset: 0.16em;
   }
 
   .demo-notice__dismiss {
     display: grid;
-    width: 2.75rem;
-    height: 2.75rem;
+    width: 2rem;
+    height: 2rem;
     flex: none;
     place-items: center;
-    border: 1px solid transparent;
-    border-radius: 0.375rem;
+    border: 0;
+    border-radius: var(--skr-radius-control);
     background: transparent;
     color: inherit;
     cursor: pointer;
-    font-size: 1.35rem;
+    font-size: 1.1rem;
     line-height: 1;
   }
 
   .demo-notice__dismiss:hover {
-    border-color: color-mix(in srgb, currentColor 35%, transparent);
-    background: color-mix(in srgb, currentColor 8%, transparent);
+    background: color-mix(in srgb, currentColor 15%, transparent);
   }
 
   .demo-notice__dismiss:focus-visible {
@@ -194,6 +208,14 @@ if (typeof window !== "undefined") {
     .demo-notice {
       padding-left: 0.75rem;
       font-size: 0.75rem;
+    }
+
+    /* The section 4.6 touch-target floor: 2.75rem (44 CSS pixels) in both
+       dimensions on narrow viewports, where reachability is the binding
+       constraint rather than prominence. */
+    .demo-notice__dismiss {
+      width: 2.75rem;
+      height: 2.75rem;
     }
   }
 </style>

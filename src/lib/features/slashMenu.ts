@@ -299,12 +299,12 @@ const slashTheme = View.baseTheme({
     color: "var(--skr-text)",
     backgroundColor: "var(--skr-surface-raised)",
     border: "1px solid var(--skr-border)",
-    borderRadius: "6px",
+    borderRadius: "var(--skr-radius-surface)",
     boxShadow: "var(--skr-shadow)",
   },
   ".cm-skr-slash-option": {
     padding: "2px 8px",
-    borderRadius: "4px",
+    borderRadius: "var(--skr-radius-control)",
     cursor: "pointer",
   },
   ".cm-skr-slash-option-active": {

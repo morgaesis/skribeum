@@ -262,6 +262,9 @@ function bindMaximizeButtonRef(node: HTMLButtonElement, isMaximize: boolean) {
     width: 2.875rem;
     height: 100%;
     border: 0;
+    /* Caption buttons are edge controls and bleed to the window edge; the
+       section 5.12 radius scale does not apply (section 4.13, the one
+       named exemption). */
     border-radius: 0;
     padding: 0;
     background: transparent;

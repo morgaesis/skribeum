@@ -82,6 +82,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   application and the browser demo regardless of which element has focus,
   instead of falling through to the browser's own find bar before the editor
   gains focus.
+- The browser demo's notice no longer renders as a full-width amber alert
+  block outranking the note beneath it. It is now a muted, hairline-bounded
+  strip sharing the accent-subtle treatment of the persistent storage status
+  bar it hands off to, at roughly three-quarters the vertical footprint,
+  still dismissible and still readable.
 
 ### Changed
 
@@ -96,6 +101,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   secondary as flat text, and destructive as danger text. No labelled button
   draws a border at rest, and at most one primary button appears per dialog,
   empty state, or footer.
+- A three-value radius scale governs every rounded surface in the product:
+  0.25rem for controls and chips, 0.375rem for floating surfaces and content
+  blocks, 0.75rem for dialogs and sheets. Text inputs, the settings search,
+  and slider readouts in entry mode de-box to flat fields with a bottom rule;
+  segmented controls and the stepper lose their outer frame in favor of
+  hairline separators between options; overflow-menu and settings-jump-menu
+  rows flatten to full-width rows with no rounded row card. Only the
+  checkbox, the toggle switch, and the Windows and Linux caption buttons keep
+  geometry outside the scale, each specified elsewhere in the design system.
 - The file tree uses display titles, collision suffixes, authored note icons,
   indent guides, persistent expansion, a vault header, drag moves, and
   pointer, keyboard, context-menu, and touch routes to registered row actions.

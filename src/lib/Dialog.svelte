@@ -229,7 +229,7 @@ onDestroy(() => {
     overflow-y: auto;
     box-sizing: border-box;
     border: 1px solid var(--skr-border);
-    border-radius: 0.75rem;
+    border-radius: var(--skr-radius-dialog);
     padding: 1.25rem;
     background: var(--skr-surface-raised);
     box-shadow: var(--skr-shadow);
@@ -254,10 +254,13 @@ onDestroy(() => {
   }
 
   .skr-dialog-input {
+    /* De-boxed per design system section 5.12: a flat field with a bottom
+       rule only, never a boxed outline. */
     box-sizing: border-box;
     width: 100%;
-    border: 1px solid var(--skr-border-strong);
-    border-radius: 0.375rem;
+    border: 0;
+    border-bottom: 1px solid var(--skr-border);
+    border-radius: 0;
     padding: 0.5rem 0.625rem;
     background: var(--skr-surface);
     color: var(--skr-text);
@@ -265,6 +268,7 @@ onDestroy(() => {
   }
 
   .skr-dialog-input:focus-visible {
+    border-bottom-color: var(--skr-border-strong);
     outline: 2px solid var(--skr-focus);
     outline-offset: 1px;
   }

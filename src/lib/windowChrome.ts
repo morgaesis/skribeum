@@ -116,20 +116,25 @@ export async function readWindowChromeState(): Promise<WindowChromeState> {
 
 /**
  * Subscribes to native window resize and focus-change events, calling
- * `onChange` with the freshly read state after each one. Returns an
- * unsubscribe function; a no-op unsubscribe is returned outside the
- * desktop runtime.
+ * `onChange` with the fields that changed. A resize can only change
+ * maximized or fullscreen state, so only those two are re-read (never
+ * focus); a focus change already carries its new value in the event
+ * payload, so it costs no round trip at all. Returns an unsubscribe
+ * function; a no-op unsubscribe is returned outside the desktop runtime.
  */
 export async function subscribeWindowChromeState(
-  onChange: (state: WindowChromeState) => void,
+  onChange: (next: Partial<WindowChromeState>) => void,
 ): Promise<() => void> {
   if (!hasDesktopRuntime()) return () => {};
   const window = getCurrentWindow();
-  const refresh = () => {
-    void readWindowChromeState().then(onChange);
-  };
-  const unlistenResized = await window.onResized(refresh);
-  const unlistenFocusChanged = await window.onFocusChanged(refresh);
+  const unlistenResized = await window.onResized(() => {
+    void Promise.all([window.isMaximized(), window.isFullscreen()]).then(
+      ([maximized, fullscreen]) => onChange({ maximized, fullscreen }),
+    );
+  });
+  const unlistenFocusChanged = await window.onFocusChanged((event) => {
+    onChange({ focused: event.payload });
+  });
   return () => {
     unlistenResized();
     unlistenFocusChanged();

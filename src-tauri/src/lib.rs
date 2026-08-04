@@ -667,8 +667,7 @@ pub fn run() {
             // instead and never install a menu bar.
             #[cfg(target_os = "macos")]
             {
-                menu::install(app.handle())
-                    .expect("failed to install the native application menu");
+                menu::install(app.handle()).expect("failed to install the native application menu");
                 app.on_menu_event(menu::handle_event);
             }
             Ok(())

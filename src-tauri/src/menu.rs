@@ -144,13 +144,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let menu = Menu::with_items(
         app,
-        &[
-            &app_menu,
-            &file_menu,
-            &edit_menu,
-            &view_menu,
-            &window_menu,
-        ],
+        &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu],
     )?;
     app.set_menu(menu)?;
     Ok(())

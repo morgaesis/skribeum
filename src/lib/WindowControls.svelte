@@ -86,7 +86,7 @@ onMount(() => {
     state = initial;
   });
   void subscribeWindowChromeState((next) => {
-    if (!disposed) state = next;
+    if (!disposed) state = { ...state, ...next };
   }).then((dispose) => {
     if (disposed) {
       dispose();

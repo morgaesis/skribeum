@@ -114,28 +114,40 @@ export async function readWindowChromeState(): Promise<WindowChromeState> {
   return { maximized, fullscreen, focused };
 }
 
+/** A resize sequence delivers many intermediate events while the pointer or
+ * the OS animates the change; maximized and fullscreen are discrete,
+ * infrequent transitions, not per-frame feedback, so re-reading them waits
+ * for the sequence to settle rather than round-tripping on every event. */
+const RESIZE_SETTLE_MS = 150;
+
 /**
  * Subscribes to native window resize and focus-change events, calling
  * `onChange` with the fields that changed. A resize can only change
  * maximized or fullscreen state, so only those two are re-read (never
- * focus); a focus change already carries its new value in the event
- * payload, so it costs no round trip at all. Returns an unsubscribe
- * function; a no-op unsubscribe is returned outside the desktop runtime.
+ * focus, and only after the resize settles); a focus change already
+ * carries its new value in the event payload, so it costs no round trip
+ * at all. Returns an unsubscribe function; a no-op unsubscribe is
+ * returned outside the desktop runtime.
  */
 export async function subscribeWindowChromeState(
   onChange: (next: Partial<WindowChromeState>) => void,
 ): Promise<() => void> {
   if (!hasDesktopRuntime()) return () => {};
   const window = getCurrentWindow();
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
   const unlistenResized = await window.onResized(() => {
-    void Promise.all([window.isMaximized(), window.isFullscreen()]).then(
-      ([maximized, fullscreen]) => onChange({ maximized, fullscreen }),
-    );
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      void Promise.all([window.isMaximized(), window.isFullscreen()]).then(
+        ([maximized, fullscreen]) => onChange({ maximized, fullscreen }),
+      );
+    }, RESIZE_SETTLE_MS);
   });
   const unlistenFocusChanged = await window.onFocusChanged((event) => {
     onChange({ focused: event.payload });
   });
   return () => {
+    clearTimeout(settleTimer);
     unlistenResized();
     unlistenFocusChanged();
   };

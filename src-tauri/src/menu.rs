@@ -12,7 +12,7 @@
 #[cfg(target_os = "macos")]
 use tauri::menu::{Menu, MenuEvent, MenuItemBuilder, SubmenuBuilder};
 #[cfg(target_os = "macos")]
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 #[cfg(target_os = "macos")]
 use tauri_specta::Event;
 
@@ -48,6 +48,11 @@ const MENU_COMMAND_IDS: &[&str] = &[
 ];
 
 /// Builds and installs the native macOS menu bar.
+///
+/// # Errors
+///
+/// Returns an error if the platform menu APIs fail to build or install any
+/// menu, submenu, or item.
 #[cfg(target_os = "macos")]
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let app_name = app.package_info().name.clone();
@@ -154,6 +159,10 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 /// other menu event (predefined items, unrecognized ids) is ignored here:
 /// predefined items are already fully handled natively before this runs.
 #[cfg(target_os = "macos")]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "App::on_menu_event requires exactly Fn(&AppHandle<R>, MenuEvent)"
+)]
 pub fn handle_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let command = event.id().0.clone();
     if MENU_COMMAND_IDS.contains(&command.as_str()) {

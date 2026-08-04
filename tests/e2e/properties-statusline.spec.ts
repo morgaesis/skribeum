@@ -590,24 +590,14 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
       async () => (await currentNotePath()) === PROPERTIES_NOTE_NAME,
       { timeout: 15000, timeoutMsg: "Back did not return to the note" },
     );
-    // The recorder above is what catches an intermediate expanded frame,
-    // so wait for the panel's own settled condition (collapsed, zero
-    // content height) rather than a duration guessed to outlast the
-    // motion: reading the recorded frames before the panel truly settles
-    // would cut off the observation window the recorder exists to cover.
-    await browser.waitUntil(
-      async () =>
-        (await toggle.getAttribute("aria-expanded")) === "false" &&
-        (await browser.execute(
-          () =>
-            document.querySelector<HTMLElement>(".skr-properties-content")
-              ?.offsetHeight ?? null,
-        )) === 0,
-      {
-        timeout: 5000,
-        timeoutMsg: "panel motion did not settle back to collapsed after Back",
-      },
-    );
+    // This pause is an observation window, not a wait for an arrival. The
+    // recorder below reports every frame it saw, and the assertion that it
+    // saw any frames at all is what proves the observation happened; a
+    // condition-based wait satisfies immediately when the panel arrives
+    // already collapsed, so the recorder would be read before it captured
+    // anything and the test would pass by observing nothing. The duration
+    // covers the 160ms panel-motion window of section 5.1 plus settling.
+    await browser.pause(500);
     const frames = await browser.execute(() => {
       const recorder = window as Window & {
         __PANEL_FRAMES__?: Array<{ expanded: string | null; height: number }>;

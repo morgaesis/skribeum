@@ -157,6 +157,8 @@ import {
 } from "./lib/themes/theme";
 import UnifiedCommandSurface from "./lib/UnifiedCommandSurface.svelte";
 import { bindVisualViewportCss } from "./lib/visualViewport";
+import WindowControls from "./lib/WindowControls.svelte";
+import { showWindowSystemMenu } from "./lib/windowChrome";
 import {
   defaultWorkspaceState,
   loadWorkspaceState,
@@ -311,7 +313,7 @@ function applySettings(documentSettings: SettingsState["document"]) {
         : "manuscript",
       dark_palette: isDarkPaletteName(documentSettings.dark_palette)
         ? documentSettings.dark_palette
-        : "lamplight",
+        : "nightroom",
       prose_font: isProseFontName(documentSettings.prose_font)
         ? documentSettings.prose_font
         : "serif",
@@ -2712,7 +2714,21 @@ onMount(() => {
   class="skr-shell flex h-screen flex-col overflow-hidden"
   inert={activeSheet !== null || activeOverlay !== null}
 >
-  <header class="skr-app-header border-b">
+  <!-- svelte-ignore a11y_no_static_element_interactions -- the header's
+       implicit role is already `banner`; the drag-region right-click opens
+       the desktop window menu (design system section 4.13), not a page
+       interaction. -->
+  <header
+    class="skr-app-header border-b"
+    data-tauri-drag-region={hasDesktopRuntime() && !narrowViewport
+      ? "deep"
+      : undefined}
+    oncontextmenu={(event) => {
+      if (!hasDesktopRuntime() || narrowViewport) return;
+      event.preventDefault();
+      void showWindowSystemMenu();
+    }}
+  >
     <div class="skr-header-leading">
       <h1 class="sr-only">{STRINGS.appTitle}</h1>
       {#if vault !== null && workspace.sidebarCollapsed}
@@ -2809,6 +2825,7 @@ onMount(() => {
           <circle cx="19" cy="12" r="1.75" />
         </svg>
       </button>
+      <WindowControls {registry} {commandContext} {narrowViewport} />
     </div>
   </header>
 
@@ -2913,10 +2930,11 @@ onMount(() => {
         <div class="skr-empty-vault">
           <button
             type="button"
-            class="skr-control rounded border px-3 py-2"
+            class="skr-btn-primary"
             disabled={openVaultDisabledReason !== null}
             title={openVaultDisabledReason ?? undefined}
             data-command-id="vault.open"
+            data-btn-role="primary"
             onclick={() => registry.run("vault.open", commandContext())}
           >
             {STRINGS.openVault}
@@ -3059,7 +3077,8 @@ onMount(() => {
                     <p>{STRINGS.noteNotFoundDesktop}</p>
                     <button
                       type="button"
-                      class="skr-control rounded border px-2 py-1"
+                      class="skr-btn-secondary"
+                      data-btn-role="secondary"
                       onclick={refreshMissingNote}
                     >
                       {STRINGS.noteNotFoundRefresh}

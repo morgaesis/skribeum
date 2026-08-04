@@ -305,7 +305,8 @@ function additionFocusout(event: FocusEvent) {
         {:else if onAddProperty !== undefined}
           <button
             type="button"
-            class="skr-properties-add"
+            class="skr-properties-add skr-btn-secondary"
+            data-btn-role="secondary"
             onclick={() => (adding = true)}
           >
             {STRINGS.propertiesAddProperty}
@@ -529,17 +530,22 @@ function additionFocusout(event: FocusEvent) {
   }
 
   /* The ghost add row: revealed by panel hover or focus, never the only
-     route (the registered command reaches the same flow). */
+     route (the registered command reaches the same flow). It carries the
+     secondary labelled-button role (section 5.12) for fill and weight, with
+     the row's own geometry overriding the role class's pill padding and
+     centering so it still reads as a compact 4.15 row, not a button. */
   .skr-properties-add {
     display: flex;
     min-height: 1.75rem;
     align-items: center;
+    justify-content: flex-start;
     border: 0;
     padding: 0;
     background: transparent;
     color: var(--skr-text-muted);
     font-family: inherit;
     font-size: 13px;
+    font-weight: 400;
     text-align: left;
     cursor: pointer;
     opacity: 0;

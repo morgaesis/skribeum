@@ -244,14 +244,14 @@ export const STRINGS = {
     "Choose one palette to apply its colours and light or dark appearance.",
   settingsPaletteManuscript: "Manuscript",
   settingsPaletteManuscriptDescription:
-    "Warm paper for light mode and warm charcoal for dark mode.",
+    "Paper and ink in light mode, Night Ink ground with a Jade accent in dark mode.",
   settingsPaletteStudio: "Studio",
   settingsPaletteStudioDescription:
     "Cool neutral surfaces with a clear blue accent.",
   settingsPaletteGazette: "Gazette",
   settingsPaletteGazetteDescription:
     "The highest-contrast pair, with a violet accent.",
-  settingsPaletteLamplight: "Lamplight",
+  settingsPaletteNightroom: "Nightroom",
   settingsPaletteGraphite: "Graphite",
   settingsPaletteSignal: "Signal",
   settingsPalettePreviewBeforeLink: "Notes read well in every ",
@@ -437,6 +437,9 @@ export const STRINGS = {
   navigationForward: "Forward",
   overflowMenuLabel: "More actions",
   commandPaletteLabel: "Command palette",
+  windowMinimize: "Minimize",
+  windowMaximizeOrRestore: "Maximize or restore",
+  windowClose: "Close",
   mobileFiles: "Files",
   mobileSearch: "Search",
   commandNavigateBack: "Navigate back",

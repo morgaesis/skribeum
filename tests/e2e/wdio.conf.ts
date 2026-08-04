@@ -164,6 +164,7 @@ export const config: WebdriverIO.Config = {
     path.join(configDirectory, "properties-statusline.spec.ts"),
     path.join(configDirectory, "smoke.spec.ts"),
     path.join(configDirectory, "unified-command-surface.spec.ts"),
+    path.join(configDirectory, "palette.spec.ts"),
   ],
   maxInstances: 1,
   // The embedded driver provider is the @wdio/tauri-service default: the app

@@ -24,7 +24,7 @@ export const DEFAULT_SETTINGS: SettingsDocument = {
   schema_version: 2,
   theme: "system",
   light_palette: "manuscript",
-  dark_palette: "lamplight",
+  dark_palette: "nightroom",
   prose_font: "serif",
   code_font: "modern",
   editor_font_size: 16,

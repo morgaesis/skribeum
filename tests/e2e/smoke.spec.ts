@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
+import "./windowChrome.spec";
 import "./workspace.spec";
 import {
   DEFAULT_SETTINGS,
@@ -1484,11 +1485,22 @@ describe("skribeum shell", () => {
       "skr-note-title-region",
       "skr-header-trailing",
     ]);
-    expect(header?.buttons.map((button) => button.label)).toEqual(["", "", ""]);
+    // macOS keeps its native traffic lights and draws no caption buttons
+    // (design system section 4.13); Windows and Linux draw three after the
+    // overflow button.
+    const captionButtonCount = process.platform === "darwin" ? 0 : 3;
+    expect(header?.buttons.map((button) => button.label)).toEqual(
+      Array(3 + captionButtonCount).fill(""),
+    );
+    const captionAriaLabels =
+      captionButtonCount === 0
+        ? []
+        : ["Minimize", "Maximize or restore", "Close"];
     expect(header?.buttons.map((button) => button.ariaLabel)).toEqual([
       "Back",
       "Forward",
       "More actions",
+      ...captionAriaLabels,
     ]);
     expect(await $("[data-testid=note-title]").getText()).toBe(
       "A room for reading",
@@ -6410,7 +6422,7 @@ describe("skribeum core editing surfaces", () => {
           appearance.codeFont === "modern" &&
           appearance.theme === "system" &&
           appearance.lightPalette === "manuscript" &&
-          appearance.darkPalette === "lamplight" &&
+          appearance.darkPalette === "nightroom" &&
           appearance.proseFont === "serif" &&
           typeof persisted !== "string" &&
           stableJson(persisted) === stableJson(expectedDefaults)
@@ -6864,11 +6876,11 @@ describe("skribeum core editing surfaces", () => {
           return (
             document.documentElement.dataset.theme === "system" &&
             document.documentElement.dataset.lightPalette === "manuscript" &&
-            document.documentElement.dataset.darkPalette === "lamplight" &&
+            document.documentElement.dataset.darkPalette === "nightroom" &&
             document.documentElement.dataset.proseFont === "serif" &&
             persisted.theme === "system" &&
             persisted.light_palette === "manuscript" &&
-            persisted.dark_palette === "lamplight" &&
+            persisted.dark_palette === "nightroom" &&
             persisted.prose_font === "serif"
           );
         }),

@@ -21,6 +21,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   persistence slot that surfaces slow and failed writes. Phones carry no
   statusline; the `Note statistics` command serves the same facts on every
   viewport.
+- The desktop window draws its own chrome: the header is the titlebar, with a
+  drag region, double-click-to-maximize, and a right-click window menu. macOS
+  keeps the native hidden-titlebar style with the traffic lights and menu bar;
+  Windows and Linux draw Minimize, Maximize or Restore, and Close caption
+  buttons. An unmaximized window keeps a 1px border, with an 8px corner radius
+  on Linux; every window dims its header to 60% opacity while unfocused.
 - Desktop undo and redo history persists across note switches and application
   restarts in a per-note application-data journal. External ingests and state
   mismatches fence older history, each replay restores its recorded selection,
@@ -54,6 +60,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The default dark palette, formerly Lamplight, is renamed Nightroom and
+  retuned to the brand's Night Ink ground with a Jade accent; the default
+  light palette Manuscript keeps its name and takes the brand's Spruce
+  accent. The former warm charcoal-and-amber dark palette is removed rather
+  than kept as an alternative, and a single fixed, mode-independent
+  `--skr-lamplight` token reserves the brand's actual Lamplight glow for a
+  future room-unlocked indicator.
+- Labelled buttons carry one of three roles: primary as an accent fill,
+  secondary as flat text, and destructive as danger text. No labelled button
+  draws a border at rest, and at most one primary button appears per dialog,
+  empty state, or footer.
 - The file tree uses display titles, collision suffixes, authored note icons,
   indent guides, persistent expansion, a vault header, drag moves, and
   pointer, keyboard, context-menu, and touch routes to registered row actions.

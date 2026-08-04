@@ -24,6 +24,21 @@ Source indicator, and one overflow button. The anchored overflow menu contains
 the command aliases, file tree, outline, in-note find, settings, note creation,
 saving, copy-link actions, navigation history, and vault opening.
 
+The desktop application draws its own window chrome: the wide-viewport header
+is the window titlebar. Dragging an empty area of the header moves the window
+with the platform's own move loop, double-clicking it toggles maximize, and
+right-clicking it opens a window menu. macOS keeps the native traffic lights,
+inset from the leading edge, and the native application menu bar, whose items
+run the same commands as every other surface. Windows and Linux draw Minimize,
+Maximize or Restore, and Close buttons at the trailing edge of the header, in
+that fixed order; the button maximizes and restores the window on click. The
+Windows 11 snap layouts flyout on hover needs native hit-testing this build
+does not add. An unmaximized window keeps a 1px border, with an 8px corner
+radius on
+Linux; both drop when the window is maximized or fullscreen. The header's
+title, icons, and caption glyphs dim to 60% opacity while the window is
+unfocused; note content never dims.
+
 The wide sidebar starts with the vault name, then a compact tree whose note
 rows use frontmatter titles or first-line headings and hide the default `.md`
 extension. Authored single-grapheme `icon` values appear only in the tree.

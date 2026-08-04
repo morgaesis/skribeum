@@ -28,6 +28,7 @@
     "zoom_set",
     "window_warmup",
     "window_ready",
+    "window_show_system_menu",
     "file_open_resolve",
     "open_files_take"
   ],
@@ -56,6 +57,7 @@
     "zoom_set": "Validates, persists, and applies one application zoom percentage to every webview window.",
     "window_warmup": "Lets Linux WebKit commit an offscreen frame without exposing the startup window.",
     "window_ready": "Applies persisted zoom and reveals a hidden or warmed window after the frontend reports its first painted frame.",
+    "window_show_system_menu": "Shows a system-style window menu (Minimize, Maximize or Restore, Close) at the pointer for the header drag region's right-click, built fresh from predefined menu items on every call.",
     "file_open_resolve": "Resolves an operating-system file-open path to a known vault or the file's containing folder.",
     "open_files_take": "Drains file-open paths queued by argv, second-instance forwarding, or native open-file events.",
     "plugin:dialog|confirm": "Shows the destructive-action confirmation before clearing one note's edit history.",

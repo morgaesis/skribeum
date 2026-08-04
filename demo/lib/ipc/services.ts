@@ -32,7 +32,7 @@ const DEFAULT_SETTINGS: SettingsDocument = {
   schema_version: 2,
   theme: "system",
   light_palette: "manuscript",
-  dark_palette: "lamplight",
+  dark_palette: "nightroom",
   prose_font: "serif",
   code_font: "modern",
   editor_font_size: 16,
@@ -61,7 +61,7 @@ const DEFAULT_SETTINGS: SettingsDocument = {
 };
 const THEMES = new Set(["system", "light", "dark"]);
 const LIGHT_PALETTES = new Set(["manuscript", "studio", "gazette"]);
-const DARK_PALETTES = new Set(["lamplight", "graphite", "signal"]);
+const DARK_PALETTES = new Set(["nightroom", "graphite", "signal"]);
 const PROSE_FONTS = new Set(["serif", "sans"]);
 const CODE_FONTS = new Set(["modern", "classic"]);
 const FONT_SIZE_RANGE = [8, 40] as const;
@@ -593,6 +593,10 @@ export async function zoomSet(_zoomPercent: number): Promise<number> {
 }
 
 export async function windowReady(_webviewMilliseconds: number): Promise<void> {
+  throw new Error(STRINGS.desktopWindowRequired);
+}
+
+export async function windowShowSystemMenu(): Promise<void> {
   throw new Error(STRINGS.desktopWindowRequired);
 }
 

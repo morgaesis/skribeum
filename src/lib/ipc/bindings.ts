@@ -107,6 +107,14 @@ export const commands = {
 	windowWarmup: () => typedError<null, AppError>(__TAURI_INVOKE("window_warmup")),
 	/**  Applies persisted zoom before revealing the first committed frontend render. */
 	windowReady: (webviewMs: number | null) => typedError<null, AppError>(__TAURI_INVOKE("window_ready", { webviewMs })),
+	/**
+	 *  Shows a system-style window menu (Minimize, Maximize or Restore, Close)
+	 *  at the pointer, for the header's drag-region right-click (design system
+	 *  section 4.13: "Right-clicking it opens the system window menu where the
+	 *  platform provides one"). Built fresh per call from predefined menu items
+	 *  so it always reflects the window's current state; nothing is cached.
+	 */
+	windowShowSystemMenu: () => typedError<null, AppError>(__TAURI_INVOKE("window_show_system_menu")),
 	/**  Resolves one operating-system open-with path against known vault roots. */
 	fileOpenResolve: (path: string) => typedError<OpenFileTarget, AppError>(__TAURI_INVOKE("file_open_resolve", { path })),
 	/**  Drains operating-system open-with paths queued by argv or open-file events. */
@@ -125,6 +133,7 @@ export const events = {
 	bulkDivergenceReview: makeEvent<BulkDivergenceReview>("bulk-divergence-review"),
 	externalNoteRemove: makeEvent<ExternalNoteRemove>("external-note-remove"),
 	externalNoteUpdate: makeEvent<ExternalNoteUpdate>("external-note-update"),
+	menuCommandInvoked: makeEvent<MenuCommandInvoked>("menu-command-invoked"),
 	noteRecovered: makeEvent<NoteRecovered>("note-recovered"),
 	openFilesAvailable: makeEvent<OpenFilesAvailable>("open-files-available"),
 	reconciliationBanner: makeEvent<ReconciliationBanner>("reconciliation-banner"),
@@ -284,6 +293,16 @@ export type ExternalNoteUpdate = {
 	projection_hash: string,
 	/**  Delta from the last projection to the new content. */
 	change_set: ByteRangeReplace[],
+};
+
+/**
+ *  A native macOS menu bar item registered against a command registry id was
+ *  clicked (design system section 4.13); the frontend runs the matching
+ *  command through the same registry every other surface uses.
+ */
+export type MenuCommandInvoked = {
+	/**  The command registry id carried by the clicked menu item. */
+	command: string,
 };
 
 /**

@@ -243,16 +243,28 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
     await title.waitForDisplayed({ timeout: 15000 });
     await title.click();
     // The caret sits in the value; the focused value carries the visible
-    // 1px edit-state bottom rule of section 5.12.
-    const focusedBorder = await browser.execute(() => {
-      const value = document.querySelector<HTMLElement>(
-        '.skr-property-editable[data-property-key="title"]',
-      );
-      if (!value || document.activeElement !== value) return null;
-      return getComputedStyle(value).borderBottomColor;
-    });
-    expect(focusedBorder).not.toBeNull();
-    expect(focusedBorder).not.toContain("rgba(0, 0, 0, 0)");
+    // 1px edit-state bottom rule of section 5.12. A WebDriver click's
+    // underlying focus assignment can land a tick after the click resolves
+    // on some drivers, so poll rather than reading computed style once.
+    let focusedBorder: string | null = null;
+    await browser.waitUntil(
+      async () => {
+        focusedBorder = await browser.execute(() => {
+          const value = document.querySelector<HTMLElement>(
+            '.skr-property-editable[data-property-key="title"]',
+          );
+          if (!value || document.activeElement !== value) return null;
+          return getComputedStyle(value).borderBottomColor;
+        });
+        return (
+          focusedBorder !== null && !focusedBorder.includes("rgba(0, 0, 0, 0)")
+        );
+      },
+      {
+        timeout: 5000,
+        timeoutMsg: "the focused value never carried the edit-state border",
+      },
+    );
 
     await browser.keys([modifierKey, "a"]);
     // Typed text reaches a contenteditable region through the element's own

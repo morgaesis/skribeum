@@ -158,6 +158,30 @@ describe("task status settings", () => {
     await unmount(component);
   });
 
+  it("toggles the section menu: a second click on the same trigger closes it", async () => {
+    const { component } = renderSettings();
+    const jump = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-jump"]',
+    );
+    expect(jump?.getAttribute("aria-expanded")).toBe("false");
+
+    jump?.click();
+    flushSync();
+    expect(
+      document.querySelector('[data-testid="settings-jump-menu"]'),
+    ).not.toBeNull();
+    expect(jump?.getAttribute("aria-expanded")).toBe("true");
+
+    jump?.click();
+    flushSync();
+    expect(
+      document.querySelector('[data-testid="settings-jump-menu"]'),
+    ).toBeNull();
+    expect(jump?.getAttribute("aria-expanded")).toBe("false");
+
+    await unmount(component);
+  });
+
   it("updates palette and link preview preferences", () => {
     const { component, updates } = renderSettings();
     document

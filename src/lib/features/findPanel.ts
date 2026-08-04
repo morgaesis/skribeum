@@ -237,8 +237,14 @@ export function registerFind(registry: CommandRegistry): void {
   registry.register({
     id: "find.open",
     title: STRINGS.commandFindInNote,
+    // Global, not editor-scoped: an editor-scoped binding only claims
+    // Mod-f while the CodeMirror content has DOM focus, so a browser (the
+    // demo build has no native menu accelerator standing in the way)
+    // still owns Mod-f whenever focus sits anywhere else, opening its own
+    // find bar instead of this one. The window-level global handler
+    // claims the key regardless of focus and still resolves the live
+    // editor view through the command context.
     keybindings: ["Mod-f"],
-    scope: "editor",
     pointer: ["action-menu", "command-palette"],
     run: (context) =>
       context.view === null ? false : openSearchPanel(context.view),

@@ -44,8 +44,17 @@ rows use frontmatter titles or first-line headings and hide the default `.md`
 extension. Authored single-grapheme `icon` values appear only in the tree.
 Folder chevrons, indent guides, selected-note reveal, and per-folder expansion
 state keep hierarchy visible. Hover or focus a row to open its registered
-Rename, Delete, Copy link, and desktop file-manager actions. Right-click,
-Shift+F10, the context-menu key, and touch hold open the same menu.
+Rename, Delete, Copy link, and desktop file-manager actions; activating the
+row's own trigger a second time closes the menu. Right-click, Shift+F10, the
+context-menu key, and touch hold open the same menu. Renaming or creating a
+note opens the application's own dialog rather than a browser prompt;
+deleting a vault entry, and every other destructive confirmation in the
+product, opens the same dialog with its destructive action styled apart from
+the safe default. Every dialog traps focus, closes on Escape, and returns
+focus to the control that opened it. A note's new name must end in `.md`,
+`.markdown`, or `.txt`, the extensions the vault treats as a note; a name
+outside that set is refused with the reason shown inline, so a rename can
+never leave a note the tree can no longer select or open.
 
 Opening a second note adds a tab strip. `ctrl+tab` and `ctrl+shift+tab` cycle
 tabs, `mod+w` closes one, `mod+shift+t` reopens it, and `mod+1` through `mod+9`
@@ -73,12 +82,18 @@ collapsed above the note. A frontmatter `title` supplies the display title,
 followed by a first-line H1 and then the file name. Narrow viewports carry no
 statusline; the `Note statistics` command serves the same facts there.
 
+`mod+f` opens in-note find and replace, claiming the key from the browser's
+own find bar on both the desktop application and the browser demo regardless
+of which element currently has focus. Escape closes the panel and returns
+focus to the editor, Enter and Shift-Enter step to the next and previous
+match, and the live match count is announced to assistive technology.
+
 Every visible control accepts pointer, touch, and keyboard activation. Tab and
-Shift+Tab stay inside an open modal sheet, Escape closes it, and focus returns
-to the control that opened it. On narrow viewports, the command surface anchors
-above the on-screen keyboard and scrolls its results internally. Keyboard
-shortcuts remain visible beside command results and in selection toolbar
-tooltips.
+Shift+Tab stay inside an open modal sheet or dialog, Escape closes it, and
+focus returns to the control that opened it. On narrow viewports, the command
+surface anchors above the on-screen keyboard and scrolls its results
+internally. Keyboard shortcuts remain visible beside command results and in
+selection toolbar tooltips.
 
 The desktop application zooms its complete webview with `mod++` and `mod+-`.
 `mod+0` returns to 100 percent. Zoom is stored from 50 to 200 percent in

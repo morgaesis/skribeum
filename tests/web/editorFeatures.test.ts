@@ -38,6 +38,7 @@ import {
   type CommandContext,
   type CommandRegistry,
   editorKeymap,
+  globalKeydownHandler,
 } from "../../src/lib/registry";
 
 const registry: CommandRegistry = createAppRegistry();
@@ -972,6 +973,39 @@ describe("table editing through the registry", () => {
 });
 
 describe("in-note find through the registry", () => {
+  it("claims Mod-f globally, so a browser find bar cannot win before the editor gains focus", () => {
+    activeView = makeView("beta beta beta\n", 0);
+    expect(searchPanelOpen(activeView.state)).toBe(false);
+
+    // Dispatched on an element the editor never sees, unlike a chord typed
+    // into the CodeMirror content: only a window-level, not editor-scope,
+    // binding reaches this.
+    const outsideElement = document.createElement("div");
+    document.body.append(outsideElement);
+    const event = new KeyboardEvent("keydown", {
+      key: "f",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    globalKeydownHandler(registry, context)(event);
+
+    expect(searchPanelOpen(activeView.state)).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
+    outsideElement.remove();
+  });
+
+  it("declines to claim Mod-f, leaving the browser default, when no note is open", () => {
+    activeView = undefined;
+    const event = new KeyboardEvent("keydown", {
+      key: "f",
+      ctrlKey: true,
+      cancelable: true,
+    });
+    globalKeydownHandler(registry, context)(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("opens the panel, counts matches, and replaces through the buffer", () => {
     const view = makeView("beta beta beta\n", 0);
     expect(searchPanelOpen(view.state)).toBe(false);

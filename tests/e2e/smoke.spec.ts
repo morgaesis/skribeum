@@ -151,6 +151,35 @@ async function dismissBannersForPath(name?: string) {
   }
 }
 
+/**
+ * Waits for a note switch's scroll and selection restoration to finish.
+ *
+ * Reopening a note the editor has visited before replays its saved caret
+ * and scroll offset (Editor.svelte's `replaceEditorState`), which spans up
+ * to two animation frames of `correctScrollOffset` corrections; the editor
+ * root carries an inline `visibility: hidden` style for that whole window.
+ * A test that reads or overwrites scroll position, selection, or focus
+ * immediately after the note-path attribute updates races that in-flight
+ * correction, which can silently revert the test's own scroll or focus
+ * change once it finally lands. Waiting on this visibility flag (the same
+ * signal the app itself gates arrival on) removes the race instead of
+ * guessing at a frame count.
+ */
+async function waitForEditorArrival(): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        () =>
+          document.querySelector<HTMLElement>(".cm-editor")?.style
+            .visibility !== "hidden",
+      ),
+    {
+      timeout: 10000,
+      timeoutMsg: "editor scroll and selection restoration did not settle",
+    },
+  );
+}
+
 async function openNoteFromTree(name: string) {
   const row = $(`[role="treeitem"][data-path="${name}"]`);
   await row.waitForExist({ timeout: 15000 });
@@ -180,7 +209,8 @@ async function openNoteFromTree(name: string) {
       timeoutMsg: `${name} did not become the active note`,
     });
   }
-  const renderedSurfaceSelector = name.toLowerCase().endsWith(".canvas")
+  const isCanvas = name.toLowerCase().endsWith(".canvas");
+  const renderedSurfaceSelector = isCanvas
     ? ".skr-editor-pane-focused .skr-pane-content"
     : ".skr-editor-pane-focused .skr-editor-shell";
   await browser.waitUntil(
@@ -197,6 +227,9 @@ async function openNoteFromTree(name: string) {
       timeoutMsg: `${name} did not finish rendering in the focused pane`,
     },
   );
+  if (!isCanvas) {
+    await waitForEditorArrival();
+  }
 }
 
 async function currentNotePath(): Promise<string | null> {
@@ -230,6 +263,9 @@ async function openNoteFromQuickSwitcher(name: string) {
   );
   await browser.keys(Key.Enter);
   await input.waitForExist({ reverse: true, timeout: 10000 });
+  if (!name.toLowerCase().endsWith(".canvas")) {
+    await waitForEditorArrival();
+  }
 }
 
 async function waitForSurfaceEntrance(selector: string) {
@@ -585,6 +621,11 @@ async function saveAndExpectTagCompletionTarget(expected: string) {
 }
 
 async function editorText(): Promise<string> {
+  // The rendered text only spans CodeMirror's virtualized viewport; a note
+  // switch that is still replaying its saved scroll (see
+  // waitForEditorArrival) can leave the target content outside that
+  // viewport until the restoration settles.
+  await waitForEditorArrival();
   return $(".skr-editor-pane-focused .cm-content").getText();
 }
 
@@ -644,6 +685,9 @@ async function waitForCapturedHistoryState(
 }
 
 async function editorDocumentText(): Promise<string> {
+  // See editorText: only rendered lines are queried, and the viewport can
+  // still be mid-restoration immediately after a note switch.
+  await waitForEditorArrival();
   return browser.execute(() =>
     [...document.querySelectorAll<HTMLElement>(".cm-line")]
       .map((line) => line.textContent ?? "")
@@ -3910,7 +3954,17 @@ describe("skribeum shell", () => {
     // move it; Enter opens the focused note.
     const firstTreeItem = $(`[role="treeitem"][data-path="${LF_NOTE_NAME}"]`);
     await firstTreeItem.click();
-    expect(await activeElementDescriptor()).toContain("treeitem");
+    // A synthesized click's resulting focus event is delivered by the
+    // native webview asynchronously; document.activeElement can briefly
+    // still read as body immediately after the click command resolves, so
+    // this polls for the condition rather than asserting on the first read.
+    await browser.waitUntil(
+      async () => (await activeElementDescriptor()).includes("treeitem"),
+      {
+        timeout: 5000,
+        timeoutMsg: "tree item did not receive focus after being clicked",
+      },
+    );
     const beforeArrow = await activeElementDescriptor();
     await browser.keys(Key.ArrowDown);
     const afterArrow = await activeElementDescriptor();

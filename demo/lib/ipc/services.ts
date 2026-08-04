@@ -7,6 +7,7 @@ import {
   validateTaskStatusDocuments,
 } from "../../../src/lib/taskStatuses";
 import type {
+  MaximizeButtonRect,
   OpenFileTarget,
   SearchHit,
   SettingsDoc,
@@ -597,6 +598,12 @@ export async function windowReady(_webviewMilliseconds: number): Promise<void> {
 }
 
 export async function windowShowSystemMenu(): Promise<void> {
+  throw new Error(STRINGS.desktopWindowRequired);
+}
+
+export async function windowSetMaximizeButtonRect(
+  _rect: MaximizeButtonRect | null,
+): Promise<void> {
   throw new Error(STRINGS.desktopWindowRequired);
 }
 

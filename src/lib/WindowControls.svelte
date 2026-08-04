@@ -21,8 +21,10 @@ import {
   headerForegroundOpacity,
   linuxWindowRadiusRem,
   macosLeadingInsetRem,
+  maximizeButtonRectFromDomRect,
   minimizeWindow,
   readWindowChromeState,
+  reportMaximizeButtonRect,
   showsCaptionButtons,
   showsWindowBorder,
   subscribeWindowChromeState,
@@ -40,7 +42,43 @@ const { registry, commandContext, narrowViewport }: Props = $props();
 
 const platform: DesktopPlatform | null = desktopPlatform();
 
-let state = $state<WindowChromeState>(DEFAULT_WINDOW_CHROME_STATE);
+// Named `chromeState`, not `state`: Svelte's compiler disambiguates the
+// `$state` rune from its own legacy `$storeName` auto-subscription syntax
+// by checking for a same-named local variable, and a variable literally
+// named `state` collides with the rune name itself once a second `$state`
+// call exists anywhere in the component, breaking type inference on both.
+let chromeState = $state<WindowChromeState>(DEFAULT_WINDOW_CHROME_STATE);
+
+// Windows-only native hit-testing for the Maximize button (design system
+// section 4.13): the button's own DOM element, and the hover and press
+// state the native side mirrors back once it starts answering
+// `WM_NCHITTEST` for that area, since real pointer events stop reaching the
+// webview there and the button's own CSS `:hover`/`:active` never fire.
+let maximizeButtonEl: HTMLButtonElement | null = $state(null);
+let maximizeButtonHovered = $state(false);
+let maximizeButtonPressed = $state(false);
+
+/** Reports the Maximize button's current rectangle, or clears the report
+ * when it is not meaningfully on screen (narrow viewport, before mount, a
+ * platform other than Windows). Keeping the native side in sync here is
+ * what makes Windows 11 snap layouts track the button's real position
+ * rather than wherever it used to be. */
+function syncMaximizeButtonRect(): void {
+  if (platform !== "windows" || narrowViewport || maximizeButtonEl === null) {
+    void reportMaximizeButtonRect(null);
+    return;
+  }
+  void reportMaximizeButtonRect(
+    maximizeButtonRectFromDomRect(
+      maximizeButtonEl.getBoundingClientRect(),
+      window.devicePixelRatio,
+    ),
+  );
+}
+
+$effect(() => {
+  syncMaximizeButtonRect();
+});
 
 /** Applies the window-chrome CSS custom properties the header and the
  * `.skr-shell` root read. Neutral values on the narrow layout, whose own
@@ -72,7 +110,7 @@ function applyChromeVariables(active: boolean, current: WindowChromeState) {
 }
 
 $effect(() => {
-  applyChromeVariables(!narrowViewport, state);
+  applyChromeVariables(!narrowViewport, chromeState);
 });
 
 onMount(() => {
@@ -83,10 +121,10 @@ onMount(() => {
 
   void readWindowChromeState().then((initial) => {
     if (disposed) return;
-    state = initial;
+    chromeState = initial;
   });
   void subscribeWindowChromeState((next) => {
-    if (!disposed) state = { ...state, ...next };
+    if (!disposed) chromeState = { ...chromeState, ...next };
   }).then((dispose) => {
     if (disposed) {
       dispose();
@@ -102,6 +140,21 @@ onMount(() => {
     registry.run(event.payload.command, commandContext());
   });
 
+  // Windows-only: the button's screen position shifts whenever the window
+  // resizes (it sits at the header's trailing edge), even when its own
+  // size never changes, so a plain `resize` listener is what keeps the
+  // native hit-test rectangle from drifting out from under the pointer.
+  const unlistenMaximizeButtonHitState =
+    platform === "windows"
+      ? events.maximizeButtonHitState.listen((event) => {
+          maximizeButtonHovered = event.payload.hovered;
+          maximizeButtonPressed = event.payload.pressed;
+        })
+      : null;
+  if (platform === "windows") {
+    window.addEventListener("resize", syncMaximizeButtonRect);
+  }
+
   // The end-to-end suite cannot force genuine OS focus loss or a native
   // maximize from inside the same WebDriver session it drives, so it feeds
   // synthetic transitions through the exact state path a real window event
@@ -115,7 +168,7 @@ onMount(() => {
   };
   if (typeof debugWindow.__SKRIBEUM_E2E_VAULT__ === "string") {
     debugWindow.__SKRIBEUM_E2E_SET_WINDOW_CHROME__ = (next) => {
-      state = { ...state, ...next };
+      chromeState = { ...chromeState, ...next };
     };
   }
 
@@ -123,6 +176,11 @@ onMount(() => {
     disposed = true;
     unsubscribeChromeState?.();
     void unlistenMenu.then((dispose) => dispose());
+    if (platform === "windows") {
+      window.removeEventListener("resize", syncMaximizeButtonRect);
+      void unlistenMaximizeButtonHitState?.then((dispose) => dispose());
+      void reportMaximizeButtonRect(null);
+    }
     applyChromeVariables(false, DEFAULT_WINDOW_CHROME_STATE);
     delete debugWindow.__SKRIBEUM_E2E_SET_WINDOW_CHROME__;
   };
@@ -139,6 +197,19 @@ function runCaptionButton(id: CaptionButtonId): void {
   else if (id === "maximize") void toggleMaximizeWindow();
   else void closeWindowChrome();
 }
+
+/** Captures the Maximize button's own DOM node into `maximizeButtonEl`.
+ * `bind:this` cannot target a conditional expression inside the `#each`
+ * below, so this Svelte action does the same job for the one button in the
+ * loop that needs it. */
+function bindMaximizeButtonRef(node: HTMLButtonElement, isMaximize: boolean) {
+  if (isMaximize) maximizeButtonEl = node;
+  return {
+    destroy() {
+      if (isMaximize && maximizeButtonEl === node) maximizeButtonEl = null;
+    },
+  };
+}
 </script>
 
 {#if platform !== null && !narrowViewport && showsCaptionButtons(platform)}
@@ -148,9 +219,14 @@ function runCaptionButton(id: CaptionButtonId): void {
         type="button"
         class="skr-caption-button"
         class:skr-caption-button-close={id === "close"}
+        class:skr-caption-button-native-hover={id === "maximize" &&
+          maximizeButtonHovered}
+        class:skr-caption-button-native-active={id === "maximize" &&
+          maximizeButtonPressed}
         data-testid="caption-{id}"
         aria-label={CAPTION_LABELS[id]}
         onclick={() => runCaptionButton(id)}
+        use:bindMaximizeButtonRef={id === "maximize"}
       >
         {#if id === "minimize"}
           <svg viewBox="0 0 10 10" aria-hidden="true">
@@ -196,7 +272,14 @@ function runCaptionButton(id: CaptionButtonId): void {
         var(--skr-motion-state-easing);
   }
 
-  .skr-caption-button:hover {
+  .skr-caption-button:hover,
+  /* Windows native hit-testing (design system section 4.13) routes real
+     pointer input over the Maximize button away from the webview once it
+     starts answering `WM_NCHITTEST` for that area, so this button's own
+     `:hover` never fires there; the native side mirrors its hover and
+     press state back over an event instead, applied as these two classes. */
+  .skr-caption-button-native-hover,
+  .skr-caption-button-native-active {
     background-color: var(--skr-surface-subtle);
   }
 

@@ -108,13 +108,36 @@ export const commands = {
 	/**  Applies persisted zoom before revealing the first committed frontend render. */
 	windowReady: (webviewMs: number | null) => typedError<null, AppError>(__TAURI_INVOKE("window_ready", { webviewMs })),
 	/**
-	 *  Shows a system-style window menu (Minimize, Maximize or Restore, Close)
-	 *  at the pointer, for the header's drag-region right-click (design system
-	 *  section 4.13: "Right-clicking it opens the system window menu where the
-	 *  platform provides one"). Built fresh per call from predefined menu items
-	 *  so it always reflects the window's current state; nothing is cached.
+	 *  Shows the window menu at the pointer, for the header's drag-region
+	 *  right-click (design system section 4.13: "Right-clicking it opens the
+	 *  system window menu where the platform provides one"). On Windows this is
+	 *  the real platform system menu (`GetSystemMenu` and `TrackPopupMenu`),
+	 *  carrying Move, Size, and keyboard-driven resize alongside Minimize,
+	 *  Maximize or Restore, and Close; every other platform keeps the
+	 *  predefined-item approximation, built fresh per call so it always
+	 *  reflects the window's current state.
 	 */
 	windowShowSystemMenu: () => typedError<null, AppError>(__TAURI_INVOKE("window_show_system_menu")),
+	/**
+	 *  Reports the Maximize caption button's current rectangle in physical
+	 *  pixels from the client area's top-left corner (design system section
+	 *  4.13), keeping Windows native hit-testing in sync with the webview's own
+	 *  layout so Windows 11 snap layouts appear on hover and hold over the
+	 *  button, not somewhere it used to be. The webview calls this whenever the
+	 *  button's own layout changes and with `None` when it should stop
+	 *  answering the hit test at all (window teardown). A no-op everywhere
+	 *  except Windows.
+	 */
+	windowSetMaximizeButtonRect: (rect: {
+	/**  Left edge, physical pixels from the client area's left edge. */
+	x: number | null,
+	/**  Top edge, physical pixels from the client area's top edge. */
+	y: number | null,
+	/**  Width in physical pixels. */
+	width: number | null,
+	/**  Height in physical pixels. */
+	height: number | null,
+} | null) => typedError<null, AppError>(__TAURI_INVOKE("window_set_maximize_button_rect", { rect })),
 	/**  Resolves one operating-system open-with path against known vault roots. */
 	fileOpenResolve: (path: string) => typedError<OpenFileTarget, AppError>(__TAURI_INVOKE("file_open_resolve", { path })),
 	/**  Drains operating-system open-with paths queued by argv or open-file events. */
@@ -133,6 +156,7 @@ export const events = {
 	bulkDivergenceReview: makeEvent<BulkDivergenceReview>("bulk-divergence-review"),
 	externalNoteRemove: makeEvent<ExternalNoteRemove>("external-note-remove"),
 	externalNoteUpdate: makeEvent<ExternalNoteUpdate>("external-note-update"),
+	maximizeButtonHitState: makeEvent<MaximizeButtonHitState>("maximize-button-hit-state"),
 	menuCommandInvoked: makeEvent<MenuCommandInvoked>("menu-command-invoked"),
 	noteRecovered: makeEvent<NoteRecovered>("note-recovered"),
 	openFilesAvailable: makeEvent<OpenFilesAvailable>("open-files-available"),
@@ -293,6 +317,43 @@ export type ExternalNoteUpdate = {
 	projection_hash: string,
 	/**  Delta from the last projection to the new content. */
 	change_set: ByteRangeReplace[],
+};
+
+/**
+ *  The native hover and press state of the Windows Maximize caption button
+ *  (design system section 4.13). Emitted only on Windows: a genuine
+ *  `WM_NCHITTEST` result of `HTMAXBUTTON` routes real pointer input away
+ *  from the webview entirely, so the button's own CSS `:hover` and
+ *  `:active` never fire once native hit-testing answers for that area, and
+ *  this event carries the highlight and press state back instead.
+ */
+export type MaximizeButtonHitState = {
+	/**
+	 *  Whether the cursor is currently over the button's reported
+	 *  rectangle.
+	 */
+	hovered: boolean,
+	/**  Whether the primary button is currently held down over the button. */
+	pressed: boolean,
+};
+
+/**
+ *  The Maximize caption button's rectangle in the same coordinate space
+ *  `WM_NCHITTEST` uses after `ScreenToClient`: physical pixels measured
+ *  from the client area's top-left corner. The webview reports this
+ *  whenever the button's layout changes, converting its own CSS-pixel
+ *  `getBoundingClientRect` through `devicePixelRatio` before it crosses the
+ *  IPC boundary, so this side never needs to know the window's DPI scale.
+ */
+export type MaximizeButtonRect = {
+	/**  Left edge, physical pixels from the client area's left edge. */
+	x: number | null,
+	/**  Top edge, physical pixels from the client area's top edge. */
+	y: number | null,
+	/**  Width in physical pixels. */
+	width: number | null,
+	/**  Height in physical pixels. */
+	height: number | null,
 };
 
 /**

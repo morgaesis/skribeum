@@ -31,6 +31,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   restarts in a per-note application-data journal. External ingests and state
   mismatches fence older history, each replay restores its recorded selection,
   and `Note: clear edit history` removes one note's journal after confirmation.
+- On Windows, the Maximize caption button participates in native hit-testing,
+  so Windows 11 snap layouts appear on hover and hold exactly as they do over
+  a system titlebar; the drag region's right-click menu is the real platform
+  system menu, carrying Move, Size, and keyboard-driven resize alongside
+  Minimize, Maximize or Restore, and Close. Every other platform is unchanged.
 
 ### Security
 

@@ -30,6 +30,18 @@ tauri-plugin-dialog = "2.7.2"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-opener = "2.5.4"
 
+# Native Maximize-button hit-testing and the real system window menu
+# (design system section 4.13) are Windows-only; this pins the same version
+# Tauri itself already resolves transitively (see Cargo.lock), so declaring
+# it directly adds no new supply-chain surface.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
 [lints]
 workspace = true
 

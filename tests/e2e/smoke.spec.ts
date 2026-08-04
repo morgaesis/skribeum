@@ -613,6 +613,7 @@ function tagCompletionResult(
 }
 
 async function typeTagCompletionQuery(
+  harness: TagCompletionHarness,
   position: TagCompletionPosition = "final",
   query = "ced",
 ): Promise<void> {
@@ -647,7 +648,7 @@ async function typeTagCompletionQuery(
   // refresh while it is open. Wait for the autosave itself to land (the
   // event that triggers the refresh) rather than a fixed duration guessed
   // to outlast the debounce.
-  await waitForActiveTabSaved();
+  await harness.waitForQuerySaved(position, query);
 }
 
 async function saveAndExpectTagCompletionTarget(expected: string) {
@@ -742,6 +743,14 @@ type TagCompletionHarness = {
   prepare(): Promise<void>;
   expectResult(expected: string): Promise<void>;
   expectDismissedResult(expected: string): Promise<void>;
+  /**
+   * Resolves once the autosave carrying the typed query has landed in
+   * whichever store the harness persists to.
+   */
+  waitForQuerySaved(
+    position: TagCompletionPosition,
+    query: string,
+  ): Promise<void>;
 };
 
 const packagedTagCompletionHarness: TagCompletionHarness = {
@@ -753,13 +762,22 @@ const packagedTagCompletionHarness: TagCompletionHarness = {
   async expectDismissedResult(expected) {
     await saveAndExpectTagCompletionTarget(expected);
   },
+  async waitForQuerySaved(position, query) {
+    // The desktop shell writes the note itself, so the file is the
+    // authoritative record that the save landed, and a failure reports the
+    // content that did arrive rather than a bare flag.
+    await waitForDisk(
+      TAG_COMPLETION_TARGET_NOTE_NAME,
+      tagCompletionResult(position, `#${query}`),
+    );
+  },
 };
 
 async function verifyTagCompletionAcceptance(harness: TagCompletionHarness) {
   for (const position of ["middle", "final"] as const) {
     for (const chord of [[Key.Enter], [Key.Ctrl, Key.Enter]]) {
       await harness.prepare();
-      await typeTagCompletionQuery(position);
+      await typeTagCompletionQuery(harness, position);
       expect(await tagCompletionOptionTexts()).toEqual([
         "#project/cedar-room",
         "#context/outdoors",
@@ -782,7 +800,7 @@ async function verifyTagCompletionArrowSelection(
 ) {
   for (const position of ["middle", "final"] as const) {
     await harness.prepare();
-    await typeTagCompletionQuery(position);
+    await typeTagCompletionQuery(harness, position);
     await browser.keys(Key.ArrowDown);
     expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
       "#context/outdoors",
@@ -793,7 +811,7 @@ async function verifyTagCompletionArrowSelection(
     );
 
     await harness.prepare();
-    await typeTagCompletionQuery(position);
+    await typeTagCompletionQuery(harness, position);
     await browser.keys(Key.ArrowDown);
     expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
       "#context/outdoors",
@@ -812,7 +830,7 @@ async function verifyTagCompletionArrowSelection(
 async function verifyTagCompletionEscape(harness: TagCompletionHarness) {
   for (const position of ["middle", "final"] as const) {
     await harness.prepare();
-    await typeTagCompletionQuery(position);
+    await typeTagCompletionQuery(harness, position);
     await browser.keys(Key.Escape);
     await browser.waitUntil(
       async () => !(await $(".cm-skr-tag-menu").isExisting()),
@@ -862,20 +880,37 @@ async function demoTagCompletionTargetText(): Promise<string | null> {
  * this polls the same dirty/saving signal TabStrip's unsaved indicator
  * renders from, exposed directly because the tab strip itself only shows
  * that indicator once a pane holds more than one tab.
+ *
+ * The wait carries the same budget as `waitForDisk`: both bound one
+ * autosave, which spans the idle debounce, a durable-history flush and the
+ * write itself, serialized behind any save already in flight. A timeout
+ * reports the last state the probe returned, so a write still running
+ * (`true`) reads differently from a pane with no active tab (`null`) or a
+ * page that never installed the probe.
  */
 async function waitForActiveTabSaved(): Promise<void> {
-  await browser.waitUntil(
-    () =>
-      browser.execute(
-        () =>
+  let observed: boolean | null | undefined;
+  try {
+    await browser.waitUntil(
+      async () => {
+        observed = await browser.execute(() =>
           (
             window as Window & {
               __SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?: () => boolean | null;
             }
-          ).__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?.() === false,
-      ),
-    { timeout: 5000, timeoutMsg: "autosave did not settle" },
-  );
+          ).__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?.(),
+        );
+        return observed === false;
+      },
+      { timeout: 10000 },
+    );
+  } catch {
+    throw new Error(
+      `autosave did not settle: the active tab dirty probe reported ${
+        observed === undefined ? "no probe on the page" : String(observed)
+      }`,
+    );
+  }
 }
 
 async function prepareDemoTagCompletionTarget(): Promise<void> {
@@ -912,6 +947,11 @@ const demoTagCompletionHarness: TagCompletionHarness = {
   },
   async expectDismissedResult(expected) {
     expect(await demoTagCompletionTargetText()).toBe(expected);
+  },
+  async waitForQuerySaved() {
+    // The demo persists to browser storage, which the test process cannot
+    // read, so the tab's own dirty signal is the available oracle.
+    await waitForActiveTabSaved();
   },
 };
 
@@ -2075,7 +2115,7 @@ describe("skribeum shell", () => {
       await picker.waitForExist({ reverse: true, timeout: 10000 });
 
       await setSimulatedVisualViewport(500);
-      await typeTagCompletionQuery("final");
+      await typeTagCompletionQuery(packagedTagCompletionHarness, "final");
       const caretBottom = await browser.execute(() => {
         const caret = document.querySelector<HTMLElement>(".cm-cursor-primary");
         return caret?.getBoundingClientRect().bottom ?? 140;
@@ -3902,7 +3942,7 @@ describe("skribeum shell", () => {
 
   it("ranks_an_inserted_tag_as_recent", async () => {
     await prepareTagCompletionTarget();
-    await typeTagCompletionQuery();
+    await typeTagCompletionQuery(packagedTagCompletionHarness);
     await browser.keys(Key.ArrowDown);
     await browser.keys(Key.Enter);
     const expected = tagCompletionResult("final", "#context/outdoors");

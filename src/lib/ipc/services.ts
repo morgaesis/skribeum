@@ -81,6 +81,12 @@ export async function windowReady(webviewMilliseconds: number): Promise<void> {
   unwrap(await commands.windowReady(webviewMilliseconds));
 }
 
+/** Shows the drag region's right-click window menu (Minimize, Maximize or
+ * Restore, Close) at the pointer. */
+export async function windowShowSystemMenu(): Promise<void> {
+  unwrap(await commands.windowShowSystemMenu());
+}
+
 /** Drains native file-open paths queued by argv or operating-system events. */
 export async function openFilesTake(): Promise<string[]> {
   return unwrap(await commands.openFilesTake());

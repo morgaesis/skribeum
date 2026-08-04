@@ -150,6 +150,8 @@ import {
 } from "./lib/themes/theme";
 import UnifiedCommandSurface from "./lib/UnifiedCommandSurface.svelte";
 import { bindVisualViewportCss } from "./lib/visualViewport";
+import WindowControls from "./lib/WindowControls.svelte";
+import { showWindowSystemMenu } from "./lib/windowChrome";
 import {
   defaultWorkspaceState,
   loadWorkspaceState,
@@ -2617,7 +2619,21 @@ onMount(() => {
   class="skr-shell flex h-screen flex-col overflow-hidden"
   inert={activeSheet !== null || activeOverlay !== null}
 >
-  <header class="skr-app-header border-b">
+  <!-- svelte-ignore a11y_no_static_element_interactions -- the header's
+       implicit role is already `banner`; the drag-region right-click opens
+       the desktop window menu (design system section 4.13), not a page
+       interaction. -->
+  <header
+    class="skr-app-header border-b"
+    data-tauri-drag-region={hasDesktopRuntime() && !narrowViewport
+      ? "deep"
+      : undefined}
+    oncontextmenu={(event) => {
+      if (!hasDesktopRuntime() || narrowViewport) return;
+      event.preventDefault();
+      void showWindowSystemMenu();
+    }}
+  >
     <div class="skr-header-leading">
       <h1 class="sr-only">{STRINGS.appTitle}</h1>
       {#if vault !== null && workspace.sidebarCollapsed}
@@ -2714,6 +2730,7 @@ onMount(() => {
           <circle cx="19" cy="12" r="1.75" />
         </svg>
       </button>
+      <WindowControls {registry} {commandContext} {narrowViewport} />
     </div>
   </header>
 

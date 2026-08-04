@@ -22,6 +22,7 @@ use tauri::Manager;
 
 pub mod error;
 pub mod ipc;
+pub mod menu;
 
 pub use ipc::ipc_builder;
 
@@ -661,6 +662,15 @@ pub fn run() {
                     .set_background_color(Some(background))
                     .expect("failed to set the startup window background");
             }
+            // The native menu bar is macOS-only (design system section
+            // 4.13); Windows and Linux draw caption buttons in the header
+            // instead and never install a menu bar.
+            #[cfg(target_os = "macos")]
+            {
+                menu::install(app.handle())
+                    .expect("failed to install the native application menu");
+                app.on_menu_event(menu::handle_event);
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -719,6 +729,44 @@ mod tests {
         let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
             .expect("Tauri configuration parses");
         let window = &config["app"]["windows"][0];
+        assert_eq!(window["visible"], false);
+        assert_eq!(window["backgroundColor"], "#f6f2ea");
+    }
+
+    /// Design system section 4.13: the window draws its own chrome, so the
+    /// platform default frame is off in the base configuration. macOS keeps
+    /// its native frame (for the traffic lights) through the platform
+    /// override tested below.
+    #[test]
+    fn base_window_has_no_platform_decorations() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("Tauri configuration parses");
+        let window = &config["app"]["windows"][0];
+        assert_eq!(window["decorations"], false);
+    }
+
+    /// Design system section 4.13: macOS keeps the native hidden-titlebar
+    /// style with the traffic lights preserved and the native title hidden,
+    /// so the header's own title is what renders. Tauri discovers and
+    /// merges `tauri.macos.conf.json` over the base configuration only when
+    /// building for macOS (JSON Merge Patch, RFC 7396); this test parses it
+    /// directly since that merge cannot run on this platform. A real macOS
+    /// session is needed to confirm the traffic lights land vertically
+    /// centered at the derived position.
+    #[test]
+    fn macos_window_keeps_native_traffic_lights_and_hides_the_native_title() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.macos.conf.json"))
+                .expect("macOS platform configuration parses");
+        let window = &config["app"]["windows"][0];
+        assert_eq!(window["decorations"], true);
+        assert_eq!(window["titleBarStyle"], "Overlay");
+        assert_eq!(window["hiddenTitle"], true);
+        assert_eq!(window["trafficLightPosition"]["x"], 16.0);
+        assert_eq!(window["trafficLightPosition"]["y"], 14.0);
+        // The platform override still carries every field JSON Merge Patch
+        // would otherwise erase by replacing the whole `windows` array.
+        assert_eq!(window["title"], "Skribeum");
         assert_eq!(window["visible"], false);
         assert_eq!(window["backgroundColor"], "#f6f2ea");
     }

@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { $, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
+import "./windowChrome.spec";
 import "./workspace.spec";
 import {
   DEFAULT_SETTINGS,
@@ -1484,11 +1485,21 @@ describe("skribeum shell", () => {
       "skr-note-title-region",
       "skr-header-trailing",
     ]);
-    expect(header?.buttons.map((button) => button.label)).toEqual(["", "", ""]);
+    expect(header?.buttons.map((button) => button.label)).toEqual([
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+    ]);
     expect(header?.buttons.map((button) => button.ariaLabel)).toEqual([
       "Back",
       "Forward",
       "More actions",
+      "Minimize",
+      "Maximize or restore",
+      "Close",
     ]);
     expect(await $("[data-testid=note-title]").getText()).toBe(
       "A room for reading",

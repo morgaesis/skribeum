@@ -15,6 +15,7 @@ import {
   commands,
   type EditHistoryAction,
   type NoteContent,
+  type NoteStat,
   type TreeEntry,
   type VaultHandle,
   type WriteResult,
@@ -190,6 +191,14 @@ export async function readNote(
     text,
     readOnly: meta.encoding === "non-utf8",
   };
+}
+
+/** Reads one indexed note's filesystem creation and modification times. */
+export async function readNoteStat(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<NoteStat> {
+  return unwrap(await commands.noteStat(handle, relPath));
 }
 
 /** Reads an indexed regular file without opening an editable note session. */

@@ -38,7 +38,8 @@ crate contains glue only.
   grows deliberately, never incidentally. Current commands: `vault_open`
   (the only command accepting an absolute path), `vault_tree`,
   `vault_tree_refresh` (on-demand re-index of the tree from current
-  filesystem state), `note_read`, `note_write`, `watch_subscribe`,
+  filesystem state), `note_read`, `note_stat` (index-resolved filesystem
+  timestamps for the statusline), `note_write`, `watch_subscribe`,
   `search_query`, `settings_read`, `settings_write`.
 - `note_write` is change-set based: a list of byte-range replacements
   against the last-read projection, plus the expected projection hash. The
@@ -150,6 +151,17 @@ complete frame with input and scrolling available throughout. A fresh note open 
 starts at the top with the form-factor panel default, and leaves its parked
 caret unfocused.
 
+Wide viewports render a 1.5rem statusline below the workspace
+(`src/lib/Statusline.svelte`). Its segments consume facts the shell already
+owns: `note_stat` timestamps feed the last-edited segment and its note-info
+popover, the editor reports word, character, selection, and caret counts
+through a per-frame statistics callback, the save path reports a
+persistence state (silent, saving past the write grace, or a persisting
+failure), and section 6.2 copy-link confirmations render in the center
+`aria-live` region on wide viewports while narrow viewports keep the status
+banner. The registered `Note statistics` command serves the same facts on
+every viewport; phones render no statusline.
+
 `workspaceState.ts` stores one normalized workspace document per vault. It
 contains sidebar and outline geometry, tree expansion and selection, up to two
 panes, each pane's ordered tabs and active path, closed-tab state, the split
@@ -232,9 +244,13 @@ renders as a properties panel above the editor: a positional parser
 records each value's exact character range, typed inputs (dates, numbers,
 booleans, lists, honoring `.obsidian/types.json`) replace precisely that
 range through a normal editor transaction, and untouched keys are
-byte-preserved through the ordinary change-set save path. The panel starts
-expanded on wide layouts and collapsed on narrow layouts, and identifies the
-note by its vault path. A shared
+byte-preserved through the ordinary change-set save path. The panel renders
+the compact form of the design system: a caps header row with the property
+count, flat 1.75rem rows with an 8rem label column, checkbox, chip, ISO
+date, and wikilink-typed values, click-to-edit write-through, and an
+add-property row backed by a registered command. It starts expanded on wide
+layouts and collapsed on narrow layouts, and every arrival paints its
+recorded or default state in the first frame. A shared
 title resolver derives reading-surface labels from a non-empty frontmatter
 `title`, a first-line H1, or the trimmed file name, in that order.
 

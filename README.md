@@ -53,10 +53,10 @@ a Files button, the current note display title, and an overflow button. The
 overflow sheet provides the quick switcher, search, command palette, settings,
 outline, file tree, note creation, saving, in-note find, navigation history,
 and vault opening. The editor retains 24px inline gutters, which leaves 312px
-for prose on a 360px viewport and 342px on a 390px viewport. Properties remain
+for prose on a 360px viewport and 342px on a 390px viewport. Properties start
 collapsed above the note. A frontmatter `title` supplies the display title,
-followed by a first-line H1 and then the file name. The properties panel
-continues to identify the note by its vault path.
+followed by a first-line H1 and then the file name. Narrow viewports carry no
+statusline; the `Note statistics` command serves the same facts there.
 
 Every visible control accepts pointer, touch, and keyboard activation. Tab and
 Shift+Tab stay inside an open modal sheet, Escape closes it, and focus returns
@@ -80,7 +80,30 @@ Back and forward restore each note's exact UTF-8 caret offsets,
 content-anchored reading position, and properties-panel state without moving
 keyboard focus into the editor. A newly opened note starts at the top with its
 caret parked and the form-factor panel default. The panel starts expanded on
-wide viewports and collapsed on narrow viewports.
+wide viewports and collapsed on narrow viewports, and arrival paints its final
+state in the first frame.
+
+Frontmatter properties render in a compact flat panel at the note top: a
+single caps header row with the property count, then one line per property
+with a fixed label column. Boolean values render as checkboxes, list values as
+chips, dates as their ISO text, and wikilink values as links that navigate;
+everything else is flat text. Clicking a value places a caret in it, and the
+value being edited carries a thin bottom rule; edits write through to the
+exact frontmatter bytes. An Add property row appears at the panel's end on
+hover or focus, and `Note: add property` in the command palette reaches the
+same flow. A note without frontmatter shows no panel.
+
+Wide viewports carry a quiet statusline below the workspace. Its leading
+segment shows when the note was last edited and opens a note-info popover with
+the created and modified timestamps, the vault path, and word and character
+counts. The center region announces transient confirmations such as
+`Link copied`. The trailing segments show the word count, `132 of 4,210 words`
+while a selection is active, with a line and column segment joining only in
+source mode. The persistence slot stays silent while everything is saved,
+shows `Saving…` when a write runs long, and keeps `Couldn't save` visible,
+with the failure detail behind it, until a write succeeds. With no note open
+the bar renders empty. The `Note statistics` command serves the same facts on
+every viewport.
 
 Hovering a resolved note link for 450ms opens a read-only preview. The preview
 uses the same reading-state decoration pipeline as the note and embeds, keeps

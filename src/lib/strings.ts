@@ -172,6 +172,28 @@ export const STRINGS = {
   propertiesExpand: "Expand note properties",
   propertiesCollapse: "Collapse note properties",
   propertiesListItemLabel: "list item",
+  propertiesAddProperty: "Add property",
+  propertiesAddKeyLabel: "Property name",
+  propertiesAddValueLabel: "Property value",
+  commandAddProperty: "Note: add property",
+  statuslineLabel: "Status",
+  statuslineEdited: "Edited {time}",
+  statuslineEditedJustNow: "Edited just now",
+  statuslineWordCount: "{count} words",
+  statuslineWordCountOne: "1 word",
+  statuslineSelectionWordCount: "{selected} of {total} words",
+  statuslineLineColumn: "Ln {line}, Col {column}",
+  statuslineSaving: "Saving…",
+  statuslineSaveFailed: "Couldn't save",
+  statuslineSaveFailedDetail: "The last write to this note failed:",
+  commandNoteStatistics: "Note statistics",
+  noteInfoLabel: "Note information",
+  noteInfoCreated: "Created",
+  noteInfoModified: "Modified",
+  noteInfoPath: "Path",
+  noteInfoWords: "Words",
+  noteInfoCharacters: "Characters",
+  noteInfoUnavailable: "Not available",
   closeAction: "Close",
   noMatches: "No matches",
   commandSurfaceLabel: "Search notes and commands",
@@ -480,3 +502,14 @@ export const STRINGS = {
   tableAppendRow: "Append table row",
   tableAppendColumn: "Append table column",
 } as const;
+
+/** Fills `{name}` placeholders in a catalogue template. */
+export function formatString(
+  template: string,
+  values: Readonly<Record<string, string | number>>,
+): string {
+  return template.replace(/\{(\w+)\}/g, (match, name: string) => {
+    const value = values[name];
+    return value === undefined ? match : String(value);
+  });
+}

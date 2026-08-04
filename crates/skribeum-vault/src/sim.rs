@@ -885,6 +885,7 @@ impl FileSystem for SimFs {
             Some(EntryRef::Directory) => Ok(FileMetadata {
                 size: 0,
                 mtime: Duration::ZERO,
+                created: None,
                 is_dir: true,
                 mode: None,
             }),
@@ -893,6 +894,7 @@ impl FileSystem for SimFs {
                 Ok(FileMetadata {
                     size: inode.content.len() as u64,
                     mtime: Duration::from_millis(inode.mtime_tick),
+                    created: None,
                     is_dir: false,
                     mode: Some(inode.mode),
                 })

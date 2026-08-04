@@ -14,6 +14,8 @@ import {
   applyTypeOverrides,
   parseFrontmatter,
   parseObsidianTypes,
+  propertyInsertion,
+  wikilinkValue,
 } from "../../src/lib/editor/frontmatter";
 
 const corpusDirectory = path.join(
@@ -245,5 +247,61 @@ describe("declared Obsidian property types (decision 101)", () => {
   it("tolerates malformed types.json", () => {
     expect(parseObsidianTypes("not json")).toEqual({});
     expect(parseObsidianTypes("[]")).toEqual({});
+  });
+});
+
+describe("wikilink-shaped property values (section 4.15)", () => {
+  it("reads a bare wikilink value", () => {
+    expect(wikilinkValue("[[Reading room]]")).toEqual({
+      target: "Reading room",
+      label: "Reading room",
+    });
+  });
+
+  it("reads an aliased wikilink with a fragment", () => {
+    expect(wikilinkValue('"[[Notes/Plan#Goals|the plan]]"')).toEqual({
+      target: "Notes/Plan#Goals",
+      label: "the plan",
+    });
+  });
+
+  it("rejects non-wikilink values", () => {
+    expect(wikilinkValue("plain text")).toBeNull();
+    expect(wikilinkValue("[[]]")).toBeNull();
+    expect(wikilinkValue("[[a]] and [[b]]")).toBeNull();
+  });
+});
+
+describe("add-property insertion (section 4.15)", () => {
+  it("appends a property line before the closing fence", () => {
+    const text = "---\ntitle: One\n---\nBody\n";
+    const parsed = parseFrontmatter(text);
+    expect(parsed).not.toBeNull();
+    if (parsed === null) return;
+    const insertion = propertyInsertion(parsed, "status", "draft");
+    expect(insertion).not.toBeNull();
+    if (insertion === null) return;
+    const edited = applyEdit(
+      text,
+      insertion.from,
+      insertion.from,
+      insertion.insert,
+    );
+    expect(edited).toBe("---\ntitle: One\nstatus: draft\n---\nBody\n");
+    const reparsed = parseFrontmatter(edited);
+    expect(reparsed?.entries.map((entry) => entry.key)).toEqual([
+      "title",
+      "status",
+    ]);
+  });
+
+  it("normalizes keys and rejects empty ones", () => {
+    const parsed = parseFrontmatter("---\n---\n");
+    expect(parsed).not.toBeNull();
+    if (parsed === null) return;
+    expect(propertyInsertion(parsed, "  ", "x")).toBeNull();
+    expect(propertyInsertion(parsed, "my key:", "a\nb")?.insert).toBe(
+      "my-key: a b\n",
+    );
   });
 });

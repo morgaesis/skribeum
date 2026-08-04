@@ -210,10 +210,14 @@ describe("file tree, previews, panels, and workspace tabs", () => {
         .isExisting(),
     ).toBe(true);
     await pointerMenu.$('[data-command-id="tree.note.copy-link"]').click();
-    const copied = $('aside[role="status"]');
+    // Wide viewports announce in the statusline's center slot (section
+    // 6.2); the banner strip is the narrow-viewport route.
+    const copied = $(
+      '[data-testid="statusline-announcements"] .skr-statusline-announcement',
+    );
     await copied.waitForDisplayed({ timeout: 10000 });
     expect(await copied.getText()).toContain("Link copied");
-    await copied.$("button").click();
+    await copied.waitForExist({ reverse: true, timeout: 10000 });
 
     await browser.execute(
       (element) => (element as HTMLElement).focus(),
@@ -240,7 +244,9 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await browser.keys(Key.ArrowDown);
     await browser.keys(Key.ArrowDown);
     await browser.keys(Key.Enter);
-    const keyboardCopied = $('aside[role="status"]');
+    const keyboardCopied = $(
+      '[data-testid="statusline-announcements"] .skr-statusline-announcement',
+    );
     await keyboardCopied.waitForDisplayed({ timeout: 10000 });
     expect(await keyboardCopied.getText()).toContain("Link copied");
   });

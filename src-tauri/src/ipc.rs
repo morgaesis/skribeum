@@ -332,6 +332,18 @@ pub struct NoteContent {
     pub byte_length: u32,
 }
 
+/// Filesystem timestamps for one indexed note, serving the statusline's
+/// last-edited segment and the note-info popover.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct NoteStat {
+    /// Modification time in whole milliseconds since the Unix epoch, absent
+    /// when the platform reports none.
+    pub modified_ms: Option<f64>,
+    /// Creation time in whole milliseconds since the Unix epoch, absent on
+    /// filesystems that record none.
+    pub created_ms: Option<f64>,
+}
+
 /// Metadata for a read-only indexed-file read. Bytes travel over the raw
 /// channel passed to `vault_file_read`.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -1265,6 +1277,53 @@ fn note_read(
         encoding,
         projection_hash,
         byte_length,
+    })
+}
+
+/// Converts an epoch duration into whole milliseconds as a JSON number.
+fn epoch_milliseconds(duration: Duration) -> f64 {
+    #[allow(clippy::cast_precision_loss)] // Millisecond epochs stay far below 2^53.
+    let milliseconds = duration.as_millis() as f64;
+    milliseconds
+}
+
+/// Reads the creation and modification timestamps of one indexed note. The
+/// path resolves through the vault index exactly like `note_read`, so no
+/// unindexed path is ever statted.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn note_stat(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    rel_path: String,
+) -> Result<NoteStat, AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let vaults = registry.lock();
+    let open = vaults
+        .get(&handle.id)
+        .ok_or_else(AppError::unknown_handle)?;
+    let entry = open
+        .vault
+        .tree()
+        .iter()
+        .find(|entry| entry.path == path)
+        .ok_or_else(|| {
+            AppError::from(skribeum_vault::VaultError::NoteNotFound).with_path(path.as_str())
+        })?;
+    if entry.kind != EntryKind::Note {
+        return Err(AppError::from(skribeum_vault::VaultError::NotANote).with_path(path.as_str()));
+    }
+    let absolute = open.vault.root().join(path.as_str());
+    let metadata = RealFs.metadata(&absolute).map_err(|error| AppError {
+        code: "note/stat",
+        message: format!("failed to read note metadata: {error}"),
+        path: Some(path.as_str().to_owned()),
+    })?;
+    Ok(NoteStat {
+        modified_ms: (metadata.mtime > Duration::ZERO)
+            .then(|| epoch_milliseconds(metadata.mtime)),
+        created_ms: metadata.created.map(epoch_milliseconds),
     })
 }
 
@@ -2279,6 +2338,7 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             tree_entry_delete,
             tree_entry_reveal,
             note_read,
+            note_stat,
             vault_file_read,
             note_write,
             edit_history_read,

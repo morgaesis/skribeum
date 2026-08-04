@@ -45,6 +45,9 @@ pub struct FileMetadata {
     /// Modification time as a duration since the Unix epoch. The simulator
     /// synthesizes this deterministically from its logical tick counter.
     pub mtime: Duration,
+    /// Creation time as a duration since the Unix epoch, absent on
+    /// filesystems that record none and in the simulator.
+    pub created: Option<Duration>,
     /// Whether the entry is a directory.
     pub is_dir: bool,
     /// Permission mode bits where the platform exposes them (Unix), used by

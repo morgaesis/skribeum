@@ -1,12 +1,18 @@
 <script lang="ts">
+// registry-exempt keydown: Enter and Escape inside an editable property
+// value are ARIA textbox pattern internals (commit and cancel of the
+// field being edited), not application commands.
 import type { Frontmatter, FrontmatterEntry } from "./editor/frontmatter";
+import { wikilinkValue } from "./editor/frontmatter";
 import { STRINGS } from "./strings";
 
 let {
   frontmatter,
   onEditValue,
-  noteIdentity = null,
+  onAddProperty,
+  onFollowWikilink,
   expanded = $bindable(false),
+  adding = $bindable(false),
 }: {
   frontmatter: Frontmatter;
   /**
@@ -15,66 +21,165 @@ let {
    * the editor's normal change-set save path.
    */
   onEditValue: (from: number, to: number, insert: string) => void;
-  noteIdentity?: string | null;
+  /** Appends one `key: value` line before the closing fence. */
+  onAddProperty?: (key: string, value: string) => void;
+  /** Follows a wikilink-shaped property value. */
+  onFollowWikilink?: (target: string) => void;
   /** Controlled expansion state owned by the note view-state record. */
   expanded?: boolean;
+  /** Whether the add-property row is in its inline entry state. */
+  adding?: boolean;
 } = $props();
 
 const panelContentId = "skr-properties-content";
 
-function commitScalar(entry: FrontmatterEntry, value: string) {
+let addKeyElement = $state<HTMLElement | undefined>();
+let addValueElement = $state<HTMLElement | undefined>();
+let addRowElement = $state<HTMLElement | undefined>();
+// Tracked alongside the CSS :hover rule below (real pointer hover keeps
+// working through :hover directly) so the reveal is also driven by an
+// observable pointer event, matching the reveal pattern used elsewhere
+// (App.svelte's sidebar header actions, the link preview).
+let panelHovered = $state(false);
+
+/**
+ * Commits an edited scalar. When the cleaned text matches the authored
+ * value nothing is written and the element's text resets, so the DOM a
+ * contenteditable session rewrote never drifts from the document.
+ */
+function commitScalar(
+  entry: FrontmatterEntry,
+  element: EventTarget | null,
+): void {
+  const clean = elementText(element)
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+  if (clean !== entry.raw) {
+    onEditValue(entry.valueFrom, entry.valueTo, clean);
+  } else if (element instanceof HTMLElement) {
+    element.textContent = entry.raw;
+  }
+}
+
+function commitBoolean(entry: FrontmatterEntry, checked: boolean) {
+  const value = checked ? "true" : "false";
   if (value !== entry.raw) {
     onEditValue(entry.valueFrom, entry.valueTo, value);
   }
 }
 
-function commitBoolean(entry: FrontmatterEntry, checked: boolean) {
-  commitScalar(entry, checked ? "true" : "false");
-}
-
 function commitListItem(
   item: { from: number; to: number; raw: string },
-  value: string,
+  element: EventTarget | null,
 ) {
-  if (value !== item.raw) {
-    onEditValue(item.from, item.to, value);
+  const clean = elementText(element)
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+  if (clean !== item.raw) {
+    onEditValue(item.from, item.to, clean);
+  } else if (element instanceof HTMLElement) {
+    element.textContent = item.raw;
   }
-}
-
-function inputValue(event: Event): string {
-  return (event.currentTarget as HTMLInputElement).value;
 }
 
 function inputChecked(event: Event): boolean {
   return (event.currentTarget as HTMLInputElement).checked;
 }
 
-/** Scalar date inputs only accept the date part; time suffixes edit as text. */
-function editsAsDateInput(entry: FrontmatterEntry): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(entry.raw);
+/**
+ * Keyboard contract for an editable value: Enter commits by leaving the
+ * field, Escape restores the authored text and leaves without a commit.
+ */
+function editableKeydown(event: KeyboardEvent, original: string) {
+  const target = event.currentTarget as HTMLElement;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    target.blur();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    target.textContent = original;
+    target.blur();
+  }
+}
+
+function elementText(element: EventTarget | null): string {
+  return element instanceof HTMLElement ? (element.textContent ?? "") : "";
+}
+
+$effect(() => {
+  if (adding && addKeyElement !== undefined) {
+    addKeyElement.focus();
+  }
+});
+
+function commitAddition() {
+  if (!adding) return;
+  const key = elementText(addKeyElement ?? null).trim();
+  const value = elementText(addValueElement ?? null).trim();
+  adding = false;
+  if (key.length > 0) {
+    onAddProperty?.(key, value);
+  }
+}
+
+function cancelAddition() {
+  adding = false;
+}
+
+function additionKeydown(event: KeyboardEvent, cell: "key" | "value") {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cancelAddition();
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    if (cell === "key") {
+      addValueElement?.focus();
+    } else {
+      commitAddition();
+    }
+  }
+}
+
+function additionFocusout(event: FocusEvent) {
+  const next = event.relatedTarget;
+  if (
+    addRowElement !== undefined &&
+    next instanceof Node &&
+    addRowElement.contains(next)
+  ) {
+    return;
+  }
+  commitAddition();
 }
 </script>
 
-<section class="skr-properties" aria-label={STRINGS.propertiesPanelLabel}>
-  <div class="skr-properties-header">
-    <button
-      type="button"
-      class="skr-properties-toggle"
-      aria-expanded={expanded}
-      aria-controls={panelContentId}
-      aria-label={expanded
-        ? STRINGS.propertiesCollapse
-        : STRINGS.propertiesExpand}
-      onclick={() => (expanded = !expanded)}
-    >
-      <span class="skr-properties-chevron" aria-hidden="true"></span>
-      <span>{STRINGS.propertiesPanelTitle}</span>
-      {#if noteIdentity !== null}
-        <span class="skr-properties-path">{noteIdentity}</span>
-      {/if}
-      <span class="skr-properties-count">{frontmatter.entries.length}</span>
-    </button>
-  </div>
+<section
+  class="skr-properties"
+  class:skr-properties-hovered={panelHovered}
+  aria-label={STRINGS.propertiesPanelLabel}
+  onpointerenter={() => (panelHovered = true)}
+  onpointerleave={() => (panelHovered = false)}
+>
+  <button
+    type="button"
+    class="skr-properties-toggle"
+    aria-expanded={expanded}
+    aria-controls={panelContentId}
+    aria-label={expanded
+      ? STRINGS.propertiesCollapse
+      : STRINGS.propertiesExpand}
+    onclick={() => (expanded = !expanded)}
+  >
+    <span class="skr-properties-leading" aria-hidden="true">
+      <svg viewBox="0 0 16 16" class:skr-properties-chevron-open={expanded}>
+        <path d="m5.5 3.5 4.5 4.5-4.5 4.5" />
+      </svg>
+    </span>
+    <span class="skr-properties-title">{STRINGS.propertiesPanelTitle}</span>
+    <span class="skr-properties-count">{frontmatter.entries.length}</span>
+  </button>
 
   <div class:expanded class="skr-properties-reveal">
     <div
@@ -83,134 +188,186 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
       aria-hidden={!expanded}
       inert={!expanded}
     >
-      <dl class="skr-properties-list">
+      <div class="skr-properties-list">
         {#each frontmatter.entries as entry, index (index)}
-          <dt>{entry.key}</dt>
-          <dd>
-            {#if entry.type === "boolean"}
-              <input
-                type="checkbox"
-                checked={entry.raw === "true"}
-                onchange={(event) => commitBoolean(entry, inputChecked(event))}
-              />
-            {:else if entry.type === "number"}
-              <input
-                type="number"
-                class="skr-property-number"
-                value={entry.raw}
-                step="any"
-                onchange={(event) => commitScalar(entry, inputValue(event))}
-              />
-            {:else if entry.type === "date" && editsAsDateInput(entry)}
-              <input
-                type="date"
-                value={entry.raw}
-                onchange={(event) => commitScalar(entry, inputValue(event))}
-              />
-            {:else if entry.type === "list" && entry.items !== undefined}
-              <ul>
-                {#each entry.items as item, itemIndex (itemIndex)}
-                  <li>
-                    <input
-                      type="text"
-                      size={Math.max(item.raw.length, 4)}
-                      value={item.raw}
-                      aria-label={`${entry.key} ${STRINGS.propertiesListItemLabel} ${itemIndex + 1}`}
-                      onchange={(event) => commitListItem(item, inputValue(event))}
-                    />
-                  </li>
-                {/each}
-              </ul>
-            {:else}
-              <input
-                type="text"
-                value={entry.raw}
-                onchange={(event) => commitScalar(entry, inputValue(event))}
-              />
-            {/if}
-          </dd>
+          <div class="skr-property-row">
+            <span class="skr-property-label" id={`skr-property-key-${index}`}>
+              {entry.key}
+            </span>
+            <div class="skr-property-value">
+              {#if entry.type === "boolean"}
+                <span class="skr-property-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={entry.raw === "true"}
+                    aria-labelledby={`skr-property-key-${index}`}
+                    onchange={(event) =>
+                      commitBoolean(entry, inputChecked(event))}
+                  />
+                  <span class="skr-property-check-glyph" aria-hidden="true">
+                    ✓
+                  </span>
+                </span>
+              {:else if entry.type === "list" && entry.items !== undefined}
+                <ul class="skr-property-chips">
+                  {#each entry.items as item, itemIndex (`${itemIndex}:${item.raw}`)}
+                    <li>
+                      <span
+                        class="skr-property-editable skr-property-chip"
+                        role="textbox"
+                tabindex="0"
+                        contenteditable="plaintext-only"
+                        aria-label={`${entry.key} ${STRINGS.propertiesListItemLabel} ${itemIndex + 1}`}
+                        onkeydown={(event) => editableKeydown(event, item.raw)}
+                        onblur={(event) =>
+                          commitListItem(item, event.currentTarget)}
+                        >{item.raw}</span
+                      >
+                    </li>
+                  {/each}
+                </ul>
+              {:else if wikilinkValue(entry.raw) !== null}
+                {@const link = wikilinkValue(entry.raw)}
+                <button
+                  type="button"
+                  class="skr-property-wikilink"
+                  data-wikilink-target={link?.target}
+                  onclick={() =>
+                    link !== null && onFollowWikilink?.(link.target)}
+                >
+                  {link?.label}
+                </button>
+              {:else}
+                {#key entry.raw}
+                  <span
+                    class="skr-property-editable"
+                    role="textbox"
+                    tabindex="0"
+                    contenteditable="plaintext-only"
+                    aria-labelledby={`skr-property-key-${index}`}
+                    data-property-key={entry.key}
+                    onkeydown={(event) => editableKeydown(event, entry.raw)}
+                    onblur={(event) => commitScalar(entry, event.currentTarget)}
+                    >{entry.raw}</span
+                  >
+                {/key}
+              {/if}
+            </div>
+          </div>
         {/each}
-      </dl>
+
+        {#if adding}
+          <div
+            class="skr-property-row skr-property-add-row"
+            bind:this={addRowElement}
+            onfocusout={additionFocusout}
+          >
+            <span class="skr-property-label">
+              <span
+                class="skr-property-editable skr-property-add-key"
+                role="textbox"
+                tabindex="0"
+                contenteditable="plaintext-only"
+                aria-label={STRINGS.propertiesAddKeyLabel}
+                bind:this={addKeyElement}
+                onkeydown={(event) => additionKeydown(event, "key")}
+              ></span>
+            </span>
+            <div class="skr-property-value">
+              <span
+                class="skr-property-editable"
+                role="textbox"
+                tabindex="0"
+                contenteditable="plaintext-only"
+                aria-label={STRINGS.propertiesAddValueLabel}
+                bind:this={addValueElement}
+                onkeydown={(event) => additionKeydown(event, "value")}
+              ></span>
+            </div>
+          </div>
+        {:else if onAddProperty !== undefined}
+          <button
+            type="button"
+            class="skr-properties-add"
+            onclick={() => (adding = true)}
+          >
+            {STRINGS.propertiesAddProperty}
+          </button>
+        {/if}
+      </div>
     </div>
   </div>
 </section>
 
 <style>
+  /* Section 4.15: flat panel at the note top inside the prose column. No
+     card, no frame, no fill; a single hairline closes it. */
   .skr-properties {
     flex: none;
     border-bottom: 1px solid var(--skr-border);
-    background: var(--skr-surface-subtle);
     color: var(--skr-text);
     font-family: var(--skr-font-interface);
   }
 
-  .skr-properties-header {
-    display: flex;
-    justify-content: center;
-    min-height: 2.75rem;
-    background: var(--skr-surface);
-  }
-
   .skr-properties-toggle {
     display: flex;
-    align-items: center;
-    gap: 0.65rem;
+    box-sizing: border-box;
     width: min(
       100%,
       calc(var(--skr-editor-measure, 72) * 1ch + 2 * var(--skr-gutter))
     );
-    padding: 0.65rem var(--skr-gutter);
+    height: 1.75rem;
+    align-items: center;
+    gap: 0.375rem;
+    margin-inline: auto;
+    padding: 0 var(--skr-gutter);
     border: 0;
     background: transparent;
-    color: var(--skr-text);
-    font: inherit;
-    font-size: 0.82rem;
+    color: var(--skr-text-muted);
+    font-family: inherit;
+    font-size: 12px;
     font-weight: 600;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.05em;
+    line-height: 1.4;
     text-align: left;
+    text-transform: uppercase;
     cursor: pointer;
   }
 
   .skr-properties-toggle:focus-visible,
+  .skr-properties-add:focus-visible,
+  .skr-property-wikilink:focus-visible,
   input:focus-visible {
     outline: 2px solid var(--skr-focus);
     outline-offset: 2px;
   }
 
-  .skr-properties-chevron {
-    width: 0.45rem;
-    height: 0.45rem;
-    border-right: 1.5px solid var(--skr-text-muted);
-    border-bottom: 1.5px solid var(--skr-text-muted);
-    transform: rotate(-45deg);
+  .skr-properties-leading {
+    display: inline-grid;
+    width: 1rem;
+    height: 1rem;
+    flex: none;
+    place-items: center;
+  }
+
+  .skr-properties-leading svg {
+    width: 1rem;
+    height: 1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.25;
+    /* Section 4.15: the chevron swap is instant. */
     transition: none;
   }
 
-  .skr-properties-toggle[aria-expanded="true"] .skr-properties-chevron {
-    transform: rotate(45deg) translateY(-0.1rem);
+  .skr-properties-chevron-open {
+    transform: rotate(90deg);
   }
 
   .skr-properties-count {
-    display: inline-grid;
-    min-width: 1.5rem;
-    min-height: 1.5rem;
-    place-items: center;
-    border: 1px solid var(--skr-border);
-    border-radius: 999px;
-    color: var(--skr-text-muted);
-    font-size: 0.72rem;
-    font-weight: 600;
-  }
-
-  .skr-properties-path {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--skr-text-muted);
-    font-family: var(--skr-font-mono);
-    font-size: 0.72rem;
     font-weight: 400;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .skr-properties-reveal {
@@ -230,87 +387,183 @@ function editsAsDateInput(entry: FrontmatterEntry): boolean {
   }
 
   .skr-properties-list {
+    display: flex;
+    box-sizing: border-box;
     width: min(
       100%,
       calc(var(--skr-editor-measure, 72) * 1ch + 2 * var(--skr-gutter))
     );
-    box-sizing: border-box;
+    flex-direction: column;
     margin-inline: auto;
     padding-inline: var(--skr-gutter);
+    padding-bottom: 0.25rem;
   }
 
-  .skr-properties-list {
+  /* Section 4.15 rows: one property per 1.75rem line; a wrapped value
+     grows its row and is never truncated. */
+  .skr-property-row {
     display: grid;
-    grid-template-columns: minmax(7rem, max-content) minmax(10rem, 1fr);
-    gap: 0.55rem 1rem;
-    margin-block: 0;
-    padding-top: 0.75rem;
-    padding-bottom: 1rem;
-    font-size: 0.8rem;
+    min-height: 1.75rem;
+    align-items: start;
+    grid-template-columns: 8rem minmax(0, 1fr);
   }
 
-  dt {
-    align-self: center;
+  .skr-property-label {
+    overflow: hidden;
+    width: 8rem;
+    box-sizing: border-box;
+    padding-right: 0.75rem;
     color: var(--skr-text-muted);
-    font-weight: 600;
+    font-size: 13px;
+    line-height: 1.75rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  dd {
+  .skr-property-value {
+    display: flex;
     min-width: 0;
-    margin: 0;
+    align-items: center;
+    font-size: 13px;
   }
 
-  ul {
+  .skr-property-editable {
+    overflow-wrap: anywhere;
+    min-width: 1.5rem;
+    /* The edit-state 1px bottom rule of section 5.12, reserved at rest so
+       entering the edit state never moves text. */
+    border-bottom: 1px solid transparent;
+    color: var(--skr-text);
+    outline: none;
+    white-space: pre-wrap;
+  }
+
+  .skr-property-editable:focus {
+    border-bottom-color: var(--skr-border-strong);
+  }
+
+  .skr-property-chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.35rem;
+    gap: 0.25rem;
     margin: 0;
     padding: 0;
     list-style: none;
   }
 
-  input:not([type="checkbox"]) {
-    box-sizing: border-box;
-    max-width: 100%;
-    min-height: 1.85rem;
-    padding: 0.3rem 0.5rem;
-    border: 1px solid var(--skr-border);
-    border-radius: 0.35rem;
-    background: var(--skr-surface);
-    color: var(--skr-text);
+  .skr-property-chip {
+    display: inline-block;
+    border-radius: 0.25rem;
+    padding: 0.0625rem 0.375rem;
+    background: var(--skr-surface-subtle);
+    font-size: 0.8125em;
+  }
+
+  .skr-property-wikilink {
+    overflow-wrap: anywhere;
+    margin: 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--skr-accent);
     font: inherit;
+    text-align: left;
+    text-decoration: underline;
+    cursor: pointer;
   }
 
-  dd > input[type="text"] {
+  .skr-property-checkbox {
+    position: relative;
+    display: inline-grid;
+    width: 1em;
+    height: 1em;
+    place-items: center;
+  }
+
+  .skr-property-checkbox input {
+    box-sizing: border-box;
     width: 100%;
+    height: 100%;
+    margin: 0;
+    appearance: none;
+    border: 1.5px solid var(--skr-border-strong);
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
   }
 
-  .skr-property-number {
-    width: 8rem;
+  .skr-property-checkbox input:checked {
+    border-color: var(--skr-accent);
+    background: var(--skr-accent);
+  }
+
+  .skr-property-check-glyph {
+    position: absolute;
+    color: var(--skr-surface);
+    font-size: 0.78em;
+    font-weight: 800;
+    line-height: 1;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .skr-property-checkbox input:checked + .skr-property-check-glyph {
+    opacity: 1;
+  }
+
+  /* The ghost add row: revealed by panel hover or focus, never the only
+     route (the registered command reaches the same flow). */
+  .skr-properties-add {
+    display: flex;
+    min-height: 1.75rem;
+    align-items: center;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--skr-text-muted);
+    font-family: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--skr-motion-state-duration)
+      var(--skr-motion-state-easing);
+  }
+
+  .skr-properties:hover .skr-properties-add,
+  .skr-properties:focus-within .skr-properties-add,
+  .skr-properties-hovered .skr-properties-add {
+    opacity: 1;
+  }
+
+  .skr-property-add-key {
+    display: inline-block;
+    min-width: 4rem;
   }
 
   @media (max-width: 60rem) {
+    /* Section 5.1: the toggle is instant when the pane cannot hold the
+       measure and text would re-wrap. */
     .skr-properties-reveal {
       transition-duration: 0ms;
     }
 
-    .skr-properties-toggle,
-    input {
+    .skr-properties-toggle {
+      height: 2.75rem;
+    }
+
+    .skr-property-row,
+    .skr-properties-add {
       min-height: 2.75rem;
     }
 
-    .skr-properties-list {
-      grid-template-columns: 1fr;
-      gap: 0.25rem;
+    .skr-property-row {
+      grid-template-columns: minmax(0, 1fr);
     }
 
-    dd input[type="checkbox"] {
-      width: 2.75rem;
-      min-width: 2.75rem;
-    }
-
-    dd {
-      margin-bottom: 0.5rem;
+    .skr-property-label {
+      width: auto;
+      padding-right: 0;
     }
   }
 </style>

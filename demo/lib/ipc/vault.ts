@@ -10,6 +10,7 @@ import type {
   AppError,
   ByteRangeReplace,
   NoteContent,
+  NoteStat,
   TreeEntry,
   VaultHandle,
   WriteResult,
@@ -720,4 +721,16 @@ export async function readVaultFile(
 ): Promise<Uint8Array> {
   await waitForTestGate(relPath);
   return cachedFileBytes(vaultFor(handle), relPath).slice();
+}
+
+/**
+ * The seeded browser vault has no filesystem timestamps; the statusline
+ * degrades to save-time tracking in the shell.
+ */
+export async function readNoteStat(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<NoteStat> {
+  cachedFileBytes(vaultFor(handle), relPath);
+  return { modified_ms: null, created_ms: null };
 }

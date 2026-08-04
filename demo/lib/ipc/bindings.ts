@@ -15,6 +15,7 @@ export type {
   BannerReason,
   ByteRangeReplace,
   NoteContent,
+  NoteStat,
   OpenFileTarget,
   SearchHit,
   SettingsDoc,

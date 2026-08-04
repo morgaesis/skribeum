@@ -1251,3 +1251,8 @@ html body .settings-dialog {
   font-family: var(--skr-font-mono);
   font-size: 11px;
 }
+
+/* The note-info sheet body (the narrow-viewport "Note statistics" route). */
+.skr-note-info-sheet {
+  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+}

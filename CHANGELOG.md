@@ -8,6 +8,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The properties panel renders frontmatter in its compact form: a caps header
+  row with the property count, one flat line per property with a fixed label
+  column, checkbox, chip, ISO date, and wikilink-typed values, click-to-edit
+  values that write through to the exact frontmatter bytes, and an Add
+  property ghost row backed by the `Note: add property` command. The panel
+  opens expanded on wide viewports, collapsed on narrow ones, and history
+  returns paint the recorded state in the first frame.
+- A desktop statusline shows the note's last-edited time with a note-info
+  popover, center-slot confirmations such as `Link copied`, the word count
+  with a selection form and a source-mode line and column segment, and a
+  persistence slot that surfaces slow and failed writes. Phones carry no
+  statusline; the `Note statistics` command serves the same facts on every
+  viewport.
 - Desktop undo and redo history persists across note switches and application
   restarts in a per-note application-data journal. External ingests and state
   mismatches fence older history, each replay restores its recorded selection,

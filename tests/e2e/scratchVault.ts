@@ -99,6 +99,22 @@ export const RENDERING_NOTE_NAME = "zz-rendering.md";
 export const RENDERING_NOTE_CONTENT =
   "# Rendered content\n\nInline $a^2 + b^2 = c^2$.\n\n$$\nE = mc^2\n$$\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\nthis is not valid mermaid\n```\n";
 
+export const PROPERTIES_NOTE_NAME = "zz-properties.md";
+export const PROPERTIES_NOTE_CONTENT = [
+  "---",
+  "title: Properties fixture",
+  "published: false",
+  "reviewed: 2026-01-10",
+  "topics: [alpha, beta]",
+  'source: "[[zzz-navigation-target]]"',
+  "---",
+  "",
+  "# Properties fixture",
+  "",
+  "Property fixture body one two three.",
+  "",
+].join("\n");
+
 export const TAG_REFRESH_NOTE_NAME = "zz-tag-refresh.md";
 export const TAG_REFRESH_NOTE_CONTENT = "Tag catalog refresh fixture.\n";
 
@@ -360,6 +376,10 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, TASK_TRACKS_NOTE_NAME),
     TASK_TRACKS_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, PROPERTIES_NOTE_NAME),
+    PROPERTIES_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, TAG_REFRESH_NOTE_NAME),

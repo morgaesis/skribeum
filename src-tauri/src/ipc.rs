@@ -1321,8 +1321,7 @@ fn note_stat(
         path: Some(path.as_str().to_owned()),
     })?;
     Ok(NoteStat {
-        modified_ms: (metadata.mtime > Duration::ZERO)
-            .then(|| epoch_milliseconds(metadata.mtime)),
+        modified_ms: (metadata.mtime > Duration::ZERO).then(|| epoch_milliseconds(metadata.mtime)),
         created_ms: metadata.created.map(epoch_milliseconds),
     })
 }

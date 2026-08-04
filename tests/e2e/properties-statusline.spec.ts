@@ -456,7 +456,10 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
     // On wide viewports the confirmation lives in the statusline, not the
     // banner strip.
     expect(await $('aside[role="status"]').isExisting()).toBe(false);
-    // The dismissal is the 50ms state-class opacity fade of section 5.1.
+    // The dismissal is the 50ms state-class opacity fade of section 5.1;
+    // some CI runners default to prefers-reduced-motion, which zeros every
+    // duration per section 5.1 (see resolves_state_surface_and_panel_motion
+    // _from_the_built_theme in tests/e2e/smoke.spec.ts for the same check).
     const transition = await browser.execute(() => {
       const element = document.querySelector<HTMLElement>(
         ".skr-statusline-announcement",
@@ -466,9 +469,12 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
       return {
         duration: style.transitionDuration,
         property: style.transitionProperty,
+        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
       };
     });
-    expect(transition?.duration).toBe("0.05s");
+    expect(transition?.duration).toBe(
+      transition?.reducedMotion ? "0s" : "0.05s",
+    );
     expect(transition?.property).toContain("opacity");
     await announcement.waitForExist({ reverse: true, timeout: 5000 });
   });
@@ -564,7 +570,19 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
       (frame) => frame.expanded === "true" || frame.height > 0,
     );
     expect(expandedFrames).toHaveLength(0);
-    expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+    // The last recorded frame already confirms the settled state; querying
+    // fresh here (rather than reusing the toggle reference captured before
+    // the panel remounted on arrival) avoids a stale-element race against
+    // that remount.
+    expect(frames.at(-1)?.expanded).toBe("false");
+    expect(
+      await browser.execute(
+        () =>
+          document
+            .querySelector(".skr-properties-toggle")
+            ?.getAttribute("aria-expanded") ?? null,
+      ),
+    ).toBe("false");
 
     // A fresh open (no tab view-state to restore) returns to the
     // wide-viewport default: close the tab, then open the note again.

@@ -11,10 +11,12 @@ import { createAppRegistry } from "../../src/lib/features";
 import { setTaskStatusAtCursor } from "../../src/lib/features/taskCommands";
 import type { CommandContext } from "../../src/lib/registry";
 import {
+  defaultTaskStatusDocuments,
   defaultTaskStatuses,
   normalizeTaskStatuses,
   type TaskStatus,
   taskStatusCommandId,
+  validateTaskStatusDocuments,
 } from "../../src/lib/taskStatuses";
 
 const CUSTOM_STATUSES: TaskStatus[] = [
@@ -268,5 +270,26 @@ describe("task status commands and byte fidelity", () => {
     expect(
       decoder.decode(applyByteChangeSet(original, request.changeSet)),
     ).toBe("\uFEFF- [~] café\r\nnext\n");
+  });
+});
+
+describe("default Todo marker (design system section 3.6)", () => {
+  it("ships the default Todo state with no glyph, so the checkbox renders as its bare box", () => {
+    const todo = defaultTaskStatuses().find((status) => status.symbol === " ");
+    expect(todo?.category).toBe("TODO");
+    expect(todo?.glyph).toBe("");
+  });
+
+  it("leaves every other default state's glyph untouched", () => {
+    const nonTodo = defaultTaskStatuses().filter(
+      (status) => status.symbol !== " ",
+    );
+    expect(nonTodo.every((status) => status.glyph.length > 0)).toBe(true);
+  });
+
+  it("survives document validation despite its empty glyph", () => {
+    expect(validateTaskStatusDocuments(defaultTaskStatusDocuments())).toEqual(
+      defaultTaskStatusDocuments(),
+    );
   });
 });

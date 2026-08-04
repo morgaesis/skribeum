@@ -14,7 +14,17 @@ export type NoteTitleSource = {
   source: string;
 };
 
-const NOTE_EXTENSION = /\.(?:md|markdown|txt)$/iu;
+/**
+ * Extensions the vault treats as an editable plain-text note, matching the
+ * Rust vault scanner's own classification (`src-tauri/src/lib.rs`,
+ * `src-tauri/src/ipc.rs`). A path outside this set becomes an opaque
+ * `EntryKind::File` row that the tree cannot open or select, so the rename
+ * flow (`App.svelte`) validates against this same list before applying a
+ * rename, rather than letting the two drift apart.
+ */
+export const NOTE_EXTENSIONS = ["md", "markdown", "txt"] as const;
+
+const NOTE_EXTENSION = new RegExp(`\\.(?:${NOTE_EXTENSIONS.join("|")})$`, "iu");
 
 /** True when a path names an editable plain-text note. */
 export function isNotePath(path: string): boolean {

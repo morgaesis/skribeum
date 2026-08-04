@@ -1,8 +1,11 @@
 <script lang="ts">
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { onMount } from "svelte";
-import { readOnlyDecorationMode } from "../editor/decorations/engine";
+import { onMount, untrack } from "svelte";
+import {
+  dispatchWikilinkContext,
+  readOnlyDecorationMode,
+} from "../editor/decorations/engine";
 import type { WikilinkResolutionContext } from "../editor/decorations/wikilinks";
 import { parseFrontmatter } from "../editor/frontmatter";
 import { noteRenderingExtensions } from "../editor/syntaxPolicy";
@@ -35,12 +38,15 @@ function visibleSource(markdown: string): string {
   return markdown.slice(bodyStart).replace(/^\n/u, "");
 }
 
-function stateFor(markdown: string): EditorState {
+function stateFor(
+  markdown: string,
+  linkContext: WikilinkResolutionContext | undefined,
+): EditorState {
   const body = visibleSource(markdown);
   return EditorState.create({
     doc: body,
     extensions: [
-      ...noteRenderingExtensions(body, context, taskStatuses),
+      ...noteRenderingExtensions(body, linkContext, taskStatuses),
       readOnlyDecorationMode,
       EditorView.lineWrapping,
       EditorState.readOnly.of(true),
@@ -54,18 +60,38 @@ function stateFor(markdown: string): EditorState {
 }
 
 onMount(() => {
-  view = new EditorView({ state: stateFor(source), parent: host });
+  view = new EditorView({ state: stateFor(source, context), parent: host });
   return () => view?.destroy();
 });
 
+// A document or task-status change rebuilds the editor state outright; both
+// are baked into the extension set at creation. The wikilink context is
+// read through `untrack` here so an unrelated pane's navigation, which
+// gives this component a freshly identical context object on every
+// re-render, does not itself trigger a rebuild: rebuilding tears down and
+// recreates every decoration, including a rendered Mermaid diagram, which
+// is the flicker this split avoids.
 $effect(() => {
   const nextSource = source;
-  const nextContext = context;
   const nextTaskStatuses = taskStatuses;
+  void nextTaskStatuses;
   if (view !== undefined) {
-    void nextContext;
-    void nextTaskStatuses;
-    view.setState(stateFor(nextSource));
+    view.setState(
+      stateFor(
+        nextSource,
+        untrack(() => context),
+      ),
+    );
+  }
+});
+
+// Wikilink resolution context changes (a tree refresh, a config edit) push
+// through the live state field instead, the same incremental path the
+// editable editor uses, so decorations that did not change keep their DOM.
+$effect(() => {
+  const nextContext = context;
+  if (view !== undefined && nextContext !== undefined) {
+    dispatchWikilinkContext(view, nextContext);
   }
 });
 </script>

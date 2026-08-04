@@ -620,6 +620,11 @@ async function saveAndExpectTagCompletionTarget(expected: string) {
 }
 
 async function editorText(): Promise<string> {
+  // The rendered text only spans CodeMirror's virtualized viewport; a note
+  // switch that is still replaying its saved scroll (see
+  // waitForEditorArrival) can leave the target content outside that
+  // viewport until the restoration settles.
+  await waitForEditorArrival();
   return $(".skr-editor-pane-focused .cm-content").getText();
 }
 
@@ -679,6 +684,9 @@ async function waitForCapturedHistoryState(
 }
 
 async function editorDocumentText(): Promise<string> {
+  // See editorText: only rendered lines are queried, and the viewport can
+  // still be mid-restoration immediately after a note switch.
+  await waitForEditorArrival();
   return browser.execute(() =>
     [...document.querySelectorAll<HTMLElement>(".cm-line")]
       .map((line) => line.textContent ?? "")

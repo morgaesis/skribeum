@@ -46,6 +46,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pointer with no animation, and reduced motion or the animations setting
   turns every one of these transitions into its instant final state.
 
+### Changed
+
+- The installed version shows in the Updates section directly beside the
+  check-for-updates control, replacing the About section row; version search
+  and the command palette land on the one remaining row.
+
 ### Security
 
 - Rust advisory checks reject unsound transitive dependencies, and JavaScript
@@ -55,6 +61,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The desktop window always appears at startup. A corrupt or unreadable
+  settings file falls back to default settings and the window still shows; a
+  native watchdog reveals the window even when the frontend fails to boot; a
+  second launch reveals and focuses a hidden running instance instead of
+  exiting silently; and a broken single-instance endpoint or capability file
+  degrades to running without instance dedup rather than stopping the
+  application before a window exists.
 - Release-profile builds compile: the development-only TypeScript bindings
   export is confined to debug assertions, and continuous integration checks
   the release profile so the shipping configuration is gated.

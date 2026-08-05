@@ -1,10 +1,5 @@
 export type PaneSwitchKind = "note" | "history" | "tab";
 
-/** Tabs retain their live view and do not replay note-arrival motion. */
-export function paneSwitchUsesArrivalMotion(kind: PaneSwitchKind): boolean {
-  return kind !== "tab";
-}
-
 function cssTimeMilliseconds(value: string): number {
   const trimmed = value.trim();
   if (trimmed.endsWith("ms")) {

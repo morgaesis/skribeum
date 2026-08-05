@@ -5978,7 +5978,7 @@ describe("skribeum core editing surfaces", () => {
     expect(
       Math.abs(dialogGeometry.width - dialogGeometry.expectedWidth),
     ).toBeLessThan(1);
-    expect(dialogGeometry.versionHomes).toEqual(["about.version"]);
+    expect(dialogGeometry.versionHomes).toEqual(["updates.version"]);
 
     await setViewportSize(390, 844);
     const cardGeometry = await browser.execute(() => {

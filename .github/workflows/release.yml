@@ -293,7 +293,10 @@ jobs:
             exit 1
           fi
           sha256sum "${assets[@]}" > CHECKSUM
-          bunx tauri signer sign CHECKSUM
+          # The signer must be the workspace-pinned Tauri CLI: a bare bunx
+          # from this temporary directory cannot see the workspace
+          # node_modules and resolves a registry package by name instead.
+          (cd "$GITHUB_WORKSPACE" && bun run tauri signer sign "$release_directory/CHECKSUM")
           # Tauri emits a base64-encoded Minisign document for updater
           # manifests. Release the decoded document for the Minisign CLI.
           base64 --decode CHECKSUM.sig > CHECKSUM.minisig

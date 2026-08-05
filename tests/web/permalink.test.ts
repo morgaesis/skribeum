@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   generateNoteId,
   isNoteId,
+  normalizeNoteIdScalar,
   noteIdFromContent,
   PERMALINK_ID_PARAMETER,
   PERMALINK_ORIGIN,
@@ -58,6 +59,12 @@ describe("frontmatter id extraction", () => {
     expect(noteIdFromContent("---\nid: 'dQw4w9WgXcQ'\n---\n")).toBe(
       "dQw4w9WgXcQ",
     );
+  });
+
+  it("normalizes a quoted scalar the same way the copy path does", () => {
+    expect(normalizeNoteIdScalar('"dQw4w9WgXcQ"')).toBe("dQw4w9WgXcQ");
+    expect(normalizeNoteIdScalar("'dQw4w9WgXcQ'")).toBe("dQw4w9WgXcQ");
+    expect(normalizeNoteIdScalar("dQw4w9WgXcQ")).toBe("dQw4w9WgXcQ");
   });
 
   it("returns null for a note without frontmatter or an id key", () => {

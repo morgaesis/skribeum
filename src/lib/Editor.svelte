@@ -51,7 +51,7 @@ import {
   type EditorStatistics,
   type PersistenceState,
 } from "./features/noteStatistics";
-import { generateNoteId } from "./features/permalink";
+import { generateNoteId, normalizeNoteIdScalar } from "./features/permalink";
 import { selectionToolbar } from "./features/selectionToolbar";
 import {
   DEFAULT_SETTINGS,
@@ -349,7 +349,7 @@ export function ensurePermalinkId(): string | null {
   if (current === null) return null;
   const existing = current.entries.find((entry) => entry.key === "id");
   if (existing !== undefined) {
-    return existing.raw;
+    return normalizeNoteIdScalar(existing.raw);
   }
   const id = generateNoteId();
   const insertion = propertyInsertion(current, "id", id);

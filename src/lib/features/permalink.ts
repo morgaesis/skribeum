@@ -51,7 +51,7 @@ export function permalinkUrlForId(id: string): string {
 }
 
 /** Strips one layer of matching quotes a hand-authored id might carry. */
-function unwrapScalar(raw: string): string {
+export function normalizeNoteIdScalar(raw: string): string {
   if (raw.length >= 2) {
     const first = raw.charAt(0);
     const last = raw.charAt(raw.length - 1);
@@ -77,7 +77,7 @@ export function noteIdFromContent(text: string): string | null {
     return null;
   }
   const entry = frontmatter.entries.find((candidate) => candidate.key === "id");
-  return entry === undefined ? null : unwrapScalar(entry.raw);
+  return entry === undefined ? null : normalizeNoteIdScalar(entry.raw);
 }
 
 /**

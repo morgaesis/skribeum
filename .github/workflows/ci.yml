@@ -77,6 +77,11 @@ jobs:
 
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # Release artifacts compile with debug assertions off, which changes
+      # which cfg-gated code exists; the debug-profile jobs cannot see a
+      # release-only compile error.
+      - run: cargo check --workspace --release --locked
+
       - run: cargo test --workspace --locked
 
       - name: Run Rust benchmarks and compare baselines

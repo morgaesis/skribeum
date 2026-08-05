@@ -186,6 +186,15 @@ type TabSnapshot = {
 };
 const tabSnapshots = new Map<string, TabSnapshot>();
 
+/**
+ * Snapshots are captured for every outgoing note, not only ones that stay
+ * open as tabs, so single-tab browsing across a large vault would otherwise
+ * retain a full document and undo history per visited path. The cap evicts
+ * the least recently captured entries; anything evicted simply falls back
+ * to the composed-arrival rebuild a fresh open uses.
+ */
+const TAB_SNAPSHOT_LIMIT = 32;
+
 const historyCompartment = new Compartment();
 const renderingCompartment = new Compartment();
 const settingsCompartment = new Compartment();
@@ -1041,11 +1050,17 @@ async function rereadAndReconcile(): Promise<void> {
 /** Snapshots the outgoing tab's live state before its note is replaced. */
 function captureOutgoingTabState(): void {
   if (view === undefined || renderedPath === null) return;
+  tabSnapshots.delete(renderedPath);
   tabSnapshots.set(renderedPath, {
     state: view.state,
     scrollTop: view.scrollDOM.scrollTop,
     propertiesExpanded,
   });
+  while (tabSnapshots.size > TAB_SNAPSHOT_LIMIT) {
+    const oldest = tabSnapshots.keys().next().value;
+    if (oldest === undefined) break;
+    tabSnapshots.delete(oldest);
+  }
 }
 
 /**

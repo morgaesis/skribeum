@@ -351,11 +351,6 @@ select {
   background: var(--skr-surface-subtle);
 }
 
-.skr-tree-row[aria-selected="true"] {
-  background: var(--skr-accent-subtle);
-  box-shadow: inset 2px 0 var(--skr-accent);
-}
-
 .skr-tree-row:focus-visible {
   outline: 2px solid var(--skr-focus);
   outline-offset: -2px;
@@ -382,6 +377,23 @@ select {
 /* Rows a collapse hides linger as presentation-only ghosts while they fade
    on the panel clock; they never intercept the pointer. */
 .skr-tree-ghost {
+  pointer-events: none;
+}
+
+/* The open note's highlight is one overlay that travels between rows on the
+   panel clock rather than a per-row fill that pops on the row itself; a row
+   in front of it stays transparent at rest so the overlay shows through. It
+   sits behind every row in paint order (first in markup, no explicit
+   z-index needed) and never intercepts the pointer. */
+.skr-tree-active-highlight {
+  position: absolute;
+  right: 0.25rem;
+  left: 0.25rem;
+  box-sizing: border-box;
+  border-radius: var(--skr-radius-control);
+  background: var(--skr-accent-subtle);
+  box-shadow: inset 2px 0 var(--skr-accent);
+  opacity: 0;
   pointer-events: none;
 }
 

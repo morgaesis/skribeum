@@ -26,6 +26,11 @@ const FOLDER_REVEAL_TRANSITION = [
   "background-color var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
 ].join(", ");
 
+// The open note's highlight travel: a compositor-only transform on the
+// panel clock, matching the folder reveal's own reflow clock above.
+const ACTIVE_HIGHLIGHT_TRAVEL_TRANSITION =
+  "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)";
+
 let {
   entries,
   selectedPath = null,
@@ -75,6 +80,14 @@ let folderMotionGeneration = 0;
 let folderMotionElements: HTMLElement[] = [];
 let ghostElements = $state<Array<HTMLElement | undefined>>([]);
 let leavingRows = $state<GhostRow[]>([]);
+let highlightElement = $state<HTMLElement>();
+// Plain (non-reactive) bookkeeping: the choreography effect below both
+// reads and writes these, and making them `$state` would make its own
+// writes re-trigger itself mid-flush, stomping the entrance markers it had
+// just set.
+let highlightRestTop: number | null = null;
+let highlightAnimatedPath: string | null = null;
+let highlightMotionGeneration = 0;
 
 type RowPresentation = {
   path: string;
@@ -200,6 +213,15 @@ const rows = $derived.by((): Row[] => {
   return visible;
 });
 
+const activeRowIndex = $derived(
+  selectedPath === null
+    ? -1
+    : rows.findIndex((row) => row.path === selectedPath),
+);
+const activeRowTop = $derived(
+  activeRowIndex < 0 ? null : TREE_PADDING + activeRowIndex * rowHeight,
+);
+
 const windowStart = $derived(
   Math.max(
     0,
@@ -282,6 +304,88 @@ $effect(() => {
       if (index >= 0) void focusRow(index, false);
     });
   }
+});
+
+/**
+ * Travels the open-note highlight from its previous row to the new one on
+ * the panel clock, a compositor-only transform. The overlay's own geometry
+ * (top) always applies instantly; only the leftover transform interpolates.
+ * This effect re-runs for reasons other than a selection change too (the
+ * tree reflowing under an unchanged selection, e.g. a sibling folder
+ * toggling), in which case it just follows the new geometry with no
+ * choreography at all: the travel is reserved for an actual note change.
+ * When the previous row has left the screen (first selection, or the row
+ * sat inside what is now a collapsed folder), there is nothing to travel
+ * from, so the highlight enters in place with the surface class instead.
+ */
+$effect(() => {
+  const path = selectedPath;
+  const top = activeRowTop;
+  const element = highlightElement;
+  if (element === undefined) return;
+
+  if (top === null) {
+    // Deliberately leaves `highlightAnimatedPath` untouched: a row can
+    // resolve to null on an intermediate pass within the same flush (e.g.
+    // the tree hasn't derived its rows yet) before settling on the real
+    // target a moment later, and recording the path here would make that
+    // later, real pass look like a no-op re-selection instead of new.
+    element.style.transition = "";
+    element.style.transform = "";
+    element.style.opacity = "0";
+    highlightRestTop = null;
+    return;
+  }
+
+  const isNewSelection = path !== highlightAnimatedPath;
+  highlightAnimatedPath = path;
+  const generation = ++highlightMotionGeneration;
+
+  // The panel-duration custom property is root-scoped (theme and the
+  // reduced-motion/animations-off overrides both apply at `:root`), so this
+  // reads it from the document root rather than the tree element, which may
+  // not have its `bind:this` resolved yet on the very first run.
+  const duration = motionDurationMilliseconds("--skr-motion-panel-duration");
+
+  if (duration === 0 || !isNewSelection) {
+    delete element.dataset.motionSurface;
+    element.style.transition = "";
+    element.style.transform = "";
+    element.style.opacity = "1";
+    element.style.top = `${top}px`;
+    highlightRestTop = top;
+    return;
+  }
+
+  const previousTop = highlightRestTop;
+  if (previousTop === null) {
+    element.style.transition = "";
+    element.style.transform = "";
+    element.style.opacity = "";
+    element.style.top = `${top}px`;
+    highlightRestTop = top;
+    delete element.dataset.motionExiting;
+    element.dataset.motionSurface = "fade";
+    enterMotionSurface(element);
+    return;
+  }
+
+  delete element.dataset.motionSurface;
+  element.style.transition = "none";
+  element.style.opacity = "1";
+  element.style.top = `${top}px`;
+  element.style.transform = `translateY(${previousTop - top}px)`;
+  highlightRestTop = top;
+  void element.offsetHeight;
+  requestAnimationFrame(() => {
+    if (generation !== highlightMotionGeneration) return;
+    element.style.transition = ACTIVE_HIGHLIGHT_TRAVEL_TRANSITION;
+    element.style.transform = "";
+    setTimeout(() => {
+      if (generation !== highlightMotionGeneration) return;
+      element.style.transition = "";
+    }, duration);
+  });
 });
 
 $effect(() => {
@@ -680,6 +784,14 @@ function dropOn(destination: string | null) {
     aria-hidden="true"
     class="skr-tree-spacer"
     style={`height: ${TREE_PADDING * 2 + rows.length * rowHeight}px`}
+  ></li>
+  <li
+    bind:this={highlightElement}
+    role="presentation"
+    aria-hidden="true"
+    inert
+    class="skr-tree-active-highlight"
+    style={`height: ${rowHeight}px`}
   ></li>
   {#each renderedIndices as index (rows[index]?.path)}
     {@const row = rows[index]}

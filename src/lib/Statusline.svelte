@@ -9,7 +9,7 @@ import {
   formatWordCount,
   type PersistenceState,
 } from "./features/noteStatistics";
-import { enterMotionSurface } from "./motion";
+import { enterMotionSurface, exitMotionSurface } from "./motion";
 import NoteInfo from "./NoteInfo.svelte";
 import { STRINGS } from "./strings";
 
@@ -45,6 +45,12 @@ let announcementTimer: ReturnType<typeof setTimeout> | undefined;
 let failureOpen = $state(false);
 let editedSegment = $state<HTMLButtonElement | undefined>();
 let barElement = $state<HTMLElement | undefined>();
+let infoRendered = $state(false);
+let infoPopover = $state<HTMLElement | undefined>();
+let infoCloseGeneration = 0;
+let failureRendered = $state(false);
+let failurePopover = $state<HTMLElement | undefined>();
+let failureCloseGeneration = 0;
 
 const lastEdited = $derived(
   path !== null && modifiedMs !== null && modifiedMs !== undefined
@@ -98,6 +104,41 @@ function closeSurfaces(restoreFocus: boolean) {
   }
 }
 
+// The popovers stay rendered through their 50ms exit so a dismissal leaves
+// with the mirror of its entrance motion; the open flags themselves flip
+// instantly and nothing ever waits on the fade.
+$effect(() => {
+  if (infoOpen) {
+    infoCloseGeneration += 1;
+    if (infoRendered) enterMotionSurface(infoPopover);
+    infoRendered = true;
+  } else if (infoRendered) {
+    const generation = ++infoCloseGeneration;
+    const popover = infoPopover;
+    const finish = () => {
+      if (generation === infoCloseGeneration) infoRendered = false;
+    };
+    if (popover === undefined) finish();
+    else void exitMotionSurface(popover, finish);
+  }
+});
+
+$effect(() => {
+  if (failureOpen) {
+    failureCloseGeneration += 1;
+    if (failureRendered) enterMotionSurface(failurePopover);
+    failureRendered = true;
+  } else if (failureRendered) {
+    const generation = ++failureCloseGeneration;
+    const popover = failurePopover;
+    const finish = () => {
+      if (generation === failureCloseGeneration) failureRendered = false;
+    };
+    if (popover === undefined) finish();
+    else void exitMotionSurface(popover, finish);
+  }
+});
+
 function onWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape" && (infoOpen || failureOpen)) {
     event.preventDefault();
@@ -148,8 +189,9 @@ function surfaceEnter(node: HTMLElement) {
         {lastEdited}
       </button>
     {/if}
-    {#if infoOpen}
+    {#if infoRendered}
       <div
+        bind:this={infoPopover}
         class="skr-statusline-popover"
         role="dialog"
         aria-label={STRINGS.noteInfoLabel}
@@ -212,8 +254,9 @@ function surfaceEnter(node: HTMLElement) {
       >
         {STRINGS.statuslineSaveFailed}
       </button>
-      {#if failureOpen && persistence.kind === "failed"}
+      {#if failureRendered && persistence.kind === "failed"}
         <div
+          bind:this={failurePopover}
           class="skr-statusline-popover skr-statusline-popover-trailing"
           role="dialog"
           aria-label={STRINGS.statuslineSaveFailed}

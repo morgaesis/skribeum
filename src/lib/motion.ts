@@ -25,11 +25,25 @@ export function hoverIntentDelay(
   );
 }
 
+/** Resolves a motion-class duration custom property to milliseconds. */
+export function motionDurationMilliseconds(
+  property:
+    | "--skr-motion-state-duration"
+    | "--skr-motion-surface-duration"
+    | "--skr-motion-panel-duration",
+  element: Element = document.documentElement,
+): number {
+  return cssTimeMilliseconds(
+    getComputedStyle(element).getPropertyValue(property),
+  );
+}
+
 /** Starts an entrance after the initial compositor state has been resolved. */
 export function enterMotionSurface(
   element: HTMLElement | null | undefined,
 ): void {
   if (element == null) return;
+  delete element.dataset.motionExiting;
   element.dataset.motionEntered = "false";
   if (!element.isConnected) {
     requestAnimationFrame(() => {

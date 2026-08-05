@@ -533,6 +533,7 @@ select {
 }
 
 .skr-tab-items {
+  position: relative;
   display: flex;
   min-width: 0;
   flex: 1;
@@ -586,17 +587,21 @@ select {
   font-weight: 600;
 }
 
-.skr-tab-active::after {
+/* The active-tab indicator is one overlay that travels between tabs on the
+   panel clock rather than a per-tab bar that pops on the active tab itself;
+   left and width are written inline as it tracks its tab. Its color follows
+   pane focus, not selection: a bar in an unfocused split's strip is still
+   visible, just muted, since section 4.10 keeps the split model legible. */
+.skr-tab-active-indicator {
   position: absolute;
-  right: 0;
   bottom: 0;
-  left: 0;
   height: 2px;
   background: var(--skr-border-strong);
-  content: "";
+  opacity: 0;
+  pointer-events: none;
 }
 
-.skr-tab-focused::after {
+.skr-tab-active-indicator-focused {
   background: var(--skr-accent);
 }
 

@@ -246,6 +246,15 @@ class ValidatorTests(unittest.TestCase):
         body = self.body.replace("- 📖 **Reading", "- é **Reading")
         self.assert_invalid(body, "every introduction bullet")
 
+    def test_arrows_block_emoji_counts_as_a_bullet_emoji(self) -> None:
+        body = self.body.replace("- 📖 **Reading", "- ↩️ **Reading")
+        self.assertEqual(
+            [],
+            RELEASE_NOTES.validate_generated_body(
+                body, self.section, "morgaesis/skribeum", "v0.0.6"
+            ),
+        )
+
     def test_ungrounded_bold_lead_is_rejected(self) -> None:
         body = self.body.replace(
             "**Reading column styles behave.**",

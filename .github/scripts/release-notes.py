@@ -29,7 +29,19 @@ EMOJI_BOLD_LEAD_BULLET = re.compile(
     r"^\s*-\s+(?:(?P<icon>\S+)\s+)?\*\*(?P<lead>.+?)\*\*(?:\s+(?P<trailing_icon>\S+))?",
     re.MULTILINE,
 )
-EMOJI = re.compile(r"[\u2600-\u27bf\U0001f000-\U0001faff]")
+# Every Unicode block emoji presentation draws from, including the arrows,
+# technical, geometric, and supplemental-symbol blocks and the emoji
+# variation selector; a class limited to the miscellaneous-symbols and
+# supplemental planes rejects legitimate bullets such as one led by U+21A9.
+EMOJI = re.compile(
+    "["
+    "\u00a9\u00ae\u203c\u2049\u2122\u2139"
+    "\u2190-\u21ff\u2300-\u23ff\u24c2\u25a0-\u27bf"
+    "\u2934\u2935\u2b00-\u2bff\u3030\u303d\u3297\u3299"
+    "\ufe0f"
+    "\U0001f000-\U0001faff"
+    "]"
+)
 WORD = re.compile(r"[a-z0-9]+")
 STOP_WORDS = {
     "about",

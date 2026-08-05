@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onMount, tick } from "svelte";
 import { type CommandTooltipOptions, commandTooltip } from "./commandTooltip";
+import { enterMotionSurface, exitMotionSurface } from "./motion";
 import { resolveTitleCollisions } from "./noteTitles";
 import { STRINGS } from "./strings";
 import type { WorkspaceTab } from "./workspaceState";
@@ -29,10 +30,15 @@ let dragging = $state<number | null>(null);
 let insertion = $state<number | null>(null);
 let listOpen = $state(false);
 let itemsElement = $state<HTMLDivElement>();
+let listMenuElement = $state<HTMLDivElement>();
 let overflowed = $state(false);
 let scrollPointer = $state<number | null>(null);
 let scrollOriginX = 0;
 let scrollOriginLeft = 0;
+// The dragged tab's width, measured once when its drag starts; the gap the
+// passed-over tabs open is exactly the slot the tab will land in.
+let dragWidth = 0;
+let listCloseGeneration = 0;
 
 const titles = $derived(
   resolveTitleCollisions(
@@ -55,6 +61,35 @@ function finishReorder() {
   }
   dragging = null;
   insertion = null;
+}
+
+/**
+ * How far a tab shifts to open the dragged tab's landing gap. The dragged
+ * tab itself follows the pointer natively with no animation; only the tabs
+ * it passes over translate, on the panel clock, and dropping resets every
+ * offset instantly as the reordered strip takes over.
+ */
+function reorderOffset(index: number): number {
+  if (dragging === null || insertion === null) return 0;
+  if (dragging < index && index < insertion) return -dragWidth;
+  if (insertion <= index && index < dragging) return dragWidth;
+  return 0;
+}
+
+function openList() {
+  listCloseGeneration += 1;
+  listOpen = true;
+  void tick().then(() => enterMotionSurface(listMenuElement));
+}
+
+function closeList() {
+  const menu = listMenuElement;
+  const generation = ++listCloseGeneration;
+  const finish = () => {
+    if (generation === listCloseGeneration) listOpen = false;
+  };
+  if (menu === undefined) finish();
+  else void exitMotionSurface(menu, finish);
 }
 
 function measureOverflow() {
@@ -126,6 +161,7 @@ function finishScrollDrag(event: PointerEvent) {
     <div
       class="skr-tab-items"
       class:skr-tab-items-scrolling={scrollPointer !== null}
+      class:skr-tab-items-reordering={dragging !== null}
       role="tablist"
       tabindex="-1"
       aria-label={STRINGS.openTabs}
@@ -147,6 +183,10 @@ function finishScrollDrag(event: PointerEvent) {
         class:skr-tab-focused={focused && tab.path === activePath}
         class:skr-tab-active={tab.path === activePath}
         class:skr-tab-insertion={insertion === index && dragging !== index}
+        class:skr-tab-dragging={dragging === index}
+        style:transform={dragging !== null && dragging !== index
+          ? `translateX(${reorderOffset(index)}px)`
+          : null}
         draggable="true"
         onmousedown={(event) => closeWithMiddleButton(event, tab.path)}
         onclick={(event) => {
@@ -161,6 +201,7 @@ function finishScrollDrag(event: PointerEvent) {
         }}
         ondragstart={(event) => {
           dragging = index;
+          dragWidth = event.currentTarget.offsetWidth;
           event.dataTransfer?.setData("application/x-skribeum-tab", tab.path);
           if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = "move";
         }}
@@ -208,14 +249,20 @@ function finishScrollDrag(event: PointerEvent) {
           aria-haspopup="menu"
           aria-expanded={listOpen}
           use:commandTooltip={{ title: STRINGS.allTabs }}
-          onclick={() => (listOpen = !listOpen)}
+          onclick={() => (listOpen ? closeList() : openList())}
         >
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path d="M3 4h10M3 8h10M3 12h10" />
           </svg>
         </button>
         {#if listOpen}
-          <div class="skr-tab-menu" role="menu" aria-label={STRINGS.allTabs}>
+          <div
+            bind:this={listMenuElement}
+            class="skr-tab-menu"
+            role="menu"
+            aria-label={STRINGS.allTabs}
+            data-motion-surface="anchored-top"
+          >
             {#each tabs as tab, index (tab.path)}
               {@const title = titles[index]}
               <button
@@ -223,7 +270,7 @@ function finishScrollDrag(event: PointerEvent) {
                 role="menuitemradio"
                 aria-checked={tab.path === activePath}
                 onclick={() => {
-                  listOpen = false;
+                  closeList();
                   onActivate(tab.path);
                 }}
               >

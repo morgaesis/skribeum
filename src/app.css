@@ -379,6 +379,12 @@ select {
   box-shadow: inset 0 0 0 2px var(--skr-accent);
 }
 
+/* Rows a collapse hides linger as presentation-only ghosts while they fade
+   on the panel clock; they never intercept the pointer. */
+.skr-tree-ghost {
+  pointer-events: none;
+}
+
 .skr-tree-indent-guide {
   position: absolute;
   top: 0;
@@ -580,6 +586,18 @@ select {
 
 .skr-tab-focused::after {
   background: var(--skr-accent);
+}
+
+/* While a tab drags, the tabs it passes over reflow to open its landing
+   gap on the panel clock, a compositor-only translate; the dragged tab
+   itself follows the pointer natively with no animation at all. */
+.skr-tab-items-reordering .skr-tab-shell {
+  transition: transform var(--skr-motion-panel-duration)
+    var(--skr-motion-panel-easing);
+}
+
+.skr-tab-items-reordering .skr-tab-dragging {
+  transition: none;
 }
 
 .skr-tab-insertion::before {
@@ -1145,8 +1163,31 @@ html body .settings-dialog {
   transform: none;
 }
 
+/* Exits keep the state-class 50ms while mirroring the surface's own
+   entrance transform, so a surface that arrived with motion leaves with
+   the same motion in reverse rather than a bare fade. */
 [data-motion-surface][data-motion-exiting="true"] {
   opacity: 0;
+  transform: none;
+  transition:
+    opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing),
+    transform var(--skr-motion-state-duration) var(--skr-motion-state-easing);
+}
+
+[data-motion-surface="centered"][data-motion-exiting="true"] {
+  transform: scale(0.98);
+}
+
+[data-motion-surface="anchored-top"][data-motion-exiting="true"] {
+  transform: translateY(calc(-1 * var(--skr-motion-distance)));
+}
+
+[data-motion-surface="anchored-bottom"][data-motion-exiting="true"] {
+  transform: translateY(var(--skr-motion-distance));
+}
+
+[data-motion-surface="fade"][data-motion-exiting="true"],
+[data-motion-surface="scrim"][data-motion-exiting="true"] {
   transform: none;
   transition: opacity var(--skr-motion-state-duration)
     var(--skr-motion-state-easing);
@@ -1180,6 +1221,12 @@ html body .settings-dialog {
 
 @media (max-width: 60rem) {
   .settings-jump-menu[data-motion-entered="false"] {
+    transform: translateY(var(--skr-motion-distance));
+  }
+
+  /* On narrow viewports the jump menu rises from the bottom edge, so its
+     exit mirrors that direction instead of the anchored-top default. */
+  .settings-jump-menu[data-motion-exiting="true"] {
     transform: translateY(var(--skr-motion-distance));
   }
 

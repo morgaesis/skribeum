@@ -2,6 +2,11 @@
 import { tick } from "svelte";
 import { commandTooltip } from "./commandTooltip";
 import type { TreeEntry } from "./ipc/bindings";
+import {
+  enterMotionSurface,
+  exitMotionSurface,
+  motionDurationMilliseconds,
+} from "./motion";
 import { noteFileName, noteIcon, resolveTitleCollisions } from "./noteTitles";
 import type { CommandContext, CommandRegistry } from "./registry";
 import { STRINGS } from "./strings";
@@ -11,6 +16,15 @@ const TOUCH_ROW_HEIGHT = 44;
 const TREE_PADDING = 4;
 const OVERSCAN_ROWS = 12;
 const HOLD_DELAY_MS = 550;
+
+// The folder reveal choreography: rows displaced by a toggle translate from
+// their previous slot and revealed or hidden rows cross-fade, all on the
+// panel clock, while row hover fills keep the state clock throughout.
+const FOLDER_REVEAL_TRANSITION = [
+  "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
+  "opacity var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
+  "background-color var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
+].join(", ");
 
 let {
   entries,
@@ -56,6 +70,20 @@ let dragPath = $state<string | null>(null);
 let dropPath = $state<string | null>(null);
 let hoveredPath = $state<string | null>(null);
 let holdTimer: ReturnType<typeof setTimeout> | null = null;
+let menuCloseGeneration = 0;
+let folderMotionGeneration = 0;
+let folderMotionElements: HTMLElement[] = [];
+let ghostElements = $state<Array<HTMLElement | undefined>>([]);
+let leavingRows = $state<GhostRow[]>([]);
+
+type RowPresentation = {
+  path: string;
+  kind: TreeEntry["kind"];
+  depth: number;
+  label: string;
+  suffix?: string;
+  icon?: string;
+};
 
 type Row = TreeEntry & {
   depth: number;
@@ -64,6 +92,12 @@ type Row = TreeEntry & {
   icon?: string;
   position: number;
   setSize: number;
+};
+
+/** A collapsed row lingering only long enough to fade out. */
+type GhostRow = RowPresentation & {
+  open: boolean;
+  top: number;
 };
 
 function parentPath(path: string): string {
@@ -306,9 +340,107 @@ function persistExpanded() {
 }
 
 function toggleFolder(row: Row) {
-  userExpanded[row.path] = !expanded(row.path);
-  delete autoExpanded[row.path];
+  void toggleFolderWithReveal(row);
+}
+
+/** Restores every row the reveal choreography touched to its settled state. */
+function settleFolderMotion() {
+  for (const element of folderMotionElements) {
+    element.style.transition = "";
+    element.style.transform = "";
+    element.style.opacity = "";
+  }
+  folderMotionElements = [];
+  ghostElements = [];
+  if (leavingRows.length > 0) leavingRows = [];
+}
+
+/**
+ * Flips a folder and choreographs the change so it reads as a reveal: rows
+ * a toggle displaces translate from their previous slot while revealed rows
+ * fade in and hidden rows linger as inert ghosts fading out. Row geometry
+ * itself applies instantly and only transform and opacity animate, so
+ * keyboard focus, scrolling, and the ARIA tree read from the real rows at
+ * their final positions throughout. With animations off or reduced motion,
+ * the toggle lands in its final state with no choreography at all.
+ */
+async function toggleFolderWithReveal(row: Row) {
+  const folderPath = row.path;
+  const opening = !expanded(folderPath);
+  const generation = ++folderMotionGeneration;
+  settleFolderMotion();
+  const tree = treeElement;
+  const duration =
+    tree === undefined
+      ? 0
+      : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
+  const previousIndex =
+    duration === 0
+      ? null
+      : new Map(rows.map((entry, index) => [entry.path, index]));
+  if (previousIndex !== null && !opening) {
+    leavingRows = renderedIndices.flatMap((index): GhostRow[] => {
+      const hidden = rows[index];
+      if (hidden === undefined || !hidden.path.startsWith(`${folderPath}/`)) {
+        return [];
+      }
+      return [
+        {
+          path: hidden.path,
+          kind: hidden.kind,
+          depth: hidden.depth,
+          label: hidden.label,
+          ...(hidden.suffix === undefined ? {} : { suffix: hidden.suffix }),
+          ...(hidden.icon === undefined ? {} : { icon: hidden.icon }),
+          open: hidden.kind === "directory" && expanded(hidden.path),
+          top: TREE_PADDING + index * rowHeight,
+        },
+      ];
+    });
+  }
+  userExpanded[folderPath] = opening;
+  delete autoExpanded[folderPath];
   persistExpanded();
+  if (previousIndex === null || tree === undefined) return;
+  await tick();
+  if (generation !== folderMotionGeneration) return;
+  const moving: HTMLElement[] = [];
+  for (const index of renderedIndices) {
+    const current = rows[index];
+    const element = itemElements[index];
+    if (current === undefined || element === undefined) continue;
+    const before = previousIndex.get(current.path);
+    if (before === undefined) {
+      element.style.opacity = "0";
+    } else if (before !== index) {
+      element.style.transform = `translateY(${(before - index) * rowHeight}px)`;
+    } else {
+      continue;
+    }
+    element.style.transition = "none";
+    moving.push(element);
+  }
+  const ghosts = ghostElements.filter(
+    (element): element is HTMLElement => element !== undefined,
+  );
+  folderMotionElements = [...moving, ...ghosts];
+  void tree.offsetWidth;
+  requestAnimationFrame(() => {
+    if (generation !== folderMotionGeneration) return;
+    for (const element of moving) {
+      element.style.transition = FOLDER_REVEAL_TRANSITION;
+      element.style.transform = "";
+      element.style.opacity = "";
+    }
+    for (const ghost of ghosts) {
+      ghost.style.transition = FOLDER_REVEAL_TRANSITION;
+      ghost.style.opacity = "0";
+    }
+    setTimeout(() => {
+      if (generation !== folderMotionGeneration) return;
+      settleFolderMotion();
+    }, duration);
+  });
 }
 
 function activate(row: Row) {
@@ -330,12 +462,20 @@ function parentIndex(row: Row): number {
 
 function closeMenu(restore = true) {
   const origin = menuOrigin;
-  menuPath = null;
-  menuOrigin = null;
-  if (restore) void tick().then(() => origin?.focus());
+  const menu = menuElement;
+  const generation = ++menuCloseGeneration;
+  const finish = () => {
+    if (generation !== menuCloseGeneration) return;
+    menuPath = null;
+    menuOrigin = null;
+    if (restore) void tick().then(() => origin?.focus());
+  };
+  if (menu === undefined) finish();
+  else void exitMotionSurface(menu, finish);
 }
 
 function openMenu(row: Row, origin: HTMLElement, x?: number, y?: number) {
+  menuCloseGeneration += 1;
   const bounds = origin.getBoundingClientRect();
   menuPath = row.path;
   menuOrigin = origin;
@@ -353,6 +493,7 @@ function openMenu(row: Row, origin: HTMLElement, x?: number, y?: number) {
       8,
       Math.min(menuTop, window.innerHeight - bounds.height - 8),
     );
+    enterMotionSurface(menu);
     menu.querySelector<HTMLElement>("button")?.focus();
   });
 }
@@ -490,6 +631,29 @@ function dropOn(destination: string | null) {
 }
 </script>
 
+{#snippet rowBody(entry: RowPresentation, open: boolean)}
+  {#each Array(entry.depth) as _, guide}
+    <span
+      class="skr-tree-indent-guide"
+      aria-hidden="true"
+      style={`left: ${0.5 + guide}rem`}
+    ></span>
+  {/each}
+  <span class="skr-tree-leading" aria-hidden="true">
+    {#if entry.kind === "directory"}
+      <svg viewBox="0 0 16 16" class:skr-tree-chevron-open={open}>
+        <path d="m5.5 3.5 4.5 4.5-4.5 4.5" />
+      </svg>
+    {:else if entry.icon !== undefined}
+      <span class="skr-tree-note-icon">{entry.icon}</span>
+    {/if}
+  </span>
+  <span class="skr-tree-label">{entry.label}</span>
+  {#if entry.suffix !== undefined}
+    <span class="skr-tree-suffix">{entry.suffix}</span>
+  {/if}
+{/snippet}
+
 <ul
   bind:this={treeElement}
   class="skr-file-tree"
@@ -582,26 +746,7 @@ function dropOn(destination: string | null) {
           }
         }}
       >
-        {#each Array(row.depth) as _, guide}
-          <span
-            class="skr-tree-indent-guide"
-            aria-hidden="true"
-            style={`left: ${0.5 + guide}rem`}
-          ></span>
-        {/each}
-        <span class="skr-tree-leading" aria-hidden="true">
-          {#if row.kind === "directory"}
-            <svg viewBox="0 0 16 16" class:skr-tree-chevron-open={expanded(row.path)}>
-              <path d="m5.5 3.5 4.5 4.5-4.5 4.5" />
-            </svg>
-          {:else if row.icon !== undefined}
-            <span class="skr-tree-note-icon">{row.icon}</span>
-          {/if}
-        </span>
-        <span class="skr-tree-label">{row.label}</span>
-        {#if row.suffix !== undefined}
-          <span class="skr-tree-suffix">{row.suffix}</span>
-        {/if}
+        {@render rowBody(row, expanded(row.path))}
         <button
           type="button"
           class="skr-tree-actions"
@@ -627,6 +772,21 @@ function dropOn(destination: string | null) {
       </li>
     {/if}
   {/each}
+  {#each leavingRows as ghost, ghostIndex (ghost.path)}
+    <!-- A collapse leaves its hidden rows behind as inert, presentation-only
+         ghosts for one panel-class fade; the ARIA tree, keyboard focus, and
+         hit-testing only ever see the real rows above. -->
+    <li
+      bind:this={ghostElements[ghostIndex]}
+      role="presentation"
+      aria-hidden="true"
+      inert
+      class="skr-tree-row skr-tree-ghost"
+      style={`top: ${ghost.top}px; height: ${rowHeight}px; padding-left: ${0.5 + ghost.depth}rem`}
+    >
+      {@render rowBody(ghost, ghost.open)}
+    </li>
+  {/each}
 </ul>
 
 {#if menuRow !== null}
@@ -635,6 +795,7 @@ function dropOn(destination: string | null) {
     class="skr-tree-menu"
     role="menu"
     tabindex="-1"
+    data-motion-surface="anchored-top"
     aria-label={`${STRINGS.rowActions}: ${menuRow.label}`}
     style={`left: ${menuLeft}px; top: ${menuTop}px`}
     onkeydown={onMenuKeydown}

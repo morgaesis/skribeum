@@ -73,11 +73,7 @@ import {
   readNote,
 } from "./ipc/vault";
 import { ASYNC_SKELETON_DELAY_MS } from "./loadingStates";
-import {
-  enterMotionSurface,
-  type PaneSwitchKind,
-  paneSwitchUsesArrivalMotion,
-} from "./motion";
+import { enterMotionSurface, type PaneSwitchKind } from "./motion";
 import PropertiesPanel from "./PropertiesPanel.svelte";
 import { type CommandContext, CommandRegistry, editorKeymap } from "./registry";
 import { NARROW_BREAKPOINT_REM } from "./responsive";
@@ -172,6 +168,24 @@ let renderedPath = $state<string | null>(null);
 /** Serializes saves so change sets always apply to the base they expect. */
 let saveChain: Promise<boolean> = Promise.resolve(true);
 
+/** The switch kind supplied by the most recent `preparePaneSwitch` call. */
+let lastSwitchKind: PaneSwitchKind = "note";
+
+/**
+ * Live per-tab state, keyed by note path. Populated with the outgoing tab's
+ * exact CodeMirror state (undo history included) every time a different
+ * note initializes, and consumed only when switching back to an already
+ * open tab: the tab strip's own tabs, per section 6.4, keep their own live
+ * view state rather than replaying the byte-offset-approximated history
+ * restoration used for fresh opens and history travel.
+ */
+type TabSnapshot = {
+  state: EditorState;
+  scrollTop: number;
+  propertiesExpanded: boolean;
+};
+const tabSnapshots = new Map<string, TabSnapshot>();
+
 const historyCompartment = new Compartment();
 const renderingCompartment = new Compartment();
 const settingsCompartment = new Compartment();
@@ -204,9 +218,12 @@ let frontmatter = $state<Frontmatter | null>(null);
 let propertiesExpanded = $state(defaultPropertiesExpanded());
 let addingProperty = $state(false);
 /**
- * Bumped by every note initialization so the properties panel remounts:
- * an arrival paints its recorded or default state in the first frame with
- * no expand or collapse motion (section 6.4).
+ * Bumped by a composed-arrival note initialization (a fresh open, a history
+ * return, or a tab switch whose cache missed) so the properties panel
+ * remounts: an arrival paints its recorded or default state in the first
+ * frame with no expand or collapse motion (section 6.4). A tab switch that
+ * restores its own cached live state does not bump this: per section 5.1,
+ * switching between already open tabs never remounts.
  */
 let noteArrivalGeneration = $state(0);
 
@@ -947,12 +964,23 @@ export function getView(): EditorView | undefined {
   return view;
 }
 
-/** Hides the outgoing frame only when the pane switch needs arrival motion. */
+/**
+ * Records the switch kind and hides the outgoing frame so the incoming
+ * content's arrival fades in over an already-composed frame (section 5.1):
+ * every pane switch fades, tab activation included, and `initializeForNote`
+ * reads the recorded kind to decide whether it can restore a tab's live
+ * state instead of rebuilding one.
+ */
 export function preparePaneSwitch(kind: PaneSwitchKind): void {
-  if (!paneSwitchUsesArrivalMotion(kind)) return;
+  lastSwitchKind = kind;
   arrivalPrepared = true;
   shell.dataset.motionPreparing = "true";
   delete shell.dataset.motionExiting;
+}
+
+/** Discards a closed tab's cached live state so it cannot be restored stale. */
+export function forgetTab(path: string): void {
+  tabSnapshots.delete(path);
 }
 
 /** Captures byte-exact selection offsets and the current reading position. */
@@ -1010,15 +1038,59 @@ async function rereadAndReconcile(): Promise<void> {
   }
 }
 
+/** Snapshots the outgoing tab's live state before its note is replaced. */
+function captureOutgoingTabState(): void {
+  if (view === undefined || renderedPath === null) return;
+  tabSnapshots.set(renderedPath, {
+    state: view.state,
+    scrollTop: view.scrollDOM.scrollTop,
+    propertiesExpanded,
+  });
+}
+
+/**
+ * Returns the incoming path's cached live state when this initialization is
+ * a tab-strip activation of an already open tab and its cached document
+ * still matches the freshly read disk content; `undefined` otherwise (a
+ * fresh open, a history return, or a tab whose content changed underneath
+ * it), in which case the caller falls back to the composed-arrival rebuild.
+ */
+function consumeCachedTabState(
+  targetPath: string | null,
+  text: string,
+): TabSnapshot | undefined {
+  if (lastSwitchKind !== "tab" || targetPath === null) return undefined;
+  const cached = tabSnapshots.get(targetPath);
+  if (cached === undefined || cached.state.doc.toString() !== text) {
+    return undefined;
+  }
+  return cached;
+}
+
+/**
+ * Swaps a tab's own live `EditorState` back in, undo history and all: the
+ * same `EditorView`, no rebuilt document, no visibility hide-and-correct
+ * dance, since the cached state and scroll offset are already exact.
+ */
+function restoreCachedState(cached: TabSnapshot): void {
+  const target = view;
+  if (target === undefined) return;
+  target.setState(cached.state);
+  target.scrollDOM.style.scrollBehavior = "auto";
+  target.scrollDOM.scrollTop = cached.scrollTop;
+  queueMicrotask(finishPreparedArrival);
+}
+
 function initializeForNote(current: LoadedNote | null) {
   clearTimeout(idleSaveTimer);
+  captureOutgoingTabState();
   removed = false;
-  noteArrivalGeneration += 1;
   addingProperty = false;
   reportPersistence({ kind: "saved" });
-  propertiesExpanded =
-    historyViewState?.propertiesExpanded ?? defaultPropertiesExpanded();
   if (current === null) {
+    noteArrivalGeneration += 1;
+    propertiesExpanded =
+      historyViewState?.propertiesExpanded ?? defaultPropertiesExpanded();
     session = null;
     durableEditHistory = null;
     notifyDirty();
@@ -1032,6 +1104,9 @@ function initializeForNote(current: LoadedNote | null) {
     return;
   }
   if (current.readOnly) {
+    noteArrivalGeneration += 1;
+    propertiesExpanded =
+      historyViewState?.propertiesExpanded ?? defaultPropertiesExpanded();
     session = null;
     durableEditHistory = null;
     notifyDirty();
@@ -1074,7 +1149,19 @@ function initializeForNote(current: LoadedNote | null) {
       onWriteError?.(String(error));
     }
   }
-  replaceEditorState(text, false);
+  const cached =
+    current.recoveredChangeSet === undefined
+      ? consumeCachedTabState(currentPath, text)
+      : undefined;
+  if (cached !== undefined) {
+    propertiesExpanded = cached.propertiesExpanded;
+    restoreCachedState(cached);
+  } else {
+    noteArrivalGeneration += 1;
+    propertiesExpanded =
+      historyViewState?.propertiesExpanded ?? defaultPropertiesExpanded();
+    replaceEditorState(text, false);
+  }
   notifyDirty();
   applyLinkContext();
   refreshFrontmatter();

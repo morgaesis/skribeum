@@ -573,6 +573,10 @@ async function closeWorkspaceTab(path = focusedWorkspacePane().activePath) {
   if (closed !== undefined) {
     workspace.closedTabs = [...workspace.closedTabs, closed].slice(-20);
   }
+  // The tab's durable, byte-offset-approximated view state survives in
+  // closedTabs for Mod-Shift-T; the exact live CodeMirror state Editor
+  // cached for instant tab-strip swaps does not need to outlive the tab.
+  editor?.forgetTab(path);
   if (pane.tabs.length === 0 && workspace.panes.length === 2) {
     const other = workspace.panes.find((candidate) => candidate.id !== pane.id);
     workspace.panes = workspace.panes.filter(
@@ -2207,9 +2211,13 @@ async function openNote(
     }
     if (
       (switchKind !== "note" || selectedPath !== path) &&
-      note !== null &&
       editor !== undefined
     ) {
+      // Every pane switch fades its incoming content in over an already
+      // composed frame (section 5.1), including the very first note a
+      // freshly opened vault or URL-addressed note loads: hiding the
+      // outgoing frame here, before the note swap below, is what keeps
+      // that first paint from ever showing an intermediate state.
       editor.preparePaneSwitch(switchKind);
     }
     noteTitleVisible = !noteOpensWithHeading(loaded.text);
@@ -3205,12 +3213,24 @@ onMount(() => {
                     </button>
                   {/if}
                 </div>
-              {:else if note !== null}
+              {:else}
+                <!--
+                  One Editor instance regardless of whether a note is open:
+                  branching this on `note !== null` used to mount a second,
+                  separate Editor (and CodeMirror view) the moment the first
+                  note loaded, which read as the whole page rebuilding. The
+                  single instance transitions in place through its own
+                  reactive `note`/`path` handling instead. `vault` and `path`
+                  stay null together with `note` so a still-loading note
+                  never keys the live tab-state cache under its final path
+                  before it has actually arrived.
+                -->
                 <Editor
                   bind:this={editor}
+                  doc={M0_FIXTURE}
                   {note}
-                  {vault}
-                  path={selectedPath}
+                  vault={note !== null ? vault : null}
+                  path={note !== null ? selectedPath : null}
                   {linkContext}
                   {propertyTypes}
                   taskStatuses={settingsState.document.task_statuses}
@@ -3227,21 +3247,6 @@ onMount(() => {
                   onSaved={onEditorSaved}
                   onStatisticsChanged={(statistics) => (editorStatistics = statistics)}
                   onPersistenceChanged={(state) => (persistenceState = state)}
-                  {wikilinkNavigationOptions}
-                  {tagAffordanceOptions}
-                />
-              {:else}
-                <Editor
-                  bind:this={editor}
-                  doc={M0_FIXTURE}
-                  taskStatuses={settingsState.document.task_statuses}
-                  {registry}
-                  {commandContext}
-                  settings={settingsState.document}
-                  onDocChanged={onEditorDocChanged}
-                  onDirtyChanged={(dirty) => onEditorDirtyChanged(pane.id, pane.activePath, dirty)}
-                  onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
-                  onSaved={() => void refreshTagCatalog()}
                   {wikilinkNavigationOptions}
                   {tagAffordanceOptions}
                 />

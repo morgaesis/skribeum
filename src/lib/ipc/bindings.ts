@@ -103,9 +103,18 @@ export const commands = {
 	settingsWrite: (doc: SettingsDoc) => typedError<null, AppError>(__TAURI_INVOKE("settings_write", { doc })),
 	/**  Persists and applies one webview zoom percentage to every window. */
 	zoomSet: (zoomPercent: number) => typedError<number, AppError>(__TAURI_INVOKE("zoom_set", { zoomPercent })),
-	/**  Gives Linux `WebKit` an offscreen frame in which to commit its first paint. */
+	/**
+	 *  Gives Linux `WebKit` an offscreen frame in which to commit its first
+	 *  paint. A no-op once the window is already revealed, so a late warmup can
+	 *  never drag a visible window back to the offscreen slot.
+	 */
 	windowWarmup: () => typedError<null, AppError>(__TAURI_INVOKE("window_warmup")),
-	/**  Applies persisted zoom before revealing the first committed frontend render. */
+	/**
+	 *  Applies persisted zoom before revealing the first committed frontend
+	 *  render. Reveal is unconditional: a corrupt settings store or a failed
+	 *  zoom application falls back to defaults and the window still shows, with
+	 *  the degraded state reported only after the window is visible.
+	 */
 	windowReady: (webviewMs: number | null) => typedError<null, AppError>(__TAURI_INVOKE("window_ready", { webviewMs })),
 	/**
 	 *  Shows the window menu at the pointer, for the header's drag-region

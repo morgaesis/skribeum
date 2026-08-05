@@ -186,12 +186,6 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     description: STRINGS.settingsVersionDescription,
   },
   {
-    id: "about.version",
-    section: "about",
-    label: STRINGS.settingsVersion,
-    description: STRINGS.settingsVersionDescription,
-  },
-  {
     id: "about.license",
     section: "about",
     label: STRINGS.settingsLicense,

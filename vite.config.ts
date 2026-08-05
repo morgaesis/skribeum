@@ -19,6 +19,9 @@ export default defineConfig({
   // runtime instead of the server one under jsdom.
   test: {
     environment: "jsdom",
+    // Component styles are processed so tests can assert computed style
+    // rather than markup alone.
+    css: true,
     include: ["tests/web/**/*.test.ts", "tests/demo.test.ts"],
     setupFiles: ["tests/web/setup.ts"],
     server: {

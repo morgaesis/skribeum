@@ -91,9 +91,7 @@ describe("task status settings", () => {
     const rowIds = [
       ...document.querySelectorAll<HTMLElement>("[data-setting-id]"),
     ].map((row) => row.dataset.settingId);
-    const visibleSettingIds = SETTINGS_DESCRIPTORS.map(
-      (setting) => setting.id,
-    ).filter((id) => id !== "updates.version");
+    const visibleSettingIds = SETTINGS_DESCRIPTORS.map((setting) => setting.id);
     expect(new Set(rowIds)).toEqual(new Set(visibleSettingIds));
     expect(rowIds).toHaveLength(visibleSettingIds.length);
     await unmount(component);
@@ -394,7 +392,7 @@ describe("settings surface", () => {
           '[data-setting-id$=".version"]',
         ),
       ].map(({ dataset }) => dataset.settingId),
-    ).toEqual(["about.version"]);
+    ).toEqual(["updates.version"]);
     await unmount(component);
   });
 
@@ -713,6 +711,69 @@ describe("settings surface", () => {
     expect(document.body.textContent).toContain(
       STRINGS.settingsFileDesktopRequired,
     );
+    await unmount(component);
+  });
+
+  it("shows the installed version beside the update check", async () => {
+    const component = mount(SettingsView, {
+      target: document.body,
+      props: {
+        settings: settingsState(),
+        onUpdate: vi.fn(),
+        onClose: vi.fn(),
+        currentVersion: "9.9.9",
+      },
+    });
+    flushSync();
+    const row = document.querySelector<HTMLElement>(
+      '[data-setting-id="updates.version"]',
+    );
+    expect(
+      row
+        ?.closest("[data-settings-section]")
+        ?.getAttribute("data-settings-section"),
+    ).toBe("updates");
+    expect(row?.querySelector(".setting-label")?.textContent).toBe(
+      STRINGS.settingsVersion,
+    );
+    const value = row?.querySelector("output");
+    if (row === null || value === null || value === undefined) {
+      throw new Error("version row is missing");
+    }
+    expect(value.textContent).toBe("9.9.9");
+    const checkRow = document.querySelector<HTMLElement>(
+      '[data-setting-id="updates.check"]',
+    );
+    if (checkRow === null) throw new Error("update check row is missing");
+    expect(checkRow.closest("fieldset")?.nextElementSibling).toBe(row);
+    const style = getComputedStyle(value);
+    expect(style.fontSize).toBe("12px");
+    expect(style.textAlign).toBe("right");
+    await unmount(component);
+  });
+
+  it("keeps the version readable when the desktop backend is unavailable", async () => {
+    const component = mount(SettingsView, {
+      target: document.body,
+      props: {
+        settings: settingsState(),
+        onUpdate: vi.fn(),
+        onClose: vi.fn(),
+        desktopAvailable: false,
+        currentVersion: "9.9.9",
+      },
+    });
+    flushSync();
+    const value = document.querySelector<HTMLOutputElement>(
+      '[data-setting-id="updates.version"] output',
+    );
+    expect(value?.textContent).toBe("9.9.9");
+    expect(value?.closest("fieldset:disabled")).toBeNull();
+    expect(
+      document.querySelector<HTMLButtonElement>(
+        '[data-testid="settings-check-updates"]',
+      )?.disabled,
+    ).toBe(true);
     await unmount(component);
   });
 });

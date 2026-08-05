@@ -73,8 +73,7 @@ const settingSearchText = Object.fromEntries(
   sections.map((section) => [
     section.id,
     SETTINGS_DESCRIPTORS.filter(
-      (setting) =>
-        setting.section === section.id && setting.id !== "updates.version",
+      (setting) => setting.section === section.id,
     ).map((setting): [string, string] => [setting.label, setting.description]),
   ]),
 ) as Record<SectionId, [string, string][]>;
@@ -314,9 +313,8 @@ $effect(() => {
 async function focusSetting(id: string) {
   searchQuery = "";
   await tick();
-  const targetId = id === "updates.version" ? "about.version" : id;
   const row = contentElement?.querySelector<HTMLElement>(
-    `[data-setting-id="${CSS.escape(targetId)}"]`,
+    `[data-setting-id="${CSS.escape(id)}"]`,
   );
   if (contentElement === undefined || row === null || row === undefined) return;
   const contentBox = contentElement.getBoundingClientRect();
@@ -2166,6 +2164,15 @@ function onKeydown(event: KeyboardEvent) {
                 </div>
               {/if}
             </fieldset>
+            {#if matches(STRINGS.settingsVersion, STRINGS.settingsVersionDescription)}
+              <div class="setting-row" data-setting-id="updates.version">
+                <div class="setting-copy">
+                  <span class="setting-label">{STRINGS.settingsVersion}</span>
+                  <p>{STRINGS.settingsVersionDescription}</p>
+                </div>
+                <output tabindex="-1">{currentVersion}</output>
+              </div>
+            {/if}
           </section>
         {/if}
 
@@ -2177,15 +2184,6 @@ function onKeydown(event: KeyboardEvent) {
             <h3 id="settings-about-heading">
               {STRINGS.settingsSectionAbout}
             </h3>
-            {#if matches(STRINGS.settingsVersion, STRINGS.settingsVersionDescription)}
-              <div class="setting-row" data-setting-id="about.version">
-                <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsVersion}</span>
-                  <p>{STRINGS.settingsVersionDescription}</p>
-                </div>
-                <output tabindex="-1">{currentVersion}</output>
-              </div>
-            {/if}
             {#if matches(STRINGS.settingsLicense, STRINGS.settingsLicenseDescription)}
               <div class="setting-row" data-setting-id="about.license">
                 <div class="setting-copy">

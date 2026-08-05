@@ -12,8 +12,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use skribeum_vault::{
     Clock, EditHistoryJournal, Encoding, EntryKind, FileSystem, Journal, RealClock, RealFs,
-    ReconEvent, Reconciler, ReplayOutcome, SearchIndex, Settings, SettingsStore, Vault, VaultPath,
-    is_indexed_path,
+    ReconEvent, Reconciler, ReplayOutcome, SearchIndex, Settings, SettingsError, SettingsStore,
+    Vault, VaultPath, is_indexed_path,
 };
 use tauri::ipc::InvokeResponseBody;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
@@ -771,6 +771,12 @@ pub struct SettingsState(pub Option<SettingsStore>, pub Mutex<()>);
 /// File paths waiting for the frontend to resolve after an open-with request.
 #[derive(Default)]
 pub struct OpenFilesState(pub Mutex<Vec<String>>);
+
+/// Whether the main window has completed its first reveal. Set by
+/// `window_ready` and by every fallback reveal path, so the startup
+/// watchdog and the Linux warmup never fight an already-visible window.
+#[derive(Default)]
+pub struct WindowRevealState(pub AtomicBool);
 
 const OPEN_FILE_QUEUE_LIMIT: usize = 128;
 
@@ -2005,15 +2011,103 @@ fn cancel_window_warmup<R: Runtime>(window: &WebviewWindow<R>) {
     let _ = window.set_skip_taskbar(false);
 }
 
-/// Gives Linux `WebKit` an offscreen frame in which to commit its first paint.
+/// How long the native watchdog waits for the frontend to call
+/// `window_ready` before revealing the window itself. Long enough for a
+/// slow cold boot (webview start, fonts, first paint) to finish normally,
+/// short enough that a broken frontend degrades to a visible window
+/// instead of an invisible process.
+pub const STARTUP_REVEAL_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Moves the main window from its hidden or Linux offscreen-warmup state to
+/// its real visible position. Shared by `window_ready`, the startup reveal
+/// watchdog, and forwarded second launches so every reveal lands at the
+/// same place, never the warmup slot.
+fn reveal_window<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), AppError> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Err(error) = window.center() {
+            cancel_window_warmup(window);
+            return Err(AppError::window_failed(error.to_string()));
+        }
+        if let Err(error) = window.set_skip_taskbar(false) {
+            cancel_window_warmup(window);
+            return Err(AppError::window_failed(error.to_string()));
+        }
+    }
+    if let Err(error) = window.show() {
+        #[cfg(target_os = "linux")]
+        cancel_window_warmup(window);
+        return Err(AppError::window_failed(error.to_string()));
+    }
+    Ok(())
+}
+
+/// Reveals the main window unless `window_ready` already has. The startup
+/// watchdog calls this after [`STARTUP_REVEAL_DEADLINE`] so any frontend
+/// boot failure still produces a visible window; on the normal path the
+/// flag is already set and this does nothing. The reveal hops to the main
+/// thread: on Linux, window calls from a plain thread are dropped by GTK.
+pub fn reveal_main_window_if_pending<R: Runtime>(app: &AppHandle<R>) {
+    let revealed = app.state::<WindowRevealState>();
+    if revealed.0.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window("main") {
+            let _ = reveal_window(&window);
+        }
+    });
+}
+
+/// Reveals (when hidden) and focuses the main window for a forwarded
+/// launch, so a second launch always surfaces the running instance, even
+/// while its frontend is still booting.
+pub fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        if !window.is_visible().unwrap_or(false) && reveal_window(&window).is_ok() {
+            app.state::<WindowRevealState>()
+                .0
+                .store(true, Ordering::Release);
+        }
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Resolves the zoom percentage to apply before the first reveal. Reveal
+/// must never block on settings state: an unreadable or corrupt store falls
+/// back to the default zoom and reports the error for the caller to surface
+/// once the window is visible.
+fn startup_zoom_percent(
+    store: Option<&SettingsStore>,
+    fs: &dyn FileSystem,
+) -> (u32, Option<SettingsError>) {
+    match store.map(|store| store.read(fs)) {
+        Some(Ok(document)) => (document.zoom_percent, None),
+        Some(Err(error)) => (Settings::default().zoom_percent, Some(error)),
+        None => (Settings::default().zoom_percent, None),
+    }
+}
+
+/// Gives Linux `WebKit` an offscreen frame in which to commit its first
+/// paint. A no-op once the window is already revealed, so a late warmup can
+/// never drag a visible window back to the offscreen slot.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)] // Tauri commands keep one typed result signature across every platform.
 fn window_warmup<R: Runtime>(
     #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] window: WebviewWindow<R>,
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] revealed: State<
+        '_,
+        WindowRevealState,
+    >,
 ) -> Result<(), AppError> {
     #[cfg(target_os = "linux")]
     {
+        if revealed.0.load(Ordering::Acquire) {
+            return Ok(());
+        }
         window
             .set_skip_taskbar(true)
             .map_err(|error| AppError::window_failed(error.to_string()))?;
@@ -2029,48 +2123,27 @@ fn window_warmup<R: Runtime>(
     Ok(())
 }
 
-/// Applies persisted zoom before revealing the first committed frontend render.
+/// Applies persisted zoom before revealing the first committed frontend
+/// render. Reveal is unconditional: a corrupt settings store or a failed
+/// zoom application falls back to defaults and the window still shows, with
+/// the degraded state reported only after the window is visible.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
 fn window_ready<R: Runtime>(
     window: WebviewWindow<R>,
     settings: State<'_, SettingsState>,
+    revealed: State<'_, WindowRevealState>,
     webview_ms: Option<f64>,
 ) -> Result<(), AppError> {
     let _mutation = settings.1.lock().unwrap_or_else(PoisonError::into_inner);
-    let zoom_percent = match settings.0.as_ref() {
-        Some(store) => match store.read(&RealFs) {
-            Ok(document) => document.zoom_percent,
-            Err(error) => {
-                #[cfg(target_os = "linux")]
-                cancel_window_warmup(&window);
-                return Err(AppError::from(error));
-            }
-        },
-        None => 100,
-    };
-    if let Err(error) = window.set_zoom(f64::from(zoom_percent) / 100.0) {
-        #[cfg(target_os = "linux")]
-        cancel_window_warmup(&window);
-        return Err(AppError::window_failed(error.to_string()));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Err(error) = window.center() {
-            cancel_window_warmup(&window);
-            return Err(AppError::window_failed(error.to_string()));
-        }
-        if let Err(error) = window.set_skip_taskbar(false) {
-            cancel_window_warmup(&window);
-            return Err(AppError::window_failed(error.to_string()));
-        }
-    }
-    if let Err(error) = window.show() {
-        #[cfg(target_os = "linux")]
-        cancel_window_warmup(&window);
-        return Err(AppError::window_failed(error.to_string()));
-    }
+    let (zoom_percent, settings_error) = startup_zoom_percent(settings.0.as_ref(), &RealFs);
+    let zoom_error = window
+        .set_zoom(f64::from(zoom_percent) / 100.0)
+        .err()
+        .map(|error| AppError::window_failed(error.to_string()));
+    reveal_window(&window)?;
+    revealed.0.store(true, Ordering::Release);
     #[cfg(debug_assertions)]
     if let Some(process_ms) = crate::cold_start_elapsed_milliseconds() {
         eprintln!(
@@ -2078,7 +2151,45 @@ fn window_ready<R: Runtime>(
             webview_ms.unwrap_or_default()
         );
     }
+    if let Some(error) = settings_error {
+        return Err(AppError::from(error));
+    }
+    if let Some(error) = zoom_error {
+        return Err(error);
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod window_reveal_tests {
+    use super::startup_zoom_percent;
+    use skribeum_vault::{Settings, SettingsError, SettingsStore, SimFs};
+    use std::path::PathBuf;
+
+    #[test]
+    fn corrupt_settings_fall_back_to_the_default_zoom_and_report_it() {
+        let fs = SimFs::new();
+        let path = PathBuf::from("config/settings.json");
+        fs.external_write(&path, b"[]");
+        let store = SettingsStore::new(path);
+
+        let (zoom, error) = startup_zoom_percent(Some(&store), &fs);
+        assert_eq!(zoom, Settings::default().zoom_percent);
+        assert!(matches!(error, Some(SettingsError::Corrupt)));
+    }
+
+    #[test]
+    fn a_missing_store_or_file_uses_the_default_zoom_without_error() {
+        let fs = SimFs::new();
+        let (zoom, error) = startup_zoom_percent(None, &fs);
+        assert_eq!(zoom, Settings::default().zoom_percent);
+        assert!(error.is_none());
+
+        let store = SettingsStore::new(PathBuf::from("config/settings.json"));
+        let (zoom, error) = startup_zoom_percent(Some(&store), &fs);
+        assert_eq!(zoom, Settings::default().zoom_percent);
+        assert!(error.is_none());
+    }
 }
 
 /// Shows the window menu at the pointer, for the header's drag-region

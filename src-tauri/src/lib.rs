@@ -74,7 +74,10 @@ struct InstancePayload {
 enum InstanceClaim {
     Primary,
     Forwarded,
-    Unavailable(String),
+    /// The single-instance endpoint could not be established. The process
+    /// runs as a primary without dedup; a broken endpoint must never keep
+    /// the application from starting.
+    Degraded(String),
 }
 
 enum ForwardAttempt {
@@ -129,22 +132,26 @@ fn valid_instance_capability(capability: &str) -> bool {
         && capability.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn instance_capability(path: &Path) -> String {
-    if let Some(parent) = path.parent() {
-        RealFs
-            .create_dir_all(parent)
-            .expect("failed to create the application configuration directory");
+/// Reads or creates the capability guarding the single-instance endpoint.
+/// `None` means the file could not be established; the caller then runs
+/// without single-instance dedup rather than failing to start.
+fn instance_capability(path: &Path) -> Option<String> {
+    if let Some(parent) = path.parent()
+        && let Err(error) = RealFs.create_dir_all(parent)
+    {
+        eprintln!("skribeum: failed to create the application configuration directory: {error}");
+        return None;
     }
     for _ in 0..5 {
         if let Ok(bytes) = RealFs.read(path)
             && let Ok(capability) = String::from_utf8(bytes)
             && valid_instance_capability(&capability)
         {
-            return capability;
+            return Some(capability);
         }
         let capability = new_instance_capability();
         match RealFs.create_private_file(path, capability.as_bytes()) {
-            Ok(true) => return capability,
+            Ok(true) => return Some(capability),
             Ok(false) => std::thread::sleep(std::time::Duration::from_millis(10)),
             Err(_) => {
                 let _ = RealFs.remove_file(path);
@@ -153,16 +160,18 @@ fn instance_capability(path: &Path) -> String {
     }
     let _ = RealFs.remove_file(path);
     let capability = new_instance_capability();
-    RealFs
-        .create_private_file(path, capability.as_bytes())
-        .expect("failed to create the application instance capability");
+    if let Err(error) = RealFs.create_private_file(path, capability.as_bytes()) {
+        eprintln!("skribeum: failed to create the application instance capability: {error}");
+        return None;
+    }
     if let Ok(bytes) = RealFs.read(path)
         && let Ok(stored) = String::from_utf8(bytes)
         && valid_instance_capability(&stored)
     {
-        return stored;
+        return Some(stored);
     }
-    panic!("failed to establish the application instance capability");
+    eprintln!("skribeum: failed to establish the application instance capability");
+    None
 }
 
 fn instance_capability_path() -> PathBuf {
@@ -412,10 +421,10 @@ fn claim_instance(
             }
         }
         if let Some(error) = last_error {
-            return InstanceClaim::Unavailable(error.to_string());
+            return InstanceClaim::Degraded(error.to_string());
         }
     }
-    panic!("failed to claim an application instance port");
+    InstanceClaim::Degraded("no loopback port candidate could be bound or forwarded".to_owned())
 }
 
 fn listen_for_open_files(listener: TcpListener, capability: String, sender: Sender<Vec<String>>) {
@@ -457,18 +466,13 @@ fn dispatch_open_files<R: tauri::Runtime>(
 ) {
     std::thread::spawn(move || {
         for paths in receiver {
-            if paths.is_empty() {
-                continue;
-            }
             let app_for_event = app.clone();
             let _ = app.run_on_main_thread(move || {
                 ipc::queue_open_files(&app_for_event, paths);
-                if let Some(window) = app_for_event.get_webview_window("main")
-                    && window.is_visible().unwrap_or(false)
-                {
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
-                }
+                // A forwarded launch always surfaces the running instance,
+                // even with no paths and even while the window is still
+                // hidden; a relaunch must never be silently swallowed.
+                ipc::focus_main_window(&app_for_event);
             });
         }
     });
@@ -498,13 +502,16 @@ pub(crate) fn cold_start_elapsed_milliseconds() -> Option<u128> {
 #[allow(clippy::too_many_lines)] // Application setup is one Tauri lifecycle.
 pub fn run() {
     let initial_open_paths = canonical_open_paths(std::env::args_os().skip(1));
-    let capability = instance_capability(&instance_capability_path());
     let (open_files_sender, open_files_receiver) = mpsc::channel();
-    match claim_instance(&initial_open_paths, &capability, &open_files_sender) {
+    let claim = match instance_capability(&instance_capability_path()) {
+        Some(capability) => claim_instance(&initial_open_paths, &capability, &open_files_sender),
+        None => InstanceClaim::Degraded("the instance capability file is unavailable".to_owned()),
+    };
+    match claim {
         InstanceClaim::Primary => {}
         InstanceClaim::Forwarded => return,
-        InstanceClaim::Unavailable(message) => {
-            panic!("application instance endpoint unavailable: {message}")
+        InstanceClaim::Degraded(message) => {
+            eprintln!("skribeum: running without the single-instance endpoint: {message}");
         }
     }
     let specta_builder = ipc_builder();
@@ -537,6 +544,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(ipc::VaultRegistry::default())
         .manage(ipc::OpenFilesState::default())
+        .manage(ipc::WindowRevealState::default())
         .invoke_handler(specta_builder.invoke_handler());
 
     // The updater is compiled out of the end-to-end build so tests never
@@ -660,10 +668,18 @@ pub fn run() {
                 } else {
                     tauri::window::Color(246, 242, 234, 255)
                 };
-                window
-                    .set_background_color(Some(background))
-                    .expect("failed to set the startup window background");
+                if let Err(error) = window.set_background_color(Some(background)) {
+                    eprintln!("skribeum: failed to set the startup window background: {error}");
+                }
             }
+            // Native reveal watchdog: if the frontend never reports ready
+            // (script error, webview renderer failure), the window still
+            // appears instead of leaving an invisible process behind.
+            let watchdog_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(ipc::STARTUP_REVEAL_DEADLINE);
+                ipc::reveal_main_window_if_pending(&watchdog_handle);
+            });
             // The native menu bar is macOS-only (design system section
             // 4.13); Windows and Linux draw caption buttons in the header
             // instead and never install a menu bar.
@@ -713,6 +729,26 @@ mod tests {
         assert!(supported_open_file(Path::new("note.TXT")));
         assert!(!supported_open_file(Path::new("note.rtf")));
         assert!(!supported_open_file(Path::new("note")));
+    }
+
+    #[test]
+    fn an_unwritable_capability_location_degrades_instead_of_panicking() {
+        let scratch =
+            std::env::temp_dir().join(format!("skribeum-capability-{}", std::process::id()));
+        RealFs
+            .create_dir_all(&scratch)
+            .expect("scratch directory creates");
+        let blocking_file = scratch.join("blocking");
+        RealFs
+            .write_file(&blocking_file, b"not a directory")
+            .expect("blocking file writes");
+
+        // The capability path's parent is a plain file, so neither the
+        // directory nor the capability file can ever be created.
+        let capability = instance_capability(&blocking_file.join(INSTANCE_CAPABILITY_FILE));
+        assert_eq!(capability, None);
+
+        let _ = RealFs.remove_dir_all(&scratch);
     }
 
     #[test]

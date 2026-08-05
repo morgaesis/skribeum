@@ -38,6 +38,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a system titlebar; the drag region's right-click menu is the real platform
   system menu, carrying Move, Size, and keyboard-driven resize alongside
   Minimize, Maximize or Restore, and Close. Every other platform is unchanged.
+- Transient surfaces leave with the mirror of their entrance motion alongside
+  the unchanged 50ms fade, folder expand and collapse animate as a reveal in
+  the file tree while keyboard focus and the accessibility tree read final
+  row geometry throughout, and dragging a tab opens its landing gap by
+  animating the tabs it passes over; the dragged tab itself follows the
+  pointer with no animation, and reduced motion or the animations setting
+  turns every one of these transitions into its instant final state.
 
 ### Security
 
@@ -48,6 +55,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Release-profile builds compile: the development-only TypeScript bindings
+  export is confined to debug assertions, and continuous integration checks
+  the release profile so the shipping configuration is gated.
+- Release-note bullet validation accepts every Unicode block emoji
+  presentation draws from, so a generated summary whose bullet leads with an
+  arrows- or technical-block emoji passes instead of falling back to the
+  plain changelog body.
 - Plain HTTP and HTTPS URLs and Markdown links open in the system browser from
   the desktop application and in a new `noopener` tab from the browser demo.
 - Desktop watcher events use the same monotonic clock as note saves, so genuine

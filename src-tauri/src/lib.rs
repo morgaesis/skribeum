@@ -514,12 +514,11 @@ pub fn run() {
     // so the export works whatever the process working directory is; CI
     // separately asserts the committed file matches what this generates.
     #[cfg(debug_assertions)]
-    let bindings_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/lib/ipc/bindings.ts");
-    specta_builder
-        .export(specta_typescript::Typescript::default(), bindings_path)
-        .expect("failed to export TypeScript bindings");
-    #[cfg(debug_assertions)]
     {
+        let bindings_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/lib/ipc/bindings.ts");
+        specta_builder
+            .export(specta_typescript::Typescript::default(), bindings_path)
+            .expect("failed to export TypeScript bindings");
         let bindings_path = std::path::Path::new(bindings_path);
         let generated = RealFs
             .read(bindings_path)

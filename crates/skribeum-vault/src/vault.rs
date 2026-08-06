@@ -588,7 +588,12 @@ impl Vault {
     /// [`VaultError::NotAFile`] when it names a note or a directory, and
     /// propagates filesystem failures (including out-of-space) from the
     /// durable write sequence.
-    pub fn write_file(&self, fs: &dyn FileSystem, path: &VaultPath, bytes: &[u8]) -> Result<(), VaultError> {
+    pub fn write_file(
+        &self,
+        fs: &dyn FileSystem,
+        path: &VaultPath,
+        bytes: &[u8],
+    ) -> Result<(), VaultError> {
         let entry = self
             .tree
             .iter()

@@ -1333,6 +1333,26 @@ $effect(() => {
     :global(.cm-line.cm-skr-frontmatter:not([data-revealed="true"])) {
     display: none;
   }
+  /* The properties panel already closes the note's top edge with its own
+     hairline, so the editor's own first-block breathing room (meant for a
+     note that opens directly on its first line) would otherwise stack a
+     second gap beneath it. Zeroing it here leaves only the heading's own
+     top spacing, matching the gap between any two ordinary blocks. Source
+     mode and a revealed (in-place-edited) frontmatter block restore it,
+     since the raw fence lines become the note's true first visible line.
+     `!important` reliably overrides CodeMirror's own `.cm-content` base
+     theme padding regardless of the relative order the two stylesheets
+     mount in, rather than depending on this selector always outranking
+     CodeMirror's by specificity alone. */
+  .skr-editor-shell:has(
+      :global(.cm-line.cm-skr-frontmatter:not([data-revealed="true"]))
+    )
+    .editor
+    > :global(.cm-editor)
+    > :global(.cm-scroller)
+    > :global(.cm-content) {
+    padding-top: 0 !important;
+  }
   .editor.skr-source-mode
     > :global(.cm-editor)
     > :global(.cm-scroller)

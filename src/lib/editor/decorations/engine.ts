@@ -5,6 +5,7 @@
 // and carry `decorationOrigin`; explicit controls such as task checkboxes
 // dispatch user edits through the editor's normal local-change path.
 
+import { cursorLineUp } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   HighlightStyle,
@@ -12,9 +13,11 @@ import {
   syntaxTree,
 } from "@codemirror/language";
 import {
+  EditorSelection,
   EditorState,
   type Extension,
   Facet,
+  Prec,
   StateEffect,
   StateField,
   type Text,
@@ -24,6 +27,7 @@ import {
   Decoration,
   type DecorationSet,
   EditorView,
+  keymap,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
@@ -4386,6 +4390,58 @@ const linkPreviewKeys = EditorView.domEventHandlers({
   },
 });
 
+/**
+ * The frontmatter block hides through a per-line CSS rule (`cm-skr-frontmatter`
+ * lines display:none unless revealed), not through a replacement decoration,
+ * so it carries no `atomic` spec of its own and CodeMirror's own layout never
+ * learns the block is collapsed. Scans one decoration set for hidden
+ * frontmatter lines (class `cm-skr-frontmatter` without `data-revealed`) and
+ * folds them into the block's full line range, or null when the block does
+ * not exist or is currently revealed.
+ */
+function hiddenFrontmatterRangeIn(
+  view: EditorView,
+  set: DecorationSet,
+): { from: number; to: number } | null {
+  let from: number | null = null;
+  let to: number | null = null;
+  const cursor = set.iter();
+  while (cursor.value !== null) {
+    const spec = cursor.value.spec as {
+      class?: string;
+      attributes?: Record<string, string>;
+    };
+    if (
+      spec.class === "cm-skr-frontmatter" &&
+      spec.attributes?.["data-revealed"] !== "true"
+    ) {
+      const line = view.state.doc.lineAt(cursor.from);
+      from = from === null ? line.from : Math.min(from, line.from);
+      to = to === null ? line.to : Math.max(to, line.to);
+    }
+    cursor.next();
+  }
+  return from !== null && to !== null && from < to ? { from, to } : null;
+}
+
+/** The document range of the currently hidden (unrevealed) frontmatter block. */
+function hiddenFrontmatterRange(
+  view: EditorView,
+): { from: number; to: number } | null {
+  const inline = view.plugin(enginePlugin)?.decorations;
+  const block = view.state.field(blockEngineField, false)?.decorations;
+  for (const set of [inline, block]) {
+    if (set === undefined) {
+      continue;
+    }
+    const hidden = hiddenFrontmatterRangeIn(view, set);
+    if (hidden !== null) {
+      return hidden;
+    }
+  }
+  return null;
+}
+
 function atomicDecorations(view: EditorView): DecorationSet {
   const ranges: ReturnType<Decoration["range"]>[] = [];
   const inline = view.plugin(enginePlugin)?.decorations;
@@ -4402,8 +4458,52 @@ function atomicDecorations(view: EditorView): DecorationSet {
       cursor.next();
     }
   }
+  const hidden = hiddenFrontmatterRange(view);
+  if (hidden !== null) {
+    ranges.push(
+      Decoration.mark({ atomic: true }).range(hidden.from, hidden.to),
+    );
+  }
   return Decoration.set(ranges, true);
 }
+
+/**
+ * The frontmatter block always starts at document position 0, so CodeMirror's
+ * generic atomic-range clamp (which pushes an upward move to the near edge of
+ * the obstacle, i.e. its `from`) lands the caret at position 0: still inside
+ * the hidden block, since there is nothing before it to land on instead. This
+ * intercepts ArrowUp specifically at the boundary line right after the hidden
+ * block (the only place upward motion can reach into it) and, if the default
+ * command's own geometry still lands inside, restores the original position
+ * rather than stranding the caret in text the DOM never displays.
+ */
+export function frontmatterAwareCursorUp(view: EditorView): boolean {
+  const hidden = hiddenFrontmatterRange(view);
+  if (hidden === null) {
+    return false;
+  }
+  const before = view.state.selection.main;
+  if (!before.empty) {
+    return false;
+  }
+  const boundary = Math.min(hidden.to + 1, view.state.doc.length);
+  if (view.state.doc.lineAt(before.head).from !== boundary) {
+    return false;
+  }
+  cursorLineUp(view);
+  const after = view.state.selection.main;
+  if (after.empty && after.head >= hidden.from && after.head < hidden.to) {
+    view.dispatch({
+      selection: EditorSelection.cursor(before.head, before.assoc),
+      userEvent: "select",
+    });
+  }
+  return true;
+}
+
+const frontmatterCursorGuard = Prec.highest(
+  keymap.of([{ key: "ArrowUp", run: frontmatterAwareCursorUp }]),
+);
 
 const calloutPointerMapping = EditorView.domEventHandlers({
   mousedown(event, view) {
@@ -4664,6 +4764,11 @@ const engineTheme = EditorView.baseTheme({
     textTransform: "uppercase",
   },
   ".cm-skr-setext-underline": { color: "var(--skr-text-muted)" },
+  // The reserved-width geometry lives here and applies with no transition,
+  // so it always resolves in the same frame the caret enters the line. The
+  // glyph's own opacity and compositor translate (entrance on the surface
+  // clock, exit on the state clock, app.css) animate inside that already
+  // -settled space.
   ".cm-skr-reveal-marker": {
     display: "inline-block",
     maxWidth: "0",
@@ -5223,6 +5328,7 @@ export function decorationEngine(
     linkPreviewPlugin,
     linkPreviewKeys,
     EditorView.atomicRanges.of(atomicDecorations),
+    frontmatterCursorGuard,
     calloutPointerMapping,
     tableSessionPlugin,
     engineTheme,

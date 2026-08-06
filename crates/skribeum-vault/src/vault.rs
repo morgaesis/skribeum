@@ -43,6 +43,10 @@ pub enum VaultError {
     /// The requested path exists in the index but is not an editable note.
     #[error("path is not a note")]
     NotANote,
+    /// The requested path exists in the index but is not a plain file (it
+    /// names a note or a directory).
+    #[error("path is not a plain file")]
+    NotAFile,
     /// A write was attempted for a note this session never read; the
     /// change-set base is unknown.
     #[error("note was never read in this session")]
@@ -103,7 +107,9 @@ pub enum EntryKind {
     Directory,
     /// An editable Markdown or plain-text note.
     Note,
-    /// Any other file. Present in the tree but never parsed or edited.
+    /// Any other file. Never parsed as prose; a registered render-only view
+    /// (the canvas board) may still read and, through [`Vault::write_file`],
+    /// overwrite one whole.
     File,
 }
 
@@ -568,6 +574,39 @@ impl Vault {
         Ok(WriteResult::Written { projection_hash })
     }
 
+    /// Atomically overwrites one indexed non-note file's full contents.
+    /// Canvas boards are the only editable consumer today, and a board is
+    /// small and single-writer in practice, so the write is a whole-document
+    /// replace through the same crash-safe [`write_durable`] sequence
+    /// `write_note` uses, rather than the change-set and projection-hash
+    /// machinery notes need for multi-editor prose. A concurrent external
+    /// edit is overwritten; this path carries no conflict detection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VaultError::EntryNotFound`] when the path is not indexed,
+    /// [`VaultError::NotAFile`] when it names a note or a directory, and
+    /// propagates filesystem failures (including out-of-space) from the
+    /// durable write sequence.
+    pub fn write_file(
+        &self,
+        fs: &dyn FileSystem,
+        path: &VaultPath,
+        bytes: &[u8],
+    ) -> Result<(), VaultError> {
+        let entry = self
+            .tree
+            .iter()
+            .find(|entry| &entry.path == path)
+            .ok_or(VaultError::EntryNotFound)?;
+        if entry.kind != EntryKind::File {
+            return Err(VaultError::NotAFile);
+        }
+        let absolute = self.root.join(path.as_str());
+        write_durable(fs, &absolute, bytes)?;
+        Ok(())
+    }
+
     /// The bytes this session last read or wrote for a note, the base the
     /// next change set applies to.
     #[must_use]
@@ -830,5 +869,42 @@ mod tests {
                 .all(|entry| !entry.path.as_str().starts_with("Archive"))
         );
         assert!(fs.metadata(&root.join("Archive")).is_err());
+    }
+
+    #[test]
+    fn write_file_overwrites_a_plain_file_but_refuses_notes_and_directories() {
+        let fs = SimFs::new();
+        let root = PathBuf::from("vault");
+        fs.external_create_dir(&root);
+        fs.external_write(&root.join("board.canvas"), b"{}");
+        fs.external_write(&root.join("note.md"), b"hello");
+        fs.deliver_all();
+        let vault = Vault::open(&fs, &root).expect("vault opens");
+        let canvas = VaultPath::new("board.canvas").expect("path is valid");
+        let note = VaultPath::new("note.md").expect("path is valid");
+        let missing = VaultPath::new("absent.canvas").expect("path is valid");
+
+        vault
+            .write_file(&fs, &canvas, br#"{"nodes":[],"edges":[]}"#)
+            .expect("plain file overwrites");
+        assert_eq!(
+            fs.read(&root.join("board.canvas")).expect("file reads"),
+            br#"{"nodes":[],"edges":[]}"#
+        );
+
+        assert_eq!(
+            vault.write_file(&fs, &note, b"{}"),
+            Err(VaultError::NotAFile),
+            "a note path is never overwritten through the plain-file path"
+        );
+        assert_eq!(
+            fs.read(&root.join("note.md")).expect("note unchanged"),
+            b"hello"
+        );
+
+        assert_eq!(
+            vault.write_file(&fs, &missing, b"{}"),
+            Err(VaultError::EntryNotFound)
+        );
     }
 }

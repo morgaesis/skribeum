@@ -10,26 +10,93 @@ let {
   previews = {},
   linkContext = null,
   taskStatuses = DEFAULT_TASK_STATUSES,
+  onOpenNode,
+  onMoveNode,
+  onRemoveNode,
+  onAddNode,
 }: {
   canvas: CanvasDocument;
   previews?: Readonly<Record<string, string>>;
   linkContext?: WikilinkResolutionContext | null;
   taskStatuses?: readonly TaskStatus[];
+  /** Opens the given note path in the editor, leaving the canvas view. */
+  onOpenNode?: (path: string) => void;
+  /** Persists a card's new world-space position after a drag ends. */
+  onMoveNode?: (nodeId: string, x: number, y: number) => void;
+  /** Removes a card from the board. Never deletes the underlying note. */
+  onRemoveNode?: (nodeId: string) => void;
+  /** Requests adding an existing note to the board as a new card. */
+  onAddNode?: () => void;
 } = $props();
+
+// A screen-space pointer movement smaller than this, in CSS pixels, is
+// still a click: pointing devices jitter a few pixels between press and
+// release even when the user's intent is a plain click, and treating that
+// jitter as a drag would make single-click selection unreliable.
+const DRAG_THRESHOLD = 3;
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 4;
 
 let viewport: HTMLElement;
 let panX = $state(24);
 let panY = $state(24);
 let zoom = $state(1);
-let drag = $state<{ pointer: number; x: number; y: number } | null>(null);
+let drag = $state<{
+  pointer: number;
+  x: number;
+  y: number;
+  moved: boolean;
+} | null>(null);
+let cardDrag = $state<{
+  pointer: number;
+  nodeId: string;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+  currentX: number;
+  currentY: number;
+  moved: boolean;
+} | null>(null);
+let selectedNodeId = $state<string | null>(null);
 let previousUserSelect = "";
 
 const nodesById = $derived(
   new Map(canvas.nodes.map((node) => [node.id, node])),
 );
 
-function setZoom(next: number) {
-  zoom = Math.min(3, Math.max(0.25, next));
+/** A node's geometry, substituting the live in-progress drag position. */
+function liveNode(node: CanvasNode): CanvasNode {
+  if (cardDrag !== null && cardDrag.nodeId === node.id) {
+    return { ...node, x: cardDrag.currentX, y: cardDrag.currentY };
+  }
+  return node;
+}
+
+function clampZoom(next: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next));
+}
+
+/**
+ * Zooms to `nextZoom`, keeping the world point currently under
+ * `(anchorX, anchorY)` (viewport-relative CSS pixels) fixed on screen.
+ * Geometry that follows a pointer or an explicit anchor never animates
+ * (the instant-tracking rule this view applies to pan, zoom, and drag
+ * alike), so this reassigns state directly rather than transitioning it.
+ */
+function zoomAt(nextZoom: number, anchorX: number, anchorY: number) {
+  const clamped = clampZoom(nextZoom);
+  const ratio = clamped / zoom;
+  panX = anchorX - (anchorX - panX) * ratio;
+  panY = anchorY - (anchorY - panY) * ratio;
+  zoom = clamped;
+}
+
+/** Keyboard and toolbar zoom anchor at the viewport center, never a point. */
+function zoomAtCenter(nextZoom: number) {
+  const width = viewport?.clientWidth ?? 0;
+  const height = viewport?.clientHeight ?? 0;
+  zoomAt(nextZoom, width / 2, height / 2);
 }
 
 function resetCamera() {
@@ -38,8 +105,22 @@ function resetCamera() {
   zoom = 1;
 }
 
+function focusedCardId(): string | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  return active.closest<HTMLElement>(".canvas-card")?.dataset.nodeId ?? null;
+}
+
+function openNode(node: CanvasNode) {
+  if (node.type === "file") {
+    onOpenNode?.(node.file);
+  }
+}
+
 // registry-exempt keydown: camera controls internal to this registered
-// content view. Arrow keys pan, plus/minus zoom, and zero resets.
+// content view. Arrow keys pan, plus/minus zoom at the viewport center,
+// zero resets, and Enter opens the focused card (the keyboard equivalent
+// of the double-click open gesture).
 function onKeydown(event: KeyboardEvent) {
   switch (event.key) {
     case "ArrowLeft":
@@ -56,25 +137,46 @@ function onKeydown(event: KeyboardEvent) {
       break;
     case "+":
     case "=":
-      setZoom(zoom * 1.2);
+      zoomAtCenter(zoom * 1.25);
       break;
     case "-":
-      setZoom(zoom / 1.2);
+      zoomAtCenter(zoom / 1.25);
       break;
     case "0":
       resetCamera();
       break;
+    case "Enter": {
+      const nodeId = focusedCardId();
+      const node = nodeId !== null ? nodesById.get(nodeId) : undefined;
+      if (node === undefined) return;
+      openNode(node);
+      break;
+    }
     default:
       return;
   }
   event.preventDefault();
 }
 
+/**
+ * Every wheel gesture over the canvas is captured, so a trackpad's
+ * two-finger scroll never leaks past this view to scroll the surrounding
+ * page. Plain wheel motion pans; the pinch gesture browsers deliver as a
+ * `ctrlKey` wheel event zooms at the pointer, matching the pinch constant
+ * a real continuous gesture needs rather than a mouse notch's coarser
+ * step.
+ */
 function onWheel(event: WheelEvent) {
-  const card =
-    event.target instanceof Element
-      ? event.target.closest<HTMLElement>(".canvas-card")
-      : null;
+  event.preventDefault();
+  if (event.ctrlKey || event.metaKey) {
+    const rect = viewport.getBoundingClientRect();
+    zoomAt(
+      zoom * 1.02 ** -event.deltaY,
+      event.clientX - rect.left,
+      event.clientY - rect.top,
+    );
+    return;
+  }
   const linePixels = 16;
   const pagePixels = viewport.clientHeight || 800;
   const multiplier =
@@ -83,54 +185,8 @@ function onWheel(event: WheelEvent) {
       : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
         ? pagePixels
         : 1;
-  const deltaX = event.deltaX * multiplier;
-  const deltaY = event.deltaY * multiplier;
-  if (card !== null && cardCanScroll(card, deltaX, deltaY)) {
-    event.preventDefault();
-    card.scrollLeft = Math.max(
-      0,
-      Math.min(card.scrollWidth - card.clientWidth, card.scrollLeft + deltaX),
-    );
-    card.scrollTop = Math.max(
-      0,
-      Math.min(card.scrollHeight - card.clientHeight, card.scrollTop + deltaY),
-    );
-    return;
-  }
-  event.preventDefault();
-  if (event.ctrlKey || event.metaKey) {
-    setZoom(zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1));
-  } else {
-    panX -= deltaX;
-    panY -= deltaY;
-  }
-}
-
-function canScrollAxis(
-  position: number,
-  viewportSize: number,
-  contentSize: number,
-  delta: number,
-): boolean {
-  if (delta < 0) return position > 0;
-  if (delta > 0) return position + viewportSize < contentSize;
-  return false;
-}
-
-function cardCanScroll(
-  card: HTMLElement,
-  deltaX: number,
-  deltaY: number,
-): boolean {
-  return (
-    canScrollAxis(
-      card.scrollLeft,
-      card.clientWidth,
-      card.scrollWidth,
-      deltaX,
-    ) ||
-    canScrollAxis(card.scrollTop, card.clientHeight, card.scrollHeight, deltaY)
-  );
+  panX -= event.deltaX * multiplier;
+  panY -= event.deltaY * multiplier;
 }
 
 function clearSelection() {
@@ -156,25 +212,93 @@ function onPointerDown(event: PointerEvent) {
   ) {
     return;
   }
+  const cardElement =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>(".canvas-card")
+      : null;
+  const cardNodeId = cardElement?.dataset.nodeId;
+  const node = cardNodeId !== undefined ? nodesById.get(cardNodeId) : undefined;
   event.preventDefault();
   suppressSelection();
-  drag = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
   viewport.setPointerCapture?.(event.pointerId);
+  if (node !== undefined) {
+    cardDrag = {
+      pointer: event.pointerId,
+      nodeId: node.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: node.x,
+      originY: node.y,
+      currentX: node.x,
+      currentY: node.y,
+      moved: false,
+    };
+    return;
+  }
+  drag = {
+    pointer: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    moved: false,
+  };
+}
+
+function exceedsDragThreshold(dx: number, dy: number): boolean {
+  return Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD;
 }
 
 function onPointerMove(event: PointerEvent) {
+  if (cardDrag !== null && cardDrag.pointer === event.pointerId) {
+    event.preventDefault();
+    const screenDx = event.clientX - cardDrag.startX;
+    const screenDy = event.clientY - cardDrag.startY;
+    cardDrag = {
+      ...cardDrag,
+      currentX: cardDrag.originX + screenDx / zoom,
+      currentY: cardDrag.originY + screenDy / zoom,
+      moved: cardDrag.moved || exceedsDragThreshold(screenDx, screenDy),
+    };
+    return;
+  }
   if (drag === null || drag.pointer !== event.pointerId) return;
   event.preventDefault();
-  panX += event.clientX - drag.x;
-  panY += event.clientY - drag.y;
-  drag = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
+  const dx = event.clientX - drag.x;
+  const dy = event.clientY - drag.y;
+  panX += dx;
+  panY += dy;
+  drag = {
+    pointer: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    moved: drag.moved || exceedsDragThreshold(dx, dy),
+  };
+}
+
+function endCardDrag(pointerId: number) {
+  if (cardDrag === null || cardDrag.pointer !== pointerId) return;
+  const { nodeId, moved, currentX, currentY } = cardDrag;
+  cardDrag = null;
+  if (moved) {
+    onMoveNode?.(nodeId, currentX, currentY);
+  } else {
+    selectedNodeId = nodeId;
+  }
 }
 
 function onPointerUp(event: PointerEvent) {
-  if (drag?.pointer !== event.pointerId) return;
-  drag = null;
   if (viewport.hasPointerCapture?.(event.pointerId)) {
     viewport.releasePointerCapture(event.pointerId);
+  }
+  if (cardDrag?.pointer === event.pointerId) {
+    endCardDrag(event.pointerId);
+    restoreSelection();
+    return;
+  }
+  if (drag?.pointer !== event.pointerId) return;
+  const wasClick = !drag.moved;
+  drag = null;
+  if (wasClick) {
+    selectedNodeId = null;
   }
   restoreSelection();
 }
@@ -189,8 +313,9 @@ function cameraInteractions(node: HTMLElement) {
   node.addEventListener("lostpointercapture", onPointerUp);
   return {
     destroy() {
-      if (drag !== null) {
+      if (drag !== null || cardDrag !== null) {
         drag = null;
+        cardDrag = null;
         restoreSelection();
       }
       node.removeEventListener("keydown", onKeydown);
@@ -232,7 +357,7 @@ export function focus() {
   bind:this={viewport}
   use:cameraInteractions
   class="canvas-viewport"
-  class:dragging={drag !== null}
+  class:dragging={drag !== null || cardDrag !== null}
   role="region"
   aria-label={STRINGS.canvasViewerLabel}
   aria-describedby="canvas-keyboard-help"
@@ -242,10 +367,18 @@ export function focus() {
 >
   <p id="canvas-keyboard-help" class="sr-only">{STRINGS.canvasKeyboardHelp}</p>
   <div class="canvas-toolbar" aria-label={STRINGS.canvasControlsLabel}>
-    <button type="button" aria-label={STRINGS.canvasZoomOut} onclick={() => setZoom(zoom / 1.2)}>−</button>
+    <button type="button" aria-label={STRINGS.canvasZoomOut} onclick={() => zoomAtCenter(zoom / 1.25)}>−</button>
     <output aria-label={STRINGS.canvasZoomLevel}>{Math.round(zoom * 100)}%</output>
-    <button type="button" aria-label={STRINGS.canvasZoomIn} onclick={() => setZoom(zoom * 1.2)}>+</button>
+    <button type="button" aria-label={STRINGS.canvasZoomIn} onclick={() => zoomAtCenter(zoom * 1.25)}>+</button>
     <button type="button" class="skr-btn-secondary" data-btn-role="secondary" onclick={resetCamera}>{STRINGS.canvasResetView}</button>
+    {#if onAddNode !== undefined}
+      <button type="button" class="canvas-toolbar-add" aria-label={STRINGS.canvasAddCard} onclick={() => onAddNode?.()}>
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+          <path d="M8 6v4m-2-2h4" />
+        </svg>
+      </button>
+    {/if}
   </div>
   <div
     class="canvas-world"
@@ -257,8 +390,8 @@ export function focus() {
         {@const fromNode = nodesById.get(edge.fromNode)}
         {@const toNode = nodesById.get(edge.toNode)}
         {#if fromNode !== undefined && toNode !== undefined}
-          {@const from = edgePoint(fromNode, edge.fromSide)}
-          {@const to = edgePoint(toNode, edge.toSide)}
+          {@const from = edgePoint(liveNode(fromNode), edge.fromSide)}
+          {@const to = edgePoint(liveNode(toNode), edge.toSide)}
           <line
             data-edge-id={edge.id}
             x1={from.x}
@@ -271,33 +404,53 @@ export function focus() {
       {/each}
     </svg>
     {#each canvas.nodes as node (node.id)}
+      {@const geometry = liveNode(node)}
       <article
         class="canvas-card"
+        class:selected={selectedNodeId === node.id}
+        class:card-dragging={cardDrag !== null && cardDrag.nodeId === node.id && cardDrag.moved}
         data-node-id={node.id}
         aria-label={nodeLabel(node)}
+        data-selected={selectedNodeId === node.id}
         tabindex="0"
-        style={`left:${node.x}px;top:${node.y}px;width:${node.width}px;height:${node.height}px;--canvas-node-color:${node.color ?? "var(--skr-border)"}`}
+        ondblclick={() => openNode(node)}
+        style={`left:${geometry.x}px;top:${geometry.y}px;width:${geometry.width}px;height:${geometry.height}px;--canvas-node-color:${node.color ?? "var(--skr-border)"}`}
       >
-        {#if node.type === "text"}
-          <div class="canvas-content">
+        {#if node.type === "file"}
+          <div class="skr-canvas-card-title">{node.file}</div>
+        {/if}
+        {#if onRemoveNode !== undefined}
+          <button
+            type="button"
+            class="canvas-card-remove"
+            aria-label={STRINGS.canvasRemoveCard}
+            onclick={(event) => {
+              event.stopPropagation();
+              onRemoveNode?.(node.id);
+            }}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m4.5 4.5 7 7m0-7-7 7" />
+            </svg>
+          </button>
+        {/if}
+        <div class="canvas-content">
+          {#if node.type === "text"}
             <ReadOnlyNote
               source={node.text}
               label={nodeLabel(node)}
               context={contextFor(node)}
               {taskStatuses}
             />
-          </div>
-        {:else}
-          <div class="skr-canvas-card-title">{node.file}</div>
-          <div class="canvas-content">
+          {:else}
             <ReadOnlyNote
               source={previews[node.file] ?? STRINGS.canvasFileUnavailable}
               label={nodeLabel(node)}
               context={contextFor(node)}
               {taskStatuses}
             />
-          </div>
-        {/if}
+          {/if}
+        </div>
       </article>
     {/each}
   </div>
@@ -350,6 +503,21 @@ export function focus() {
     padding-inline: 0.625rem;
   }
 
+  .canvas-toolbar-add {
+    display: grid;
+    place-items: center;
+  }
+
+  .canvas-toolbar-add svg {
+    width: 1rem;
+    height: 1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.25;
+  }
+
   @media (max-width: 60rem) {
     .canvas-toolbar button {
       min-width: 2.75rem;
@@ -381,16 +549,28 @@ export function focus() {
   }
   .canvas-card {
     position: absolute;
+    display: flex;
+    flex-direction: column;
     box-sizing: border-box;
-    overflow: auto;
+    overflow: hidden;
     border: 2px solid var(--canvas-node-color);
     border-radius: var(--skr-radius-surface);
     background: var(--skr-surface-raised);
     box-shadow: var(--skr-shadow);
+    cursor: pointer;
+  }
+  .canvas-card.card-dragging {
+    cursor: grabbing;
+  }
+  .canvas-card.selected {
+    box-shadow: 0 0 0 2px var(--skr-focus);
+  }
+  .canvas-card:focus-visible {
+    outline: 2px solid var(--skr-focus);
+    outline-offset: 2px;
   }
   .canvas-card .skr-canvas-card-title {
-    position: sticky;
-    top: 0;
+    flex: 0 0 auto;
     overflow: hidden;
     padding: 0.45rem 0.65rem;
     border-bottom: 1px solid var(--skr-border);
@@ -401,9 +581,55 @@ export function focus() {
     white-space: nowrap;
   }
   .canvas-content {
+    flex: 1 1 auto;
+    min-height: 0;
     margin: 0;
     padding: 0.7rem;
     color: var(--skr-text);
+    overflow: hidden;
     overflow-wrap: anywhere;
+    /* Cards are a fixed-size preview, not a scroll surface at rest: per the
+       pan-versus-scroll rule, a two-finger gesture over a resting card
+       always pans the board. Content past the card's bounds clips and
+       fades rather than growing a scrollbar. */
+    mask-image: linear-gradient(to bottom, black calc(100% - 1.5rem), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.5rem), transparent 100%);
+  }
+  .canvas-card-remove {
+    position: absolute;
+    top: 0.375rem;
+    right: 0.375rem;
+    z-index: 1;
+    display: grid;
+    width: 1.5rem;
+    height: 1.5rem;
+    place-items: center;
+    border: 0;
+    border-radius: var(--skr-radius-control);
+    padding: 0;
+    color: var(--skr-text-muted);
+    background: var(--skr-surface-raised);
+    opacity: 0;
+  }
+  .canvas-card-remove svg {
+    width: 1rem;
+    height: 1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-width: 1.25;
+  }
+  .canvas-card-remove:hover {
+    background: var(--skr-surface-subtle);
+    color: var(--skr-text);
+  }
+  .canvas-card:hover .canvas-card-remove,
+  .canvas-card:focus-within .canvas-card-remove {
+    opacity: 1;
+  }
+  @media (pointer: coarse) {
+    .canvas-card-remove {
+      opacity: 1;
+    }
   }
 </style>

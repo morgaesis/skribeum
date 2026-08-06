@@ -4764,6 +4764,11 @@ const engineTheme = EditorView.baseTheme({
     textTransform: "uppercase",
   },
   ".cm-skr-setext-underline": { color: "var(--skr-text-muted)" },
+  // The reserved-width geometry lives here and applies with no transition,
+  // so it always resolves in the same frame the caret enters the line. The
+  // glyph's own opacity and compositor translate (entrance on the surface
+  // clock, exit on the state clock, app.css) animate inside that already
+  // -settled space.
   ".cm-skr-reveal-marker": {
     display: "inline-block",
     maxWidth: "0",

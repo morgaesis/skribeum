@@ -20,6 +20,7 @@ import FileTree from "../../src/lib/FileTree.svelte";
 import type { TreeEntry } from "../../src/lib/ipc/bindings";
 import TabStrip from "../../src/lib/TabStrip.svelte";
 import type { WorkspaceTab } from "../../src/lib/workspaceState";
+import { reactiveProps } from "./helpers/reactiveProps.svelte";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -225,6 +226,61 @@ describe("transient surface exits", () => {
   });
 });
 
+describe("reveal marker glyph motion", () => {
+  function markerProbe(): HTMLElement {
+    const probe = document.createElement("span");
+    probe.className = "cm-skr-reveal-marker";
+    probe.textContent = "# ";
+    document.body.append(probe);
+    return probe;
+  }
+
+  it("rests hidden with an opacity and reading-direction translate ready to animate", () => {
+    const marker = markerProbe();
+    const style = getComputedStyle(marker);
+    expect(style.opacity).toBe("0");
+    expect(style.transform).toBe("translateX(var(--skr-motion-distance))");
+    expect(transitionOf(marker)).toContain(
+      "opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
+    );
+    expect(transitionOf(marker)).toContain(
+      "transform var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
+    );
+  });
+
+  it("enters on the surface clock and leaves on the state clock, mirroring the entrance transform", () => {
+    const marker = markerProbe();
+
+    // The already-reserved space (the marker's max-width) never carries a
+    // transition of its own; only opacity and the compositor translate do.
+    marker.classList.add("cm-skr-reveal-marker-active");
+    const active = getComputedStyle(marker);
+    expect(active.opacity).toBe("1");
+    expect(active.transform).toBe("translateX(0)");
+    const enterTransition = transitionOf(marker);
+    expect(enterTransition).toContain(
+      "opacity var(--skr-motion-surface-duration) var(--skr-motion-surface-easing)",
+    );
+    expect(enterTransition).toContain(
+      "transform var(--skr-motion-surface-duration) var(--skr-motion-surface-easing)",
+    );
+    expect(enterTransition).not.toContain("max-width");
+
+    marker.classList.remove("cm-skr-reveal-marker-active");
+    const exiting = getComputedStyle(marker);
+    expect(exiting.opacity).toBe("0");
+    expect(exiting.transform).toBe("translateX(var(--skr-motion-distance))");
+    const exitTransition = transitionOf(marker);
+    expect(exitTransition).toContain(
+      "opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
+    );
+    expect(exitTransition).toContain(
+      "transform var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
+    );
+    expect(exitTransition).not.toContain("--skr-motion-surface-duration");
+  });
+});
+
 const treeEntries: TreeEntry[] = [
   { path: "Folder", kind: "directory", hidden: false },
   { path: "Folder/one.md", kind: "note", hidden: false },
@@ -381,6 +437,101 @@ describe("file tree folder reveal", () => {
   });
 });
 
+const highlightEntries: TreeEntry[] = [
+  { path: "alpha.md", kind: "note", hidden: false },
+  { path: "beta.md", kind: "note", hidden: false },
+];
+
+type HighlightProps = {
+  entries: TreeEntry[];
+  selectedPath: string | null;
+  onOpenPath: (path: string) => void;
+};
+
+describe("file tree active-note highlight", () => {
+  it("enters in place on first selection, then travels between rows on the panel clock", async () => {
+    const props = reactiveProps<HighlightProps>({
+      entries: highlightEntries,
+      selectedPath: "alpha.md",
+      onOpenPath: () => {},
+    });
+    const component = mount(FileTree, { target: document.body, props });
+    flushSync();
+
+    const highlight = document.querySelector<HTMLElement>(
+      ".skr-tree-active-highlight",
+    );
+    expect(highlight).not.toBeNull();
+    if (highlight === null) return;
+
+    // First selection: no previous position is on screen, so the highlight
+    // enters in place with the surface class rather than traveling.
+    expect(highlight.dataset.motionSurface).toBe("fade");
+    expect(highlight.dataset.motionEntered).toBe("true");
+    expect(getComputedStyle(highlight).opacity).toBe("1");
+    const alphaTop = Number.parseFloat(highlight.style.top);
+    expect(Number.isNaN(alphaTop)).toBe(false);
+
+    // Selecting the second row travels: geometry (top) applies instantly,
+    // and the transform starts at the previous row's offset with no
+    // transition attached yet.
+    props.selectedPath = "beta.md";
+    flushSync();
+
+    const betaTop = Number.parseFloat(highlight.style.top);
+    expect(betaTop).toBe(alphaTop + ROW_HEIGHT);
+    expect(highlight.style.transform).toBe(
+      `translateY(${alphaTop - betaTop}px)`,
+    );
+    expect(highlight.dataset.motionSurface).toBeUndefined();
+
+    // One frame later the highlight settles toward zero transform through a
+    // transition on the panel duration and easing.
+    await nextFrame();
+    expect(highlight.style.transform).toBe("");
+    expect(transitionOf(highlight)).toContain(
+      "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
+    );
+
+    // After the panel duration the inline transition is released.
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    expect(highlight.style.transition).toBe("");
+
+    await unmount(component);
+  });
+
+  it("snaps the highlight instantly with no choreography when motion is off", async () => {
+    document.documentElement.dataset.animations = "false";
+    const props = reactiveProps<HighlightProps>({
+      entries: highlightEntries,
+      selectedPath: "alpha.md",
+      onOpenPath: () => {},
+    });
+    const component = mount(FileTree, { target: document.body, props });
+    flushSync();
+    const highlight = document.querySelector<HTMLElement>(
+      ".skr-tree-active-highlight",
+    );
+    expect(highlight).not.toBeNull();
+    if (highlight === null) return;
+    expect(highlight.dataset.motionSurface).toBeUndefined();
+    expect(highlight.style.transform).toBe("");
+    expect(getComputedStyle(highlight).opacity).toBe("1");
+
+    props.selectedPath = "beta.md";
+    flushSync();
+    expect(highlight.dataset.motionSurface).toBeUndefined();
+    expect(highlight.style.transform).toBe("");
+    expect(highlight.style.transition).toBe("");
+
+    // Settle the row-focus microtask the selection effect schedules before
+    // tearing the tree down, so it never runs against a torn-down instance.
+    await tick();
+    await tick();
+    await unmount(component);
+  });
+});
+
 function stripTabs(count: number): WorkspaceTab[] {
   return Array.from({ length: count }, (_, index) => ({
     path: `note-${index + 1}.md`,
@@ -516,6 +667,158 @@ describe("tab strip reorder", () => {
     for (const shell of shells) {
       expect(shell.style.transform).toBe("");
     }
+
+    void unmount(component);
+  });
+});
+
+type TabStripProps = {
+  tabs: WorkspaceTab[];
+  activePath: string | null;
+  titleSources: Record<string, string>;
+  focused: boolean;
+  onActivate: (path: string) => void;
+  onClose: (path: string) => void;
+  onReorder: (from: number, to: number) => void;
+};
+
+function tabStripProps(overrides: Partial<TabStripProps> = {}): TabStripProps {
+  return reactiveProps<TabStripProps>({
+    tabs: stripTabs(3),
+    activePath: "note-1.md",
+    titleSources: {},
+    focused: true,
+    onActivate: () => {},
+    onClose: () => {},
+    onReorder: () => {},
+    ...overrides,
+  });
+}
+
+/** jsdom never lays anything out, so `offsetLeft`/`offsetWidth` default to
+ * zero for every element; this stubs them to a plausible equal-width strip,
+ * matching the drag tests' own `offsetWidth` override above. */
+function stubTabGeometry(width: number): void {
+  const shells = [...document.querySelectorAll<HTMLElement>(".skr-tab-shell")];
+  shells.forEach((shell, index) => {
+    Object.defineProperty(shell, "offsetLeft", {
+      configurable: true,
+      value: index * width,
+    });
+    Object.defineProperty(shell, "offsetWidth", {
+      configurable: true,
+      value: width,
+    });
+  });
+}
+
+describe("tab strip active-tab indicator", () => {
+  it("enters in place on first activation, then travels between tabs on the panel clock", async () => {
+    const props = tabStripProps();
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+
+    const indicator = document.querySelector<HTMLElement>(
+      ".skr-tab-active-indicator",
+    );
+    expect(indicator).not.toBeNull();
+    if (indicator === null) return;
+
+    // First activation: no previous position is on screen, so the
+    // indicator enters in place with the surface class.
+    expect(indicator.dataset.motionSurface).toBe("fade");
+    expect(indicator.dataset.motionEntered).toBe("true");
+    expect(getComputedStyle(indicator).opacity).toBe("1");
+    expect(
+      indicator.classList.contains("skr-tab-active-indicator-focused"),
+    ).toBe(true);
+
+    // Give the tabs real (stubbed) geometry now that the elements exist, so
+    // the next activation travels across a meaningful pixel delta.
+    stubTabGeometry(100);
+
+    props.activePath = "note-2.md";
+    flushSync();
+
+    expect(indicator.style.left).toBe("100px");
+    expect(indicator.style.width).toBe("100px");
+    expect(indicator.style.transform).toBe("translateX(-100px)");
+    expect(indicator.dataset.motionSurface).toBeUndefined();
+
+    await nextFrame();
+    expect(indicator.style.transform).toBe("");
+    expect(transitionOf(indicator)).toContain(
+      "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    expect(indicator.style.transition).toBe("");
+
+    await unmount(component);
+  });
+
+  it("enters in place instead of traveling once the previously active tab has closed", () => {
+    const props = tabStripProps();
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+    const indicator = document.querySelector<HTMLElement>(
+      ".skr-tab-active-indicator",
+    );
+    expect(indicator).not.toBeNull();
+    if (indicator === null) return;
+    expect(indicator.dataset.motionSurface).toBe("fade");
+
+    // Close the active tab and activate a different one in the same
+    // update, as the app does: "note-1.md" drops out of `tabs` entirely, so
+    // there is nothing left to travel from.
+    props.tabs = props.tabs.filter((tab) => tab.path !== "note-1.md");
+    props.activePath = "note-2.md";
+    flushSync();
+
+    expect(indicator.dataset.motionSurface).toBe("fade");
+    expect(getComputedStyle(indicator).opacity).toBe("1");
+
+    void unmount(component);
+  });
+
+  it("colors the indicator by pane focus rather than by selection", () => {
+    const props = tabStripProps({ focused: false });
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+    const indicator = document.querySelector<HTMLElement>(
+      ".skr-tab-active-indicator",
+    );
+    expect(indicator).not.toBeNull();
+    if (indicator === null) return;
+    expect(
+      indicator.classList.contains("skr-tab-active-indicator-focused"),
+    ).toBe(false);
+    expect(getComputedStyle(indicator).background).toContain(
+      "var(--skr-border-strong)",
+    );
+
+    void unmount(component);
+  });
+
+  it("snaps the indicator instantly with no choreography when motion is off", () => {
+    document.documentElement.dataset.animations = "false";
+    const props = tabStripProps();
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+    const indicator = document.querySelector<HTMLElement>(
+      ".skr-tab-active-indicator",
+    );
+    expect(indicator).not.toBeNull();
+    if (indicator === null) return;
+    expect(indicator.dataset.motionSurface).toBeUndefined();
+    expect(indicator.style.transform).toBe("");
+
+    stubTabGeometry(100);
+    props.activePath = "note-2.md";
+    flushSync();
+    expect(indicator.dataset.motionSurface).toBeUndefined();
+    expect(indicator.style.transform).toBe("");
+    expect(indicator.style.transition).toBe("");
 
     void unmount(component);
   });

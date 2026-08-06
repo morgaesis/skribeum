@@ -1,10 +1,19 @@
 <script lang="ts">
 import { onMount, tick } from "svelte";
 import { type CommandTooltipOptions, commandTooltip } from "./commandTooltip";
-import { enterMotionSurface, exitMotionSurface } from "./motion";
+import {
+  enterMotionSurface,
+  exitMotionSurface,
+  motionDurationMilliseconds,
+} from "./motion";
 import { resolveTitleCollisions } from "./noteTitles";
 import { STRINGS } from "./strings";
 import type { WorkspaceTab } from "./workspaceState";
+
+// The active-tab indicator travel: a compositor-only transform on the panel
+// clock, matching the reorder reflow's own clock below.
+const ACTIVE_INDICATOR_TRAVEL_TRANSITION =
+  "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)";
 
 let {
   tabs,
@@ -39,6 +48,15 @@ let scrollOriginLeft = 0;
 // passed-over tabs open is exactly the slot the tab will land in.
 let dragWidth = 0;
 let listCloseGeneration = 0;
+let tabElements = $state<Array<HTMLElement | undefined>>([]);
+let indicatorElement = $state<HTMLElement>();
+// Plain (non-reactive) bookkeeping: the choreography effect below both
+// reads and writes these, and making them `$state` would make its own
+// writes re-trigger itself mid-flush, stomping the entrance markers it had
+// just set.
+let indicatorRestLeft: number | null = null;
+let indicatorAnimatedPath: string | null = null;
+let indicatorMotionGeneration = 0;
 
 const titles = $derived(
   resolveTitleCollisions(
@@ -100,19 +118,135 @@ function measureOverflow() {
   if (!overflowed) listOpen = false;
 }
 
+/**
+ * Re-reads the active tab's geometry with no choreography, for a resize
+ * that shifts the flexible tab widths without any selection change. Any
+ * choreographed travel or entrance is left untouched: this only ever runs
+ * outside the animated effect below, from the resize observer and handler.
+ */
+function syncActiveIndicatorGeometry() {
+  const element = indicatorElement;
+  if (element === undefined) return;
+  const activeIndex =
+    activePath === null ? -1 : tabs.findIndex((tab) => tab.path === activePath);
+  const tabElement = activeIndex < 0 ? undefined : tabElements[activeIndex];
+  if (tabElement === undefined) return;
+  element.style.left = `${tabElement.offsetLeft}px`;
+  element.style.width = `${tabElement.offsetWidth}px`;
+  indicatorRestLeft = tabElement.offsetLeft;
+}
+
+function measureOverflowAndIndicator() {
+  measureOverflow();
+  syncActiveIndicatorGeometry();
+}
+
 $effect(() => {
   void tabs.length;
   void tick().then(measureOverflow);
 });
 
+/**
+ * Travels the active-tab indicator from its previous tab to the new one on
+ * the panel clock, a compositor-only transform. This effect re-runs for
+ * reasons other than a selection change too (tabs opening or closing, the
+ * strip reflowing), in which case it just follows the new geometry with no
+ * choreography: the travel is reserved for an actual tab switch. When the
+ * previously active tab has closed, there is nothing to travel from, so the
+ * indicator enters in place with the surface class instead.
+ */
+$effect(() => {
+  const path = activePath;
+  const element = indicatorElement;
+  const items = itemsElement;
+  if (element === undefined || items === undefined) {
+    indicatorRestLeft = null;
+    indicatorAnimatedPath = null;
+    return;
+  }
+  const activeIndex =
+    path === null ? -1 : tabs.findIndex((tab) => tab.path === path);
+  const tabElement = activeIndex < 0 ? undefined : tabElements[activeIndex];
+
+  if (tabElement === undefined) {
+    // Deliberately leaves `indicatorAnimatedPath` untouched: the active
+    // tab's own element can resolve to undefined on an intermediate pass
+    // within the same flush (its `bind:this` not settled yet) before
+    // resolving a moment later, and recording the path here would make
+    // that later, real pass look like a no-op re-selection instead of new.
+    element.style.transition = "";
+    element.style.transform = "";
+    element.style.opacity = "0";
+    indicatorRestLeft = null;
+    return;
+  }
+
+  const previousPath = indicatorAnimatedPath;
+  const isNewSelection = path !== previousPath;
+  const previousStillOpen =
+    previousPath !== null && tabs.some((tab) => tab.path === previousPath);
+  indicatorAnimatedPath = path;
+  const generation = ++indicatorMotionGeneration;
+
+  const left = tabElement.offsetLeft;
+  const width = tabElement.offsetWidth;
+  const duration = motionDurationMilliseconds(
+    "--skr-motion-panel-duration",
+    items,
+  );
+
+  if (duration === 0 || !isNewSelection) {
+    delete element.dataset.motionSurface;
+    element.style.transition = "";
+    element.style.transform = "";
+    element.style.opacity = "1";
+    element.style.left = `${left}px`;
+    element.style.width = `${width}px`;
+    indicatorRestLeft = left;
+    return;
+  }
+
+  if (indicatorRestLeft === null || !previousStillOpen) {
+    element.style.transition = "";
+    element.style.transform = "";
+    element.style.opacity = "";
+    element.style.left = `${left}px`;
+    element.style.width = `${width}px`;
+    indicatorRestLeft = left;
+    delete element.dataset.motionExiting;
+    element.dataset.motionSurface = "fade";
+    enterMotionSurface(element);
+    return;
+  }
+
+  const previousLeft = indicatorRestLeft;
+  delete element.dataset.motionSurface;
+  element.style.transition = "none";
+  element.style.opacity = "1";
+  element.style.left = `${left}px`;
+  element.style.width = `${width}px`;
+  element.style.transform = `translateX(${previousLeft - left}px)`;
+  indicatorRestLeft = left;
+  void element.offsetWidth;
+  requestAnimationFrame(() => {
+    if (generation !== indicatorMotionGeneration) return;
+    element.style.transition = ACTIVE_INDICATOR_TRAVEL_TRANSITION;
+    element.style.transform = "";
+    setTimeout(() => {
+      if (generation !== indicatorMotionGeneration) return;
+      element.style.transition = "";
+    }, duration);
+  });
+});
+
 onMount(() => {
-  const observer = new ResizeObserver(measureOverflow);
+  const observer = new ResizeObserver(measureOverflowAndIndicator);
   if (itemsElement instanceof HTMLElement) observer.observe(itemsElement);
-  window.addEventListener("resize", measureOverflow);
+  window.addEventListener("resize", measureOverflowAndIndicator);
   measureOverflow();
   return () => {
     observer.disconnect();
-    window.removeEventListener("resize", measureOverflow);
+    window.removeEventListener("resize", measureOverflowAndIndicator);
   };
 });
 
@@ -175,6 +309,7 @@ function finishScrollDrag(event: PointerEvent) {
       {#each tabs as tab, index (tab.path)}
       {@const title = titles[index]}
       <button
+        bind:this={tabElements[index]}
         type="button"
         class="skr-tab-shell"
         role="tab"
@@ -239,6 +374,12 @@ function finishScrollDrag(event: PointerEvent) {
         </span>
       </button>
       {/each}
+      <span
+        bind:this={indicatorElement}
+        class="skr-tab-active-indicator"
+        class:skr-tab-active-indicator-focused={focused}
+        aria-hidden="true"
+      ></span>
     </div>
     {#if overflowed}
       <div class="skr-tab-list-shell">

@@ -52,6 +52,16 @@ export const commands = {
 	 */
 	vaultFileRead: (handle: VaultHandle, relPath: string, content: Channel<number[]>) => typedError<VaultFileContent, AppError>(__TAURI_INVOKE("vault_file_read", { handle, relPath, content })),
 	/**
+	 *  Overwrites one indexed non-note file's full contents. The canvas board
+	 *  is the only editable consumer today: a card move, add, or remove
+	 *  rewrites the whole document rather than a change-set, so this command
+	 *  carries no projection-hash conflict check the way `note_write` does for
+	 *  prose. It never creates editor or reconciliation state and never
+	 *  touches search indexing, matching `vault_file_read`'s scope on the
+	 *  write side.
+	 */
+	vaultFileWrite: (handle: VaultHandle, relPath: string, bytes: number[]) => typedError<null, AppError>(__TAURI_INVOKE("vault_file_write", { handle, relPath, bytes })),
+	/**
 	 *  Writes a note through the crash-safe change-set path: `change_set` (a
 	 *  list of byte-range replacements against the last-read projection)
 	 *  applies only after `expected_projection_hash` is verified against the

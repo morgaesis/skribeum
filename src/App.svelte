@@ -127,6 +127,7 @@ import {
   readVaultFile,
   vaultTree,
   watchSubscribe,
+  writeVaultFile,
 } from "./lib/ipc/vault";
 import type { PaneSwitchKind } from "./lib/motion";
 import NoteInfo from "./lib/NoteInfo.svelte";
@@ -141,8 +142,12 @@ import {
 import CanvasView from "./lib/rendering/CanvasView.svelte";
 import {
   type CanvasDocument,
+  type CanvasNode,
   canvasFilePaths,
+  nextCanvasNodeId,
+  nextCanvasNodePosition,
   parseCanvas,
+  serializeCanvas,
 } from "./lib/rendering/canvas";
 import ReadOnlyNote from "./lib/rendering/ReadOnlyNote.svelte";
 import { NARROW_BREAKPOINT_REM } from "./lib/responsive";
@@ -2443,6 +2448,142 @@ async function openCanvas(path: string) {
   }
 }
 
+/**
+ * Serializes and durably writes the open canvas document. Never touches
+ * local state itself: callers apply their own optimistic update first and
+ * roll it back when this reports failure.
+ */
+async function persistCanvas(
+  path: string,
+  next: CanvasDocument,
+): Promise<boolean> {
+  const currentVault = vault;
+  if (currentVault === null) return false;
+  try {
+    await writeVaultFile(
+      currentVault,
+      path,
+      new TextEncoder().encode(serializeCanvas(next)),
+    );
+    return true;
+  } catch (error) {
+    errorText = describeError(STRINGS.canvasWriteFailed, error);
+    return false;
+  }
+}
+
+/** Moves one card to a new world-space position and persists the board. */
+async function moveCanvasNode(nodeId: string, x: number, y: number) {
+  const current = canvas;
+  const path = selectedPath;
+  if (current === null || path === null) return;
+  const next: CanvasDocument = {
+    ...current,
+    nodes: current.nodes.map((node) =>
+      node.id === nodeId ? { ...node, x, y } : node,
+    ),
+  };
+  canvas = next;
+  // Only roll back onto the board still open when the write settles: the
+  // view may have navigated to a different note or canvas while the write
+  // was in flight, and that canvas's own state must never be clobbered by
+  // a failure that belongs to the one this mutation started on.
+  if (!(await persistCanvas(path, next)) && selectedPath === path) {
+    canvas = current;
+  }
+}
+
+/**
+ * Removes one card and any edge touching it, and persists the board. The
+ * underlying note file is never touched: this only edits the board.
+ */
+async function removeCanvasNode(nodeId: string) {
+  const current = canvas;
+  const path = selectedPath;
+  if (current === null || path === null) return;
+  const next: CanvasDocument = {
+    nodes: current.nodes.filter((node) => node.id !== nodeId),
+    edges: current.edges.filter(
+      (edge) => edge.fromNode !== nodeId && edge.toNode !== nodeId,
+    ),
+  };
+  canvas = next;
+  if (!(await persistCanvas(path, next)) && selectedPath === path) {
+    canvas = current;
+  }
+}
+
+function canvasNotePaths(document: CanvasDocument): Set<string> {
+  return new Set(
+    document.nodes
+      .filter(
+        (node): node is Extract<CanvasNode, { type: "file" }> =>
+          node.type === "file",
+      )
+      .map((node) => node.file),
+  );
+}
+
+/**
+ * Prompts for an existing vault note's path and adds it to the open board
+ * as a new card, positioned to the right of the current rightmost card.
+ */
+async function addCanvasNode() {
+  const currentVault = vault;
+  const current = canvas;
+  const canvasPath = selectedPath;
+  if (currentVault === null || current === null || canvasPath === null) {
+    return;
+  }
+  const onCanvas = canvasNotePaths(current);
+  const entered = await showPromptDialog({
+    title: STRINGS.canvasAddCard,
+    inputLabel: STRINGS.canvasAddCardPrompt,
+    confirmLabel: STRINGS.createAction,
+    validate: (value) => {
+      const trimmed = value.trim();
+      if (trimmed.length === 0) return null;
+      const entry = tree.find((candidate) => candidate.path === trimmed);
+      if (entry === undefined || entry.kind !== "note") {
+        return STRINGS.canvasAddCardNotFound;
+      }
+      if (onCanvas.has(trimmed)) {
+        return STRINGS.canvasAddCardDuplicate;
+      }
+      return null;
+    },
+  });
+  const path = entered?.trim();
+  if (path === undefined || path === "") return;
+  let previewText: string;
+  try {
+    previewText = decodeFile(await readVaultFile(currentVault, path));
+  } catch {
+    previewText = STRINGS.canvasFileUnavailable;
+  }
+  const { x, y } = nextCanvasNodePosition(current);
+  const node: CanvasNode = {
+    id: nextCanvasNodeId(current),
+    type: "file",
+    file: path,
+    x,
+    y,
+    width: 360,
+    height: 280,
+  };
+  const next: CanvasDocument = {
+    nodes: [...current.nodes, node],
+    edges: current.edges,
+  };
+  const previousPreviews = canvasPreviews;
+  canvas = next;
+  canvasPreviews = { ...canvasPreviews, [path]: previewText };
+  if (!(await persistCanvas(canvasPath, next)) && selectedPath === canvasPath) {
+    canvas = current;
+    canvasPreviews = previousPreviews;
+  }
+}
+
 function openPath(path: string) {
   if (activeSheet === "file-tree") {
     closeSheet();
@@ -3177,6 +3318,10 @@ onMount(() => {
                   previews={canvasPreviews}
                   {linkContext}
                   taskStatuses={settingsState.document.task_statuses}
+                  onOpenNode={openPath}
+                  onMoveNode={(nodeId, x, y) => void moveCanvasNode(nodeId, x, y)}
+                  onRemoveNode={(nodeId) => void removeCanvasNode(nodeId)}
+                  onAddNode={() => void addCanvasNode()}
                 />
               {:else if contentView === VIEW_CANVAS && canvasError !== null}
                 <div class="skr-error m-4 rounded border p-3 text-sm" role="alert" data-testid="canvas-error">

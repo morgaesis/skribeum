@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   canvasFilePaths,
   edgePoint,
+  nextCanvasNodeId,
+  nextCanvasNodePosition,
   parseCanvas,
+  serializeCanvas,
 } from "../../src/lib/rendering/canvas";
 
 const SOURCE = JSON.stringify({
@@ -96,5 +99,48 @@ describe("JSON Canvas rendering model", () => {
         }),
       ),
     ).toThrow(/invalid endpoints/);
+  });
+});
+
+describe("canvas persistence helpers", () => {
+  it("round-trips through parseCanvas byte-for-byte on reserialization", () => {
+    const canvas = parseCanvas(SOURCE);
+    expect(parseCanvas(serializeCanvas(canvas))).toEqual(canvas);
+    expect(serializeCanvas(canvas)).toMatch(/\n$/);
+  });
+
+  it("assigns the next unused card id rather than colliding with an existing one", () => {
+    const canvas = parseCanvas(SOURCE);
+    expect(nextCanvasNodeId(canvas)).toBe("card-3");
+
+    const collidingCanvas = parseCanvas(
+      JSON.stringify({
+        nodes: [
+          ...canvas.nodes,
+          {
+            id: "card-3",
+            type: "text",
+            text: "x",
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+          },
+        ],
+        edges: [],
+      }),
+    );
+    expect(nextCanvasNodeId(collidingCanvas)).toBe("card-4");
+  });
+
+  it("places a new card to the right of the rightmost card, aligned with the topmost one", () => {
+    const canvas = parseCanvas(SOURCE);
+    // From SOURCE: the file card's right edge (320+240=560) is the
+    // rightmost, and the text card's top (y=25) is the topmost.
+    expect(nextCanvasNodePosition(canvas)).toEqual({ x: 600, y: 25 });
+    expect(nextCanvasNodePosition({ nodes: [], edges: [] })).toEqual({
+      x: 0,
+      y: 0,
+    });
   });
 });

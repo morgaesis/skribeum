@@ -201,6 +201,20 @@ export async function readNoteStat(
   return unwrap(await commands.noteStat(handle, relPath));
 }
 
+/**
+ * Overwrites an indexed non-note file's full contents. The canvas board is
+ * the only editable consumer today: a card move, add, or remove sends the
+ * whole rewritten document here rather than a change-set, so there is no
+ * projection-hash conflict check the way note writes have.
+ */
+export async function writeVaultFile(
+  handle: VaultHandle,
+  relPath: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  unwrap(await commands.vaultFileWrite(handle, relPath, Array.from(bytes)));
+}
+
 /** Reads an indexed regular file without opening an editable note session. */
 export async function readVaultFile(
   handle: VaultHandle,

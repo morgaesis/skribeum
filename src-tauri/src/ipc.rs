@@ -1389,6 +1389,33 @@ fn vault_file_read(
     Ok(VaultFileContent { byte_length })
 }
 
+/// Overwrites one indexed non-note file's full contents. The canvas board
+/// is the only editable consumer today: a card move, add, or remove
+/// rewrites the whole document rather than a change-set, so this command
+/// carries no projection-hash conflict check the way `note_write` does for
+/// prose. It never creates editor or reconciliation state and never
+/// touches search indexing, matching `vault_file_read`'s scope on the
+/// write side.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn vault_file_write(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    rel_path: String,
+    bytes: Vec<u8>,
+) -> Result<(), AppError> {
+    let path = VaultPath::new(&rel_path)?;
+    let vaults = registry.lock();
+    let open = vaults
+        .get(&handle.id)
+        .ok_or_else(AppError::unknown_handle)?;
+    open.vault
+        .write_file(&RealFs, &path, &bytes)
+        .map_err(|error| AppError::from(error).with_path(path.as_str()))?;
+    Ok(())
+}
+
 /// Writes a note through the crash-safe change-set path: `change_set` (a
 /// list of byte-range replacements against the last-read projection)
 /// applies only after `expected_projection_hash` is verified against the
@@ -2541,6 +2568,7 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             note_read,
             note_stat,
             vault_file_read,
+            vault_file_write,
             note_write,
             edit_history_read,
             edit_history_append,

@@ -133,6 +133,7 @@ impl From<&VaultError> for AppError {
             VaultError::EntryNotFound => "entry/not-found",
             VaultError::EntryAlreadyExists => "entry/already-exists",
             VaultError::NotANote => "note/not-a-note",
+            VaultError::NotAFile => "entry/not-a-file",
             VaultError::NoteNotRead => "note/not-read",
             VaultError::NoteReadOnly => "note/read-only",
             VaultError::BaseMismatch => "note/base-mismatch",

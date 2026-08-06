@@ -724,6 +724,39 @@ export async function readVaultFile(
 }
 
 /**
+ * Overwrites an indexed non-note file's full contents. Mirrors `noteWrite`'s
+ * best-effort local-folder write-through, but as a whole-document replace
+ * with no projection-hash conflict check: the canvas board is the only
+ * editable consumer and is not a multi-writer document.
+ */
+export async function writeVaultFile(
+  handle: VaultHandle,
+  relPath: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  const vault = vaultFor(handle);
+  assertRelativePath(relPath);
+  const next = bytes.slice();
+  const localHandle = vault.fileHandles.get(relPath);
+  if (
+    vault.directoryHandle !== null &&
+    localHandle !== undefined &&
+    vault.folderWrites &&
+    localHandle.createWritable !== undefined
+  ) {
+    try {
+      const writable = await localHandle.createWritable();
+      await writable.write(next);
+      await writable.close();
+    } catch {
+      vault.folderWrites = false;
+      publishFolderStatus(vault);
+    }
+  }
+  vault.files.set(relPath, next);
+}
+
+/**
  * The seeded browser vault has no filesystem timestamps; the statusline
  * degrades to save-time tracking in the shell.
  */

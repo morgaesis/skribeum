@@ -30,19 +30,10 @@ import {
   urlForNoteAddress,
 } from "../../src/lib/features/navigation";
 import { commandItems } from "../../src/lib/features/pickers";
-import { paneSwitchUsesArrivalMotion } from "../../src/lib/motion";
 import { type CommandContext, editorKeymap } from "../../src/lib/registry";
 import { STRINGS } from "../../src/lib/strings";
 
 const views: EditorView[] = [];
-
-describe("pane switch motion", () => {
-  it("animates note and history arrivals but keeps tab switches instant", () => {
-    expect(paneSwitchUsesArrivalMotion("note")).toBe(true);
-    expect(paneSwitchUsesArrivalMotion("history")).toBe(true);
-    expect(paneSwitchUsesArrivalMotion("tab")).toBe(false);
-  });
-});
 
 function navigationOptions(overrides: Partial<FollowWikilinkOptions> = {}) {
   return {

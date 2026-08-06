@@ -2,7 +2,7 @@
 import { onMount, tick } from "svelte";
 import AnchoredMenu from "./AnchoredMenu.svelte";
 import { type CommandTooltipOptions, commandTooltip } from "./commandTooltip";
-import { motionDurationMilliseconds } from "./motion";
+import { enterMotionSurface, motionDurationMilliseconds } from "./motion";
 import { resolveTitleCollisions } from "./noteTitles";
 import { STRINGS } from "./strings";
 import type { WorkspaceTab } from "./workspaceState";

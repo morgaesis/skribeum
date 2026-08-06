@@ -197,7 +197,11 @@ let note = $state<LoadedNote | null>(null);
 let collisionGroups = $state<string[][]>([]);
 let errorText = $state<string | null>(null);
 let banners = $state<BannerItem[]>([]);
-let editor = $state<ReturnType<typeof Editor> | undefined>();
+// Svelte resets a `bind:this` component binding to `null`, not `undefined`,
+// once the bound component unmounts (leaving canvas or the missing-note
+// surface, for instance, both swap the template away from Editor); every
+// "is the editor mounted" check below must treat both as absent.
+let editor = $state<ReturnType<typeof Editor> | null | undefined>();
 let contentHost = $state<HTMLElement | undefined>();
 let obsidianConfig = $state<ObsidianAppConfig>(DEFAULT_OBSIDIAN_APP_CONFIG);
 let linkContext = $state<WikilinkResolutionContext | null>(null);
@@ -1285,7 +1289,13 @@ function commandContext(): CommandContext {
 }
 
 async function clearEditHistory(): Promise<void> {
-  if (editor === undefined || note === null || selectedPath === null) return;
+  if (
+    editor === undefined ||
+    editor === null ||
+    note === null ||
+    selectedPath === null
+  )
+    return;
   const testConfirmed = (
     window as Window & { __SKRIBEUM_E2E_CONFIRM_EDIT_HISTORY__?: boolean }
   ).__SKRIBEUM_E2E_CONFIRM_EDIT_HISTORY__;
@@ -2211,7 +2221,8 @@ async function openNote(
     }
     if (
       (switchKind !== "note" || selectedPath !== path) &&
-      editor !== undefined
+      editor !== undefined &&
+      editor !== null
     ) {
       // Every pane switch fades its incoming content in over an already
       // composed frame (section 5.1), including the very first note a

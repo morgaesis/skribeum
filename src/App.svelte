@@ -36,6 +36,7 @@ import {
   type FollowWikilinkOptions,
   followLinkUnderCursor as followEditorLinkUnderCursor,
   type NavigationState,
+  NOTE_ADDRESS_PARAMETER,
   type NoteAddress,
   type NoteNavigator,
   type NoteViewState,
@@ -51,6 +52,11 @@ import {
   headingAtOrBefore,
   type OutlineEntry,
 } from "./lib/features/outline";
+import {
+  PERMALINK_ID_PARAMETER,
+  permalinkUrlForId,
+  resolveNoteId,
+} from "./lib/features/permalink";
 import {
   appendBareDiscoveryItems,
   commandItems,
@@ -1240,6 +1246,7 @@ function commandContext(): CommandContext {
     navigateForward: () => paneNavigate(1),
     followLink: followLinkUnderCursor,
     copyNoteLink,
+    copyPermalink,
     createTreeNote,
     createTreeFolder,
     renameTreeEntry,
@@ -1711,6 +1718,25 @@ async function copyHeadingLink(heading?: string) {
   }
 }
 
+/**
+ * Copies the active note's stable public permalink, allocating its
+ * frontmatter id on first use through the editor's own frontmatter-editing
+ * path (`ensurePermalinkId`), so the id round-trips through undo and save
+ * exactly like a properties-panel edit. Desktop and the browser demo copy
+ * the identical `https://skribeum.app` URL.
+ */
+async function copyPermalink() {
+  if (selectedPath === null || !notePaths.includes(selectedPath)) return;
+  const id = editor?.ensurePermalinkId();
+  if (id === null || id === undefined) return;
+  try {
+    await navigator.clipboard.writeText(permalinkUrlForId(id));
+    announceLinkCopied(STRINGS.permalinkCopied);
+  } catch (error) {
+    errorText = describeError(STRINGS.permalinkCopyFailed, error);
+  }
+}
+
 function copyOutlineHeading(heading: string) {
   registry.run("link.copy-heading", {
     ...commandContext(),
@@ -1776,16 +1802,16 @@ function dismissBanner(id: number) {
  * center slot, narrow ones keep the status banner because the phone shell
  * carries no statusline.
  */
-function announceLinkCopied() {
+function announceLinkCopied(text: string = STRINGS.linkCopied) {
   if (!narrowViewport) {
     nextAnnouncementId += 1;
     statuslineAnnouncement = {
       id: nextAnnouncementId,
-      text: STRINGS.linkCopied,
+      text,
     };
     return;
   }
-  const id = pushBanner({ text: STRINGS.linkCopied, polite: true });
+  const id = pushBanner({ text, polite: true });
   transientBannerTimers.set(
     id,
     setTimeout(() => dismissBanner(id), 2000),
@@ -1965,6 +1991,38 @@ async function readOptionalVaultConfigFile(
   }
 }
 
+/**
+ * Resolves a `?n=<permalink id>` browser URL to its note path by scanning
+ * the just-opened vault's frontmatter, then rewrites the URL to the
+ * ordinary `?note=<path>` form so the existing address-from-URL routing
+ * picks it up unchanged. An id that matches no note falls back gracefully
+ * to normal landing: the parameter is dropped and routing proceeds as if
+ * it had never been present.
+ */
+async function resolvePermalinkNavigation(
+  handle: VaultHandle,
+  entries: TreeEntry[],
+): Promise<void> {
+  const url = new URL(window.location.href);
+  const id = url.searchParams.get(PERMALINK_ID_PARAMETER);
+  if (id === null) {
+    return;
+  }
+  url.searchParams.delete(PERMALINK_ID_PARAMETER);
+  const resolved = await resolveNoteId(
+    id,
+    notePathsOf(entries),
+    async (notePath) => {
+      const bytes = await readVaultFile(handle, notePath);
+      return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    },
+  );
+  if (resolved !== null) {
+    url.searchParams.set(NOTE_ADDRESS_PARAMETER, resolved);
+  }
+  window.history.replaceState(window.history.state, "", url);
+}
+
 async function openVaultAtPath(path: string, initialNote?: string) {
   errorText = null;
   tagCatalogGeneration += 1;
@@ -2005,6 +2063,9 @@ async function openVaultAtPath(path: string, initialNote?: string) {
     setTagCatalog(nextTags);
     recentTags = [];
     refreshLinkContext();
+    if (navigationSurface === "browser") {
+      await resolvePermalinkNavigation(handle, nextTree);
+    }
     const harnessNote = (window as Window & { __SKRIBEUM_E2E_NOTE__?: string })
       .__SKRIBEUM_E2E_NOTE__;
     const addressed = navigation?.state().address ?? null;

@@ -1915,6 +1915,7 @@ describe("skribeum shell", () => {
         { command: "application.zoom-out", label: "Zoom out" },
         { command: "application.zoom-reset", label: "Reset zoom" },
         { command: "link.copy-note", label: "Copy link to note" },
+        { command: "link.copy-permalink", label: "Copy permalink" },
         { command: "find.open", label: "Find in note" },
         { command: "editor.toggle-source-mode", label: "Toggle source mode" },
         { command: "navigation.back", label: "Navigate back" },

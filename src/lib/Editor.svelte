@@ -51,6 +51,7 @@ import {
   type EditorStatistics,
   type PersistenceState,
 } from "./features/noteStatistics";
+import { generateNoteId, normalizeNoteIdScalar } from "./features/permalink";
 import { selectionToolbar } from "./features/selectionToolbar";
 import {
   DEFAULT_SETTINGS,
@@ -325,6 +326,42 @@ export function startAddProperty(): void {
   }
   propertiesExpanded = true;
   addingProperty = true;
+}
+
+/**
+ * Ensures the open note carries a stable permalink id, allocating one
+ * through the same frontmatter-editing path `startAddProperty` uses (a
+ * note without frontmatter gains an empty block first) so undo and
+ * serialization stay correct. Returns the existing or newly written id,
+ * or null when there is no editor to write into or the note is read-only.
+ */
+export function ensurePermalinkId(): string | null {
+  if (view === undefined || note?.readOnly === true) return null;
+  let current = frontmatter;
+  if (current === null) {
+    view.dispatch({ changes: { from: 0, to: 0, insert: "---\n---\n" } });
+    const head = view.state.doc.sliceString(
+      0,
+      Math.min(view.state.doc.length, FRONTMATTER_SCAN_LIMIT),
+    );
+    current = parseFrontmatter(head);
+  }
+  if (current === null) return null;
+  const existing = current.entries.find((entry) => entry.key === "id");
+  if (existing !== undefined) {
+    return normalizeNoteIdScalar(existing.raw);
+  }
+  const id = generateNoteId();
+  const insertion = propertyInsertion(current, "id", id);
+  if (insertion === null) return null;
+  view.dispatch({
+    changes: {
+      from: insertion.from,
+      to: insertion.from,
+      insert: insertion.insert,
+    },
+  });
+  return id;
 }
 
 /** Follows a wikilink-shaped property value from the properties panel. */

@@ -98,4 +98,11 @@ export function registerCopyLinks(registry: CommandRegistry): void {
     pointer: ["command-palette", "outline"],
     run: (context) => context.copyHeadingLink?.(context.heading),
   });
+  registry.register({
+    id: "link.copy-permalink",
+    title: STRINGS.copyPermalink,
+    pointer: ["action-menu", "command-palette"],
+    searchTerms: ["share", "public link"],
+    run: (context) => context.copyPermalink?.(),
+  });
 }

@@ -50,6 +50,8 @@ export type CommandContext = {
   followLink(view?: EditorView | null): boolean;
   /** Copies a link to the active note. */
   copyNoteLink?(): Promise<void>;
+  /** Copies the active note's stable public permalink, allocating its id. */
+  copyPermalink?(): Promise<void>;
   /** Tree row targeted by a contextual command. */
   treePath?: string;
   /** Folder targeted by a tree move, or null for the vault root. */

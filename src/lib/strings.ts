@@ -231,6 +231,9 @@ export const STRINGS = {
   copyLinkToCurrentHeading: "Copy link to current heading",
   linkCopied: "Link copied",
   linkCopyFailed: "Copying the link failed",
+  copyPermalink: "Copy permalink",
+  permalinkCopied: "Permalink copied",
+  permalinkCopyFailed: "Copying the permalink failed",
   settingsLabel: "Settings",
   commandOpenSettings: "Open settings",
   settingsIntro:

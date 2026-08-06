@@ -356,11 +356,6 @@ select {
   background: var(--skr-surface-subtle);
 }
 
-.skr-tree-row[aria-selected="true"] {
-  background: var(--skr-accent-subtle);
-  box-shadow: inset 2px 0 var(--skr-accent);
-}
-
 .skr-tree-row:focus-visible {
   outline: 2px solid var(--skr-focus);
   outline-offset: -2px;
@@ -387,6 +382,23 @@ select {
 /* Rows a collapse hides linger as presentation-only ghosts while they fade
    on the panel clock; they never intercept the pointer. */
 .skr-tree-ghost {
+  pointer-events: none;
+}
+
+/* The open note's highlight is one overlay that travels between rows on the
+   panel clock rather than a per-row fill that pops on the row itself; a row
+   in front of it stays transparent at rest so the overlay shows through. It
+   sits behind every row in paint order (first in markup, no explicit
+   z-index needed) and never intercepts the pointer. */
+.skr-tree-active-highlight {
+  position: absolute;
+  right: 0.25rem;
+  left: 0.25rem;
+  box-sizing: border-box;
+  border-radius: var(--skr-radius-control);
+  background: var(--skr-accent-subtle);
+  box-shadow: inset 2px 0 var(--skr-accent);
+  opacity: 0;
   pointer-events: none;
 }
 
@@ -541,6 +553,7 @@ select {
 }
 
 .skr-tab-items {
+  position: relative;
   display: flex;
   min-width: 0;
   flex: 1;
@@ -594,17 +607,21 @@ select {
   font-weight: 600;
 }
 
-.skr-tab-active::after {
+/* The active-tab indicator is one overlay that travels between tabs on the
+   panel clock rather than a per-tab bar that pops on the active tab itself;
+   left and width are written inline as it tracks its tab. Its color follows
+   pane focus, not selection: a bar in an unfocused split's strip is still
+   visible, just muted, since section 4.10 keeps the split model legible. */
+.skr-tab-active-indicator {
   position: absolute;
-  right: 0;
   bottom: 0;
-  left: 0;
   height: 2px;
   background: var(--skr-border-strong);
-  content: "";
+  opacity: 0;
+  pointer-events: none;
 }
 
-.skr-tab-focused::after {
+.skr-tab-active-indicator-focused {
   background: var(--skr-accent);
 }
 
@@ -1031,15 +1048,26 @@ html body .settings-dialog {
   background: var(--skr-surface-subtle);
 }
 
+/* The marker's reserved width applies with the instant list (no transition
+   ever targets it); only opacity and a compositor translate animate here.
+   The glyph enters with the surface clock and leaves with the state clock,
+   the exit mirroring the entrance transform instead of a bare fade. */
 .cm-skr-reveal-marker {
   display: inline-block;
   opacity: 0;
-  transition: opacity var(--skr-motion-state-duration)
-    var(--skr-motion-state-easing);
+  transform: translateX(var(--skr-motion-distance));
+  transition:
+    opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing),
+    transform var(--skr-motion-state-duration) var(--skr-motion-state-easing);
 }
 
 .cm-skr-reveal-marker-active {
   opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity var(--skr-motion-surface-duration) var(--skr-motion-surface-easing),
+    transform var(--skr-motion-surface-duration)
+    var(--skr-motion-surface-easing);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -168,6 +168,42 @@ export function edgePoint(node: CanvasNode, side?: CanvasSide) {
   }
 }
 
+/** Serializes a canvas document back to its on-disk JSON form. */
+export function serializeCanvas(canvas: CanvasDocument): string {
+  return `${JSON.stringify(canvas, null, 2)}\n`;
+}
+
+/** The next unused node id, stable and readable rather than a random UUID. */
+export function nextCanvasNodeId(canvas: CanvasDocument): string {
+  const existing = new Set(canvas.nodes.map((node) => node.id));
+  let index = canvas.nodes.length + 1;
+  let id = `card-${index}`;
+  while (existing.has(id)) {
+    index += 1;
+    id = `card-${index}`;
+  }
+  return id;
+}
+
+/**
+ * A default position for a newly added card: to the right of the
+ * rightmost existing card, aligned with the topmost one. An empty canvas
+ * places the first card at the origin.
+ */
+export function nextCanvasNodePosition(canvas: CanvasDocument): {
+  x: number;
+  y: number;
+} {
+  if (canvas.nodes.length === 0) {
+    return { x: 0, y: 0 };
+  }
+  const rightEdge = Math.max(
+    ...canvas.nodes.map((node) => node.x + node.width),
+  );
+  const topEdge = Math.min(...canvas.nodes.map((node) => node.y));
+  return { x: rightEdge + 40, y: topEdge };
+}
+
 export function canvasFilePaths(canvas: CanvasDocument): string[] {
   return [
     ...new Set(

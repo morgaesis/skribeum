@@ -4263,7 +4263,9 @@ describe("skribeum shell", () => {
     );
     const hidden = await headingMarkerState();
     expect(hidden?.opacity).toBe("0");
-    expect(hidden?.transform).toBe("none");
+    // At rest the glyph waits 0.25rem (4px) toward the reading direction,
+    // ready to translate into its reserved space on reveal.
+    expect(hidden?.transform).toBe("matrix(1, 0, 0, 1, 4, 0)");
     const followingPositionBefore = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -4292,8 +4294,10 @@ describe("skribeum shell", () => {
         revealed.transitionDurations.every((duration) => duration === 0),
       ).toBe(true);
     } else {
-      expect(revealed?.transform).toBe("none");
-      expect(revealed?.transitionDurations).toEqual([50]);
+      // Settled active glyph: translated home, having entered on the
+      // surface clock (opacity and transform both 120ms).
+      expect(revealed?.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
+      expect(revealed?.transitionDurations).toEqual([120, 120]);
     }
     const followingPositionAfter = await browser.execute(() => {
       const following = [

@@ -356,6 +356,70 @@ describe("rendered decoration DOM", () => {
     expect(document.activeElement?.classList).toContain("cm-skr-task-checkbox");
   });
 
+  it("re-anchors the tap-opened task menu when the editor scrolls under it", async () => {
+    const source = "- [ ] task\n\noutside";
+    const view = mountedView(source, source.indexOf("outside"));
+    const context: CommandContext = {
+      view,
+      openNote: () => Promise.resolve(),
+      openView: () => {},
+      openCommandSurface: () => {},
+      toggleView: () => {},
+      closeSurfaces: () => {},
+      requestSave: () => {},
+      notePaths: () => [],
+      recentNotePaths: () => [],
+      navigateBack: () => false,
+      navigateForward: () => false,
+      followLink: () => false,
+    };
+    const registry = createAppRegistry();
+    const checkbox = view.dom.querySelector<HTMLElement>(
+      ".cm-skr-task-checkbox",
+    );
+    checkbox?.focus();
+
+    const rectAt = (bottom: number): DOMRect =>
+      ({
+        left: 20,
+        right: 40,
+        top: bottom - 20,
+        bottom,
+        width: 20,
+        height: 20,
+        x: 20,
+        y: bottom - 20,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    // Before the menu opens, the checkbox sits low on screen.
+    Object.defineProperty(checkbox as HTMLElement, "getBoundingClientRect", {
+      configurable: true,
+      value: () => rectAt(120),
+    });
+
+    expect(registry.run(TASK_STATUS_MENU_COMMAND, context)).toBe(true);
+    await Promise.resolve();
+    const palette = view.dom.querySelector<HTMLElement>(".cm-skr-task-palette");
+    expect(palette?.hidden).toBe(false);
+    const topAfterOpen = palette?.style.top;
+    expect(topAfterOpen).not.toBe("");
+
+    // The note scrolls while the menu stays open: the checkbox is now much
+    // further up the screen. Without live re-anchoring the menu would stay
+    // glued to its first position, floating over whatever is now under it.
+    Object.defineProperty(checkbox as HTMLElement, "getBoundingClientRect", {
+      configurable: true,
+      value: () => rectAt(500),
+    });
+    view.scrollDOM.dispatchEvent(new Event("scroll"));
+
+    expect(palette?.style.top).not.toBe(topAfterOpen);
+    const numericTop = Number.parseFloat(palette?.style.top ?? "0");
+    // The menu tracks the checkbox's new bottom edge (minus the fixed
+    // finger gap the placement math reserves), not its stale first spot.
+    expect(numericTop).toBeGreaterThan(400);
+  });
+
   it("keeps heading marker geometry stable while cursor visibility changes", async () => {
     const source = "# Heading\n\nfollowing line";
     const view = mountedView(source, source.indexOf("following"));

@@ -30,6 +30,7 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { tags } from "@lezer/highlight";
+import { attachMenuDismissal } from "../../anchoredMenu";
 import { externalHttpUrl } from "../../features/navigation";
 import {
   editTableCell,
@@ -623,7 +624,9 @@ class TaskCheckboxWidget extends WidgetType {
     let expandedReference = taskStatusTrack(this.status) === "reference";
     let pendingDateStatus: TaskStatus | null = null;
     let paletteAnchor: { x: number; y: number } | null = null;
+    let openMode: "hold" | "hover" | "keyboard" | "tap" | null = null;
     let stopObservingViewport: (() => void) | null = null;
+    let stopObservingScroll: (() => void) | null = null;
     let deliberateOpen = false;
     let removeOutsidePress: (() => void) | null = null;
     let press: {
@@ -664,6 +667,15 @@ class TaskCheckboxWidget extends WidgetType {
       palette.style.maxHeight = `${Math.max(0, viewport.height - 2 * inset)}px`;
       const bounds = palette.getBoundingClientRect();
       const checkboxBounds = box.getBoundingClientRect();
+      // A tap, keyboard, or hover open tracks the checkbox itself, so the
+      // editor scrolling underneath an open menu (a wheel scroll, a
+      // scroll-into-view after a command-palette invocation) cannot leave
+      // it floating over its old position. Only the held-gesture anchor
+      // stays pinned to the point the finger pressed, matching the
+      // instant-open exception of design section 5.1.
+      if (openMode !== "hold") {
+        paletteAnchor = { x: paletteAnchor.x, y: checkboxBounds.bottom };
+      }
       const maximumLeft = Math.max(
         viewport.left + inset,
         viewport.right - bounds.width - inset,
@@ -696,8 +708,11 @@ class TaskCheckboxWidget extends WidgetType {
       options = [];
       pendingDateStatus = null;
       paletteAnchor = null;
+      openMode = null;
       stopObservingViewport?.();
       stopObservingViewport = null;
+      stopObservingScroll?.();
+      stopObservingScroll = null;
       removeOutsidePress?.();
       removeOutsidePress = null;
       deliberateOpen = false;
@@ -901,6 +916,7 @@ class TaskCheckboxWidget extends WidgetType {
       anchor?: { x: number; y: number },
     ) => {
       closeGeneration += 1;
+      openMode = mode;
       delete palette.dataset.motionExiting;
       if (mode === "hold") {
         palette.dataset.motionInstant = "true";
@@ -942,19 +958,27 @@ class TaskCheckboxWidget extends WidgetType {
         positionPalette,
         view.dom.ownerDocument.defaultView ?? window,
       );
+      // The visual viewport only moves for the browser chrome and the
+      // on-screen keyboard; the note's own scroll container is a second,
+      // independent scroll that can carry the checkbox out from under a
+      // menu positioned in viewport coordinates. Tracking it here is what
+      // keeps the menu anchored to its checkbox instead of the last place
+      // that checkbox happened to be when the menu opened.
+      stopObservingScroll?.();
+      const scroller = view.scrollDOM;
+      scroller.addEventListener("scroll", positionPalette, { passive: true });
+      stopObservingScroll = () =>
+        scroller.removeEventListener("scroll", positionPalette);
       if (keyboard || deliberateOpen) {
         queueMicrotask(() => palette.focus());
       }
       if (deliberateOpen) {
-        const ownerDocument = view.dom.ownerDocument;
-        const outsidePress = (event: PointerEvent) => {
-          if (event.target instanceof Node && !host.contains(event.target)) {
-            closePalette(true);
-          }
-        };
-        ownerDocument.addEventListener("pointerdown", outsidePress, true);
-        removeOutsidePress = () =>
-          ownerDocument.removeEventListener("pointerdown", outsidePress, true);
+        removeOutsidePress?.();
+        removeOutsidePress = attachMenuDismissal(palette, {
+          onDismiss: () => closePalette(true),
+          ignore: [box],
+          escape: false,
+        });
       }
     };
 
@@ -4846,6 +4870,13 @@ const engineTheme = EditorView.baseTheme({
     padding: "0.35rem",
     overflow: "auto",
     color: "var(--skr-text)",
+    // The palette is interface chrome, not document prose; without this it
+    // inherits `.cm-content`'s serif prose stack and its rows read in the
+    // wrong face next to every other menu in the product (design system
+    // section 2.3: interface controls and palette rows use the interface
+    // face). Row-level font-size declarations stay relative to whatever
+    // this resolves to, unchanged.
+    fontFamily: "var(--skr-font-interface)",
     backgroundColor: "var(--skr-surface-raised)",
     border: "1px solid var(--skr-border)",
     borderRadius: "var(--skr-radius-surface)",

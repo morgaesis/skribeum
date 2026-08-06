@@ -2,6 +2,7 @@
 import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
 import { onMount, tick } from "svelte";
 import tauriConfig from "../src-tauri/tauri.conf.json";
+import AnchoredMenu from "./lib/AnchoredMenu.svelte";
 import Banners, { type BannerItem } from "./lib/Banners.svelte";
 import {
   type CommandTooltipOptions,
@@ -259,7 +260,7 @@ let narrowViewport = $state(false);
 let noteTitleVisible = $state(true);
 let currentNoteSource = $state("");
 let sourceMode = $state(false);
-let surfaceFocusOrigin: HTMLElement | null = null;
+let surfaceFocusOrigin = $state<HTMLElement | null>(null);
 let taskStatusSurfaceMarker = $state<number | null>(null);
 let tableCellSurfaceActive = $state(false);
 let overflowContextPrepared = false;
@@ -2873,7 +2874,7 @@ onMount(() => {
         type="button"
         class="skr-header-overflow skr-header-icon-button"
         aria-label={STRINGS.overflowMenuLabel}
-        aria-haspopup="dialog"
+        aria-haspopup={narrowViewport ? "dialog" : "menu"}
         onpointerdown={() => prepareOverflowContext()}
         onfocus={(event) => prepareOverflowContext(event.relatedTarget)}
         onclick={(event) => openSheet("overflow", event.currentTarget)}
@@ -3291,77 +3292,92 @@ onMount(() => {
     </div>
   </Sheet>
 {:else if activeSheet === "overflow"}
-  <Sheet
-    label={STRINGS.overflowMenuLabel}
-    onClose={closeSheet}
-    restoreFocus={false}
-    variant={narrowViewport ? "sheet" : "anchored"}
-  >
-    <nav class="skr-action-menu" aria-label={STRINGS.overflowMenuLabel}>
-      {#each overflowCommands as item (item.command?.id)}
-        {#if item.command !== undefined}
-          <button
-            type="button"
-            data-command-id={item.command.id}
-            onclick={() =>
-              item.command !== undefined && runActionCommand(item.command.id)}
-          >
-            <span>{item.label}</span>
-            {#if formattedCommandKeybinding(item.command) !== undefined}
-              <kbd>{formattedCommandKeybinding(item.command)}</kbd>
-            {/if}
-          </button>
-        {/if}
-      {/each}
-      {#each actionCommands as command (command.id)}
+  {#if narrowViewport}
+    <Sheet label={STRINGS.overflowMenuLabel} onClose={closeSheet} restoreFocus={false}>
+      {@render overflowMenuRows(false)}
+    </Sheet>
+  {:else if surfaceFocusOrigin !== null}
+    <AnchoredMenu
+      anchor={surfaceFocusOrigin}
+      label={STRINGS.overflowMenuLabel}
+      align="end"
+      onClose={closeSheet}
+      restoreFocus={false}
+    >
+      {@render overflowMenuRows(true)}
+    </AnchoredMenu>
+  {/if}
+{/if}
+
+{#snippet overflowMenuRows(asMenu: boolean)}
+  <nav class="skr-action-menu" aria-label={STRINGS.overflowMenuLabel}>
+    {#each overflowCommands as item (item.command?.id)}
+      {#if item.command !== undefined}
         <button
           type="button"
-          data-command-id={command.id}
-          data-checked={command.id === TOGGLE_SOURCE_MODE_COMMAND
-            ? String(sourceMode)
-            : undefined}
-          aria-pressed={command.id === TOGGLE_SOURCE_MODE_COMMAND
-            ? sourceMode
-            : undefined}
-          disabled={command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null}
-          onclick={() => runActionCommand(command.id)}
+          role={asMenu ? "menuitem" : undefined}
+          data-command-id={item.command.id}
+          onclick={() =>
+            item.command !== undefined && runActionCommand(item.command.id)}
         >
-          <span class="skr-action-menu-label">
-            {#if command.id === TOGGLE_SOURCE_MODE_COMMAND}
-              <span class="skr-action-menu-check" aria-hidden="true">
-                {sourceMode ? "✓" : ""}
-              </span>
-            {/if}
-            <span>{command.title}</span>
-          </span>
-          {#if formattedCommandKeybinding(command) !== undefined}
-            <kbd>{formattedCommandKeybinding(command)}</kbd>
+          <span>{item.label}</span>
+          {#if formattedCommandKeybinding(item.command) !== undefined}
+            <kbd>{formattedCommandKeybinding(item.command)}</kbd>
           {/if}
         </button>
-      {/each}
-      {#each contextualOverflowCommands() as command (command.id)}
-        <button
-          type="button"
-          data-command-id={command.id}
-          onclick={() => runActionCommand(command.id)}
-        >
-          <span>{command.title}</span>
-        </button>
-      {/each}
-      {#if vaultOpenCommand !== undefined}
-        <button
-          type="button"
-          data-command-id={vaultOpenCommand.id}
-          disabled={openVaultDisabledReason !== null}
-          title={openVaultDisabledReason ?? undefined}
-          onclick={() => runActionCommand(vaultOpenCommand.id)}
-        >
-          <span>{vaultOpenCommand.title}</span>
-        </button>
       {/if}
-    </nav>
-  </Sheet>
-{/if}
+    {/each}
+    {#each actionCommands as command (command.id)}
+      <button
+        type="button"
+        role={asMenu ? "menuitem" : undefined}
+        data-command-id={command.id}
+        data-checked={command.id === TOGGLE_SOURCE_MODE_COMMAND
+          ? String(sourceMode)
+          : undefined}
+        aria-pressed={command.id === TOGGLE_SOURCE_MODE_COMMAND
+          ? sourceMode
+          : undefined}
+        disabled={command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null}
+        onclick={() => runActionCommand(command.id)}
+      >
+        <span class="skr-action-menu-label">
+          {#if command.id === TOGGLE_SOURCE_MODE_COMMAND}
+            <span class="skr-action-menu-check" aria-hidden="true">
+              {sourceMode ? "✓" : ""}
+            </span>
+          {/if}
+          <span>{command.title}</span>
+        </span>
+        {#if formattedCommandKeybinding(command) !== undefined}
+          <kbd>{formattedCommandKeybinding(command)}</kbd>
+        {/if}
+      </button>
+    {/each}
+    {#each contextualOverflowCommands() as command (command.id)}
+      <button
+        type="button"
+        role={asMenu ? "menuitem" : undefined}
+        data-command-id={command.id}
+        onclick={() => runActionCommand(command.id)}
+      >
+        <span>{command.title}</span>
+      </button>
+    {/each}
+    {#if vaultOpenCommand !== undefined}
+      <button
+        type="button"
+        role={asMenu ? "menuitem" : undefined}
+        data-command-id={vaultOpenCommand.id}
+        disabled={openVaultDisabledReason !== null}
+        title={openVaultDisabledReason ?? undefined}
+        onclick={() => runActionCommand(vaultOpenCommand.id)}
+      >
+        <span>{vaultOpenCommand.title}</span>
+      </button>
+    {/if}
+  </nav>
+{/snippet}
 
 {#if activeOverlay === VIEW_COMMAND_SURFACE}
   <UnifiedCommandSurface

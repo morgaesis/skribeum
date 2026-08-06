@@ -1,7 +1,7 @@
 <script lang="ts">
 import { onMount, tick } from "svelte";
+import AnchoredMenu from "./AnchoredMenu.svelte";
 import { type CommandTooltipOptions, commandTooltip } from "./commandTooltip";
-import { enterMotionSurface, exitMotionSurface } from "./motion";
 import { resolveTitleCollisions } from "./noteTitles";
 import { STRINGS } from "./strings";
 import type { WorkspaceTab } from "./workspaceState";
@@ -30,7 +30,7 @@ let dragging = $state<number | null>(null);
 let insertion = $state<number | null>(null);
 let listOpen = $state(false);
 let itemsElement = $state<HTMLDivElement>();
-let listMenuElement = $state<HTMLDivElement>();
+let listButtonElement = $state<HTMLButtonElement>();
 let overflowed = $state(false);
 let scrollPointer = $state<number | null>(null);
 let scrollOriginX = 0;
@@ -38,7 +38,6 @@ let scrollOriginLeft = 0;
 // The dragged tab's width, measured once when its drag starts; the gap the
 // passed-over tabs open is exactly the slot the tab will land in.
 let dragWidth = 0;
-let listCloseGeneration = 0;
 
 const titles = $derived(
   resolveTitleCollisions(
@@ -74,22 +73,6 @@ function reorderOffset(index: number): number {
   if (dragging < index && index < insertion) return -dragWidth;
   if (insertion <= index && index < dragging) return dragWidth;
   return 0;
-}
-
-function openList() {
-  listCloseGeneration += 1;
-  listOpen = true;
-  void tick().then(() => enterMotionSurface(listMenuElement));
-}
-
-function closeList() {
-  const menu = listMenuElement;
-  const generation = ++listCloseGeneration;
-  const finish = () => {
-    if (generation === listCloseGeneration) listOpen = false;
-  };
-  if (menu === undefined) finish();
-  else void exitMotionSurface(menu, finish);
 }
 
 function measureOverflow() {
@@ -243,25 +226,25 @@ function finishScrollDrag(event: PointerEvent) {
     {#if overflowed}
       <div class="skr-tab-list-shell">
         <button
+          bind:this={listButtonElement}
           type="button"
           class="skr-tab-list"
           aria-label={STRINGS.allTabs}
           aria-haspopup="menu"
           aria-expanded={listOpen}
           use:commandTooltip={{ title: STRINGS.allTabs }}
-          onclick={() => (listOpen ? closeList() : openList())}
+          onclick={() => (listOpen = !listOpen)}
         >
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path d="M3 4h10M3 8h10M3 12h10" />
           </svg>
         </button>
-        {#if listOpen}
-          <div
-            bind:this={listMenuElement}
-            class="skr-tab-menu"
-            role="menu"
-            aria-label={STRINGS.allTabs}
-            data-motion-surface="anchored-top"
+        {#if listOpen && listButtonElement !== undefined}
+          <AnchoredMenu
+            anchor={listButtonElement}
+            label={STRINGS.allTabs}
+            align="end"
+            onClose={() => (listOpen = false)}
           >
             {#each tabs as tab, index (tab.path)}
               {@const title = titles[index]}
@@ -270,7 +253,7 @@ function finishScrollDrag(event: PointerEvent) {
                 role="menuitemradio"
                 aria-checked={tab.path === activePath}
                 onclick={() => {
-                  closeList();
+                  listOpen = false;
                   onActivate(tab.path);
                 }}
               >
@@ -280,7 +263,7 @@ function finishScrollDrag(event: PointerEvent) {
                 {/if}
               </button>
             {/each}
-          </div>
+          </AnchoredMenu>
         {/if}
       </div>
     {/if}

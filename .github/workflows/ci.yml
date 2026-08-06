@@ -3,10 +3,20 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**"]
 
 permissions:
   contents: read
+
+# A superseded push to the same branch cancels the in-flight run: the matrix
+# is eleven jobs, and only the newest head's result matters on a pull
+# request. Runs on main always complete, since each merge's result is the
+# record of what landed.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 env:
   LINUX_WEBKIT_PACKAGES: >-

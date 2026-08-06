@@ -8,8 +8,17 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
-import { describe, expect, it } from "vitest";
+import { EditorView } from "@codemirror/view";
+import { flushSync, mount, unmount } from "svelte";
+import { afterEach, describe, expect, it } from "vitest";
+import Editor from "../../src/lib/Editor.svelte";
+import {
+  decorationEngine,
+  frontmatterAwareCursorUp,
+  taskStatusConfiguration,
+} from "../../src/lib/editor/decorations/engine";
 import {
   applyTypeOverrides,
   parseFrontmatter,
@@ -17,6 +26,10 @@ import {
   propertyInsertion,
   wikilinkValue,
 } from "../../src/lib/editor/frontmatter";
+import { codeLanguage } from "../../src/lib/editor/markdown/codeLanguages";
+import { obsidianMarkdownExtensionsFor } from "../../src/lib/editor/markdown/obsidian";
+import type { LoadedNote } from "../../src/lib/ipc/vault";
+import { DEFAULT_TASK_STATUSES } from "../../src/lib/taskStatuses";
 
 const corpusDirectory = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -303,5 +316,225 @@ describe("add-property insertion (section 4.15)", () => {
     expect(propertyInsertion(parsed, "my key:", "a\nb")?.insert).toBe(
       "my-key: a b\n",
     );
+  });
+});
+
+function loadedNote(text: string): LoadedNote {
+  const bytes = new TextEncoder().encode(text);
+  return {
+    meta: {
+      encoding: "utf8",
+      projection_hash: "0".repeat(64),
+      byte_length: bytes.length,
+    },
+    bytes,
+    text,
+    readOnly: false,
+  };
+}
+
+describe("properties panel spacing (computed geometry)", () => {
+  // The hidden frontmatter lines collapse to zero height (display:none), so
+  // the only remaining candidate for the reported "large empty band" is the
+  // editor's own first-block top padding stacking beneath the panel's
+  // hairline. These assertions read the cascade's actual resolved value
+  // (getComputedStyle), not a class name or a rendered snapshot, so a rule
+  // that stops applying fails the test even though every element and class
+  // still renders.
+  it("removes the editor's own top padding under a collapsed properties panel", async () => {
+    const source = [
+      "---",
+      "title: Frontmatter demonstration",
+      "---",
+      "",
+      "# Frontmatter",
+      "",
+      "Body text.",
+      "",
+    ].join("\n");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const component = mount(Editor, {
+      target: host,
+      props: { note: loadedNote(source), path: "frontmatter.md" },
+    });
+    flushSync();
+    try {
+      const properties = host.querySelector(".skr-properties");
+      expect(properties).not.toBeNull();
+      const content = host.querySelector(".cm-content") as HTMLElement;
+      expect(getComputedStyle(content).paddingTop).toBe("0px");
+    } finally {
+      await unmount(component);
+      host.remove();
+    }
+  });
+
+  it("keeps the normal top padding for a note without frontmatter", async () => {
+    const source = ["# Heading", "", "Body text.", ""].join("\n");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const component = mount(Editor, {
+      target: host,
+      props: { note: loadedNote(source), path: "plain.md" },
+    });
+    flushSync();
+    try {
+      expect(host.querySelector(".skr-properties")).toBeNull();
+      const content = host.querySelector(".cm-content") as HTMLElement;
+      expect(getComputedStyle(content).paddingTop).not.toBe("0px");
+    } finally {
+      await unmount(component);
+      host.remove();
+    }
+  });
+
+  it("restores the top padding once the frontmatter block itself is revealed", async () => {
+    const source = [
+      "---",
+      "title: Frontmatter demonstration",
+      "---",
+      "",
+      "# Frontmatter",
+      "",
+      "Body text.",
+      "",
+    ].join("\n");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const component = mount(Editor, {
+      target: host,
+      props: { note: loadedNote(source), path: "frontmatter.md" },
+    });
+    flushSync();
+    try {
+      const view = component.getView();
+      expect(view).toBeDefined();
+      if (view === undefined) return;
+      // Focus first: reveal additionally requires focused editing intent
+      // (section on the parked caret), matching real keyboard entry rather
+      // than a passive, unfocused selection restore.
+      view.contentDOM.focus();
+      view.dispatch({ selection: { anchor: source.indexOf("title") } });
+      flushSync();
+      const content = host.querySelector(".cm-content") as HTMLElement;
+      expect(getComputedStyle(content).paddingTop).not.toBe("0px");
+    } finally {
+      await unmount(component);
+      host.remove();
+    }
+  });
+});
+
+function mountedView(doc: string, anchor: number): EditorView {
+  return new EditorView({
+    state: EditorState.create({
+      doc,
+      selection: { anchor },
+      extensions: [
+        markdown({
+          base: markdownLanguage,
+          extensions: obsidianMarkdownExtensionsFor(DEFAULT_TASK_STATUSES),
+          codeLanguages: codeLanguage,
+        }),
+        taskStatusConfiguration.of(DEFAULT_TASK_STATUSES),
+        decorationEngine(),
+      ],
+    }),
+    parent: document.body,
+  });
+}
+
+describe("ArrowUp cursor motion above hidden frontmatter", () => {
+  const views: EditorView[] = [];
+
+  afterEach(() => {
+    for (const view of views.splice(0)) {
+      view.destroy();
+    }
+    document.body.textContent = "";
+  });
+
+  // The frontmatter block always starts at document position 0. CodeMirror's
+  // generic atomic-range clamp pushes an upward move to the obstacle's near
+  // edge, which for this block is position 0 itself: still inside the
+  // hidden, display:none text, not a position the DOM can show a caret in.
+  // `frontmatterAwareCursorUp` is the guard that corrects this; these cases
+  // exercise it directly (selection-position assertions) rather than through
+  // a real ArrowUp keypress, whose own pixel geometry jsdom cannot render.
+  const doc =
+    "---\ntitle: Frontmatter demonstration\n---\n\n# Frontmatter\n\nBody text.\n";
+  const blankLineAboveHeading = doc.indexOf("\n\n# Frontmatter") + 1;
+
+  it("holds the caret at the first visible line instead of the hidden block", () => {
+    const view = mountedView(doc, blankLineAboveHeading);
+    views.push(view);
+    const handled = frontmatterAwareCursorUp(view);
+    expect(handled).toBe(true);
+    expect(view.state.selection.main.head).toBe(blankLineAboveHeading);
+  });
+
+  it("never lands the caret inside the hidden frontmatter range", () => {
+    const view = mountedView(doc, blankLineAboveHeading);
+    views.push(view);
+    frontmatterAwareCursorUp(view);
+    const head = view.state.selection.main.head;
+    const frontmatterEnd = doc.indexOf("\n\n# Frontmatter");
+    expect(head === 0 || (head > 0 && head < frontmatterEnd)).toBe(false);
+  });
+
+  it("passes through when the cursor is not on the boundary line", () => {
+    // Elsewhere in the document (here, the heading itself) the guard has
+    // nothing to correct and must not claim the key, so a handler bound at
+    // lower precedence (such as table cell navigation) still gets a chance.
+    const headingPosition = doc.indexOf("# Frontmatter") + 2;
+    const view = mountedView(doc, headingPosition);
+    views.push(view);
+    const handled = frontmatterAwareCursorUp(view);
+    expect(handled).toBe(false);
+    expect(view.state.selection.main.head).toBe(headingPosition);
+  });
+
+  it("passes through once the frontmatter block is itself revealed", () => {
+    const view = mountedView(doc, doc.indexOf("title"));
+    views.push(view);
+    expect(
+      view.state.facet(EditorView.atomicRanges).flatMap((f) => {
+        const ranges: [number, number][] = [];
+        const cursor = f(view).iter();
+        while (cursor.value !== null) {
+          ranges.push([cursor.from, cursor.to]);
+          cursor.next();
+        }
+        return ranges;
+      }),
+    ).toEqual([]);
+    expect(frontmatterAwareCursorUp(view)).toBe(false);
+  });
+
+  it("passes through far from any frontmatter block", () => {
+    const plainDoc = "# H\n\npara one\n\npara two\n\npara three\n";
+    const position = plainDoc.indexOf("para three") + 2;
+    const view = mountedView(plainDoc, position);
+    views.push(view);
+    const handled = frontmatterAwareCursorUp(view);
+    expect(handled).toBe(false);
+    expect(view.state.selection.main.head).toBe(position);
+  });
+
+  it("registers the hidden block as one atomic range for CodeMirror's own motion", () => {
+    const view = mountedView(doc, blankLineAboveHeading);
+    views.push(view);
+    const frontmatterEnd = doc.indexOf("\n\n# Frontmatter");
+    const ranges = view.state.facet(EditorView.atomicRanges).flatMap((f) => {
+      const out: [number, number][] = [];
+      const cursor = f(view).iter();
+      while (cursor.value !== null) {
+        out.push([cursor.from, cursor.to]);
+        cursor.next();
+      }
+      return out;
+    });
+    expect(ranges).toContainEqual([0, frontmatterEnd]);
   });
 });

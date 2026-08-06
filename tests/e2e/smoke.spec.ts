@@ -274,8 +274,11 @@ async function currentNotePath(): Promise<string | null> {
 }
 
 async function openNoteFromQuickSwitcher(name: string) {
+  // Every caller of this helper runs at the default wide viewport, where
+  // the overflow button opens the anchored menu, not the narrow-viewport
+  // bottom sheet.
   await $('button[aria-label="More actions"]').click();
-  const overflow = $('[data-testid="overlay-sheet"]');
+  const overflow = $('[data-testid="anchored-menu"]');
   await overflow.waitForDisplayed({ timeout: 10000 });
   await overflow.$('[data-command-id="quick-switcher.open"]').click();
   const input = $('[role="combobox"]');
@@ -1689,9 +1692,9 @@ describe("skribeum shell", () => {
     ] as const;
     for (const [command, query] of routes) {
       await $('button[aria-label="More actions"]').click();
-      const menu = $('[data-testid="overlay-sheet"]');
+      const menu = $('[data-testid="anchored-menu"]');
       await menu.waitForDisplayed({ timeout: 10000 });
-      expect(await menu.getAttribute("data-sheet-variant")).toBe("anchored");
+      expect(await menu.getAttribute("role")).toBe("menu");
       expect(await horizontalViewportEscapes()).toEqual([]);
       await menu.$(`[data-command-id="${command}"]`).click();
       const input = $('[role="combobox"]');
@@ -1746,7 +1749,7 @@ describe("skribeum shell", () => {
     expect(sourcePresentation.taskWidgets).toBe(0);
 
     await $('button[aria-label="More actions"]').click();
-    const menu = $('[data-testid="overlay-sheet"]');
+    const menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     expect(
       await menu
@@ -4406,7 +4409,7 @@ describe("skribeum shell", () => {
 
     await placeCursorAtLineEnd("Review task");
     await $('button[aria-label="More actions"]').click();
-    let menu = $('[data-testid="overlay-sheet"]');
+    let menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     expect(
       await menu.$('[data-command-id="task.set-status"]').isDisplayed(),
@@ -4418,7 +4421,7 @@ describe("skribeum shell", () => {
       timeout: 10000,
     });
     await $('button[aria-label="More actions"]').click();
-    menu = $('[data-testid="overlay-sheet"]');
+    menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     const sourceTaskRoute = menu.$('[data-command-id="task.set-status"]');
     await sourceTaskRoute.waitForDisplayed({ timeout: 10000 });
@@ -4434,7 +4437,7 @@ describe("skribeum shell", () => {
 
     await placeCursorAtLineEnd("body text here");
     await $('button[aria-label="More actions"]').click();
-    menu = $('[data-testid="overlay-sheet"]');
+    menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     expect(
       await menu.$('[data-command-id="task.set-status"]').isExisting(),
@@ -4446,7 +4449,7 @@ describe("skribeum shell", () => {
       document.querySelector<HTMLElement>(".cm-skr-task-checkbox")?.focus();
     });
     await $('button[aria-label="More actions"]').click();
-    menu = $('[data-testid="overlay-sheet"]');
+    menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     expect(
       await menu.$('[data-command-id="task.set-status"]').isDisplayed(),
@@ -4472,7 +4475,7 @@ describe("skribeum shell", () => {
     expect(noteOnDisk(LIVE_PREVIEW_NOTE_NAME)).toBe(LIVE_PREVIEW_NOTE_CONTENT);
 
     await $('button[aria-label="More actions"]').click();
-    menu = $('[data-testid="overlay-sheet"]');
+    menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     await menu.$('[data-command-id="task.set-status"]').click();
     await listbox.waitForDisplayed({ timeout: 10000 });
@@ -4502,7 +4505,7 @@ describe("skribeum shell", () => {
     await listbox.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     await $('button[aria-label="More actions"]').click();
-    menu = $('[data-testid="overlay-sheet"]');
+    menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     await menu.$('[data-command-id="task.set-status"]').click();
     await listbox.waitForDisplayed({ timeout: 10000 });
@@ -5244,7 +5247,7 @@ describe("skribeum shell", () => {
       let observedAt: number | undefined;
       const sample = () => {
         const menu = document.querySelector<HTMLElement>(
-          '[data-sheet-variant="anchored"]',
+          '[data-testid="anchored-menu"]',
         );
         if (menu === null) {
           requestAnimationFrame(sample);

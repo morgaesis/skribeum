@@ -125,6 +125,7 @@ onMount(() => {
   role="menu"
   aria-label={label}
   tabindex="-1"
+  data-testid="anchored-menu"
   data-motion-surface="anchored-top"
   style:min-width={minWidth}
   style:max-width={maxWidth}

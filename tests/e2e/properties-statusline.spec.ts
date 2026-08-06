@@ -454,7 +454,7 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
     );
 
     await $('button[aria-label="More actions"]').click();
-    const overflow = $('[data-testid="overlay-sheet"]');
+    const overflow = $('[data-testid="anchored-menu"]');
     await overflow.waitForDisplayed({ timeout: 10000 });
     await overflow.$('[data-command-id="editor.toggle-source-mode"]').click();
     await overflow.waitForExist({ reverse: true, timeout: 10000 });
@@ -479,7 +479,7 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
       });
     });
     await $('button[aria-label="More actions"]').click();
-    const overflow = $('[data-testid="overlay-sheet"]');
+    const overflow = $('[data-testid="anchored-menu"]');
     await overflow.waitForDisplayed({ timeout: 10000 });
     await overflow.$('[data-command-id="link.copy-note"]').click();
 

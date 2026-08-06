@@ -270,6 +270,14 @@ describe("the control language radius scale and border-at-rest rule", () => {
     expect(palette.radiusViolations).toEqual([]);
     expect(palette.borderViolations).toEqual([]);
     await browser.keys(Key.Escape);
+    // The palette owns modality until its exit motion finishes: the shell
+    // stays inert and the scrim keeps hit-testing over the header for the
+    // length of the exit, so a header click issued before the surface
+    // unmounts lands on the scrim instead of the button underneath it.
+    await $('[data-testid="unified-command-surface"]').waitForExist({
+      reverse: true,
+      timeout: 10000,
+    });
 
     const overflow = $(".skr-header-overflow");
     if (await overflow.isExisting()) {

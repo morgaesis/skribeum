@@ -165,7 +165,7 @@ describe("work package 1 browser behavior", () => {
 
     await $('button[aria-label="More actions"]').click();
     const overflowOpenVault = $(
-      '[data-testid="overlay-sheet"] [data-command-id="vault.open"]',
+      '[data-testid="anchored-menu"] [data-command-id="vault.open"]',
     );
     await overflowOpenVault.waitForExist({ timeout: 10000 });
     await overflowOpenVault.click();

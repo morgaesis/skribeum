@@ -110,4 +110,43 @@ describe("tab strip", () => {
     expect(activated).toEqual(["note-6.md"]);
     await unmount(component);
   });
+
+  it("dismisses the all-tabs menu on a click away from it", async () => {
+    const component = mount(TabStrip, {
+      target: document.body,
+      props: {
+        tabs: tabs(8),
+        activePath: "note-1.md",
+        titleSources: {},
+        focused: true,
+        onActivate: () => {},
+        onClose: () => {},
+        onReorder: () => {},
+      },
+    });
+    flushSync();
+    const itemsElement = document.querySelector<HTMLElement>(".skr-tab-items");
+    if (itemsElement === null) return;
+    Object.defineProperties(itemsElement, {
+      clientWidth: { configurable: true, value: 640 },
+      scrollWidth: { configurable: true, value: 832 },
+    });
+    window.dispatchEvent(new Event("resize"));
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".skr-tab-list")?.click();
+    await tick();
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+
+    // A press anywhere outside the menu (and outside the button that
+    // opened it) dismisses it, the founder's reported defect: the menu
+    // used to have no outside-press handling at all and stayed open.
+    document.body.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true }),
+    );
+    await tick();
+    await tick();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    await unmount(component);
+  });
 });

@@ -1,5 +1,6 @@
 <script lang="ts">
 import { tick } from "svelte";
+import { computeAnchoredPosition } from "./anchoredMenu";
 import { commandTooltip } from "./commandTooltip";
 import type { TreeEntry } from "./ipc/bindings";
 import {
@@ -10,6 +11,7 @@ import {
 import { noteFileName, noteIcon, resolveTitleCollisions } from "./noteTitles";
 import type { CommandContext, CommandRegistry } from "./registry";
 import { STRINGS } from "./strings";
+import { visualViewportRect } from "./visualViewport";
 
 const DESKTOP_ROW_HEIGHT = 28;
 const TOUCH_ROW_HEIGHT = 44;
@@ -403,8 +405,13 @@ $effect(() => {
     }
     closeMenu(false);
   };
+  const dismissOnBlur = () => closeMenu(false);
   document.addEventListener("pointerdown", dismiss, true);
-  return () => document.removeEventListener("pointerdown", dismiss, true);
+  window.addEventListener("blur", dismissOnBlur);
+  return () => {
+    document.removeEventListener("pointerdown", dismiss, true);
+    window.removeEventListener("blur", dismissOnBlur);
+  };
 });
 
 $effect(() => {
@@ -581,22 +588,33 @@ function closeMenu(restore = true) {
 function openMenu(row: Row, origin: HTMLElement, x?: number, y?: number) {
   menuCloseGeneration += 1;
   const bounds = origin.getBoundingClientRect();
+  // A context click or long-press anchors to that point; the row's own
+  // overflow button anchors to its own bottom-right corner. Either way the
+  // anchor is a single point, expressed as a zero-size rect so it shares
+  // the flip-to-fit clamp every other menu in the product uses.
+  const point = { left: x ?? bounds.right, top: y ?? bounds.bottom };
+  const anchor = {
+    ...point,
+    right: point.left,
+    bottom: point.top,
+    width: 0,
+    height: 0,
+  };
   menuPath = row.path;
   menuOrigin = origin;
-  menuLeft = x ?? bounds.right;
-  menuTop = y ?? bounds.bottom;
+  menuLeft = anchor.left;
+  menuTop = anchor.top;
   void tick().then(() => {
     const menu = menuElement;
     if (menu === undefined) return;
-    const bounds = menu.getBoundingClientRect();
-    menuLeft = Math.max(
-      8,
-      Math.min(menuLeft, window.innerWidth - bounds.width - 8),
+    const position = computeAnchoredPosition(
+      anchor,
+      { width: menu.offsetWidth, height: menu.offsetHeight },
+      visualViewportRect(window),
+      { gap: 0 },
     );
-    menuTop = Math.max(
-      8,
-      Math.min(menuTop, window.innerHeight - bounds.height - 8),
-    );
+    menuLeft = position.left;
+    menuTop = position.top;
     enterMotionSurface(menu);
     menu.querySelector<HTMLElement>("button")?.focus();
   });

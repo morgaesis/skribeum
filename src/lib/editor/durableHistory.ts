@@ -80,6 +80,11 @@ export type EditHistoryBatch = {
   actions: EditHistoryAction[];
 };
 
+type BatchPreparation = {
+  generation: number;
+  promise: Promise<EditHistoryBatch | null>;
+};
+
 /** Marks a transaction applied from the persisted journal. */
 export const durableHistoryReplay = Annotation.define<"undo" | "redo">();
 
@@ -194,8 +199,9 @@ export class DurableEditHistory {
   private initialized = false;
   private discardLoaded = false;
   private nextSequence = 0;
+  private generation = 0;
   private retryBatch: EditHistoryBatch | null = null;
-  private batchPreparation: Promise<EditHistoryBatch | null> | null = null;
+  private batchPreparation: BatchPreparation | null = null;
   private operationChain: Promise<void> = Promise.resolve();
   private readonly readyPromise: Promise<void>;
 
@@ -269,17 +275,33 @@ export class DurableEditHistory {
     await this.readyPromise;
     await this.operationChain;
     if (this.retryBatch !== null) return this.retryBatch;
-    if (this.batchPreparation !== null) return this.batchPreparation;
-    const preparation = this.prepareFlush(cutoff);
-    this.batchPreparation = preparation;
-    try {
-      return await preparation;
-    } finally {
-      if (this.batchPreparation === preparation) this.batchPreparation = null;
+    const generation = this.generation;
+    for (;;) {
+      const active = this.batchPreparation;
+      if (active !== null) {
+        const batch = await active.promise;
+        if (generation !== this.generation) return null;
+        if (active.generation === generation) return batch;
+        continue;
+      }
+      if (generation !== this.generation) return null;
+      const preparation = this.prepareFlush(cutoff, generation);
+      const next = { generation, promise: preparation };
+      this.batchPreparation = next;
+      try {
+        const batch = await preparation;
+        if (generation !== this.generation) return null;
+        return batch;
+      } finally {
+        if (this.batchPreparation === next) this.batchPreparation = null;
+      }
     }
   }
 
-  private async prepareFlush(cutoff: number): Promise<EditHistoryBatch | null> {
+  private async prepareFlush(
+    cutoff: number,
+    generation: number,
+  ): Promise<EditHistoryBatch | null> {
     const actions = this.pending.filter((action) => action.sequence <= cutoff);
     if (actions.length === 0) return null;
     const stateChecks = new Map<Text, Promise<EditHistoryStateCheck>>();
@@ -290,10 +312,12 @@ export class DurableEditHistory {
           kind: "entry",
           entry: await this.serializeEntry(action.node, stateChecks),
         });
+        if (generation !== this.generation) return null;
       } else {
         serializedActions.push({ kind: action.kind, count: action.count });
       }
     }
+    if (generation !== this.generation) return null;
     const batch = {
       id: batchId(),
       cutoff,
@@ -460,6 +484,7 @@ export class DurableEditHistory {
   }
 
   private resetReachable(): void {
+    this.generation += 1;
     this.discardLoaded = true;
     this.undoEntries = [];
     this.redoEntries = [];

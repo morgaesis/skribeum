@@ -68,6 +68,30 @@ function harness(
   return { history, view, appended, fence, clear };
 }
 
+function controlDigests() {
+  const originalDigest = globalThis.crypto.subtle.digest.bind(
+    globalThis.crypto.subtle,
+  );
+  const releases: Array<() => void> = [];
+  vi.spyOn(globalThis.crypto.subtle, "digest").mockImplementation(
+    (algorithm, data) =>
+      new Promise<ArrayBuffer>((resolve, reject) => {
+        releases.push(() => {
+          void originalDigest(algorithm, data).then(resolve, reject);
+        });
+      }),
+  );
+  return releases;
+}
+
+async function releaseDigests(
+  releases: Array<() => void>,
+  expected: number,
+): Promise<void> {
+  await vi.waitFor(() => expect(releases).toHaveLength(expected));
+  for (const release of releases.splice(0)) release();
+}
+
 describe("durable edit history", () => {
   it("captures a transaction, its inverse, and both selections", async () => {
     const { history, view } = harness({ undo: [], redo: [] }, "alpha");
@@ -186,6 +210,117 @@ describe("durable edit history", () => {
     const next = await history.beginFlush();
     expect(next?.actions).toHaveLength(1);
     expect(next?.actions[0]?.kind).toBe("entry");
+  });
+
+  it("does not publish a pre-fence batch after preparation completes", async () => {
+    const releases = controlDigests();
+    const calls: string[] = [];
+    const { history, view, appended } = harness(
+      { undo: [], redo: [] },
+      "alpha",
+      {
+        append: async (batch, actions) => {
+          calls.push("append");
+          appended.push({ batch, actions });
+        },
+        fence: async () => {
+          calls.push("fence");
+        },
+      },
+    );
+    view.dispatch({ changes: { from: 5, insert: " old" } });
+
+    const preparing = history.beginFlush();
+    await releaseDigests(releases, 2);
+    history.fence();
+    view.dispatch({ changes: { from: 9, insert: " new" } });
+
+    await expect(preparing).resolves.toBeNull();
+    const flushing = history.flush();
+    await releaseDigests(releases, 2);
+    await flushing;
+
+    expect(calls).toEqual(["fence", "append"]);
+    expect(appended).toHaveLength(1);
+    expect(appended[0]?.actions).toMatchObject([
+      { kind: "entry", entry: { changes: [{ insert: " new" }] } },
+    ]);
+    expect(await history.beginFlush()).toBeNull();
+  });
+
+  it("does not publish a pre-clear batch after preparation completes", async () => {
+    const releases = controlDigests();
+    const calls: string[] = [];
+    const { history, view, appended } = harness(
+      { undo: [], redo: [] },
+      "alpha",
+      {
+        append: async (batch, actions) => {
+          calls.push("append");
+          appended.push({ batch, actions });
+        },
+        clear: async () => {
+          calls.push("clear");
+        },
+      },
+    );
+    view.dispatch({ changes: { from: 5, insert: " old" } });
+
+    const preparing = history.beginFlush();
+    await releaseDigests(releases, 2);
+    await history.clear();
+    view.dispatch({ changes: { from: 9, insert: " new" } });
+
+    await expect(preparing).resolves.toBeNull();
+    const flushing = history.flush();
+    await releaseDigests(releases, 2);
+    await flushing;
+
+    expect(calls).toEqual(["clear", "append"]);
+    expect(appended).toHaveLength(1);
+    expect(appended[0]?.actions).toMatchObject([
+      { kind: "entry", entry: { changes: [{ insert: " new" }] } },
+    ]);
+    expect(await history.beginFlush()).toBeNull();
+  });
+
+  it("does not publish a pre-reset batch after preparation completes", async () => {
+    const releases = controlDigests();
+    const calls: string[] = [];
+    const { history, view, appended } = harness(
+      { undo: [], redo: [] },
+      "alpha",
+      {
+        append: async (batch, actions) => {
+          calls.push("append");
+          appended.push({ batch, actions });
+        },
+        fence: async () => {
+          calls.push("fence");
+        },
+      },
+    );
+    view.dispatch({ changes: { from: 5, insert: " old" } });
+
+    const preparing = history.beginFlush();
+    await releaseDigests(releases, 2);
+    view.dispatch({
+      changes: { from: 0, to: 9, insert: "external" },
+      annotations: Transaction.userEvent.of("undo"),
+    });
+    view.dispatch({ changes: { from: 8, insert: " new" } });
+
+    await expect(preparing).resolves.toBeNull();
+    const flushing = history.flush();
+    await releaseDigests(releases, 2);
+    await flushing;
+
+    expect(calls).toEqual(["fence", "append"]);
+    expect(appended).toHaveLength(1);
+    expect(appended[0]?.actions).toMatchObject([
+      { kind: "entry", entry: { changes: [{ insert: " new" }] } },
+    ]);
+    expect(await history.beginFlush()).toBeNull();
   });
 
   it("orders an external fence after an in-flight append", async () => {

@@ -549,6 +549,49 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await $(".skr-sidebar-content").waitForDisplayed({ timeout: 10000 });
   });
 
+  it("returns focus to surviving More actions after Settings closes", async () => {
+    const opener = $('button[aria-label="More actions"]');
+    await opener.waitForDisplayed({ timeout: 10000 });
+    await opener.click();
+
+    const menu = $('[data-testid="anchored-menu"]');
+    await menu.waitForDisplayed({ timeout: 10000 });
+    const settingsCommand = menu.$('[data-command-id="settings.open"]');
+    await settingsCommand.waitForDisplayed({ timeout: 10000 });
+    await settingsCommand.click();
+
+    const settings = $('[data-testid="settings-view"]');
+    await settings.waitForDisplayed({ timeout: 10000 });
+    await browser.keys(Key.Escape);
+    await settings.waitForExist({ reverse: true, timeout: 5000 });
+
+    await browser.execute(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        }),
+    );
+    const focusEvidence = await browser.execute(() => {
+      const active = document.activeElement;
+      const survivingOpener = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="More actions"]',
+      );
+      return {
+        activeIsOpener: active === survivingOpener,
+        activeIsBody: active === document.body,
+        activeInsideSettings:
+          active?.closest('[data-testid="settings-view"]') !== null,
+        openerConnected: survivingOpener?.isConnected === true,
+      };
+    });
+    expect(focusEvidence).toEqual({
+      activeIsOpener: true,
+      activeIsBody: false,
+      activeInsideSettings: false,
+      openerConnected: true,
+    });
+  });
+
   it("loads link previews through the reading pipeline and preserves pointer intent", async () => {
     await browser.execute(() => {
       (

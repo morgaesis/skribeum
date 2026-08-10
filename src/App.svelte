@@ -444,19 +444,43 @@ async function loadTreeTitles(handle: VaultHandle, entries: TreeEntry[]) {
   }
 }
 
-function isPanelCollapseControl(
+let panelTogglePointerOrigin: HTMLElement | null | undefined;
+let panelTogglePointerClearTimer: ReturnType<typeof setTimeout> | undefined;
+
+function rememberPanelTogglePointerOrigin(event: MouseEvent) {
+  if (event.button !== 0 || panelTogglePointerOrigin !== undefined) return;
+  const active = document.activeElement;
+  panelTogglePointerOrigin =
+    active instanceof HTMLElement && active.isConnected ? active : null;
+}
+
+function releasePanelTogglePointerOrigin(event: PointerEvent) {
+  if (event.button !== 0 || panelTogglePointerOrigin === undefined) return;
+  clearTimeout(panelTogglePointerClearTimer);
+  panelTogglePointerClearTimer = setTimeout(() => {
+    panelTogglePointerOrigin = undefined;
+  });
+}
+
+function cancelPanelTogglePointerOrigin() {
+  clearTimeout(panelTogglePointerClearTimer);
+  panelTogglePointerOrigin = undefined;
+}
+
+function panelElement(panel: "sidebar" | "outline"): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    panel === "sidebar"
+      ? ".skr-desktop-sidebar"
+      : '[data-testid="desktop-outline-panel"]',
+  );
+}
+
+function panelContainsFocus(
   panel: "sidebar" | "outline",
-  element: Element | null,
-): element is HTMLElement {
-  if (!(element instanceof HTMLElement)) return false;
-  const dividerLabel =
-    panel === "sidebar" ? STRINGS.sidebarResize : STRINGS.outlineResize;
-  const collapseLabel =
-    panel === "sidebar" ? STRINGS.collapseSidebar : STRINGS.collapseOutline;
+  focusTarget: Element | null,
+): boolean {
   return (
-    element.matches(`[role="separator"][aria-label="${dividerLabel}"]`) ||
-    (element.matches(`[data-command-id="panel.${panel}.toggle"]`) &&
-      element.getAttribute("aria-label") === collapseLabel)
+    focusTarget !== null && panelElement(panel)?.contains(focusTarget) === true
   );
 }
 
@@ -471,6 +495,8 @@ function focusCollapsedPanelRestore(panel: "sidebar" | "outline") {
 }
 
 function togglePanel(panel: "sidebar" | "outline", origin?: HTMLElement) {
+  const pointerOrigin = panelTogglePointerOrigin;
+  cancelPanelTogglePointerOrigin();
   if (narrowViewport) {
     if (panel === "sidebar") {
       if (activeSheet === "file-tree") closeSheet();
@@ -484,11 +510,18 @@ function togglePanel(panel: "sidebar" | "outline", origin?: HTMLElement) {
   }
   const wasOpen =
     panel === "sidebar" ? !workspace.sidebarCollapsed : outlineOpen;
-  const activeElement = document.activeElement;
-  const shouldRestoreFocus =
+  const focusOrigin =
+    origin !== undefined
+      ? origin
+      : pointerOrigin !== undefined
+        ? pointerOrigin
+        : document.activeElement;
+  const shouldRestoreFocus = wasOpen && panelContainsFocus(panel, focusOrigin);
+  const shouldPreserveExternalPointerFocus =
     wasOpen &&
-    activeElement === (origin ?? activeElement) &&
-    isPanelCollapseControl(panel, origin ?? activeElement);
+    pointerOrigin !== undefined &&
+    focusOrigin instanceof HTMLElement &&
+    !panelContainsFocus(panel, focusOrigin);
   if (panel === "sidebar") {
     workspace.sidebarCollapsed = !workspace.sidebarCollapsed;
   } else {
@@ -496,11 +529,15 @@ function togglePanel(panel: "sidebar" | "outline", origin?: HTMLElement) {
     workspace.outlineCollapsed = !outlineOpen;
     if (outlineOpen) refreshOutline();
   }
-  if (shouldRestoreFocus) {
+  if (shouldRestoreFocus || shouldPreserveExternalPointerFocus) {
     void tick().then(() => {
       const stillCollapsed =
         panel === "sidebar" ? workspace.sidebarCollapsed : !outlineOpen;
-      if (stillCollapsed) focusCollapsedPanelRestore(panel);
+      if (!stillCollapsed) return;
+      if (shouldRestoreFocus) focusCollapsedPanelRestore(panel);
+      else if (focusOrigin instanceof HTMLElement && focusOrigin.isConnected) {
+        focusOrigin.focus();
+      }
     });
   }
 }
@@ -3210,6 +3247,10 @@ onMount(() => {
                 data-command-id="panel.sidebar.toggle"
                 aria-label={STRINGS.collapseSidebar}
                 use:commandTooltip={tooltipForCommand("panel.sidebar.toggle", STRINGS.collapseSidebar)}
+                onpointerdown={rememberPanelTogglePointerOrigin}
+                onmousedown={rememberPanelTogglePointerOrigin}
+                onpointerup={releasePanelTogglePointerOrigin}
+                onpointercancel={cancelPanelTogglePointerOrigin}
                 onclick={() => registry.run("panel.sidebar.toggle", commandContext())}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -3481,6 +3522,10 @@ onMount(() => {
               data-command-id="panel.outline.toggle"
               aria-label={STRINGS.collapseOutline}
               use:commandTooltip={tooltipForCommand("panel.outline.toggle", STRINGS.collapseOutline)}
+              onpointerdown={rememberPanelTogglePointerOrigin}
+              onmousedown={rememberPanelTogglePointerOrigin}
+              onpointerup={releasePanelTogglePointerOrigin}
+              onpointercancel={cancelPanelTogglePointerOrigin}
               onclick={() => registry.run("panel.outline.toggle", commandContext())}
             >
               <svg viewBox="0 0 16 16" aria-hidden="true">

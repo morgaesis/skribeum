@@ -4928,14 +4928,14 @@ describe("skribeum shell", () => {
 
     await placeCursorAtEditorTextStart("Editable task");
     await browser.keys(Key.Backspace);
-    expect(
-      await browser.execute(
-        () =>
-          [...document.querySelectorAll<HTMLElement>(".cm-line")].find((line) =>
-            line.textContent?.includes("Editable task"),
-          )?.textContent ?? "",
-      ),
-    ).toBe("- [x]Editable task");
+    await browser.keys([modifierKey, "s"]);
+    await browser.waitUntil(
+      () =>
+        noteOnDisk(TASK_TRACKS_NOTE_NAME)
+          .split("\n")
+          .includes("- [x]Editable task"),
+      { timeout: 10000, timeoutMsg: "task source did not preserve its status" },
+    );
     for (let press = 0; press < 5; press += 1) {
       await browser.keys(Key.Backspace);
     }

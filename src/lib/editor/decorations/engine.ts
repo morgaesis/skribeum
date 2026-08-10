@@ -3792,7 +3792,6 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
 type BlockEngineState = {
   decorations: DecorationSet;
   deferred: boolean;
-  buildCount: number;
 };
 
 const refreshDeferredDecorations = StateEffect.define<null>();
@@ -3838,53 +3837,148 @@ function defersDecorationRebuild(
   );
 }
 
+function activeRevealIn(state: EditorState): RevealRegion | null {
+  const table = state.facet(decorationTable);
+  return findActiveReveal(
+    state.doc,
+    syntaxTree(state),
+    table,
+    revealSelection(state),
+    state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    state.facet(taskStatusConfiguration),
+  );
+}
+
+function mappedReveal(
+  reveal: RevealRegion | null,
+  transaction: Transaction,
+): RevealRegion | null {
+  return reveal === null
+    ? null
+    : {
+        ...reveal,
+        from: transaction.changes.mapPos(reveal.from, -1),
+        to: transaction.changes.mapPos(reveal.to, 1),
+      };
+}
+
+function refreshRevealDecorations(
+  decorations: DecorationSet,
+  transaction: Transaction,
+  kind: "inline" | "block",
+): DecorationSet {
+  const previous = mappedReveal(
+    activeRevealIn(transaction.startState),
+    transaction,
+  );
+  const active = activeRevealIn(transaction.state);
+  const ranges = [previous, active].filter(
+    (range): range is RevealRegion => range !== null,
+  );
+  if (ranges.length === 0) return decorations;
+
+  const state = transaction.state;
+  const table = splitTable(state.facet(decorationTable))[kind];
+  const replacement = computeDecorations({
+    doc: state.doc,
+    tree: syntaxTree(state),
+    table,
+    selection: revealSelection(state),
+    ranges,
+    wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    taskStatuses: state.facet(taskStatusConfiguration),
+    activeReveal: active,
+    explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
+    ...(kind === "inline"
+      ? {
+          suppressRenderedTableDescendants:
+            state.field(explicitTableSourceField, false) === null,
+        }
+      : {}),
+  });
+  const added: ReturnType<Decoration["range"]>[] = [];
+  const cursor = replacement.iter();
+  while (cursor.value !== null) {
+    added.push(cursor.value.range(cursor.from, cursor.to));
+    cursor.next();
+  }
+  return decorations.update({
+    filter: (from, to) =>
+      !ranges.some((range) => from <= range.to && to >= range.from),
+    add: added,
+    sort: true,
+  });
+}
+
+function decorationInputsChanged(
+  state: EditorState,
+  startState: EditorState,
+): boolean {
+  return (
+    state.facet(decorationTable) !== startState.facet(decorationTable) ||
+    state.facet(sourceRevealEnabled) !==
+      startState.facet(sourceRevealEnabled) ||
+    state.facet(sourceRevealFocusEnabled) !==
+      startState.facet(sourceRevealFocusEnabled) ||
+    state.field(tableCellRevealField, false) !==
+      startState.field(tableCellRevealField, false) ||
+    state.facet(taskStatusConfiguration) !==
+      startState.facet(taskStatusConfiguration) ||
+    state.field(wikilinkContext, false) !==
+      startState.field(wikilinkContext, false) ||
+    state.field(explicitTableSourceField, false) !==
+      startState.field(explicitTableSourceField, false)
+  );
+}
+
 const blockEngineField = StateField.define<BlockEngineState>({
   create: (state) => ({
     decorations: buildBlockDecorations(state),
     deferred: false,
-    buildCount: 1,
   }),
   update(value, transaction) {
     if (refreshRequested(transaction)) {
       return {
         decorations: buildBlockDecorations(transaction.state),
         deferred: false,
-        buildCount: value.buildCount + 1,
       };
     }
     if (defersDecorationRebuild(transaction, value.decorations)) {
+      const decorations = transaction.docChanged
+        ? value.decorations.map(transaction.changes)
+        : value.decorations;
       return {
-        decorations: transaction.docChanged
-          ? value.decorations.map(transaction.changes)
-          : value.decorations,
+        decorations:
+          transaction.selection !== transaction.startState.selection
+            ? refreshRevealDecorations(decorations, transaction, "block")
+            : decorations,
         deferred: true,
-        buildCount: value.buildCount,
       };
     }
     if (value.deferred && !transaction.docChanged) {
-      return { ...value, deferred: true };
+      if (transaction.selection !== transaction.startState.selection) {
+        return {
+          decorations: refreshRevealDecorations(
+            value.decorations,
+            transaction,
+            "block",
+          ),
+          deferred: true,
+        };
+      }
+      if (!decorationInputsChanged(transaction.state, transaction.startState)) {
+        return { ...value, deferred: true };
+      }
     }
     if (
       transaction.docChanged ||
       transaction.selection !== transaction.startState.selection ||
       syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ||
-      transaction.state.facet(decorationTable) !==
-        transaction.startState.facet(decorationTable) ||
-      transaction.state.facet(sourceRevealEnabled) !==
-        transaction.startState.facet(sourceRevealEnabled) ||
-      transaction.state.field(tableCellRevealField, false) !==
-        transaction.startState.field(tableCellRevealField, false) ||
-      transaction.state.facet(taskStatusConfiguration) !==
-        transaction.startState.facet(taskStatusConfiguration) ||
-      transaction.state.field(wikilinkContext, false) !==
-        transaction.startState.field(wikilinkContext, false) ||
-      transaction.state.field(explicitTableSourceField, false) !==
-        transaction.startState.field(explicitTableSourceField, false)
+      decorationInputsChanged(transaction.state, transaction.startState)
     ) {
       return {
         decorations: buildBlockDecorations(transaction.state),
         deferred: false,
-        buildCount: value.buildCount + 1,
       };
     }
     return value;
@@ -3899,43 +3993,17 @@ function needsRebuild(update: ViewUpdate): boolean {
     update.viewportChanged ||
     update.selectionSet ||
     syntaxTree(update.state) !== syntaxTree(update.startState) ||
-    update.state.facet(decorationTable) !==
-      update.startState.facet(decorationTable) ||
-    update.state.facet(sourceRevealEnabled) !==
-      update.startState.facet(sourceRevealEnabled) ||
-    update.state.field(tableCellRevealField, false) !==
-      update.startState.field(tableCellRevealField, false) ||
-    update.state.facet(taskStatusConfiguration) !==
-      update.startState.facet(taskStatusConfiguration) ||
-    update.state.field(wikilinkContext, false) !==
-      update.startState.field(wikilinkContext, false) ||
-    update.state.field(explicitTableSourceField, false) !==
-      update.startState.field(explicitTableSourceField, false)
+    decorationInputsChanged(update.state, update.startState)
   );
 }
 
 function deferredUpdateNeedsImmediateRebuild(update: ViewUpdate): boolean {
-  return (
-    update.viewportChanged ||
-    update.state.facet(decorationTable) !==
-      update.startState.facet(decorationTable) ||
-    update.state.facet(sourceRevealEnabled) !==
-      update.startState.facet(sourceRevealEnabled) ||
-    update.state.field(tableCellRevealField, false) !==
-      update.startState.field(tableCellRevealField, false) ||
-    update.state.facet(taskStatusConfiguration) !==
-      update.startState.facet(taskStatusConfiguration) ||
-    update.state.field(wikilinkContext, false) !==
-      update.startState.field(wikilinkContext, false) ||
-    update.state.field(explicitTableSourceField, false) !==
-      update.startState.field(explicitTableSourceField, false)
-  );
+  return decorationInputsChanged(update.state, update.startState);
 }
 
 const enginePlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
-    buildCount = 1;
     private deferred = false;
     private refreshFrame: number | null = null;
     private destroyed = false;
@@ -3958,9 +4026,14 @@ const enginePlugin = ViewPlugin.fromClass(
         defersDecorationRebuild(transaction, blockDecorations),
       );
       if (deferredInput) {
-        if (update.docChanged) {
-          this.decorations = this.decorations.map(update.changes);
-        }
+        const decorations = update.docChanged
+          ? this.decorations.map(update.changes)
+          : this.decorations;
+        const transaction = update.transactions.at(-1);
+        this.decorations =
+          update.selectionSet && transaction !== undefined
+            ? refreshRevealDecorations(decorations, transaction, "inline")
+            : decorations;
         this.deferred = true;
         this.scheduleRefresh(update.view);
         return;
@@ -3970,6 +4043,14 @@ const enginePlugin = ViewPlugin.fromClass(
           !update.docChanged &&
           !deferredUpdateNeedsImmediateRebuild(update)
         ) {
+          const transaction = update.transactions.at(-1);
+          if (update.selectionSet && transaction !== undefined) {
+            this.decorations = refreshRevealDecorations(
+              this.decorations,
+              transaction,
+              "inline",
+            );
+          }
           return;
         }
         this.cancelRefresh();
@@ -3981,7 +4062,6 @@ const enginePlugin = ViewPlugin.fromClass(
     }
 
     private build(view: EditorView): DecorationSet {
-      this.buildCount += 1;
       return buildViewDecorations(view);
     }
 
@@ -4393,11 +4473,6 @@ class LinkPreviewController {
   };
 
   private readonly onPointerMove = (event: PointerEvent) => {
-    const link = this.previewLink(event.target);
-    if (link !== null && link === this.scheduledLink) {
-      this.cancelTimer();
-      this.schedule(link);
-    }
     if (this.panel === null || this.leavePoint === null) return;
     if (
       this.panelContains(event.target) ||
@@ -5494,17 +5569,6 @@ export function engineDecorations(view: EditorView): DecorationSet | null {
     }
   }
   return Decoration.set(ranges, true);
-}
-
-/** Build counts for verifying that input changes coalesce decoration walks. */
-export function decorationBuildCounts(view: EditorView): {
-  inline: number;
-  block: number;
-} {
-  return {
-    inline: view.plugin(enginePlugin)?.buildCount ?? 0,
-    block: view.state.field(blockEngineField, false)?.buildCount ?? 0,
-  };
 }
 
 /** The state's current wikilink context, for callers outside the engine. */

@@ -1386,6 +1386,89 @@ describe("rendered decoration DOM", () => {
     expect(preview?.querySelector(".skr-skeleton-bar")).toBeNull();
   });
 
+  it("loads each preview target once while the pointer moves", () => {
+    vi.useFakeTimers();
+    const loadNote = vi.fn(async (path: string) => `# ${path}`);
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "First.md", "Second.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote,
+    };
+    const view = mountedView("[[First]] [[Second]]", undefined, context);
+    const [first, second] = [
+      ...view.dom.querySelectorAll<HTMLElement>("[data-preview-target]"),
+    ];
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    if (first === undefined || second === undefined) return;
+
+    first.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    for (let movement = 0; movement < 100; movement += 1) {
+      first.dispatchEvent(new MouseEvent("pointermove", { bubbles: true }));
+    }
+    expect(loadNote).toHaveBeenCalledTimes(1);
+    expect(loadNote).toHaveBeenLastCalledWith("First.md");
+
+    second.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    expect(loadNote).toHaveBeenCalledTimes(2);
+    expect(loadNote).toHaveBeenLastCalledWith("Second.md");
+  });
+
+  it("keeps an obsolete preview resolution out of the active panel", async () => {
+    vi.useFakeTimers();
+    let resolveFirst: ((source: string) => void) | undefined;
+    let resolveSecond: ((source: string) => void) | undefined;
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "First.md", "Second.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote: (path) =>
+        new Promise<string>((resolve) => {
+          if (path === "First.md") {
+            resolveFirst = resolve;
+          } else {
+            resolveSecond = resolve;
+          }
+        }),
+    };
+    const view = mountedView("[[First]] [[Second]]", undefined, context);
+    const [first, second] = [
+      ...view.dom.querySelectorAll<HTMLElement>("[data-preview-target]"),
+    ];
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    if (first === undefined || second === undefined) return;
+
+    first.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(450);
+    second.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(450);
+
+    const preview = view.dom.querySelector<HTMLElement>(
+      '[data-testid="link-preview"]',
+    );
+    expect(preview?.textContent).toContain("Second.md");
+    resolveFirst?.("# First result");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(preview?.textContent).not.toContain("First result");
+
+    resolveSecond?.("# Second result");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(preview?.textContent).toContain("Second result");
+    expect(preview?.textContent).not.toContain("First result");
+  });
+
   it("repositions a preview after async content grows below its link", async () => {
     vi.useFakeTimers();
     const originalHeight = window.innerHeight;

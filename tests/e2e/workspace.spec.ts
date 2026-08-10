@@ -431,6 +431,124 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     );
   });
 
+  it("keeps focus on the sidebar restore toggle across keyboard collapse", async () => {
+    await clearWorkspaceStorage();
+    await browser.setWindowSize(1280, 800);
+    await browser.refresh();
+    await $(`[role=tree]`).waitForExist({ timeout: 15000 });
+
+    const divider = $('[role="separator"][aria-label="Resize sidebar"]');
+    await divider.waitForDisplayed({ timeout: 10000 });
+    await browser.execute(
+      (element) => {
+        const control = element as HTMLElement;
+        control.focus();
+        control.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+      },
+      await divider.getElement(),
+    );
+    await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          const panel = document.querySelector<HTMLElement>(
+            ".skr-desktop-sidebar",
+          );
+          const restore = document.querySelector<HTMLElement>(
+            '.skr-header-leading [data-command-id="panel.sidebar.toggle"][aria-label="Expand sidebar"]',
+          );
+          return (
+            panel?.style.width === "0rem" &&
+            panel.querySelector('[role="separator"]') === null &&
+            panel.querySelector(".skr-sidebar-content") === null &&
+            restore !== null &&
+            document.activeElement === restore &&
+            document.activeElement !== document.body
+          );
+        }),
+      {
+        timeoutMsg:
+          "focused sidebar separator did not transfer focus to the restore toggle",
+      },
+    );
+
+    await $('[aria-label="Expand sidebar"]').click();
+    await $(".skr-sidebar-content").waitForDisplayed({ timeout: 10000 });
+    const collapseButton = $(
+      '.skr-sidebar-header [data-command-id="panel.sidebar.toggle"]',
+    );
+    await collapseButton.waitForDisplayed({ timeout: 10000 });
+    await browser.execute(
+      (element) => {
+        const control = element as HTMLElement;
+        control.focus();
+        control.click();
+      },
+      await collapseButton.getElement(),
+    );
+    await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          const restore = document.querySelector<HTMLElement>(
+            '.skr-header-leading [data-command-id="panel.sidebar.toggle"][aria-label="Expand sidebar"]',
+          );
+          return restore !== null && document.activeElement === restore;
+        }),
+      {
+        timeoutMsg:
+          "focused in-panel collapse button did not transfer focus to the restore toggle",
+      },
+    );
+
+    await $('[aria-label="Expand sidebar"]').click();
+    await $(".skr-sidebar-content").waitForDisplayed({ timeout: 10000 });
+    const readingSurface = $('[data-testid="reading-surface"]');
+    await readingSurface.waitForExist({ timeout: 10000 });
+    const readingSurfaceElement = await readingSurface.getElement();
+    await browser.execute(
+      (element) => (element as HTMLElement).focus(),
+      readingSurfaceElement,
+    );
+    const pointerCollapseButton = $(
+      '.skr-sidebar-header [data-command-id="panel.sidebar.toggle"]',
+    );
+    await browser.execute(
+      (element) => {
+        const control = element as HTMLElement;
+        control.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            bubbles: true,
+            button: 0,
+            pointerId: 31,
+          }),
+        );
+        control.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, button: 0 }),
+        );
+      },
+      await pointerCollapseButton.getElement(),
+    );
+    await browser.waitUntil(
+      () =>
+        browser.execute((element) => {
+          const panel = document.querySelector<HTMLElement>(
+            ".skr-desktop-sidebar",
+          );
+          return (
+            panel?.style.width === "0rem" && document.activeElement === element
+          );
+        }, readingSurfaceElement),
+      {
+        timeoutMsg:
+          "pointer collapse changed focus when focus was outside the sidebar",
+      },
+    );
+
+    await $('[aria-label="Expand sidebar"]').click();
+    await $(".skr-sidebar-content").waitForDisplayed({ timeout: 10000 });
+  });
+
   it("loads link previews through the reading pipeline and preserves pointer intent", async () => {
     await browser.execute(() => {
       (

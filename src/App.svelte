@@ -444,7 +444,33 @@ async function loadTreeTitles(handle: VaultHandle, entries: TreeEntry[]) {
   }
 }
 
-function togglePanel(panel: "sidebar" | "outline") {
+function isPanelCollapseControl(
+  panel: "sidebar" | "outline",
+  element: Element | null,
+): element is HTMLElement {
+  if (!(element instanceof HTMLElement)) return false;
+  const dividerLabel =
+    panel === "sidebar" ? STRINGS.sidebarResize : STRINGS.outlineResize;
+  const collapseLabel =
+    panel === "sidebar" ? STRINGS.collapseSidebar : STRINGS.collapseOutline;
+  return (
+    element.matches(`[role="separator"][aria-label="${dividerLabel}"]`) ||
+    (element.matches(`[data-command-id="panel.${panel}.toggle"]`) &&
+      element.getAttribute("aria-label") === collapseLabel)
+  );
+}
+
+function focusCollapsedPanelRestore(panel: "sidebar" | "outline") {
+  const target =
+    panel === "sidebar"
+      ? document.querySelector<HTMLElement>(
+          '.skr-header-leading [data-command-id="panel.sidebar.toggle"]',
+        )
+      : document.querySelector<HTMLElement>('[aria-label="More actions"]');
+  target?.focus();
+}
+
+function togglePanel(panel: "sidebar" | "outline", origin?: HTMLElement) {
   if (narrowViewport) {
     if (panel === "sidebar") {
       if (activeSheet === "file-tree") closeSheet();
@@ -456,12 +482,26 @@ function togglePanel(panel: "sidebar" | "outline") {
     }
     return;
   }
+  const wasOpen =
+    panel === "sidebar" ? !workspace.sidebarCollapsed : outlineOpen;
+  const activeElement = document.activeElement;
+  const shouldRestoreFocus =
+    wasOpen &&
+    activeElement === (origin ?? activeElement) &&
+    isPanelCollapseControl(panel, origin ?? activeElement);
   if (panel === "sidebar") {
     workspace.sidebarCollapsed = !workspace.sidebarCollapsed;
   } else {
     outlineOpen = !outlineOpen;
     workspace.outlineCollapsed = !outlineOpen;
     if (outlineOpen) refreshOutline();
+  }
+  if (shouldRestoreFocus) {
+    void tick().then(() => {
+      const stillCollapsed =
+        panel === "sidebar" ? workspace.sidebarCollapsed : !outlineOpen;
+      if (stillCollapsed) focusCollapsedPanelRestore(panel);
+    });
   }
 }
 
@@ -3201,7 +3241,7 @@ onMount(() => {
           edge="right"
           label={STRINGS.sidebarResize}
           onResize={(value) => (workspace.sidebarWidthRem = value)}
-          onCollapse={() => togglePanel("sidebar")}
+          onCollapse={(origin) => togglePanel("sidebar", origin)}
         />
         {/if}
       </div>
@@ -3431,7 +3471,7 @@ onMount(() => {
           edge="left"
           label={STRINGS.outlineResize}
           onResize={(value) => (workspace.outlineWidthRem = value)}
-          onCollapse={() => togglePanel("outline")}
+          onCollapse={(origin) => togglePanel("outline", origin)}
         />
         <section class="skr-outline-content" aria-label={STRINGS.outlineLabel}>
           <div class="skr-outline-header">

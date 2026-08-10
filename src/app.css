@@ -712,6 +712,10 @@ select {
     var(--skr-motion-state-easing);
 }
 
+.skr-tab-close-dirty {
+  display: grid;
+}
+
 .skr-tab-shell:hover .skr-tab-unsaved,
 .skr-tab-shell:focus .skr-tab-unsaved,
 .skr-tab-shell:focus-within .skr-tab-unsaved {
@@ -735,6 +739,10 @@ select {
 @media (pointer: coarse) {
   .skr-tab-shell:not(.skr-tab-dirty) .skr-tab-close {
     opacity: 1;
+    pointer-events: auto;
+  }
+
+  .skr-tab-close-dirty {
     pointer-events: auto;
   }
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { onMount, tick } from "svelte";
+import { onDestroy, onMount, tick } from "svelte";
 import AnchoredMenu from "./AnchoredMenu.svelte";
 import { type CommandTooltipOptions, commandTooltip } from "./commandTooltip";
 import { enterMotionSurface, motionDurationMilliseconds } from "./motion";
@@ -26,9 +26,7 @@ function transformOffset(element: HTMLElement): number {
   const translate = transform.match(
     /^translate\(\s*(-?[\d.]+)px(?:,\s*(-?[\d.]+)px)?\s*\)$/,
   );
-  if (translate !== null) {
-    return Number.parseFloat(translate[1] ?? "0");
-  }
+  if (translate !== null) return Number.parseFloat(translate[1] ?? "0");
   const axisTranslate = transform.match(/^translateX\(\s*(-?[\d.]+)px\s*\)$/);
   return axisTranslate === null
     ? 0
@@ -39,7 +37,6 @@ function renderedLeft(element: HTMLElement, fallback: number): number {
   const left = Number.parseFloat(element.style.left);
   return (Number.isFinite(left) ? left : fallback) + transformOffset(element);
 }
-
 let {
   tabs,
   activePath,
@@ -81,7 +78,27 @@ let indicatorElement = $state<HTMLElement>();
 let indicatorRestLeft: number | null = null;
 let indicatorAnimatedPath: string | null = null;
 let indicatorMotionGeneration = 0;
+let indicatorMotionFrame: number | null = null;
+let indicatorMotionTimer: ReturnType<typeof setTimeout> | null = null;
 let indicatorTraveling = false;
+let mounted = true;
+
+function cancelIndicatorCallbacks(): void {
+  if (indicatorMotionFrame !== null) {
+    cancelAnimationFrame(indicatorMotionFrame);
+    indicatorMotionFrame = null;
+  }
+  if (indicatorMotionTimer !== null) {
+    clearTimeout(indicatorMotionTimer);
+    indicatorMotionTimer = null;
+  }
+}
+
+onDestroy(() => {
+  mounted = false;
+  indicatorMotionGeneration += 1;
+  cancelIndicatorCallbacks();
+});
 
 const titles = $derived(
   resolveTitleCollisions(
@@ -120,6 +137,7 @@ function reorderOffset(index: number): number {
 }
 
 function measureOverflow() {
+  if (!mounted) return;
   const element = itemsElement;
   overflowed =
     element instanceof HTMLElement &&
@@ -127,15 +145,35 @@ function measureOverflow() {
   if (!overflowed) listOpen = false;
 }
 
+function scheduleIndicatorTravel(generation: number): void {
+  const element = indicatorElement;
+  if (!mounted || element === undefined) return;
+  const duration = motionDurationMilliseconds(
+    "--skr-motion-panel-duration",
+    itemsElement ?? document.documentElement,
+  );
+  indicatorMotionFrame = requestAnimationFrame(() => {
+    indicatorMotionFrame = null;
+    if (!mounted || generation !== indicatorMotionGeneration) return;
+    element.style.transition = ACTIVE_INDICATOR_TRAVEL_TRANSITION;
+    element.style.transform = "";
+    indicatorMotionTimer = setTimeout(() => {
+      indicatorMotionTimer = null;
+      if (!mounted || generation !== indicatorMotionGeneration) return;
+      element.style.transition = "";
+      indicatorTraveling = false;
+    }, duration);
+  });
+}
+
 /**
- * Re-reads the active tab's geometry with no choreography, for a resize
- * that shifts the flexible tab widths without any selection change. Any
- * choreographed travel or entrance is left untouched: this only ever runs
- * outside the animated effect below, from the resize observer and handler.
+ * Re-reads the active tab's geometry after the strip changes size. If the
+ * indicator is traveling, its current rendered position becomes the start
+ * of a new panel-clock leg so a resize does not create a visible jump.
  */
 function syncActiveIndicatorGeometry() {
   const element = indicatorElement;
-  if (element === undefined) return;
+  if (!mounted || element === undefined) return;
   const activeIndex =
     activePath === null ? -1 : tabs.findIndex((tab) => tab.path === activePath);
   const tabElement = activeIndex < 0 ? undefined : tabElements[activeIndex];
@@ -145,28 +183,14 @@ function syncActiveIndicatorGeometry() {
   if (indicatorTraveling) {
     const currentLeft = renderedLeft(element, indicatorRestLeft ?? left);
     const generation = ++indicatorMotionGeneration;
+    cancelIndicatorCallbacks();
     element.style.transition = "none";
     element.style.left = `${left}px`;
     element.style.width = `${width}px`;
     element.style.transform = `translateX(${currentLeft - left}px)`;
     indicatorRestLeft = left;
     void element.offsetWidth;
-    requestAnimationFrame(() => {
-      if (generation !== indicatorMotionGeneration) return;
-      element.style.transition = ACTIVE_INDICATOR_TRAVEL_TRANSITION;
-      element.style.transform = "";
-      setTimeout(
-        () => {
-          if (generation !== indicatorMotionGeneration) return;
-          element.style.transition = "";
-          indicatorTraveling = false;
-        },
-        motionDurationMilliseconds(
-          "--skr-motion-panel-duration",
-          itemsElement ?? document.documentElement,
-        ),
-      );
-    });
+    scheduleIndicatorTravel(generation);
     return;
   }
   element.style.left = `${left}px`;
@@ -181,7 +205,9 @@ function measureOverflowAndIndicator() {
 
 $effect(() => {
   void tabs.length;
-  void tick().then(measureOverflow);
+  void tick().then(() => {
+    if (mounted) measureOverflow();
+  });
 });
 
 /**
@@ -198,6 +224,7 @@ $effect(() => {
   const element = indicatorElement;
   const items = itemsElement;
   if (element === undefined || items === undefined) {
+    cancelIndicatorCallbacks();
     indicatorRestLeft = null;
     indicatorAnimatedPath = null;
     indicatorTraveling = false;
@@ -225,6 +252,11 @@ $effect(() => {
   const previousStillOpen =
     previousPath !== null && tabs.some((tab) => tab.path === previousPath);
   indicatorAnimatedPath = path;
+  const previousLeft =
+    indicatorRestLeft === null
+      ? null
+      : renderedLeft(element, indicatorRestLeft);
+  cancelIndicatorCallbacks();
   const generation = ++indicatorMotionGeneration;
 
   const left = tabElement.offsetLeft;
@@ -260,7 +292,7 @@ $effect(() => {
     return;
   }
 
-  const previousLeft = renderedLeft(element, indicatorRestLeft);
+  if (previousLeft === null) return;
   delete element.dataset.motionSurface;
   element.style.transition = "none";
   element.style.opacity = "1";
@@ -270,16 +302,7 @@ $effect(() => {
   indicatorRestLeft = left;
   indicatorTraveling = true;
   void element.offsetWidth;
-  requestAnimationFrame(() => {
-    if (generation !== indicatorMotionGeneration) return;
-    element.style.transition = ACTIVE_INDICATOR_TRAVEL_TRANSITION;
-    element.style.transform = "";
-    setTimeout(() => {
-      if (generation !== indicatorMotionGeneration) return;
-      element.style.transition = "";
-      indicatorTraveling = false;
-    }, duration);
-  });
+  scheduleIndicatorTravel(generation);
 });
 
 onMount(() => {
@@ -357,6 +380,12 @@ function finishScrollDrag(event: PointerEvent) {
         class="skr-tab-shell"
         role="tab"
         aria-selected={tab.path === activePath}
+        aria-label={
+          tab.dirty === true
+            ? `${title?.displayTitle ?? tab.path}, ${STRINGS.unsavedNote}`
+            : undefined
+        }
+        data-dirty={tab.dirty === true ? "true" : undefined}
         tabindex={tab.path === activePath ? 0 : -1}
         class:skr-tab-focused={focused && tab.path === activePath}
         class:skr-tab-active={tab.path === activePath}

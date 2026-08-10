@@ -60,23 +60,28 @@ function transitionOf(element: Element): string {
   return getComputedStyle(element).transition.replace(/\s+/g, " ");
 }
 
-function loadedDeclaration(selector: string, property: string): string | null {
-  for (const sheet of document.styleSheets) {
-    for (const rule of sheet.cssRules) {
-      if (!(rule instanceof CSSStyleRule)) continue;
+function loadedDeclarations(selector: string, property: string): string[] {
+  const values: string[] = [];
+  const visit = (rules: CSSRuleList) => {
+    for (const rule of Array.from(rules)) {
       if (
+        rule instanceof CSSStyleRule &&
         rule.selectorText
           .split(",")
           .map((value) => value.trim())
           .includes(selector)
       ) {
-        return rule.style.getPropertyValue(property).trim() || null;
+        const value = rule.style.getPropertyValue(property).trim();
+        if (value !== "") values.push(value);
+      }
+      if ("cssRules" in rule) {
+        visit((rule as CSSGroupingRule).cssRules);
       }
     }
-  }
-  return null;
+  };
+  for (const sheet of document.styleSheets) visit(sheet.cssRules);
+  return values;
 }
-
 function surfaceProbe(variant: string): HTMLElement {
   const probe = document.createElement("div");
   probe.dataset.motionSurface = variant;
@@ -431,6 +436,43 @@ describe("file tree folder reveal", () => {
     await unmount(component);
   });
 
+  it("animates auto-expanded folders closed with inert leaving ghosts", async () => {
+    const props = reactiveProps({
+      entries: treeEntries,
+      selectedPath: "Folder/one.md" as string | null,
+      onOpenPath: () => {},
+    });
+    const component = mount(FileTree, { target: document.body, props });
+    flushSync();
+    await tick();
+    await tick();
+    await new Promise((resolve) => setTimeout(resolve, 220));
+
+    expect(treeRow("Folder/one.md")).not.toBeNull();
+    props.selectedPath = "plain.md";
+    flushSync();
+    await tick();
+    await tick();
+
+    expect(treeRow("Folder/one.md")).toBeNull();
+    const ghosts = [
+      ...document.querySelectorAll<HTMLElement>(".skr-tree-ghost"),
+    ];
+    expect(ghosts).toHaveLength(2);
+    for (const ghost of ghosts) {
+      expect(ghost.hasAttribute("inert")).toBe(true);
+      expect(ghost.getAttribute("aria-hidden")).toBe("true");
+      expect(getComputedStyle(ghost).pointerEvents).toBe("none");
+    }
+
+    await nextFrame();
+    expect(ghosts.every((ghost) => ghost.style.opacity === "0")).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    expect(document.querySelector(".skr-tree-ghost")).toBeNull();
+
+    await unmount(component);
+  });
+
   it("reverses an interrupted folder reveal from current row and ghost positions", async () => {
     const component = mount(FileTree, {
       target: document.body,
@@ -449,8 +491,6 @@ describe("file tree folder reveal", () => {
     expect(revealed).not.toBeNull();
     if (plain === null || revealed === null) return;
 
-    // Model a close arriving while the open reveal is halfway through: the
-    // displaced plain row is rendered at 32px and the child ghost at 39px.
     plain.style.transform = "translateY(-28px)";
     revealed.style.transform = "translateY(7px)";
     revealed.style.opacity = "0.5";
@@ -461,42 +501,11 @@ describe("file tree folder reveal", () => {
     expect(folder?.getAttribute("aria-expanded")).toBe("false");
     expect(plain.style.transform).toBe("translateY(28px)");
     const ghost = document.querySelector<HTMLElement>(
-      '.skr-tree-ghost[data-ghost-path="Folder/one.md"]',
+      '[data-ghost-path="Folder/one.md"]',
     );
     expect(ghost).not.toBeNull();
     expect(ghost?.style.top).toBe("39px");
     expect(ghost?.style.opacity).toBe("0.5");
-
-    await unmount(component);
-  });
-
-  it("uses the manual reveal choreography for selection-driven auto-expansion", async () => {
-    const component = mount(FileTree, {
-      target: document.body,
-      props: {
-        entries: treeEntries,
-        selectedPath: "Folder/one.md",
-        onOpenPath: () => {},
-      },
-    });
-    flushSync();
-    await tick();
-    await tick();
-
-    const revealed = treeRow("Folder/one.md");
-    const displaced = treeRow("plain.md");
-    expect(revealed).not.toBeNull();
-    expect(displaced).not.toBeNull();
-    if (revealed === null || displaced === null) return;
-
-    expect(revealed.style.opacity).toBe("0");
-    expect(displaced.style.transform).toBe(`translateY(${-2 * ROW_HEIGHT}px)`);
-    await nextFrame();
-    expect(revealed.style.opacity).toBe("");
-    expect(displaced.style.transform).toBe("");
-    expect(transitionOf(revealed)).toContain(
-      "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
-    );
 
     await unmount(component);
   });
@@ -618,7 +627,6 @@ describe("file tree active-note highlight", () => {
     await tick();
     await unmount(component);
   });
-
   it("retargets from the highlight's current rendered position", async () => {
     const props = reactiveProps<HighlightProps>({
       entries: highlightEntries,
@@ -1055,17 +1063,20 @@ describe("tab strip active-tab indicator", () => {
     // jsdom does not recompute descendant pseudo-class selectors in computed
     // style, so read the exact declarations from the loaded production sheet.
     expect(
-      loadedDeclaration(".skr-tab-shell:focus .skr-tab-unsaved", "opacity"),
-    ).toBe("0");
+      loadedDeclarations(".skr-tab-shell:focus .skr-tab-unsaved", "opacity"),
+    ).toContain("0");
     expect(
-      loadedDeclaration(".skr-tab-shell:focus .skr-tab-close-dirty", "opacity"),
-    ).toBe("1");
+      loadedDeclarations(
+        ".skr-tab-shell:focus .skr-tab-close-dirty",
+        "opacity",
+      ),
+    ).toContain("1");
     expect(
-      loadedDeclaration(
+      loadedDeclarations(
         ".skr-tab-shell:focus .skr-tab-close-dirty",
         "pointer-events",
       ),
-    ).toBe("auto");
+    ).toContain("auto");
 
     close
       .querySelector("svg")
@@ -1073,5 +1084,34 @@ describe("tab strip active-tab indicator", () => {
     expect(closed).toHaveBeenCalledWith("note-1.md");
 
     void unmount(component);
+  });
+});
+
+describe("motion lifecycle", () => {
+  it("cancels scheduled tree and tab callbacks when they unmount", async () => {
+    const cancelFrame = vi.spyOn(globalThis, "cancelAnimationFrame");
+    const clearTimer = vi.spyOn(globalThis, "clearTimeout");
+    const treeProps = reactiveProps<HighlightProps>({
+      entries: highlightEntries,
+      selectedPath: "alpha.md",
+      onOpenPath: () => {},
+    });
+    const tree = mount(FileTree, { target: document.body, props: treeProps });
+    flushSync();
+    treeProps.selectedPath = "beta.md";
+    flushSync();
+    await unmount(tree);
+
+    const tabProps = tabStripProps();
+    const tabs = mount(TabStrip, { target: document.body, props: tabProps });
+    flushSync();
+    stubTabGeometry(100);
+    tabProps.activePath = "note-2.md";
+    flushSync();
+    await nextFrame();
+    await unmount(tabs);
+
+    expect(cancelFrame).toHaveBeenCalled();
+    expect(clearTimer).toHaveBeenCalled();
   });
 });

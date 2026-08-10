@@ -82,6 +82,39 @@ function loadedDeclarations(selector: string, property: string): string[] {
   for (const sheet of document.styleSheets) visit(sheet.cssRules);
   return values;
 }
+
+function loadedMediaDeclarations(
+  mediaQuery: string,
+  selector: string,
+  property: string,
+): string[] {
+  const values: string[] = [];
+  const visit = (rules: CSSRuleList) => {
+    for (const rule of Array.from(rules)) {
+      if (
+        rule instanceof CSSStyleRule &&
+        rule.selectorText
+          .split(",")
+          .map((value) => value.trim())
+          .includes(selector)
+      ) {
+        const value = rule.style.getPropertyValue(property).trim();
+        if (value !== "") values.push(value);
+      }
+      if ("cssRules" in rule) {
+        visit((rule as CSSGroupingRule).cssRules);
+      }
+    }
+  };
+  for (const sheet of document.styleSheets) {
+    for (const rule of Array.from(sheet.cssRules)) {
+      if (rule instanceof CSSMediaRule && rule.conditionText === mediaQuery) {
+        visit(rule.cssRules);
+      }
+    }
+  }
+  return values;
+}
 function surfaceProbe(variant: string): HTMLElement {
   const probe = document.createElement("div");
   probe.dataset.motionSurface = variant;
@@ -1082,6 +1115,69 @@ describe("tab strip active-tab indicator", () => {
       .querySelector("svg")
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(closed).toHaveBeenCalledWith("note-1.md");
+
+    void unmount(component);
+  });
+
+  it("keeps dirty and clean closes visible and hit-testable for coarse pointers", () => {
+    const closed = vi.fn();
+    const props = tabStripProps({
+      tabs: [
+        { path: "note-1.md", viewState: null, dirty: true },
+        { path: "note-2.md", viewState: null },
+      ],
+      onClose: closed,
+    });
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+
+    const dirtyShell = document.querySelector<HTMLElement>(
+      ".skr-tab-shell.skr-tab-dirty",
+    );
+    const dirtyDot = dirtyShell?.querySelector<HTMLElement>(".skr-tab-unsaved");
+    const dirtyClose = dirtyShell?.querySelector<HTMLElement>(".skr-tab-close");
+    const cleanShell = document.querySelector<HTMLElement>(
+      ".skr-tab-shell:not(.skr-tab-dirty)",
+    );
+    const cleanClose = cleanShell?.querySelector<HTMLElement>(".skr-tab-close");
+    expect(dirtyShell?.getAttribute("aria-label")).toMatch(/unsaved/iu);
+    expect(dirtyDot).not.toBeNull();
+    expect(dirtyClose).not.toBeNull();
+    expect(cleanClose).not.toBeNull();
+    if (dirtyDot === null || dirtyClose === null || cleanClose === null) return;
+
+    expect(getComputedStyle(dirtyDot).opacity).toBe("1");
+    expect(getComputedStyle(dirtyDot).pointerEvents).toBe("none");
+    expect(
+      loadedMediaDeclarations(
+        "(pointer: coarse)",
+        ".skr-tab-shell .skr-tab-close",
+        "opacity",
+      ),
+    ).toContain("1");
+    expect(
+      loadedMediaDeclarations(
+        "(pointer: coarse)",
+        ".skr-tab-shell .skr-tab-close",
+        "pointer-events",
+      ),
+    ).toContain("auto");
+    expect(
+      loadedMediaDeclarations(
+        "(pointer: coarse)",
+        ".skr-tab-shell.skr-tab-dirty .skr-tab-unsaved",
+        "opacity",
+      ),
+    ).toContain("1");
+
+    dirtyClose.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, detail: 1 }),
+    );
+    cleanClose.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, detail: 1 }),
+    );
+    expect(closed).toHaveBeenNthCalledWith(1, "note-1.md");
+    expect(closed).toHaveBeenNthCalledWith(2, "note-2.md");
 
     void unmount(component);
   });

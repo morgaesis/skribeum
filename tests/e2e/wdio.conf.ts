@@ -155,7 +155,7 @@ const capabilities: TauriCapabilities[] = [
 export const config: WebdriverIO.Config = {
   runner: "local",
   specs: [
-    // The first three run before any browser-demo navigation, in any order
+    // The first four run before any browser-demo navigation, in any order
     // relative to each other: each needs the shared app window on its
     // freshly launched desktop content, and none navigates it away.
     // smoke.spec.ts ends with browser-demo tests that navigate the same
@@ -166,6 +166,7 @@ export const config: WebdriverIO.Config = {
     path.join(configDirectory, "properties-statusline.spec.ts"),
     path.join(configDirectory, "windowChrome.spec.ts"),
     path.join(configDirectory, "workspace.spec.ts"),
+    path.join(configDirectory, "motion.spec.ts"),
     path.join(configDirectory, "smoke.spec.ts"),
     path.join(configDirectory, "unified-command-surface.spec.ts"),
     path.join(configDirectory, "palette.spec.ts"),

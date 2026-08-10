@@ -737,13 +737,13 @@ select {
 }
 
 @media (pointer: coarse) {
-  .skr-tab-shell:not(.skr-tab-dirty) .skr-tab-close {
+  .skr-tab-shell .skr-tab-close {
     opacity: 1;
     pointer-events: auto;
   }
 
-  .skr-tab-close-dirty {
-    pointer-events: auto;
+  .skr-tab-shell.skr-tab-dirty .skr-tab-unsaved {
+    opacity: 1;
   }
 }
 

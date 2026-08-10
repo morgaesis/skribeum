@@ -1,5 +1,6 @@
 import { $, browser, expect } from "@wdio/globals";
 import {
+  LF_NOTE_NAME,
   TREE_FIRST_NOTE_NAME,
   TREE_FOLDER_NAME,
   TREE_SECOND_NOTE_NAME,
@@ -26,11 +27,6 @@ async function expandFixtureFolder(): Promise<void> {
   await $(
     `[role="treeitem"][data-path="${TREE_FIRST_NOTE_NAME}"]`,
   ).waitForExist({ timeout: 10000 });
-}
-
-async function frames(selector: string, count = 12): Promise<Box[]> {
-  await beginMotionCapture(selector, count);
-  return completedMotionCapture();
 }
 
 async function beginMotionCapture(selector: string, count = 12): Promise<void> {
@@ -82,6 +78,22 @@ async function completedMotionCapture(): Promise<MotionFrame[]> {
     delete window.__SKRIBEUM_MOTION_CAPTURE__;
     return frames;
   `);
+}
+
+async function renderedBox(selector: string): Promise<Box> {
+  const box = await browser.execute((target) => {
+    const element = document.querySelector(target);
+    if (element === null) return null;
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+  }, selector);
+  if (box === null) throw new Error(`${selector} is not rendered`);
+  return box;
 }
 
 function expectRenderedBoxes(boxes: Box[], count = 12): void {
@@ -238,15 +250,15 @@ describe("packaged motion geometry", () => {
     await $("[role=tree]").waitForExist({ timeout: 15000 });
   });
 
-  it("keeps tree and tab retargeting inside rendered frame geometry", async () => {
+  it("retargets tree A to B to C before settle without losing current position", async () => {
     await expandFixtureFolder();
-    await selectTreePath(TREE_SECOND_NOTE_NAME);
+    await selectTreePath(TREE_FIRST_NOTE_NAME);
     const treeBefore = await treeMotionEvidence(
-      TREE_SECOND_NOTE_NAME,
       TREE_FIRST_NOTE_NAME,
+      TREE_SECOND_NOTE_NAME,
     );
     expect(treeBefore.actionTarget).toEqual({
-      dataPath: TREE_FIRST_NOTE_NAME,
+      dataPath: TREE_SECOND_NOTE_NAME,
       role: "treeitem",
       selected: "false",
     });
@@ -255,8 +267,40 @@ describe("packaged motion geometry", () => {
     if (treeBefore.source === null || treeBefore.target === null) {
       throw new Error("tree motion source or target row is unavailable");
     }
+    await openTreePath(TREE_SECOND_NOTE_NAME);
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          (path) =>
+            document
+              .querySelector<HTMLElement>(
+                `[role="treeitem"][data-path="${CSS.escape(path)}"]`,
+              )
+              ?.getAttribute("aria-selected") === "true",
+          TREE_SECOND_NOTE_NAME,
+        ),
+      { timeoutMsg: `${TREE_SECOND_NOTE_NAME} did not become active` },
+    );
+    await browser.pause(24);
+    const beforeRetarget = await renderedBox(".skr-tree-active-highlight");
+    const targetRow = await renderedBox(
+      `[role="treeitem"][data-path="${LF_NOTE_NAME}"]`,
+    );
     await beginMotionCapture(".skr-tree-active-highlight");
-    await selectTreePath(TREE_FIRST_NOTE_NAME);
+    await openTreePath(LF_NOTE_NAME);
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          (path) =>
+            document
+              .querySelector<HTMLElement>(
+                `[role="treeitem"][data-path="${CSS.escape(path)}"]`,
+              )
+              ?.getAttribute("aria-selected") === "true",
+          LF_NOTE_NAME,
+        ),
+      { timeoutMsg: `${LF_NOTE_NAME} did not become active` },
+    );
     const treeFrames = await completedMotionCapture();
     expectRenderedBoxes(treeFrames);
     if (await animationsCanTravel()) {
@@ -271,9 +315,16 @@ describe("packaged motion geometry", () => {
       expectContinuousTrajectory(
         treeFrames,
         "top",
-        treeBefore.source.top,
-        treeBefore.target.top,
+        beforeRetarget.top,
+        targetRow.top,
       );
+      const first = treeFrames[0];
+      if (first === undefined)
+        throw new Error("tree motion has no first frame");
+      expect(Math.abs(first.top - beforeRetarget.top)).toBeLessThan(1);
+      expect(
+        Math.abs(beforeRetarget.top - treeBefore.target.top),
+      ).toBeGreaterThan(1);
     }
 
     await selectTreePath(TREE_FIRST_NOTE_NAME);
@@ -327,13 +378,41 @@ describe("packaged motion geometry", () => {
     }
   });
 
-  it("rebases active-tab geometry after a real window resize", async () => {
-    const before = await frames(".skr-tab-active-indicator");
+  it("samples active-tab rectangles before, during, and after a real resize", async () => {
+    await expandFixtureFolder();
+    await selectTreePath(TREE_FIRST_NOTE_NAME);
+    await selectTreePath(TREE_SECOND_NOTE_NAME);
+    await selectTreePath(LF_NOTE_NAME);
+    const targetIndex = await browser.execute(() => {
+      const tabs = [...document.querySelectorAll<HTMLElement>('[role="tab"]')];
+      const activeIndex = tabs.findIndex(
+        (tab) => tab.getAttribute("aria-selected") === "true",
+      );
+      return activeIndex === 0 ? 1 : 0;
+    });
+    const targetSelector = `[role="tab"]:nth-of-type(${targetIndex + 1})`;
+    const targetTab = $(targetSelector);
+    await targetTab.waitForDisplayed({ timeout: 10000 });
+    await beginMotionCapture(".skr-tab-active-indicator", 24);
+    await targetTab.click();
+    await browser.pause(24);
+    const before = await renderedBox(".skr-tab-active-indicator");
+    const beforeTarget = await renderedBox(targetSelector);
     await browser.setWindowSize(1060, 800);
-    const after = await frames(".skr-tab-active-indicator");
-    expectRenderedBoxes(before);
-    expectRenderedBoxes(after);
-    expect(after.at(-1)?.width).toBeGreaterThan(0);
+    const during = await renderedBox(".skr-tab-active-indicator");
+    const duringTarget = await renderedBox(targetSelector);
+    await browser.pause(220);
+    const after = await renderedBox(".skr-tab-active-indicator");
+    const afterTarget = await renderedBox(targetSelector);
+    const captured = await completedMotionCapture();
+    expectRenderedBoxes(captured, 24);
+    expectRenderedBoxes([before, during, after], 3);
+    expectRenderedBoxes([beforeTarget, duringTarget, afterTarget], 3);
+    if (await animationsCanTravel()) {
+      expect(Math.abs(before.left - during.left)).toBeLessThan(1);
+    }
+    expect(Math.abs(after.left - afterTarget.left)).toBeLessThan(1);
+    expect(Math.abs(after.width - afterTarget.width)).toBeLessThan(1);
     await browser.setWindowSize(1280, 800);
   });
 });

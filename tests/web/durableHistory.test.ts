@@ -1,4 +1,4 @@
-import { EditorState } from "@codemirror/state";
+import { EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -84,6 +84,54 @@ describe("durable edit history", () => {
       anchor: 10,
       head: 10,
     });
+  });
+
+  it("defers large-document serialization and hashing until persistence", async () => {
+    const document = "x".repeat(1_000_000);
+    const state = EditorState.create({ doc: document });
+    const transaction = state.update({
+      changes: { from: document.length, insert: "!" },
+    });
+    const beforeToString = vi.spyOn(transaction.startState.doc, "toString");
+    const afterToString = vi.spyOn(transaction.newDoc, "toString");
+    const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
+    const history = new DurableEditHistory({
+      read: async () => ({ undo: [], redo: [] }),
+      append: async () => undefined,
+      fence: async () => undefined,
+      clear: async () => undefined,
+    });
+
+    history.record(transaction);
+
+    expect(beforeToString).not.toHaveBeenCalled();
+    expect(afterToString).not.toHaveBeenCalled();
+    expect(digest).not.toHaveBeenCalled();
+
+    await history.beginFlush();
+
+    expect(beforeToString).toHaveBeenCalledOnce();
+    expect(afterToString).toHaveBeenCalledOnce();
+    expect(digest).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconciles native history with an equivalent document value", async () => {
+    const { history, view } = harness({ undo: [], redo: [] }, "alpha");
+    view.dispatch({ changes: { from: 5, insert: " beta" } });
+    view.dispatch({ changes: { from: 10, insert: " gamma" } });
+    view.dispatch({
+      changes: { from: 0, to: 16, insert: "alpha" },
+      annotations: Transaction.userEvent.of("undo"),
+    });
+
+    expect(await history.depths()).toEqual({ undo: 0, redo: 2 });
+    const batch = await history.beginFlush();
+    expect(batch?.actions.map((action) => action.kind)).toEqual([
+      "entry",
+      "entry",
+      "undo",
+    ]);
+    expect(batch?.actions.at(-1)).toEqual({ kind: "undo", count: 2 });
   });
 
   it("keeps edits typed during a history flush in the next batch", async () => {

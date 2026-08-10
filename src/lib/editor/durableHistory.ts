@@ -3,6 +3,7 @@ import {
   ChangeSet,
   EditorSelection,
   type SelectionRange,
+  type Text,
   Transaction,
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
@@ -51,9 +52,13 @@ export type EditHistoryTransport = {
 };
 
 type RuntimeEntry = {
-  serialized: Promise<EditHistoryEntry>;
-  beforeText?: string;
-  afterText?: string;
+  serialized?: Promise<EditHistoryEntry>;
+  changes?: ChangeSet;
+  inverse?: ChangeSet;
+  selectionBefore?: EditHistorySelection;
+  selectionAfter?: EditHistorySelection;
+  beforeDoc?: Text;
+  afterDoc?: Text;
 };
 
 type PendingAction =
@@ -63,8 +68,8 @@ type PendingAction =
 
 type QueuedOperation =
   | { kind: "entry"; node: RuntimeEntry; sequence: number }
-  | { kind: "undo-to"; text: string; sequence: number }
-  | { kind: "redo-to"; text: string; sequence: number };
+  | { kind: "undo-to"; doc: Text; sequence: number }
+  | { kind: "redo-to"; doc: Text; sequence: number };
 
 export type EditHistoryBatch = {
   id: string;
@@ -173,6 +178,40 @@ function loadedNode(entry: EditHistoryEntry): RuntimeEntry {
   return { serialized: Promise.resolve(entry) };
 }
 
+function serializeNode(node: RuntimeEntry): Promise<EditHistoryEntry> {
+  if (node.serialized !== undefined) return node.serialized;
+  const {
+    changes,
+    inverse,
+    selectionBefore,
+    selectionAfter,
+    beforeDoc,
+    afterDoc,
+  } = node;
+  if (
+    changes === undefined ||
+    inverse === undefined ||
+    selectionBefore === undefined ||
+    selectionAfter === undefined ||
+    beforeDoc === undefined ||
+    afterDoc === undefined
+  ) {
+    throw new Error("runtime history entry cannot be serialized");
+  }
+  node.serialized = Promise.all([
+    editHistoryStateCheck(beforeDoc.toString()),
+    editHistoryStateCheck(afterDoc.toString()),
+  ]).then(([before, after]) => ({
+    changes: serializeChanges(changes),
+    inverse: serializeChanges(inverse),
+    selection_before: selectionBefore,
+    selection_after: selectionAfter,
+    before,
+    after,
+  }));
+  return node.serialized;
+}
+
 /**
  * Mirrors CodeMirror's current-session history into a persisted linear
  * journal. CodeMirror remains authoritative while its own undo or redo
@@ -225,7 +264,7 @@ export class DurableEditHistory {
     if (transaction.isUserEvent("undo")) {
       this.enqueue({
         kind: "undo-to",
-        text: transaction.newDoc.toString(),
+        doc: transaction.newDoc,
         sequence,
       });
       return;
@@ -233,32 +272,20 @@ export class DurableEditHistory {
     if (transaction.isUserEvent("redo")) {
       this.enqueue({
         kind: "redo-to",
-        text: transaction.newDoc.toString(),
+        doc: transaction.newDoc,
         sequence,
       });
       return;
     }
 
-    const beforeText = transaction.startState.doc.toString();
-    const afterText = transaction.newDoc.toString();
-    const beforeCheck = editHistoryStateCheck(beforeText);
-    const afterCheck = editHistoryStateCheck(afterText);
     const inverse = transaction.changes.invert(transaction.startState.doc);
     const node: RuntimeEntry = {
-      beforeText,
-      afterText,
-      serialized: Promise.all([beforeCheck, afterCheck]).then(
-        ([before, after]) => ({
-          changes: serializeChanges(transaction.changes),
-          inverse: serializeChanges(inverse),
-          selection_before: serializeSelection(
-            transaction.startState.selection,
-          ),
-          selection_after: serializeSelection(transaction.newSelection),
-          before,
-          after,
-        }),
-      ),
+      changes: transaction.changes,
+      inverse,
+      selectionBefore: serializeSelection(transaction.startState.selection),
+      selectionAfter: serializeSelection(transaction.newSelection),
+      beforeDoc: transaction.startState.doc,
+      afterDoc: transaction.newDoc,
     };
     this.enqueue({ kind: "entry", node, sequence });
   }
@@ -278,7 +305,7 @@ export class DurableEditHistory {
       actions: await Promise.all(
         actions.map(async (action): Promise<EditHistoryAction> => {
           if (action.kind === "entry") {
-            return { kind: "entry", entry: await action.node.serialized };
+            return { kind: "entry", entry: await serializeNode(action.node) };
           }
           return { kind: action.kind, count: action.count };
         }),
@@ -368,16 +395,18 @@ export class DurableEditHistory {
       operation.kind === "undo-to" ? this.undoEntries : this.redoEntries;
     const target =
       operation.kind === "undo-to" ? this.redoEntries : this.undoEntries;
-    const textField = operation.kind === "undo-to" ? "beforeText" : "afterText";
     let count = 0;
     let matched = false;
     while (source.length > 0) {
       const node = source.at(-1);
-      if (node?.[textField] === undefined) break;
+      if (node === undefined) break;
+      const expectedDoc =
+        operation.kind === "undo-to" ? node.beforeDoc : node.afterDoc;
+      if (expectedDoc === undefined) break;
       source.pop();
       target.push(node);
       count += 1;
-      if (node[textField] === operation.text) {
+      if (expectedDoc.eq(operation.doc)) {
         matched = true;
         break;
       }
@@ -401,7 +430,7 @@ export class DurableEditHistory {
           direction === "undo" ? this.undoEntries : this.redoEntries;
         const node = source.at(-1);
         if (node === undefined) return;
-        const entry = await node.serialized;
+        const entry = await serializeNode(node);
         const startingText = view.state.doc.toString();
         const expected = direction === "undo" ? entry.after : entry.before;
         const actual = await editHistoryStateCheck(startingText);

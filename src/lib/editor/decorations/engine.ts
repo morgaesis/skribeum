@@ -3792,6 +3792,7 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
 type BlockEngineState = {
   decorations: DecorationSet;
   deferred: boolean;
+  buildCount: number;
 };
 
 const refreshDeferredDecorations = StateEffect.define<null>();
@@ -3802,28 +3803,66 @@ function refreshRequested(transaction: Transaction) {
   );
 }
 
+/**
+ * Native deletion and history replay may change a very large document while
+ * leaving the user waiting for the next paint. Existing decorations map
+ * exactly through those changes, so defer their expensive syntax walk until
+ * after the input transaction. Commands that deliberately change structure
+ * retain the synchronous rebuild they need to update their rendered control.
+ */
+function changesTouchBlockDecoration(
+  changes: Transaction["changes"],
+  decorations: DecorationSet | undefined,
+): boolean {
+  if (decorations === undefined) return false;
+  let touched = false;
+  changes.iterChangedRanges((fromA, toA) => {
+    decorations.between(fromA, toA, () => {
+      touched = true;
+    });
+  });
+  return touched;
+}
+
+function defersDecorationRebuild(
+  transaction: Transaction,
+  blockDecorations?: DecorationSet,
+): boolean {
+  return (
+    transaction.docChanged &&
+    !changesTouchBlockDecoration(transaction.changes, blockDecorations) &&
+    (transaction.annotation(bulkTextInputAnnotation) === true ||
+      transaction.isUserEvent("delete") ||
+      transaction.isUserEvent("undo") ||
+      transaction.isUserEvent("redo"))
+  );
+}
+
 const blockEngineField = StateField.define<BlockEngineState>({
   create: (state) => ({
     decorations: buildBlockDecorations(state),
     deferred: false,
+    buildCount: 1,
   }),
   update(value, transaction) {
     if (refreshRequested(transaction)) {
       return {
         decorations: buildBlockDecorations(transaction.state),
         deferred: false,
+        buildCount: value.buildCount + 1,
       };
     }
-    if (
-      value.deferred ||
-      transaction.annotation(bulkTextInputAnnotation) === true
-    ) {
+    if (defersDecorationRebuild(transaction, value.decorations)) {
       return {
         decorations: transaction.docChanged
           ? value.decorations.map(transaction.changes)
           : value.decorations,
         deferred: true,
+        buildCount: value.buildCount,
       };
+    }
+    if (value.deferred && !transaction.docChanged) {
+      return { ...value, deferred: true };
     }
     if (
       transaction.docChanged ||
@@ -3845,6 +3884,7 @@ const blockEngineField = StateField.define<BlockEngineState>({
       return {
         decorations: buildBlockDecorations(transaction.state),
         deferred: false,
+        buildCount: value.buildCount + 1,
       };
     }
     return value;
@@ -3874,9 +3914,28 @@ function needsRebuild(update: ViewUpdate): boolean {
   );
 }
 
+function deferredUpdateNeedsImmediateRebuild(update: ViewUpdate): boolean {
+  return (
+    update.viewportChanged ||
+    update.state.facet(decorationTable) !==
+      update.startState.facet(decorationTable) ||
+    update.state.facet(sourceRevealEnabled) !==
+      update.startState.facet(sourceRevealEnabled) ||
+    update.state.field(tableCellRevealField, false) !==
+      update.startState.field(tableCellRevealField, false) ||
+    update.state.facet(taskStatusConfiguration) !==
+      update.startState.facet(taskStatusConfiguration) ||
+    update.state.field(wikilinkContext, false) !==
+      update.startState.field(wikilinkContext, false) ||
+    update.state.field(explicitTableSourceField, false) !==
+      update.startState.field(explicitTableSourceField, false)
+  );
+}
+
 const enginePlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    buildCount = 1;
     private deferred = false;
     private refreshFrame: number | null = null;
     private destroyed = false;
@@ -3888,14 +3947,17 @@ const enginePlugin = ViewPlugin.fromClass(
     update(update: ViewUpdate): void {
       if (update.transactions.some(refreshRequested)) {
         this.deferred = false;
-        this.decorations = buildViewDecorations(update.view);
+        this.decorations = this.build(update.view);
         return;
       }
-      const bulkInput = update.transactions.some(
-        (transaction) =>
-          transaction.annotation(bulkTextInputAnnotation) === true,
+      const blockDecorations = update.startState.field(
+        blockEngineField,
+        false,
+      )?.decorations;
+      const deferredInput = update.transactions.some((transaction) =>
+        defersDecorationRebuild(transaction, blockDecorations),
       );
-      if (this.deferred || bulkInput) {
+      if (deferredInput) {
         if (update.docChanged) {
           this.decorations = this.decorations.map(update.changes);
         }
@@ -3903,9 +3965,24 @@ const enginePlugin = ViewPlugin.fromClass(
         this.scheduleRefresh(update.view);
         return;
       }
-      if (needsRebuild(update)) {
-        this.decorations = buildViewDecorations(update.view);
+      if (this.deferred) {
+        if (
+          !update.docChanged &&
+          !deferredUpdateNeedsImmediateRebuild(update)
+        ) {
+          return;
+        }
+        this.cancelRefresh();
+        this.deferred = false;
       }
+      if (needsRebuild(update)) {
+        this.decorations = this.build(update.view);
+      }
+    }
+
+    private build(view: EditorView): DecorationSet {
+      this.buildCount += 1;
+      return buildViewDecorations(view);
     }
 
     private scheduleRefresh(view: EditorView): void {
@@ -3931,11 +4008,16 @@ const enginePlugin = ViewPlugin.fromClass(
       afterPaint(3);
     }
 
-    destroy(): void {
-      this.destroyed = true;
+    private cancelRefresh(): void {
       if (this.refreshFrame !== null) {
         cancelAnimationFrame(this.refreshFrame);
+        this.refreshFrame = null;
       }
+    }
+
+    destroy(): void {
+      this.destroyed = true;
+      this.cancelRefresh();
     }
   },
   { decorations: (plugin) => plugin.decorations },
@@ -4004,6 +4086,7 @@ class LinkPreviewController {
   private coneTimer: ReturnType<typeof setTimeout> | null = null;
   private closeTimer: ReturnType<typeof setTimeout> | null = null;
   private preload: PreloadedNote | null = null;
+  private placementFrame: number | null = null;
   private readonly stopObservingViewport: () => void;
 
   constructor(readonly view: EditorView) {
@@ -4145,12 +4228,40 @@ class LinkPreviewController {
     panel.append(header, body);
     this.view.dom.append(panel);
 
-    const viewport = visualViewportRect(
-      this.view.dom.ownerDocument.defaultView ?? window,
+    this.place(panel, link);
+    enterMotionSurface(panel);
+
+    this.activeLink = link;
+    this.panel = panel;
+    this.leavePoint = null;
+    this.previousDescription = link.getAttribute("aria-describedby");
+    this.previousControls = link.getAttribute("aria-controls");
+    this.previousExpanded = link.getAttribute("aria-expanded");
+    link.setAttribute("aria-describedby", panel.id);
+    link.setAttribute("aria-controls", panel.id);
+    link.setAttribute("aria-expanded", "true");
+    this.cleanupRender = renderLinkedNote(
+      body,
+      target,
+      this.view.state.doc.toString(),
+      context,
+      `${STRINGS.linkPreviewLabel}: ${sourceName}`,
+      this.view.state.facet(taskStatusConfiguration),
+      () => {
+        this.view.requestMeasure();
+        this.schedulePlacement(panel, link);
+      },
+      "preview",
+      preload,
     );
+  }
+
+  private place(panel: HTMLElement, link: HTMLElement): void {
+    const ownerWindow = this.view.dom.ownerDocument.defaultView ?? window;
+    const viewport = visualViewportRect(ownerWindow);
     const bounds = link.getBoundingClientRect();
     const rootSize = Number.parseFloat(
-      getComputedStyle(document.documentElement).fontSize,
+      getComputedStyle(this.view.dom.ownerDocument.documentElement).fontSize,
     );
     panel.style.maxHeight = `${Math.min(
       18 * rootSize,
@@ -4173,33 +4284,31 @@ class LinkPreviewController {
     panel.dataset.motionSurface = placedBelow
       ? "anchored-top"
       : "anchored-bottom";
-    enterMotionSurface(panel);
+  }
 
-    this.activeLink = link;
-    this.panel = panel;
-    this.leavePoint = null;
-    this.previousDescription = link.getAttribute("aria-describedby");
-    this.previousControls = link.getAttribute("aria-controls");
-    this.previousExpanded = link.getAttribute("aria-expanded");
-    link.setAttribute("aria-describedby", panel.id);
-    link.setAttribute("aria-controls", panel.id);
-    link.setAttribute("aria-expanded", "true");
-    this.cleanupRender = renderLinkedNote(
-      body,
-      target,
-      this.view.state.doc.toString(),
-      context,
-      `${STRINGS.linkPreviewLabel}: ${sourceName}`,
-      this.view.state.facet(taskStatusConfiguration),
-      () => this.view.requestMeasure(),
-      "preview",
-      preload,
-    );
+  private schedulePlacement(panel: HTMLElement, link: HTMLElement): void {
+    if (this.placementFrame !== null) {
+      return;
+    }
+    this.placementFrame = requestAnimationFrame(() => {
+      this.placementFrame = null;
+      if (
+        this.panel === panel &&
+        this.activeLink === link &&
+        panel.isConnected
+      ) {
+        this.place(panel, link);
+      }
+    });
   }
 
   private dismiss(): void {
     this.cancelTimer();
     this.cancelTravelTimers();
+    if (this.placementFrame !== null) {
+      cancelAnimationFrame(this.placementFrame);
+      this.placementFrame = null;
+    }
     const panel = this.panel;
     const cleanupRender = this.cleanupRender;
     this.cleanupRender = null;
@@ -5385,6 +5494,17 @@ export function engineDecorations(view: EditorView): DecorationSet | null {
     }
   }
   return Decoration.set(ranges, true);
+}
+
+/** Build counts for verifying that input changes coalesce decoration walks. */
+export function decorationBuildCounts(view: EditorView): {
+  inline: number;
+  block: number;
+} {
+  return {
+    inline: view.plugin(enginePlugin)?.buildCount ?? 0,
+    block: view.state.field(blockEngineField, false)?.buildCount ?? 0,
+  };
 }
 
 /** The state's current wikilink context, for callers outside the engine. */

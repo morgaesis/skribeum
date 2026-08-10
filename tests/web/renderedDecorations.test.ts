@@ -1185,6 +1185,51 @@ describe("rendered decoration DOM", () => {
     ).toBeNull();
   });
 
+  it("holds embed skeleton geometry through the content replacement frame", async () => {
+    vi.useFakeTimers();
+    let resolveNote: ((source: string) => void) | undefined;
+    const loaded = new Promise<string>((resolve) => {
+      resolveNote = resolve;
+    });
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      embedAncestry: ["Root.md"],
+      embedDepth: 0,
+      loadNote: () => loaded,
+    };
+    const view = mountedView("![[Other]]\n\noutside", undefined, context);
+    await vi.advanceTimersByTimeAsync(150);
+    const loading = view.dom.querySelector<HTMLElement>(
+      '.skr-loading-embed[data-loading-state="skeleton"]',
+    );
+    expect(loading).not.toBeNull();
+    if (loading === null) return;
+    vi.spyOn(loading, "getBoundingClientRect").mockReturnValue({
+      width: 320,
+      height: 72,
+      top: 0,
+      right: 320,
+      bottom: 72,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    resolveNote?.("**Resolved content**");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loading.style.minHeight).toBe("72px");
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(loading.style.minHeight).toBe("");
+  });
+
   it("shows a visible notice for an embed cycle", () => {
     const context: WikilinkResolutionContext = {
       paths: ["Root.md"],
@@ -1339,6 +1384,94 @@ describe("rendered decoration DOM", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(preview?.querySelector(".cm-skr-strong")).not.toBeNull();
     expect(preview?.querySelector(".skr-skeleton-bar")).toBeNull();
+  });
+
+  it("repositions a preview after async content grows below its link", async () => {
+    vi.useFakeTimers();
+    const originalHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: 300,
+    });
+    let resolveNote: ((source: string) => void) | undefined;
+    const source = new Promise<string>((resolve) => {
+      resolveNote = resolve;
+    });
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote: () => source,
+    };
+    const view = mountedView("See [[Other]].", undefined, context);
+    const link = view.dom.querySelector<HTMLElement>("[data-preview-target]");
+    expect(link).not.toBeNull();
+    if (link === null) return;
+    vi.spyOn(link, "getBoundingClientRect").mockReturnValue({
+      width: 100,
+      height: 20,
+      top: 140,
+      right: 200,
+      bottom: 160,
+      left: 100,
+      x: 100,
+      y: 140,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const panelRect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement): DOMRect {
+        if (this.dataset.testid === "link-preview") {
+          const expanded = this.querySelector(".cm-content") !== null;
+          const height = expanded ? 180 : 80;
+          return {
+            width: 240,
+            height,
+            top: 0,
+            right: 240,
+            bottom: height,
+            left: 0,
+            x: 0,
+            y: 0,
+            toJSON: () => ({}),
+          } as DOMRect;
+        }
+        return {
+          width: 0,
+          height: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    try {
+      link.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(450);
+      const preview = view.dom.querySelector<HTMLElement>(
+        '[data-testid="link-preview"]',
+      );
+      expect(preview?.style.top).toBe("168px");
+
+      resolveNote?.("**Expanded preview**");
+      await vi.advanceTimersByTimeAsync(20);
+      expect(preview?.style.top).toBe("12px");
+      expect(preview?.dataset.motionSurface).toBe("anchored-bottom");
+    } finally {
+      panelRect.mockRestore();
+      Object.defineProperty(window, "innerHeight", {
+        configurable: true,
+        value: originalHeight,
+      });
+    }
   });
 
   it("renders preview content with the embed reading pipeline structure", async () => {

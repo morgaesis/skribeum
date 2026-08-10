@@ -6,6 +6,7 @@ import {
   type EditHistoryAction,
   type EditHistoryEntry,
   type EditHistorySnapshot,
+  type EditHistoryTransport,
   editHistoryStateCheck,
 } from "../../src/lib/editor/durableHistory";
 
@@ -13,6 +14,7 @@ const views: EditorView[] = [];
 
 afterEach(() => {
   for (const view of views.splice(0)) view.destroy();
+  vi.restoreAllMocks();
 });
 
 async function replaceEntry(
@@ -37,7 +39,11 @@ async function replaceEntry(
   };
 }
 
-function harness(snapshot: EditHistorySnapshot, text: string) {
+function harness(
+  snapshot: EditHistorySnapshot,
+  text: string,
+  transportOverrides: Partial<EditHistoryTransport> = {},
+) {
   const appended: Array<{ batch: string; actions: EditHistoryAction[] }> = [];
   const fence = vi.fn(async () => undefined);
   const clear = vi.fn(async () => undefined);
@@ -57,6 +63,7 @@ function harness(snapshot: EditHistorySnapshot, text: string) {
     },
     fence,
     clear,
+    ...transportOverrides,
   });
   return { history, view, appended, fence, clear };
 }
@@ -252,6 +259,75 @@ describe("durable edit history", () => {
     expect(calls[2]?.batch).not.toBe(calls[0]?.batch);
     expect(calls.map((call) => call.actions.length)).toEqual([1, 1, 1]);
     expect(await history.beginFlush()).toBeNull();
+  });
+
+  it("serializes a long retry batch in order without fanning out state digests", async () => {
+    const releases: Array<() => void> = [];
+    let activeDigests = 0;
+    let peakDigests = 0;
+    const originalDigest = globalThis.crypto.subtle.digest.bind(
+      globalThis.crypto.subtle,
+    );
+    const digest = vi
+      .spyOn(globalThis.crypto.subtle, "digest")
+      .mockImplementation((algorithm, data) => {
+        activeDigests += 1;
+        peakDigests = Math.max(peakDigests, activeDigests);
+        return new Promise<ArrayBuffer>((resolve) => {
+          releases.push(() => {
+            activeDigests -= 1;
+            void originalDigest(algorithm, data).then(resolve);
+          });
+        });
+      });
+    const calls: Array<{ batch: string; actions: EditHistoryAction[] }> = [];
+    let attempts = 0;
+    const { history, view } = harness({ undo: [], redo: [] }, "", {
+      append: async (batch, actions) => {
+        calls.push({ batch, actions });
+        attempts += 1;
+        if (attempts === 1) throw new Error("ambiguous response");
+      },
+      fence: async () => undefined,
+      clear: async () => undefined,
+    });
+
+    for (let index = 0; index < 64; index += 1) {
+      view.dispatch({ changes: { from: index, insert: String(index % 10) } });
+    }
+    expect(digest).not.toHaveBeenCalled();
+
+    const preparing = history.beginFlush();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(peakDigests).toBeLessThanOrEqual(2);
+
+    for (let index = 0; index < 65; index += 1) {
+      await vi.waitFor(() => expect(releases.length).toBeGreaterThan(index));
+      releases[index]?.();
+    }
+
+    const batch = await preparing;
+    expect(batch?.actions).toHaveLength(64);
+    expect(batch?.actions.map((action) => action.kind)).toEqual(
+      Array.from({ length: 64 }, () => "entry"),
+    );
+    expect(
+      batch?.actions.map((action) =>
+        action.kind === "entry" ? action.entry.changes[0]?.insert : null,
+      ),
+    ).toEqual(Array.from({ length: 64 }, (_, index) => String(index % 10)));
+    expect(digest).toHaveBeenCalledTimes(65);
+
+    await expect(history.flush()).rejects.toThrow("ambiguous response");
+    await history.flush();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.batch).toBe(calls[0]?.batch);
+    expect(calls[1]?.actions).toEqual(calls[0]?.actions);
+
+    vi.restoreAllMocks();
+    history.undo(view);
+    await history.depths();
+    expect(view.state.doc.toString()).toHaveLength(63);
   });
 
   it("applies a persisted inverse and restores its recorded selection", async () => {

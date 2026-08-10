@@ -52,13 +52,16 @@ export type EditHistoryTransport = {
 };
 
 type RuntimeEntry = {
-  serialized?: Promise<EditHistoryEntry>;
-  changes?: ChangeSet;
-  inverse?: ChangeSet;
-  selectionBefore?: EditHistorySelection;
-  selectionAfter?: EditHistorySelection;
+  serialized?: EditHistoryEntry;
+  serializing?: Promise<EditHistoryEntry>;
   beforeDoc?: Text;
   afterDoc?: Text;
+  source?: {
+    changes: ChangeSet;
+    inverse: ChangeSet;
+    selectionBefore: EditorSelection;
+    selectionAfter: EditorSelection;
+  };
 };
 
 type PendingAction =
@@ -175,41 +178,7 @@ function checksEqual(
 }
 
 function loadedNode(entry: EditHistoryEntry): RuntimeEntry {
-  return { serialized: Promise.resolve(entry) };
-}
-
-function serializeNode(node: RuntimeEntry): Promise<EditHistoryEntry> {
-  if (node.serialized !== undefined) return node.serialized;
-  const {
-    changes,
-    inverse,
-    selectionBefore,
-    selectionAfter,
-    beforeDoc,
-    afterDoc,
-  } = node;
-  if (
-    changes === undefined ||
-    inverse === undefined ||
-    selectionBefore === undefined ||
-    selectionAfter === undefined ||
-    beforeDoc === undefined ||
-    afterDoc === undefined
-  ) {
-    throw new Error("runtime history entry cannot be serialized");
-  }
-  node.serialized = Promise.all([
-    editHistoryStateCheck(beforeDoc.toString()),
-    editHistoryStateCheck(afterDoc.toString()),
-  ]).then(([before, after]) => ({
-    changes: serializeChanges(changes),
-    inverse: serializeChanges(inverse),
-    selection_before: selectionBefore,
-    selection_after: selectionAfter,
-    before,
-    after,
-  }));
-  return node.serialized;
+  return { serialized: entry };
 }
 
 /**
@@ -226,6 +195,7 @@ export class DurableEditHistory {
   private discardLoaded = false;
   private nextSequence = 0;
   private retryBatch: EditHistoryBatch | null = null;
+  private batchPreparation: Promise<EditHistoryBatch | null> | null = null;
   private operationChain: Promise<void> = Promise.resolve();
   private readonly readyPromise: Promise<void>;
 
@@ -280,12 +250,14 @@ export class DurableEditHistory {
 
     const inverse = transaction.changes.invert(transaction.startState.doc);
     const node: RuntimeEntry = {
-      changes: transaction.changes,
-      inverse,
-      selectionBefore: serializeSelection(transaction.startState.selection),
-      selectionAfter: serializeSelection(transaction.newSelection),
       beforeDoc: transaction.startState.doc,
       afterDoc: transaction.newDoc,
+      source: {
+        changes: transaction.changes,
+        inverse,
+        selectionBefore: transaction.startState.selection,
+        selectionAfter: transaction.newSelection,
+      },
     };
     this.enqueue({ kind: "entry", node, sequence });
   }
@@ -297,19 +269,35 @@ export class DurableEditHistory {
     await this.readyPromise;
     await this.operationChain;
     if (this.retryBatch !== null) return this.retryBatch;
+    if (this.batchPreparation !== null) return this.batchPreparation;
+    const preparation = this.prepareFlush(cutoff);
+    this.batchPreparation = preparation;
+    try {
+      return await preparation;
+    } finally {
+      if (this.batchPreparation === preparation) this.batchPreparation = null;
+    }
+  }
+
+  private async prepareFlush(cutoff: number): Promise<EditHistoryBatch | null> {
     const actions = this.pending.filter((action) => action.sequence <= cutoff);
     if (actions.length === 0) return null;
+    const stateChecks = new Map<Text, Promise<EditHistoryStateCheck>>();
+    const serializedActions: EditHistoryAction[] = [];
+    for (const action of actions) {
+      if (action.kind === "entry") {
+        serializedActions.push({
+          kind: "entry",
+          entry: await this.serializeEntry(action.node, stateChecks),
+        });
+      } else {
+        serializedActions.push({ kind: action.kind, count: action.count });
+      }
+    }
     const batch = {
       id: batchId(),
       cutoff,
-      actions: await Promise.all(
-        actions.map(async (action): Promise<EditHistoryAction> => {
-          if (action.kind === "entry") {
-            return { kind: "entry", entry: await serializeNode(action.node) };
-          }
-          return { kind: action.kind, count: action.count };
-        }),
-      ),
+      actions: serializedActions,
     };
     this.retryBatch = batch;
     return batch;
@@ -430,7 +418,7 @@ export class DurableEditHistory {
           direction === "undo" ? this.undoEntries : this.redoEntries;
         const node = source.at(-1);
         if (node === undefined) return;
-        const entry = await serializeNode(node);
+        const entry = await this.serializeEntry(node, new Map());
         const startingText = view.state.doc.toString();
         const expected = direction === "undo" ? entry.after : entry.before;
         const actual = await editHistoryStateCheck(startingText);
@@ -478,6 +466,50 @@ export class DurableEditHistory {
     this.pending = [];
     this.queued = [];
     this.retryBatch = null;
+  }
+
+  private serializeEntry(
+    node: RuntimeEntry,
+    stateChecks: Map<Text, Promise<EditHistoryStateCheck>>,
+  ): Promise<EditHistoryEntry> {
+    if (node.serialized !== undefined) return Promise.resolve(node.serialized);
+    if (node.serializing !== undefined) return node.serializing;
+    const source = node.source;
+    if (
+      source === undefined ||
+      node.beforeDoc === undefined ||
+      node.afterDoc === undefined
+    ) {
+      return Promise.reject(new Error("history entry cannot be serialized"));
+    }
+    const check = (doc: Text): Promise<EditHistoryStateCheck> => {
+      let pending = stateChecks.get(doc);
+      if (pending === undefined) {
+        pending = editHistoryStateCheck(doc.toString());
+        stateChecks.set(doc, pending);
+      }
+      return pending;
+    };
+    const serializing = Promise.all([
+      check(node.beforeDoc),
+      check(node.afterDoc),
+    ]).then(([before, after]) => {
+      const entry = {
+        changes: serializeChanges(source.changes),
+        inverse: serializeChanges(source.inverse),
+        selection_before: serializeSelection(source.selectionBefore),
+        selection_after: serializeSelection(source.selectionAfter),
+        before,
+        after,
+      };
+      node.serialized = entry;
+      delete node.source;
+      return entry;
+    });
+    node.serializing = serializing;
+    return serializing.finally(() => {
+      if (node.serializing === serializing) delete node.serializing;
+    });
   }
 
   private applyReplayMovement(

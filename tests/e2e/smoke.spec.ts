@@ -6755,6 +6755,46 @@ describe("skribeum core editing surfaces", () => {
     await $('[role="tree"]').waitForExist({ timeout: 15000 });
   });
 
+  it("contains_malicious_mermaid_configuration_and_resource_requests", async () => {
+    await openNoteFromTree(RENDERING_NOTE_NAME);
+    await browser.waitUntil(
+      async () => {
+        const states = await browser.execute(() =>
+          [...document.querySelectorAll<HTMLElement>(".cm-skr-mermaid")].map(
+            (host) =>
+              host.classList.contains("cm-skr-render-error") ||
+              host.querySelector("svg") !== null,
+          ),
+        );
+        return states.length === 6 && states.every(Boolean);
+      },
+      {
+        timeout: 30000,
+        timeoutMsg: "Mermaid security fixtures did not settle",
+      },
+    );
+
+    const result = await browser.execute(() => {
+      const diagrams = [
+        ...document.querySelectorAll<HTMLElement>(".cm-skr-mermaid"),
+      ];
+      const cssFixture = diagrams.at(-1);
+      return {
+        prototypePolluted: Object.prototype.hasOwnProperty.call(
+          Object.prototype,
+          "mermaidPrototypePollutionMarker",
+        ),
+        cssFixtureContained:
+          cssFixture?.classList.contains("cm-skr-render-error") ||
+          (cssFixture?.querySelector("svg") !== null &&
+            cssFixture.childElementCount === 1),
+      };
+    });
+
+    expect(result.prototypePolluted).toBe(false);
+    expect(result.cssFixtureContained).toBe(true);
+  });
+
   it("opens_and_operates_the_read_only_canvas_by_keyboard", async () => {
     await openNoteFromTree(CANVAS_FILE_NAME);
     const viewer = $('[data-testid="canvas-view"]');

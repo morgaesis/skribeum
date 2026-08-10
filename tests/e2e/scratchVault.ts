@@ -97,7 +97,7 @@ export const DURABLE_CLEAR_NOTE_CONTENT = "durable clear base\n";
 
 export const RENDERING_NOTE_NAME = "zz-rendering.md";
 export const RENDERING_NOTE_CONTENT =
-  "# Rendered content\n\nInline $a^2 + b^2 = c^2$.\n\n$$\nE = mc^2\n$$\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\nthis is not valid mermaid\n```\n";
+  "# Rendered content\n\nInline $a^2 + b^2 = c^2$.\n\n$$\nE = mc^2\n$$\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\nthis is not valid mermaid\n```\n\n```mermaid\narchitecture-beta\n  group mermaidPrototypePollutionMarker(cloud)[Marker]\n  service a(server)[A] in __proto__\n  service b(server)[B] in mermaidPrototypePollutionMarker\n  a:R -- L:b\n```\n\n```mermaid\nxychart\n  x-axis 1 --> 1\n  line [1, 2]\n```\n\n```mermaid\nradar-beta\n  axis a, b\n  curve c {1, 1}\n  ticks 1000000000\n```\n\n```mermaid\n---\nconfig:\n  themeCSS: |-\n    & + * { color: red !important; }\n---\ninfo\n```\n";
 
 export const PROPERTIES_NOTE_NAME = "zz-properties.md";
 export const PROPERTIES_NOTE_CONTENT = [

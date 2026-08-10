@@ -60,6 +60,23 @@ function transitionOf(element: Element): string {
   return getComputedStyle(element).transition.replace(/\s+/g, " ");
 }
 
+function loadedDeclaration(selector: string, property: string): string | null {
+  for (const sheet of document.styleSheets) {
+    for (const rule of sheet.cssRules) {
+      if (!(rule instanceof CSSStyleRule)) continue;
+      if (
+        rule.selectorText
+          .split(",")
+          .map((value) => value.trim())
+          .includes(selector)
+      ) {
+        return rule.style.getPropertyValue(property).trim() || null;
+      }
+    }
+  }
+  return null;
+}
+
 function surfaceProbe(variant: string): HTMLElement {
   const probe = document.createElement("div");
   probe.dataset.motionSurface = variant;
@@ -414,6 +431,76 @@ describe("file tree folder reveal", () => {
     await unmount(component);
   });
 
+  it("reverses an interrupted folder reveal from current row and ghost positions", async () => {
+    const component = mount(FileTree, {
+      target: document.body,
+      props: { entries: treeEntries, onOpenPath: () => {} },
+    });
+    flushSync();
+
+    const folder = treeRow("Folder");
+    folder?.click();
+    await tick();
+    await tick();
+
+    const plain = treeRow("plain.md");
+    const revealed = treeRow("Folder/one.md");
+    expect(plain).not.toBeNull();
+    expect(revealed).not.toBeNull();
+    if (plain === null || revealed === null) return;
+
+    // Model a close arriving while the open reveal is halfway through: the
+    // displaced plain row is rendered at 32px and the child ghost at 39px.
+    plain.style.transform = "translateY(-28px)";
+    revealed.style.transform = "translateY(7px)";
+    revealed.style.opacity = "0.5";
+    folder?.click();
+    await tick();
+    await tick();
+
+    expect(folder?.getAttribute("aria-expanded")).toBe("false");
+    expect(plain.style.transform).toBe("translateY(28px)");
+    const ghost = document.querySelector<HTMLElement>(
+      '.skr-tree-ghost[data-ghost-path="Folder/one.md"]',
+    );
+    expect(ghost).not.toBeNull();
+    expect(ghost?.style.top).toBe("39px");
+    expect(ghost?.style.opacity).toBe("0.5");
+
+    await unmount(component);
+  });
+
+  it("uses the manual reveal choreography for selection-driven auto-expansion", async () => {
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries: treeEntries,
+        selectedPath: "Folder/one.md",
+        onOpenPath: () => {},
+      },
+    });
+    flushSync();
+    await tick();
+    await tick();
+
+    const revealed = treeRow("Folder/one.md");
+    const displaced = treeRow("plain.md");
+    expect(revealed).not.toBeNull();
+    expect(displaced).not.toBeNull();
+    if (revealed === null || displaced === null) return;
+
+    expect(revealed.style.opacity).toBe("0");
+    expect(displaced.style.transform).toBe(`translateY(${-2 * ROW_HEIGHT}px)`);
+    await nextFrame();
+    expect(revealed.style.opacity).toBe("");
+    expect(displaced.style.transform).toBe("");
+    expect(transitionOf(revealed)).toContain(
+      "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
+    );
+
+    await unmount(component);
+  });
+
   it("lands a toggle in its final state with no choreography when motion is zero", async () => {
     document.documentElement.dataset.animations = "false";
     const component = mount(FileTree, {
@@ -440,6 +527,7 @@ describe("file tree folder reveal", () => {
 const highlightEntries: TreeEntry[] = [
   { path: "alpha.md", kind: "note", hidden: false },
   { path: "beta.md", kind: "note", hidden: false },
+  { path: "gamma.md", kind: "note", hidden: false },
 ];
 
 type HighlightProps = {
@@ -528,6 +616,39 @@ describe("file tree active-note highlight", () => {
     // tearing the tree down, so it never runs against a torn-down instance.
     await tick();
     await tick();
+    await unmount(component);
+  });
+
+  it("retargets from the highlight's current rendered position", async () => {
+    const props = reactiveProps<HighlightProps>({
+      entries: highlightEntries,
+      selectedPath: "alpha.md",
+      onOpenPath: () => {},
+    });
+    const component = mount(FileTree, { target: document.body, props });
+    flushSync();
+
+    const highlight = document.querySelector<HTMLElement>(
+      ".skr-tree-active-highlight",
+    );
+    expect(highlight).not.toBeNull();
+    if (highlight === null) return;
+
+    props.selectedPath = "beta.md";
+    flushSync();
+    await nextFrame();
+
+    // Stand in for the browser's in-flight interpolated transform at the
+    // instant a second retarget arrives: beta's top is 32px and its rendered
+    // highlight is currently 14px above that slot.
+    highlight.style.transform = "translateY(-14px)";
+    props.selectedPath = "gamma.md";
+    flushSync();
+
+    // Gamma's final slot is 60px. The new travel must start at the rendered
+    // 18px position, not at beta's 32px rest position.
+    expect(highlight.style.transform).toBe("translateY(-42px)");
+
     await unmount(component);
   });
 });
@@ -819,6 +940,137 @@ describe("tab strip active-tab indicator", () => {
     expect(indicator.dataset.motionSurface).toBeUndefined();
     expect(indicator.style.transform).toBe("");
     expect(indicator.style.transition).toBe("");
+
+    void unmount(component);
+  });
+
+  it("retargets from the indicator's current rendered position", async () => {
+    const props = tabStripProps();
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+
+    const indicator = document.querySelector<HTMLElement>(
+      ".skr-tab-active-indicator",
+    );
+    expect(indicator).not.toBeNull();
+    if (indicator === null) return;
+    stubTabGeometry(100);
+
+    props.activePath = "note-2.md";
+    flushSync();
+    await nextFrame();
+
+    // The browser has rendered 40px of the 100px travel when a new target
+    // arrives, so the indicator is currently at x=60px.
+    indicator.style.transform = "translateX(-40px)";
+    props.activePath = "note-3.md";
+    flushSync();
+
+    // Note three starts at x=200px. Continuity requires 60-200=-140px.
+    expect(indicator.style.transform).toBe("translateX(-140px)");
+
+    await unmount(component);
+  });
+
+  it("rebases in-flight indicator travel when the tab strip resizes", async () => {
+    const props = tabStripProps();
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+
+    const indicator = document.querySelector<HTMLElement>(
+      ".skr-tab-active-indicator",
+    );
+    expect(indicator).not.toBeNull();
+    if (indicator === null) return;
+    const shells = [
+      ...document.querySelectorAll<HTMLElement>(".skr-tab-shell"),
+    ];
+    stubTabGeometry(100);
+
+    props.activePath = "note-2.md";
+    flushSync();
+    await nextFrame();
+    indicator.style.transform = "translateX(-40px)";
+
+    const activeShell = shells[1];
+    expect(activeShell).not.toBeUndefined();
+    if (activeShell === undefined) return;
+    Object.defineProperty(activeShell, "offsetLeft", {
+      configurable: true,
+      value: 150,
+    });
+    Object.defineProperty(activeShell, "offsetWidth", {
+      configurable: true,
+      value: 120,
+    });
+    window.dispatchEvent(new Event("resize"));
+
+    // The indicator was at x=60px before the resize. Its new target is
+    // x=150px, so its rebased transform is -90px and its width follows the
+    // active tab immediately.
+    expect(indicator.style.left).toBe("150px");
+    expect(indicator.style.width).toBe("120px");
+    expect(indicator.style.transform).toBe("translateX(-90px)");
+
+    await unmount(component);
+  });
+
+  it("crossfades a dirty dot into the close affordance in a fixed hit box", () => {
+    const closed = vi.fn();
+    const props = tabStripProps({
+      tabs: [
+        { path: "note-1.md", viewState: null, dirty: true },
+        { path: "note-2.md", viewState: null },
+      ],
+      onClose: closed,
+    });
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+
+    const shell = document.querySelector<HTMLElement>(".skr-tab-shell");
+    const status = shell?.querySelector<HTMLElement>(".skr-tab-status");
+    const dot = shell?.querySelector<HTMLElement>(".skr-tab-unsaved");
+    const close = shell?.querySelector<HTMLElement>(".skr-tab-close");
+    expect(status).not.toBeNull();
+    expect(dot).not.toBeNull();
+    expect(close).not.toBeNull();
+    if (status === null || dot === null || close === null || shell === null)
+      return;
+
+    expect(getComputedStyle(status).width).toBe("16px");
+    expect(getComputedStyle(status).minWidth).toBe("16px");
+    expect(getComputedStyle(dot).display).toBe("grid");
+    expect(getComputedStyle(dot).opacity).toBe("1");
+    expect(getComputedStyle(close).display).toBe("grid");
+    expect(getComputedStyle(close).opacity).toBe("0");
+    expect(getComputedStyle(close).pointerEvents).toBe("none");
+    expect(getComputedStyle(dot).transition).toContain(
+      "opacity var(--skr-motion-state-duration)",
+    );
+
+    // Focus supplies the same reveal state as hover while keeping the probe
+    // in the keyboard path that must retain its existing semantics.
+    shell.focus();
+    expect(document.activeElement).toBe(shell);
+    // jsdom does not recompute descendant pseudo-class selectors in computed
+    // style, so read the exact declarations from the loaded production sheet.
+    expect(
+      loadedDeclaration(".skr-tab-shell:focus .skr-tab-unsaved", "opacity"),
+    ).toBe("0");
+    expect(
+      loadedDeclaration(".skr-tab-shell:focus .skr-tab-close-dirty", "opacity"),
+    ).toBe("1");
+    expect(
+      loadedDeclaration(
+        ".skr-tab-shell:focus .skr-tab-close-dirty",
+        "pointer-events",
+      ),
+    ).toBe("auto");
+
+    close
+      .querySelector("svg")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(closed).toHaveBeenCalledWith("note-1.md");
 
     void unmount(component);
   });

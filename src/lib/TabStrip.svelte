@@ -12,6 +12,34 @@ import type { WorkspaceTab } from "./workspaceState";
 const ACTIVE_INDICATOR_TRAVEL_TRANSITION =
   "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)";
 
+function transformOffset(element: HTMLElement): number {
+  const transform = getComputedStyle(element).transform.trim();
+  if (transform === "" || transform === "none") return 0;
+  const matrix3d = transform.match(/^matrix3d\(([^)]+)\)$/);
+  if (matrix3d !== null) {
+    return Number.parseFloat(matrix3d[1]?.split(",")[12] ?? "0");
+  }
+  const matrix = transform.match(/^matrix\(([^)]+)\)$/);
+  if (matrix !== null) {
+    return Number.parseFloat(matrix[1]?.split(",")[4] ?? "0");
+  }
+  const translate = transform.match(
+    /^translate\(\s*(-?[\d.]+)px(?:,\s*(-?[\d.]+)px)?\s*\)$/,
+  );
+  if (translate !== null) {
+    return Number.parseFloat(translate[1] ?? "0");
+  }
+  const axisTranslate = transform.match(/^translateX\(\s*(-?[\d.]+)px\s*\)$/);
+  return axisTranslate === null
+    ? 0
+    : Number.parseFloat(axisTranslate[1] ?? "0");
+}
+
+function renderedLeft(element: HTMLElement, fallback: number): number {
+  const left = Number.parseFloat(element.style.left);
+  return (Number.isFinite(left) ? left : fallback) + transformOffset(element);
+}
+
 let {
   tabs,
   activePath,
@@ -53,6 +81,7 @@ let indicatorElement = $state<HTMLElement>();
 let indicatorRestLeft: number | null = null;
 let indicatorAnimatedPath: string | null = null;
 let indicatorMotionGeneration = 0;
+let indicatorTraveling = false;
 
 const titles = $derived(
   resolveTitleCollisions(
@@ -111,9 +140,38 @@ function syncActiveIndicatorGeometry() {
     activePath === null ? -1 : tabs.findIndex((tab) => tab.path === activePath);
   const tabElement = activeIndex < 0 ? undefined : tabElements[activeIndex];
   if (tabElement === undefined) return;
-  element.style.left = `${tabElement.offsetLeft}px`;
-  element.style.width = `${tabElement.offsetWidth}px`;
-  indicatorRestLeft = tabElement.offsetLeft;
+  const left = tabElement.offsetLeft;
+  const width = tabElement.offsetWidth;
+  if (indicatorTraveling) {
+    const currentLeft = renderedLeft(element, indicatorRestLeft ?? left);
+    const generation = ++indicatorMotionGeneration;
+    element.style.transition = "none";
+    element.style.left = `${left}px`;
+    element.style.width = `${width}px`;
+    element.style.transform = `translateX(${currentLeft - left}px)`;
+    indicatorRestLeft = left;
+    void element.offsetWidth;
+    requestAnimationFrame(() => {
+      if (generation !== indicatorMotionGeneration) return;
+      element.style.transition = ACTIVE_INDICATOR_TRAVEL_TRANSITION;
+      element.style.transform = "";
+      setTimeout(
+        () => {
+          if (generation !== indicatorMotionGeneration) return;
+          element.style.transition = "";
+          indicatorTraveling = false;
+        },
+        motionDurationMilliseconds(
+          "--skr-motion-panel-duration",
+          itemsElement ?? document.documentElement,
+        ),
+      );
+    });
+    return;
+  }
+  element.style.left = `${left}px`;
+  element.style.width = `${width}px`;
+  indicatorRestLeft = left;
 }
 
 function measureOverflowAndIndicator() {
@@ -142,6 +200,7 @@ $effect(() => {
   if (element === undefined || items === undefined) {
     indicatorRestLeft = null;
     indicatorAnimatedPath = null;
+    indicatorTraveling = false;
     return;
   }
   const activeIndex =
@@ -176,6 +235,7 @@ $effect(() => {
   );
 
   if (duration === 0 || !isNewSelection) {
+    indicatorTraveling = false;
     delete element.dataset.motionSurface;
     element.style.transition = "";
     element.style.transform = "";
@@ -187,6 +247,7 @@ $effect(() => {
   }
 
   if (indicatorRestLeft === null || !previousStillOpen) {
+    indicatorTraveling = false;
     element.style.transition = "";
     element.style.transform = "";
     element.style.opacity = "";
@@ -199,7 +260,7 @@ $effect(() => {
     return;
   }
 
-  const previousLeft = indicatorRestLeft;
+  const previousLeft = renderedLeft(element, indicatorRestLeft);
   delete element.dataset.motionSurface;
   element.style.transition = "none";
   element.style.opacity = "1";
@@ -207,6 +268,7 @@ $effect(() => {
   element.style.width = `${width}px`;
   element.style.transform = `translateX(${previousLeft - left}px)`;
   indicatorRestLeft = left;
+  indicatorTraveling = true;
   void element.offsetWidth;
   requestAnimationFrame(() => {
     if (generation !== indicatorMotionGeneration) return;
@@ -215,6 +277,7 @@ $effect(() => {
     setTimeout(() => {
       if (generation !== indicatorMotionGeneration) return;
       element.style.transition = "";
+      indicatorTraveling = false;
     }, duration);
   });
 });
@@ -297,6 +360,7 @@ function finishScrollDrag(event: PointerEvent) {
         tabindex={tab.path === activePath ? 0 : -1}
         class:skr-tab-focused={focused && tab.path === activePath}
         class:skr-tab-active={tab.path === activePath}
+        class:skr-tab-dirty={tab.dirty === true}
         class:skr-tab-insertion={insertion === index && dragging !== index}
         class:skr-tab-dragging={dragging === index}
         style:transform={dragging !== null && dragging !== index
@@ -338,19 +402,24 @@ function finishScrollDrag(event: PointerEvent) {
             <span class="skr-tab-suffix">{title.collisionSuffix}</span>
           {/if}
         </span>
-        {#if tab.dirty === true}
-          <span class="skr-tab-unsaved" aria-label={STRINGS.unsavedNote}></span>
-        {/if}
-        <span
-          class="skr-tab-close"
-          class:skr-tab-close-dirty={tab.dirty === true}
-          data-command-id="tab.close"
-          aria-hidden="true"
-          use:commandTooltip={closeTooltip}
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="m4.5 4.5 7 7m0-7-7 7" />
-          </svg>
+        <span class="skr-tab-status">
+          {#if tab.dirty === true}
+            <span
+              class="skr-tab-unsaved"
+              aria-label={STRINGS.unsavedNote}
+            ></span>
+          {/if}
+          <span
+            class="skr-tab-close"
+            class:skr-tab-close-dirty={tab.dirty === true}
+            data-command-id="tab.close"
+            aria-hidden="true"
+            use:commandTooltip={closeTooltip}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m4.5 4.5 7 7m0-7-7 7" />
+            </svg>
+          </span>
         </span>
       </button>
       {/each}

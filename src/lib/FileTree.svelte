@@ -113,6 +113,14 @@ type Row = TreeEntry & {
 type GhostRow = RowPresentation & {
   open: boolean;
   top: number;
+  opacity: number;
+};
+
+type FolderMotionSnapshot = {
+  presentation: RowPresentation;
+  open: boolean;
+  top: number;
+  opacity: number;
 };
 
 function parentPath(path: string): string {
@@ -121,6 +129,52 @@ function parentPath(path: string): string {
 
 function baseName(path: string): string {
   return path.split("/").at(-1) ?? path;
+}
+
+function transformOffset(element: HTMLElement, axis: "x" | "y"): number {
+  const transform = getComputedStyle(element).transform.trim();
+  if (transform === "" || transform === "none") return 0;
+
+  const matrix3d = transform.match(/^matrix3d\(([^)]+)\)$/);
+  if (matrix3d !== null) {
+    const values = matrix3d[1]?.split(",").map(Number) ?? [];
+    return values[axis === "x" ? 12 : 13] ?? 0;
+  }
+  const matrix = transform.match(/^matrix\(([^)]+)\)$/);
+  if (matrix !== null) {
+    const values = matrix[1]?.split(",").map(Number) ?? [];
+    return values[axis === "x" ? 4 : 5] ?? 0;
+  }
+
+  const translate = transform.match(
+    /^translate\(\s*(-?[\d.]+)px(?:,\s*(-?[\d.]+)px)?\s*\)$/,
+  );
+  if (translate !== null) {
+    return Number.parseFloat(translate[axis === "x" ? 1 : 2] ?? "0");
+  }
+  const axisTranslate = transform.match(
+    new RegExp(`^translate${axis.toUpperCase()}\\(\\s*(-?[\\d.]+)px\\s*\\)$`),
+  );
+  return axisTranslate === null
+    ? 0
+    : Number.parseFloat(axisTranslate[1] ?? "0");
+}
+
+function renderedCoordinate(
+  element: HTMLElement,
+  axis: "x" | "y",
+  fallback: number,
+): number {
+  const property = axis === "x" ? element.style.left : element.style.top;
+  const base = Number.parseFloat(property);
+  return (
+    (Number.isFinite(base) ? base : fallback) + transformOffset(element, axis)
+  );
+}
+
+function renderedOpacity(element: HTMLElement): number {
+  const opacity = Number.parseFloat(getComputedStyle(element).opacity);
+  return Number.isFinite(opacity) ? opacity : 1;
 }
 
 function expanded(path: string): boolean {
@@ -299,7 +353,17 @@ $effect(() => {
       if (userExpanded[ancestor] !== true) next[ancestor] = true;
     }
   }
-  autoExpanded = next;
+  const previous = autoExpanded;
+  const changed =
+    Object.keys(previous).length !== Object.keys(next).length ||
+    Object.keys(next).some((ancestor) => previous[ancestor] !== true);
+  if (changed) {
+    const snapshots = captureFolderMotion();
+    const generation = ++folderMotionGeneration;
+    settleFolderMotion();
+    autoExpanded = next;
+    void playFolderReveal(snapshots, generation);
+  }
   if (path !== null) {
     void tick().then(() => {
       const index = rows.findIndex((row) => row.path === path);
@@ -359,7 +423,10 @@ $effect(() => {
     return;
   }
 
-  const previousTop = highlightRestTop;
+  const previousTop =
+    highlightRestTop === null
+      ? null
+      : renderedCoordinate(element, "y", highlightRestTop);
   if (previousTop === null) {
     element.style.transition = "";
     element.style.transform = "";
@@ -428,7 +495,7 @@ async function focusRow(index: number, focus = true) {
   if (rows.length === 0) return;
   const nextIndex = Math.max(0, Math.min(index, rows.length - 1));
   focusIndex = nextIndex;
-  if (treeElement !== undefined) {
+  if (treeElement != null) {
     const rowTop = TREE_PADDING + nextIndex * rowHeight;
     const rowBottom = rowTop + rowHeight;
     const viewportBottom = treeElement.scrollTop + treeElement.clientHeight;
@@ -452,6 +519,48 @@ function persistExpanded() {
 
 function toggleFolder(row: Row) {
   void toggleFolderWithReveal(row);
+}
+
+function captureFolderMotion(): Map<string, FolderMotionSnapshot> {
+  const snapshots = new Map<string, FolderMotionSnapshot>();
+  for (const index of renderedIndices) {
+    const row = rows[index];
+    const element = itemElements[index];
+    if (row === undefined || element === undefined) continue;
+    snapshots.set(row.path, {
+      presentation: {
+        path: row.path,
+        kind: row.kind,
+        depth: row.depth,
+        label: row.label,
+        ...(row.suffix === undefined ? {} : { suffix: row.suffix }),
+        ...(row.icon === undefined ? {} : { icon: row.icon }),
+      },
+      open: row.kind === "directory" && expanded(row.path),
+      top: renderedCoordinate(element, "y", TREE_PADDING + index * rowHeight),
+      opacity: renderedOpacity(element),
+    });
+  }
+  for (const [index, ghost] of leavingRows.entries()) {
+    const element = ghostElements[index];
+    snapshots.set(ghost.path, {
+      presentation: {
+        path: ghost.path,
+        kind: ghost.kind,
+        depth: ghost.depth,
+        label: ghost.label,
+        ...(ghost.suffix === undefined ? {} : { suffix: ghost.suffix }),
+        ...(ghost.icon === undefined ? {} : { icon: ghost.icon }),
+      },
+      open: ghost.open,
+      top:
+        element === undefined
+          ? ghost.top
+          : renderedCoordinate(element, "y", ghost.top),
+      opacity: element === undefined ? ghost.opacity : renderedOpacity(element),
+    });
+  }
+  return snapshots;
 }
 
 /** Restores every row the reveal choreography touched to its settled state. */
@@ -478,6 +587,7 @@ function settleFolderMotion() {
 async function toggleFolderWithReveal(row: Row) {
   const folderPath = row.path;
   const opening = !expanded(folderPath);
+  const snapshots = captureFolderMotion();
   const generation = ++folderMotionGeneration;
   settleFolderMotion();
   const tree = treeElement;
@@ -485,26 +595,24 @@ async function toggleFolderWithReveal(row: Row) {
     tree === undefined
       ? 0
       : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
-  const previousIndex =
-    duration === 0
-      ? null
-      : new Map(rows.map((entry, index) => [entry.path, index]));
-  if (previousIndex !== null && !opening) {
+  if (duration > 0 && !opening) {
     leavingRows = renderedIndices.flatMap((index): GhostRow[] => {
       const hidden = rows[index];
-      if (hidden === undefined || !hidden.path.startsWith(`${folderPath}/`)) {
+      const snapshot =
+        hidden === undefined ? undefined : snapshots.get(hidden.path);
+      if (
+        hidden === undefined ||
+        snapshot === undefined ||
+        !hidden.path.startsWith(`${folderPath}/`)
+      ) {
         return [];
       }
       return [
         {
-          path: hidden.path,
-          kind: hidden.kind,
-          depth: hidden.depth,
-          label: hidden.label,
-          ...(hidden.suffix === undefined ? {} : { suffix: hidden.suffix }),
-          ...(hidden.icon === undefined ? {} : { icon: hidden.icon }),
-          open: hidden.kind === "directory" && expanded(hidden.path),
-          top: TREE_PADDING + index * rowHeight,
+          ...snapshot.presentation,
+          open: snapshot.open,
+          top: snapshot.top,
+          opacity: snapshot.opacity,
         },
       ];
     });
@@ -512,7 +620,21 @@ async function toggleFolderWithReveal(row: Row) {
   userExpanded[folderPath] = opening;
   delete autoExpanded[folderPath];
   persistExpanded();
-  if (previousIndex === null || tree === undefined) return;
+  if (tree === undefined || duration === 0) return;
+  await playFolderReveal(snapshots, generation);
+}
+
+async function playFolderReveal(
+  snapshots: Map<string, FolderMotionSnapshot>,
+  generation: number,
+): Promise<void> {
+  const tree = treeElement;
+  if (tree === undefined) return;
+  const duration = motionDurationMilliseconds(
+    "--skr-motion-panel-duration",
+    tree,
+  );
+  if (duration === 0) return;
   await tick();
   if (generation !== folderMotionGeneration) return;
   const moving: HTMLElement[] = [];
@@ -520,21 +642,27 @@ async function toggleFolderWithReveal(row: Row) {
     const current = rows[index];
     const element = itemElements[index];
     if (current === undefined || element === undefined) continue;
-    const before = previousIndex.get(current.path);
+    const before = snapshots.get(current.path);
     if (before === undefined) {
+      element.style.transition = "none";
       element.style.opacity = "0";
-    } else if (before !== index) {
-      element.style.transform = `translateY(${(before - index) * rowHeight}px)`;
+      moving.push(element);
     } else {
-      continue;
+      const finalTop = TREE_PADDING + index * rowHeight;
+      const offset = before.top - finalTop;
+      const opacityChanged = before.opacity < 1;
+      if (offset === 0 && !opacityChanged) continue;
+      element.style.transition = "none";
+      if (offset !== 0) element.style.transform = `translateY(${offset}px)`;
+      if (opacityChanged) element.style.opacity = `${before.opacity}`;
+      moving.push(element);
     }
-    element.style.transition = "none";
-    moving.push(element);
   }
   const ghosts = ghostElements.filter(
     (element): element is HTMLElement => element !== undefined,
   );
   folderMotionElements = [...moving, ...ghosts];
+  if (folderMotionElements.length === 0) return;
   void tree.offsetWidth;
   requestAnimationFrame(() => {
     if (generation !== folderMotionGeneration) return;
@@ -912,7 +1040,8 @@ function dropOn(destination: string | null) {
       aria-hidden="true"
       inert
       class="skr-tree-row skr-tree-ghost"
-      style={`top: ${ghost.top}px; height: ${rowHeight}px; padding-left: ${0.5 + ghost.depth}rem`}
+      data-ghost-path={ghost.path}
+      style={`top: ${ghost.top}px; height: ${rowHeight}px; padding-left: ${0.5 + ghost.depth}rem${ghost.opacity < 1 ? `; opacity: ${ghost.opacity}` : ""}`}
     >
       {@render rowBody(ghost, ghost.open)}
     </li>

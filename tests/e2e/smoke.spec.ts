@@ -6780,7 +6780,7 @@ describe("skribeum core editing surfaces", () => {
       ];
       const cssFixture = diagrams.at(-1);
       return {
-        prototypePolluted: Object.prototype.hasOwnProperty.call(
+        prototypePolluted: Object.hasOwn(
           Object.prototype,
           "mermaidPrototypePollutionMarker",
         ),

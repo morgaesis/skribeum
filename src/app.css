@@ -58,6 +58,11 @@ button,
 input,
 select {
   color: inherit;
+  /* Form controls use the browser's own dialog font by default, not the
+     ambient interface stack; every control that skips its own explicit
+     font-size still lands on the token system instead of drifting to a
+     visibly different face and size next to its siblings. */
+  font-family: inherit;
 }
 
 button,
@@ -491,10 +496,25 @@ select {
   border: 0;
   border-radius: 0;
   padding: 0.375rem 0.5rem;
-  background: transparent;
+  background-color: transparent;
   font-family: var(--skr-font-interface);
   font-size: 13px;
   text-align: left;
+  cursor: pointer;
+}
+
+/* Every menu row shares one hover rule, defined with higher specificity
+   than each menu's own unconditional `background-color: transparent` base
+   rule so a later-declared base rule can never cancel it again (design
+   system section 5.1: 50ms linear background to the subtle surface
+   token). The longhand (not the `background` shorthand) keeps this rule
+   from resetting any other background sub-property a future row style
+   might add. */
+.skr-tree-menu button:hover,
+.skr-tree-menu button:focus-visible,
+.skr-action-menu button:hover,
+.skr-action-menu button:focus-visible {
+  background-color: var(--skr-surface-subtle);
 }
 
 .skr-workspace {
@@ -724,44 +744,9 @@ select {
   margin-left: auto;
 }
 
-.skr-tab-menu {
-  position: fixed;
-  top: 5.25rem;
-  right: 0.5rem;
-  z-index: 90;
-  display: grid;
-  min-width: 12rem;
-  max-width: min(22rem, calc(100vw - 1rem));
-  max-height: 20rem;
-  overflow-y: auto;
-  border: 1px solid var(--skr-border);
-  border-radius: var(--skr-radius-surface);
-  padding: 0.25rem;
-  background: var(--skr-surface-raised);
-  box-shadow: var(--skr-shadow);
-}
-
-.skr-tab-menu button {
-  display: flex;
-  min-width: 0;
-  min-height: 2rem;
-  align-items: center;
-  gap: 0.35rem;
-  border: 0;
-  /* Overflow-menu rows are flat full-width rows: no rounded row cards
-     (design system section 5.12). */
-  border-radius: 0;
-  padding: 0.375rem 0.5rem;
-  color: var(--skr-text);
-  background: transparent;
-  font-family: var(--skr-font-interface);
-  font-size: 13px;
-  text-align: left;
-}
-
-.skr-tab-menu button[aria-checked="true"] {
-  background: var(--skr-accent-subtle);
-}
+/* The all-tabs list itself renders through AnchoredMenu.svelte, which
+   carries its own row chrome (design system section 5.12): no per-menu
+   CSS lives here anymore. */
 
 .skr-split-divider {
   position: relative;
@@ -860,8 +845,16 @@ select {
      (design system section 5.12). */
   border-radius: 0;
   padding: 0.625rem 0.75rem;
-  background: transparent;
+  color: var(--skr-text);
+  background-color: transparent;
+  /* Buttons do not inherit font-family or font-size from their ancestors
+     by default (the browser's own dialog-font UA style wins), so every
+     control must set the interface token explicitly (design system
+     section 2.3: interface controls and palette rows, 13px fixed). */
+  font-family: var(--skr-font-interface);
+  font-size: 13px;
   text-align: start;
+  cursor: pointer;
 }
 
 .skr-action-menu button:disabled {

@@ -1,5 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import { createServer } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TauriCapabilities } from "@wdio/tauri-service";
@@ -14,6 +17,28 @@ import {
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(configDirectory, "../..");
 let demoServer: ChildProcess | null = null;
+
+const startupVaultMode = process.env.SKRIBEUM_E2E_STARTUP_VAULT_MODE === "1";
+const startupVaultRunId =
+  process.env.SKRIBEUM_E2E_STARTUP_VAULT_RUN_ID ?? randomUUID();
+const startupVaultFixtureRoot = path.join(
+  os.tmpdir(),
+  `skribeum-e2e-startup-vault-${startupVaultRunId}`,
+);
+const startupVaultFirstPath = path.join(startupVaultFixtureRoot, "first");
+const startupVaultSecondPath = path.join(startupVaultFixtureRoot, "second");
+const startupVaultSettingsPath = path.join(
+  startupVaultFixtureRoot,
+  "settings.json",
+);
+const startupVaultSessionPath = path.join(
+  startupVaultFixtureRoot,
+  "vault-session.json",
+);
+const startupVaultEditHistoryPath = path.join(
+  startupVaultFixtureRoot,
+  "edit-history.jsonl",
+);
 
 async function availablePort(): Promise<number> {
   const server = createServer();
@@ -116,17 +141,38 @@ async function stopDemoServer(): Promise<void> {
 }
 
 async function prepareSuite(): Promise<void> {
+  if (startupVaultMode) {
+    // This mode deliberately retains every generated path. It needs a fresh
+    // session without sharing normal E2E or user data, and it tests relaunches
+    // against the same retained session document.
+    mkdirSync(startupVaultFirstPath, { recursive: true });
+    mkdirSync(startupVaultSecondPath, { recursive: true });
+    return;
+  }
   // The configuration module is evaluated again for workers and reloaded
   // sessions. The launcher calls onPrepare once, so reset here to preserve
   // the note and app-data state across a deliberate binary relaunch.
   createScratchVault();
   await startDemoServer();
 }
-process.env.SKRIBEUM_E2E_VAULT = SCRATCH_VAULT_PATH;
-process.env.SKRIBEUM_E2E_SETTINGS = SCRATCH_SETTINGS_PATH;
-process.env.SKRIBEUM_E2E_VAULT_SESSION = SCRATCH_VAULT_SESSION_PATH;
-process.env.SKRIBEUM_E2E_RESET_WORKSPACE = "1";
-process.env.SKRIBEUM_E2E_EDIT_HISTORY = SCRATCH_EDIT_HISTORY_PATH;
+if (startupVaultMode) {
+  process.env.SKRIBEUM_E2E_STARTUP_VAULT_RUN_ID = startupVaultRunId;
+  process.env.SKRIBEUM_E2E_STARTUP_VAULT_FIRST = startupVaultFirstPath;
+  process.env.SKRIBEUM_E2E_STARTUP_VAULT_SECOND = startupVaultSecondPath;
+  // Suppress the ordinary frontend vault injection. The session is the only
+  // startup source in this mode.
+  delete process.env.SKRIBEUM_E2E_VAULT;
+  delete process.env.SKRIBEUM_E2E_RESET_WORKSPACE;
+  process.env.SKRIBEUM_E2E_SETTINGS = startupVaultSettingsPath;
+  process.env.SKRIBEUM_E2E_VAULT_SESSION = startupVaultSessionPath;
+  process.env.SKRIBEUM_E2E_EDIT_HISTORY = startupVaultEditHistoryPath;
+} else {
+  process.env.SKRIBEUM_E2E_VAULT = SCRATCH_VAULT_PATH;
+  process.env.SKRIBEUM_E2E_SETTINGS = SCRATCH_SETTINGS_PATH;
+  process.env.SKRIBEUM_E2E_VAULT_SESSION = SCRATCH_VAULT_SESSION_PATH;
+  process.env.SKRIBEUM_E2E_RESET_WORKSPACE = "1";
+  process.env.SKRIBEUM_E2E_EDIT_HISTORY = SCRATCH_EDIT_HISTORY_PATH;
+}
 
 // The workspace places build output in target/ at the repository root. The
 // e2e suite runs against the debug binary built with the webdriver feature
@@ -156,24 +202,26 @@ const capabilities: TauriCapabilities[] = [
 
 export const config: WebdriverIO.Config = {
   runner: "local",
-  specs: [
-    // The first four run before any browser-demo navigation, in any order
-    // relative to each other: each needs the shared app window on its
-    // freshly launched desktop content, and none navigates it away.
-    // smoke.spec.ts ends with browser-demo tests that navigate the same
-    // window away and never navigate it back, and
-    // unified-command-surface.spec.ts navigates to the browser demo before
-    // every test, so running after either would leave no desktop-mode
-    // window for these files to find.
-    path.join(configDirectory, "properties-statusline.spec.ts"),
-    path.join(configDirectory, "windowChrome.spec.ts"),
-    path.join(configDirectory, "workspace.spec.ts"),
-    path.join(configDirectory, "motion.spec.ts"),
-    path.join(configDirectory, "smoke.spec.ts"),
-    path.join(configDirectory, "unified-command-surface.spec.ts"),
-    path.join(configDirectory, "palette.spec.ts"),
-    path.join(configDirectory, "control-language.spec.ts"),
-  ],
+  specs: startupVaultMode
+    ? [path.join(configDirectory, "startup-vault.spec.ts")]
+    : [
+        // The first four run before any browser-demo navigation, in any order
+        // relative to each other: each needs the shared app window on its
+        // freshly launched desktop content, and none navigates it away.
+        // smoke.spec.ts ends with browser-demo tests that navigate the same
+        // window away and never navigate it back, and
+        // unified-command-surface.spec.ts navigates to the browser demo before
+        // every test, so running after either would leave no desktop-mode
+        // window for these files to find.
+        path.join(configDirectory, "properties-statusline.spec.ts"),
+        path.join(configDirectory, "windowChrome.spec.ts"),
+        path.join(configDirectory, "workspace.spec.ts"),
+        path.join(configDirectory, "motion.spec.ts"),
+        path.join(configDirectory, "smoke.spec.ts"),
+        path.join(configDirectory, "unified-command-surface.spec.ts"),
+        path.join(configDirectory, "palette.spec.ts"),
+        path.join(configDirectory, "control-language.spec.ts"),
+      ],
   maxInstances: 1,
   // The embedded driver provider is the @wdio/tauri-service default: the app
   // itself serves WebDriver via tauri-plugin-wdio-webdriver, so no external

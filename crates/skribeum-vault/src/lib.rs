@@ -28,7 +28,8 @@ pub use path::{PathCollision, VaultPath, VaultPathError, detect_collisions};
 pub use real::{RealClock, RealFs};
 pub use recon::{BannerReason, ReconEvent, Reconciler, ReconcilerConfig};
 pub use search::{
-    SEARCH_SCHEMA_VERSION, SearchError, SearchHit, SearchIndex, TagFrequency, index_file_name,
+    RebuildOutcome, SEARCH_SCHEMA_VERSION, SearchError, SearchHit, SearchIndex, TagFrequency,
+    index_file_name,
 };
 pub use settings::{
     SETTINGS_FILE_NAME, SETTINGS_SCHEMA_VERSION, Settings, SettingsError, SettingsStore,

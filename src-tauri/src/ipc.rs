@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -755,6 +756,9 @@ struct OpenVault {
     /// The vault's full-text index. `None` when the OS app-data directory
     /// could not be resolved; the index lives there, never in the vault.
     search: Arc<Mutex<Option<SearchIndex>>>,
+    /// Rebuild workers owned by this handle generation. Closing the handle
+    /// cancels and joins every worker before releasing the generation.
+    rebuilds: Arc<IndexRebuilds>,
 }
 
 /// Session state: open vaults by handle, plus the session clock driving
@@ -784,6 +788,7 @@ impl VaultRegistry {
                 watching: Arc::new(AtomicBool::new(false)),
                 reconciler: Arc::new(Mutex::new(Reconciler::default())),
                 search,
+                rebuilds: Arc::new(IndexRebuilds::default()),
             },
         );
         VaultOpenResult {
@@ -801,6 +806,7 @@ impl VaultRegistry {
                 .publication
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
+            open.rebuilds.join_all();
         }
     }
 
@@ -812,6 +818,67 @@ impl VaultRegistry {
     #[cfg(test)]
     fn watcher_count(&self) -> u32 {
         self.active_watchers.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    fn rebuild_count(&self) -> u32 {
+        self.lock()
+            .values()
+            .map(|open| open.rebuilds.active_count())
+            .sum()
+    }
+}
+
+/// Owns background full-index rebuilds for one vault handle generation.
+#[derive(Default)]
+struct IndexRebuilds {
+    workers: Mutex<Vec<JoinHandle<()>>>,
+    active_workers: AtomicU32,
+}
+
+impl IndexRebuilds {
+    fn reap_finished(workers: &mut Vec<JoinHandle<()>>) {
+        let mut pending = Vec::with_capacity(workers.len());
+        for worker in workers.drain(..) {
+            if worker.is_finished() {
+                let _ = worker.join();
+            } else {
+                pending.push(worker);
+            }
+        }
+        *workers = pending;
+    }
+
+    fn join_all(&self) {
+        let workers = {
+            let mut workers = self.workers.lock().unwrap_or_else(PoisonError::into_inner);
+            std::mem::take(&mut *workers)
+        };
+        for worker in workers {
+            let _ = worker.join();
+        }
+    }
+
+    #[cfg(test)]
+    fn active_count(&self) -> u32 {
+        self.active_workers.load(Ordering::Acquire)
+    }
+}
+
+/// Keeps the rebuild count accurate even when cancellation exits before the
+/// index lock is acquired.
+struct IndexRebuildLease(Arc<IndexRebuilds>);
+
+impl IndexRebuildLease {
+    fn new(rebuilds: Arc<IndexRebuilds>) -> Self {
+        rebuilds.active_workers.fetch_add(1, Ordering::AcqRel);
+        Self(rebuilds)
+    }
+}
+
+impl Drop for IndexRebuildLease {
+    fn drop(&mut self) {
+        self.0.active_workers.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -1223,39 +1290,64 @@ fn change_all_window_zoom<R: Runtime>(
 /// notes only; a rebuild never writes inside the vault. The function returns
 /// after the worker acquires the index lock, so a subsequent query waits for
 /// the complete rebuild instead of racing ahead of it.
-fn spawn_index_rebuild(
+fn spawn_index_rebuild<F: FileSystem + 'static>(
+    rebuilds: &Arc<IndexRebuilds>,
     search: &Arc<Mutex<Option<SearchIndex>>>,
     vault: Vault,
     active: Arc<AtomicBool>,
+    fs: F,
 ) {
     let search = Arc::clone(search);
     let (started_tx, started_rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    let started = {
+        let mut workers = rebuilds
+            .workers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        IndexRebuilds::reap_finished(&mut workers);
         if !active.load(Ordering::Acquire) {
-            let _ = started_tx.send(());
-            return;
+            false
+        } else {
+            let rebuilds = Arc::clone(rebuilds);
+            workers.push(std::thread::spawn(move || {
+                let _lease = IndexRebuildLease::new(Arc::clone(&rebuilds));
+                if !active.load(Ordering::Acquire) {
+                    let _ = started_tx.send(());
+                    return;
+                }
+                let guard = search.lock().unwrap_or_else(PoisonError::into_inner);
+                let _ = started_tx.send(());
+                if active.load(Ordering::Acquire)
+                    && let Some(index) = guard.as_ref()
+                {
+                    #[cfg(debug_assertions)]
+                    let rebuilt = matches!(
+                        index.rebuild_cancellable(&fs, &vault, || {
+                            !active.load(Ordering::Acquire)
+                        }),
+                        Ok(skribeum_vault::RebuildOutcome::Completed(_))
+                    );
+                    #[cfg(not(debug_assertions))]
+                    let _ = index.rebuild_cancellable(&fs, &vault, || {
+                        !active.load(Ordering::Acquire)
+                    });
+                    #[cfg(debug_assertions)]
+                    if rebuilt
+                        && active.load(Ordering::Acquire)
+                        && let Some(process_ms) = crate::cold_start_elapsed_milliseconds()
+                    {
+                        eprintln!(
+                            "SKRIBEUM_COLD_START {{\"event\":\"full-text-index-complete\",\"process_ms\":{process_ms}}}"
+                        );
+                    }
+                }
+            }));
+            true
         }
-        let guard = search.lock().unwrap_or_else(PoisonError::into_inner);
-        let _ = started_tx.send(());
-        if active.load(Ordering::Acquire)
-            && let Some(index) = guard.as_ref()
-        {
-            #[cfg(debug_assertions)]
-            let rebuilt = index.rebuild(&RealFs, &vault).is_ok();
-            #[cfg(not(debug_assertions))]
-            let _ = index.rebuild(&RealFs, &vault);
-            #[cfg(debug_assertions)]
-            if rebuilt
-                && active.load(Ordering::Acquire)
-                && let Some(process_ms) = crate::cold_start_elapsed_milliseconds()
-            {
-                eprintln!(
-                    "SKRIBEUM_COLD_START {{\"event\":\"full-text-index-complete\",\"process_ms\":{process_ms}}}"
-                );
-            }
-        }
-    });
-    let _ = started_rx.recv();
+    };
+    if started {
+        let _ = started_rx.recv();
+    }
 }
 
 /// Opens a vault at an absolute path, validates it and indexes its tree.
@@ -1290,11 +1382,12 @@ fn vault_open<R: Runtime>(
             SearchIndex::open_in_app_data(&dir, vault.root()).ok()
         })));
     let result = registry.register(vault.clone(), search.clone());
-    let active = {
+    let (active, rebuilds) = {
         let vaults = registry.lock();
-        Arc::clone(&vaults[&result.handle.id].active)
+        let open = &vaults[&result.handle.id];
+        (Arc::clone(&open.active), Arc::clone(&open.rebuilds))
     };
-    spawn_index_rebuild(&search, vault, active);
+    spawn_index_rebuild(&rebuilds, &search, vault, active, RealFs);
     if !groups.is_empty() {
         let (active, publication) = {
             let vaults = registry.lock();
@@ -1369,7 +1462,7 @@ fn vault_tree_refresh<R: Runtime>(
     registry: State<'_, VaultRegistry>,
     handle: VaultHandle,
 ) -> Result<Vec<TreeEntry>, AppError> {
-    let (entries, groups, search, vault, active, publication) = {
+    let (entries, groups, search, vault, active, publication, rebuilds) = {
         let mut vaults = registry.lock();
         let open = vaults
             .get_mut(&handle.id)
@@ -1388,9 +1481,10 @@ fn vault_tree_refresh<R: Runtime>(
             open.vault.clone(),
             Arc::clone(&open.active),
             Arc::clone(&open.publication),
+            Arc::clone(&open.rebuilds),
         )
     };
-    spawn_index_rebuild(&search, vault, Arc::clone(&active));
+    spawn_index_rebuild(&rebuilds, &search, vault, Arc::clone(&active), RealFs);
     if !groups.is_empty() {
         let _ = emit_for_open_vault(
             &app,
@@ -1450,7 +1544,7 @@ fn tree_folder_create(
     rel_path: String,
 ) -> Result<Vec<TreeEntry>, AppError> {
     let path = VaultPath::new(&rel_path)?;
-    let (entries, search, vault, active) = {
+    let (entries, search, vault, active, rebuilds) = {
         let mut vaults = registry.lock();
         let open = vaults
             .get_mut(&handle.id)
@@ -1463,9 +1557,10 @@ fn tree_folder_create(
             Arc::clone(&open.search),
             open.vault.clone(),
             Arc::clone(&open.active),
+            Arc::clone(&open.rebuilds),
         )
     };
-    spawn_index_rebuild(&search, vault, active);
+    spawn_index_rebuild(&rebuilds, &search, vault, active, RealFs);
     Ok(entries)
 }
 
@@ -1481,7 +1576,7 @@ fn tree_entry_move(
 ) -> Result<Vec<TreeEntry>, AppError> {
     let from = VaultPath::new(&from_path)?;
     let to = VaultPath::new(&to_path)?;
-    let (entries, search, vault, active) = {
+    let (entries, search, vault, active, rebuilds) = {
         let mut vaults = registry.lock();
         let open = vaults
             .get_mut(&handle.id)
@@ -1494,9 +1589,10 @@ fn tree_entry_move(
             Arc::clone(&open.search),
             open.vault.clone(),
             Arc::clone(&open.active),
+            Arc::clone(&open.rebuilds),
         )
     };
-    spawn_index_rebuild(&search, vault, active);
+    spawn_index_rebuild(&rebuilds, &search, vault, active, RealFs);
     Ok(entries)
 }
 
@@ -1510,7 +1606,7 @@ fn tree_entry_delete(
     rel_path: String,
 ) -> Result<Vec<TreeEntry>, AppError> {
     let path = VaultPath::new(&rel_path)?;
-    let (entries, search, vault, active) = {
+    let (entries, search, vault, active, rebuilds) = {
         let mut vaults = registry.lock();
         let open = vaults
             .get_mut(&handle.id)
@@ -1523,9 +1619,10 @@ fn tree_entry_delete(
             Arc::clone(&open.search),
             open.vault.clone(),
             Arc::clone(&open.active),
+            Arc::clone(&open.rebuilds),
         )
     };
-    spawn_index_rebuild(&search, vault, active);
+    spawn_index_rebuild(&rebuilds, &search, vault, active, RealFs);
     Ok(entries)
 }
 
@@ -2430,8 +2527,125 @@ mod vault_session_tests {
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
 
-    use super::{VaultRegistry, WatchLease, publish_if_open, record_opened_vault};
-    use skribeum_vault::{SearchIndex, SimFs, Vault, VaultSession, VaultSessionStore};
+    use super::{
+        IndexRebuilds, VaultRegistry, WatchLease, publish_if_open, record_opened_vault,
+        spawn_index_rebuild,
+    };
+    use skribeum_vault::{
+        DirEntry, FileMetadata, FileSystem, FsError, SearchIndex, SimFs, Vault, VaultSession,
+        VaultSessionStore, Watcher,
+    };
+
+    #[derive(Clone)]
+    struct BlockingFs {
+        inner: SimFs,
+        first_read: Arc<AtomicBool>,
+        entered: mpsc::Sender<()>,
+        release: Arc<Mutex<mpsc::Receiver<()>>>,
+    }
+
+    impl BlockingFs {
+        fn new(inner: SimFs) -> (Self, mpsc::Receiver<()>, mpsc::Sender<()>) {
+            let (entered_tx, entered_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            (
+                Self {
+                    inner,
+                    first_read: Arc::new(AtomicBool::new(false)),
+                    entered: entered_tx,
+                    release: Arc::new(Mutex::new(release_rx)),
+                },
+                entered_rx,
+                release_tx,
+            )
+        }
+    }
+
+    impl FileSystem for BlockingFs {
+        fn read(&self, path: &Path) -> Result<Vec<u8>, FsError> {
+            if !self.first_read.swap(true, Ordering::AcqRel) {
+                let _ = self.entered.send(());
+                let release = self
+                    .release
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let _ = release.recv();
+            }
+            self.inner.read(path)
+        }
+
+        fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
+            self.inner.write_file(path, bytes)
+        }
+
+        fn create_new_file(&self, path: &Path) -> Result<bool, FsError> {
+            self.inner.create_new_file(path)
+        }
+
+        fn create_private_file(&self, path: &Path, bytes: &[u8]) -> Result<bool, FsError> {
+            self.inner.create_private_file(path, bytes)
+        }
+
+        fn append_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
+            self.inner.append_file(path, bytes)
+        }
+
+        fn fsync_file(&self, path: &Path) -> Result<(), FsError> {
+            self.inner.fsync_file(path)
+        }
+
+        fn fsync_dir(&self, path: &Path) -> Result<(), FsError> {
+            self.inner.fsync_dir(path)
+        }
+
+        fn copy_permissions(&self, from: &Path, to: &Path) -> Result<(), FsError> {
+            self.inner.copy_permissions(from, to)
+        }
+
+        fn resolve_write_target(&self, path: &Path) -> Result<PathBuf, FsError> {
+            self.inner.resolve_write_target(path)
+        }
+
+        fn canonicalize(&self, path: &Path) -> Result<PathBuf, FsError> {
+            self.inner.canonicalize(path)
+        }
+
+        fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError> {
+            self.inner.rename(from, to)
+        }
+
+        fn remove_file(&self, path: &Path) -> Result<(), FsError> {
+            self.inner.remove_file(path)
+        }
+
+        fn remove_dir_all(&self, path: &Path) -> Result<(), FsError> {
+            self.inner.remove_dir_all(path)
+        }
+
+        fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
+            self.inner.create_dir_all(path)
+        }
+
+        fn create_private_dir_all(&self, path: &Path) -> Result<(), FsError> {
+            self.inner.create_private_dir_all(path)
+        }
+
+        fn write_private_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
+            self.inner.write_private_file(path, bytes)
+        }
+
+        fn metadata(&self, path: &Path) -> Result<FileMetadata, FsError> {
+            self.inner.metadata(path)
+        }
+
+        fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
+            self.inner.read_dir(path)
+        }
+
+        fn watch(&self, root: &Path) -> Result<Box<dyn Watcher>, FsError> {
+            self.inner.watch(root)
+        }
+    }
 
     #[test]
     fn only_a_successful_open_records_the_canonical_vault_root() {
@@ -2514,6 +2728,124 @@ mod vault_session_tests {
 
         assert_eq!(registry.open_count(), 0);
         assert_eq!(registry.watcher_count(), 0);
+    }
+
+    #[test]
+    fn close_cancels_a_blocked_rebuild_and_waits_for_its_worker() {
+        let fs = SimFs::new();
+        let root = PathBuf::from("/vaults/blocked");
+        fs.external_create_dir(&root);
+        for number in 0..64 {
+            fs.external_write(
+                &root.join(format!("note-{number:02}.md")),
+                format!("# Note {number}\n\ncancellable index traversal\n").as_bytes(),
+            );
+        }
+        fs.deliver_all();
+        let vault = Vault::open(&fs, &root).expect("vault opens");
+        let index = SearchIndex::in_memory().expect("index opens");
+        index
+            .index_note("previous.md", b"preserved before cancellation")
+            .expect("previous index state writes");
+        let search = Arc::new(Mutex::new(Some(index)));
+        let registry = Arc::new(VaultRegistry::default());
+        let opened = registry.register(vault.clone(), Arc::clone(&search));
+        let (active, rebuilds) = {
+            let vaults = registry.lock();
+            let open = vaults.get(&opened.handle.id).expect("registered vault");
+            (Arc::clone(&open.active), Arc::clone(&open.rebuilds))
+        };
+        let (blocking_fs, entered_rx, release_tx) = BlockingFs::new(fs);
+
+        spawn_index_rebuild(&rebuilds, &search, vault, Arc::clone(&active), blocking_fs);
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("rebuild blocks during its first note read");
+        assert_eq!(registry.rebuild_count(), 1);
+
+        let (close_started_tx, close_started_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let close_registry = Arc::clone(&registry);
+        let handle = opened.handle;
+        let closer = std::thread::spawn(move || {
+            let _ = close_started_tx.send(());
+            close_registry.close(handle);
+            let _ = closed_tx.send(());
+        });
+        close_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("close begins");
+        for _ in 0..10_000 {
+            if !active.load(Ordering::Acquire) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(
+            !active.load(Ordering::Acquire),
+            "close signals rebuild cancellation before waiting"
+        );
+        assert!(
+            closed_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "close waits until the blocked traversal can observe cancellation"
+        );
+
+        release_tx.send(()).expect("blocked read releases");
+        closed_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("close returns after the rebuild exits");
+        closer.join().expect("close worker exits");
+
+        assert_eq!(registry.open_count(), 0);
+        assert_eq!(rebuilds.active_count(), 0);
+        let guard = search.lock().expect("search index lock");
+        let index = guard.as_ref().expect("search index remains available");
+        assert_eq!(
+            index
+                .query("preserved", 10)
+                .expect("previous index remains queryable")
+                .len(),
+            1,
+            "cancelled rebuild rolls its transaction back"
+        );
+        assert!(
+            index
+                .query("cancellable", 10)
+                .expect("cancelled entries stay absent")
+                .is_empty(),
+            "no partial rebuild result commits after close"
+        );
+    }
+
+    #[test]
+    fn repeated_open_close_keeps_rebuild_workers_bounded() {
+        let fs = SimFs::new();
+        let root = PathBuf::from("/vaults/repeated");
+        fs.external_create_dir(&root);
+        fs.external_write(&root.join("note.md"), b"ordinary rebuild content\n");
+        fs.deliver_all();
+        let vault = Vault::open(&fs, &root).expect("vault opens");
+        let registry = VaultRegistry::default();
+
+        for _ in 0..16 {
+            let search = Arc::new(Mutex::new(Some(
+                SearchIndex::in_memory().expect("index opens"),
+            )));
+            let opened = registry.register(vault.clone(), Arc::clone(&search));
+            let (active, rebuilds) = {
+                let vaults = registry.lock();
+                let open = vaults.get(&opened.handle.id).expect("registered vault");
+                (Arc::clone(&open.active), Arc::clone(&open.rebuilds))
+            };
+            spawn_index_rebuild(&rebuilds, &search, vault.clone(), active, fs.clone());
+            assert!(
+                registry.rebuild_count() <= 1,
+                "one handle owns at most one active rebuild in this open-close cycle"
+            );
+            registry.close(opened.handle);
+            assert_eq!(registry.open_count(), 0);
+            assert_eq!(rebuilds.active_count(), 0);
+        }
     }
 
     #[test]

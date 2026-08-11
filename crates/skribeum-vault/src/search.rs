@@ -43,6 +43,15 @@ pub enum SearchError {
     Storage(String),
 }
 
+/// The terminal state of one full-index rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RebuildOutcome {
+    /// Every indexed note was read and committed to the index.
+    Completed(usize),
+    /// The caller cancelled before the transaction could commit.
+    Cancelled,
+}
+
 impl From<rusqlite::Error> for SearchError {
     fn from(error: rusqlite::Error) -> Self {
         // SQLite error text describes storage and SQL state, never note
@@ -320,11 +329,39 @@ impl SearchIndex {
     /// Unreadable notes are skipped; the index must never block on one bad
     /// file.
     pub fn rebuild(&self, fs: &dyn FileSystem, vault: &Vault) -> Result<usize, SearchError> {
+        match self.rebuild_cancellable(fs, vault, || false)? {
+            RebuildOutcome::Completed(indexed) => Ok(indexed),
+            RebuildOutcome::Cancelled => unreachable!("an always-active rebuild cannot cancel"),
+        }
+    }
+
+    /// Rebuilds the index until `cancelled` requests that the transaction be
+    /// abandoned. Cancellation is checked once per traversed vault entry and
+    /// again after each note read, so a cancelled rebuild commits no partial
+    /// index.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SearchError::Storage`] when the index cannot be written.
+    /// Unreadable notes are skipped; the index must never block on one bad
+    /// file.
+    pub fn rebuild_cancellable(
+        &self,
+        fs: &dyn FileSystem,
+        vault: &Vault,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<RebuildOutcome, SearchError> {
+        if cancelled() {
+            return Ok(RebuildOutcome::Cancelled);
+        }
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM note_index", [])?;
         tx.execute("DELETE FROM note_tags", [])?;
         let mut indexed = 0usize;
         for entry in vault.tree() {
+            if cancelled() {
+                return Ok(RebuildOutcome::Cancelled);
+            }
             if entry.kind != EntryKind::Note {
                 continue;
             }
@@ -332,11 +369,17 @@ impl SearchIndex {
             let Ok(bytes) = fs.read(&absolute) else {
                 continue;
             };
+            if cancelled() {
+                return Ok(RebuildOutcome::Cancelled);
+            }
             Self::index_note_in_transaction(&tx, entry.path.as_str(), &bytes)?;
             indexed += 1;
         }
+        if cancelled() {
+            return Ok(RebuildOutcome::Cancelled);
+        }
         tx.commit()?;
-        Ok(indexed)
+        Ok(RebuildOutcome::Completed(indexed))
     }
 
     /// Applies one reconciliation event to the index: external updates

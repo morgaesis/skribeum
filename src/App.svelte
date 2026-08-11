@@ -1127,7 +1127,7 @@ function validateTreeRename(
   return null;
 }
 
-async function renameTreeEntry(path: string) {
+async function renameTreeEntry(path: string, restoreFocus?: () => void) {
   const activeVault = vault;
   if (activeVault === null) return;
   const requiresNoteExtension =
@@ -1163,12 +1163,14 @@ async function renameTreeEntry(path: string) {
     if (affectsActive && selectedPath !== null) {
       await openNote(selectedPath, activeViewState);
     }
+    await tick();
+    restoreFocus?.();
   } catch (error) {
     errorText = describeError(STRINGS.treeOperationFailed, error);
   }
 }
 
-async function deleteTreeEntry(path: string) {
+async function deleteTreeEntry(path: string, restoreFocus?: () => void) {
   const activeVault = vault;
   if (activeVault === null) return;
   const confirmed = await showConfirmDialog({
@@ -1204,6 +1206,8 @@ async function deleteTreeEntry(path: string) {
         await openNote(nextPath, tab.viewState, "tab");
       }
     }
+    await tick();
+    restoreFocus?.();
   } catch (error) {
     errorText = describeError(STRINGS.treeOperationFailed, error);
   }

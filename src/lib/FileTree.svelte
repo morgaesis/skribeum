@@ -561,6 +561,29 @@ async function focusRow(index: number, focus = true) {
   if (focus) itemElements[nextIndex]?.focus();
 }
 
+function restoreMenuTreeFocus(path: string): () => void {
+  const originIndex = rows.findIndex((row) => row.path === path);
+  if (originIndex >= 0) {
+    focusIndex = originIndex;
+    itemElements[originIndex]?.focus();
+  }
+
+  return () => {
+    const exactIndex = rows.findIndex((row) => row.path === path);
+    if (exactIndex >= 0) {
+      void focusRow(exactIndex);
+      return;
+    }
+    if (rows.length > 0) {
+      // A removed row hands focus to its following sibling when available,
+      // otherwise the preceding sibling at the final surviving index.
+      void focusRow(Math.min(Math.max(originIndex, 0), rows.length - 1));
+      return;
+    }
+    treeElement?.focus();
+  };
+}
+
 function persistExpanded() {
   onExpandedChange?.(
     Object.entries(userExpanded)
@@ -830,8 +853,13 @@ function runMenuCommand(id: string) {
   const path = menuPath;
   if (path === null || registry === undefined || commandContext === undefined)
     return;
+  const restoreTreeFocus = restoreMenuTreeFocus(path);
   closeMenu(false);
-  registry.run(id, { ...commandContext(), treePath: path });
+  registry.run(id, {
+    ...commandContext(),
+    treePath: path,
+    restoreTreeFocus,
+  });
 }
 
 function rowContextMenu(event: MouseEvent, row: Row) {
@@ -987,6 +1015,7 @@ function dropOn(destination: string | null) {
   bind:this={treeElement}
   class="skr-file-tree"
   role="tree"
+  tabindex="-1"
   aria-label={STRINGS.vaultTreeLabel}
   onkeydown={onKeydown}
   onscroll={(event) => {

@@ -5,10 +5,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{FileSystem, FsError, write_durable};
+use crate::{FileSystem, FsError, write_durable_private};
 
 /// File name of the device-local vault startup session document.
 pub const VAULT_SESSION_FILE_NAME: &str = "vault-session.json";
+/// Private directory containing the device-local vault startup session.
+pub const VAULT_SESSION_DIRECTORY_NAME: &str = "vault-session";
 /// Current schema version of [`VaultSession`].
 pub const VAULT_SESSION_SCHEMA_VERSION: u32 = 1;
 /// Number of recently opened vaults retained for startup recovery.
@@ -121,10 +123,12 @@ pub struct VaultSessionStore {
 }
 
 impl VaultSessionStore {
-    /// A store at `path`.
+    /// A store in its dedicated `directory`.
     #[must_use]
-    pub fn new(path: PathBuf) -> Self {
-        Self { path }
+    pub fn new(directory: &Path) -> Self {
+        Self {
+            path: directory.join(VAULT_SESSION_FILE_NAME),
+        }
     }
 
     /// The session document path.
@@ -186,7 +190,9 @@ impl VaultSessionStore {
         Ok(session)
     }
 
-    /// Clears automatic startup recovery without deleting the recent list.
+    /// Clears only the authoritative automatic-startup selection without
+    /// deleting the recent list. Startup policy may still choose a remaining
+    /// recent vault when no authoritative selection exists.
     ///
     /// # Errors
     ///
@@ -203,12 +209,9 @@ impl VaultSessionStore {
         let mut bytes = serde_json::to_vec_pretty(&session.document())
             .map_err(|_| VaultSessionError::Serialize)?;
         bytes.push(b'\n');
-        if let Some(parent) = self.path.parent()
-            && fs.metadata(parent).is_err()
-        {
-            fs.create_dir_all(parent)?;
-        }
-        write_durable(fs, &self.path, &bytes)?;
+        let parent = self.path.parent().ok_or(FsError::NotADirectory)?;
+        fs.create_private_dir_all(parent)?;
+        write_durable_private(fs, &self.path, &bytes)?;
         Ok(())
     }
 }

@@ -30,6 +30,17 @@ pub struct VaultHandle {
     pub id: u32,
 }
 
+/// The canonical vault identity and the handle that owns it for this native
+/// session. Frontend callers retain `handle` for every handle-scoped command
+/// and use `root` when they need the canonical path identity.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct VaultOpenResult {
+    /// Opaque session-local handle for subsequent vault commands.
+    pub handle: VaultHandle,
+    /// Canonical absolute root accepted by the native vault model.
+    pub root: String,
+}
+
 /// Entry kind over IPC.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
@@ -733,6 +744,12 @@ fn task_status_into_vault(status: TaskStatusDoc) -> skribeum_vault::TaskStatus {
 
 struct OpenVault {
     vault: Vault,
+    /// Cleared by `vault_close`; every background worker checks it before
+    /// doing more work or publishing an event.
+    active: Arc<AtomicBool>,
+    /// Serializes publication with close so no event can cross the IPC
+    /// boundary after `vault_close` completes.
+    publication: Arc<Mutex<()>>,
     watching: Arc<AtomicBool>,
     reconciler: Arc<Mutex<Reconciler>>,
     /// The vault's full-text index. `None` when the OS app-data directory
@@ -746,6 +763,7 @@ struct OpenVault {
 pub struct VaultRegistry {
     next_id: AtomicU32,
     vaults: Mutex<HashMap<u32, OpenVault>>,
+    active_watchers: Arc<AtomicU32>,
     clock: RealClock,
 }
 
@@ -753,6 +771,87 @@ impl VaultRegistry {
     fn lock(&self) -> MutexGuard<'_, HashMap<u32, OpenVault>> {
         self.vaults.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn register(&self, vault: Vault, search: Arc<Mutex<Option<SearchIndex>>>) -> VaultOpenResult {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let root = vault.root().to_string_lossy().into_owned();
+        self.lock().insert(
+            id,
+            OpenVault {
+                vault,
+                active: Arc::new(AtomicBool::new(true)),
+                publication: Arc::new(Mutex::new(())),
+                watching: Arc::new(AtomicBool::new(false)),
+                reconciler: Arc::new(Mutex::new(Reconciler::default())),
+                search,
+            },
+        );
+        VaultOpenResult {
+            handle: VaultHandle { id },
+            root,
+        }
+    }
+
+    /// Releases one handle's ownership. Missing handles are already closed.
+    fn close(&self, handle: VaultHandle) {
+        if let Some(open) = self.lock().remove(&handle.id) {
+            open.active.store(false, Ordering::Release);
+            open.watching.store(false, Ordering::Release);
+            let _publication = open
+                .publication
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    #[cfg(test)]
+    fn open_count(&self) -> usize {
+        self.lock().len()
+    }
+
+    #[cfg(test)]
+    fn watcher_count(&self) -> u32 {
+        self.active_watchers.load(Ordering::Acquire)
+    }
+}
+
+/// Keeps the registry's watcher count accurate even when a worker returns
+/// through an early cancellation branch.
+struct WatchLease(Arc<AtomicU32>);
+
+impl WatchLease {
+    fn new(count: Arc<AtomicU32>) -> Self {
+        count.fetch_add(1, Ordering::AcqRel);
+        Self(count)
+    }
+}
+
+impl Drop for WatchLease {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Emits while the handle is still active. Holding the publication lock makes
+/// close a linearization point: after close returns, no worker can publish.
+fn publish_if_open<Result>(
+    active: &AtomicBool,
+    publication: &Mutex<()>,
+    publish: impl FnOnce() -> Result,
+) -> Option<Result> {
+    let _publication = publication.lock().unwrap_or_else(PoisonError::into_inner);
+    active.load(Ordering::Acquire).then(publish)
+}
+
+fn emit_for_open_vault<R: Runtime, Payload: Serialize + Clone>(
+    app: &AppHandle<R>,
+    active: &AtomicBool,
+    publication: &Mutex<()>,
+    event: &str,
+    payload: Payload,
+) -> bool {
+    publish_if_open(active, publication, || app.emit(event, payload))
+        .is_some_and(|result| result.is_ok())
 }
 
 /// The crash journal, enabled by default and living in the OS app-data
@@ -997,19 +1096,32 @@ fn change_all_window_zoom<R: Runtime>(
 /// notes only; a rebuild never writes inside the vault. The function returns
 /// after the worker acquires the index lock, so a subsequent query waits for
 /// the complete rebuild instead of racing ahead of it.
-fn spawn_index_rebuild(search: &Arc<Mutex<Option<SearchIndex>>>, vault: Vault) {
+fn spawn_index_rebuild(
+    search: &Arc<Mutex<Option<SearchIndex>>>,
+    vault: Vault,
+    active: Arc<AtomicBool>,
+) {
     let search = Arc::clone(search);
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
+        if !active.load(Ordering::Acquire) {
+            let _ = started_tx.send(());
+            return;
+        }
         let guard = search.lock().unwrap_or_else(PoisonError::into_inner);
         let _ = started_tx.send(());
-        if let Some(index) = guard.as_ref() {
+        if active.load(Ordering::Acquire)
+            && let Some(index) = guard.as_ref()
+        {
             #[cfg(debug_assertions)]
             let rebuilt = index.rebuild(&RealFs, &vault).is_ok();
             #[cfg(not(debug_assertions))]
             let _ = index.rebuild(&RealFs, &vault);
             #[cfg(debug_assertions)]
-            if rebuilt && let Some(process_ms) = crate::cold_start_elapsed_milliseconds() {
+            if rebuilt
+                && active.load(Ordering::Acquire)
+                && let Some(process_ms) = crate::cold_start_elapsed_milliseconds()
+            {
                 eprintln!(
                     "SKRIBEUM_COLD_START {{\"event\":\"full-text-index-complete\",\"process_ms\":{process_ms}}}"
                 );
@@ -1029,12 +1141,13 @@ fn vault_open<R: Runtime>(
     registry: State<'_, VaultRegistry>,
     session: State<'_, VaultSessionState>,
     path: String,
-) -> Result<VaultHandle, AppError> {
+) -> Result<VaultOpenResult, AppError> {
     let vault = Vault::open(&RealFs, Path::new(&path))?;
     let _mutation = session.1.lock().unwrap_or_else(PoisonError::into_inner);
-    record_opened_vault(&RealFs, session.0.as_ref(), &vault)?;
+    // Startup recovery is best effort. A read-only, full, or inaccessible
+    // device-local session store never invalidates a successfully opened vault.
+    let _ = record_opened_vault(&RealFs, session.0.as_ref(), &vault);
     drop(_mutation);
-    let id = registry.next_id.fetch_add(1, Ordering::Relaxed) + 1;
     let groups: Vec<Vec<String>> = vault
         .collisions()
         .iter()
@@ -1049,21 +1162,40 @@ fn vault_open<R: Runtime>(
         Arc::new(Mutex::new(app.path().app_data_dir().ok().and_then(|dir| {
             SearchIndex::open_in_app_data(&dir, vault.root()).ok()
         })));
-    spawn_index_rebuild(&search, vault.clone());
-
-    registry.lock().insert(
-        id,
-        OpenVault {
-            vault,
-            watching: Arc::new(AtomicBool::new(false)),
-            reconciler: Arc::new(Mutex::new(Reconciler::default())),
-            search,
-        },
-    );
+    let result = registry.register(vault.clone(), search.clone());
+    let active = {
+        let vaults = registry.lock();
+        Arc::clone(&vaults[&result.handle.id].active)
+    };
+    spawn_index_rebuild(&search, vault, active);
     if !groups.is_empty() {
-        let _ = VaultCollisionsDetected { vault: id, groups }.emit(&app);
+        let (active, publication) = {
+            let vaults = registry.lock();
+            let open = &vaults[&result.handle.id];
+            (Arc::clone(&open.active), Arc::clone(&open.publication))
+        };
+        let _ = emit_for_open_vault(
+            &app,
+            &active,
+            &publication,
+            VaultCollisionsDetected::NAME,
+            VaultCollisionsDetected {
+                vault: result.handle.id,
+                groups,
+            },
+        );
     }
-    Ok(VaultHandle { id })
+    Ok(result)
+}
+
+/// Releases a native vault handle. Repeating the close is harmless so a
+/// superseded frontend open can always clean up its provisional handle.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn vault_close(registry: State<'_, VaultRegistry>, handle: VaultHandle) -> Result<(), AppError> {
+    registry.close(handle);
+    Ok(())
 }
 
 /// Converts a vault's indexed tree into its IPC form.
@@ -1111,7 +1243,7 @@ fn vault_tree_refresh<R: Runtime>(
     registry: State<'_, VaultRegistry>,
     handle: VaultHandle,
 ) -> Result<Vec<TreeEntry>, AppError> {
-    let (entries, groups, search, vault) = {
+    let (entries, groups, search, vault, active, publication) = {
         let mut vaults = registry.lock();
         let open = vaults
             .get_mut(&handle.id)
@@ -1128,15 +1260,22 @@ fn vault_tree_refresh<R: Runtime>(
             groups,
             Arc::clone(&open.search),
             open.vault.clone(),
+            Arc::clone(&open.active),
+            Arc::clone(&open.publication),
         )
     };
-    spawn_index_rebuild(&search, vault);
+    spawn_index_rebuild(&search, vault, Arc::clone(&active));
     if !groups.is_empty() {
-        let _ = VaultCollisionsDetected {
-            vault: handle.id,
-            groups,
-        }
-        .emit(&app);
+        let _ = emit_for_open_vault(
+            &app,
+            &active,
+            &publication,
+            VaultCollisionsDetected::NAME,
+            VaultCollisionsDetected {
+                vault: handle.id,
+                groups,
+            },
+        );
     }
     Ok(entries)
 }
@@ -1185,7 +1324,7 @@ fn tree_folder_create(
     rel_path: String,
 ) -> Result<Vec<TreeEntry>, AppError> {
     let path = VaultPath::new(&rel_path)?;
-    let (entries, search, vault) = {
+    let (entries, search, vault, active) = {
         let mut vaults = registry.lock();
         let open = vaults
             .get_mut(&handle.id)
@@ -1197,9 +1336,10 @@ fn tree_folder_create(
             tree_entries(&open.vault),
             Arc::clone(&open.search),
             open.vault.clone(),
+            Arc::clone(&open.active),
         )
     };
-    spawn_index_rebuild(&search, vault);
+    spawn_index_rebuild(&search, vault, active);
     Ok(entries)
 }
 
@@ -1215,7 +1355,7 @@ fn tree_entry_move(
 ) -> Result<Vec<TreeEntry>, AppError> {
     let from = VaultPath::new(&from_path)?;
     let to = VaultPath::new(&to_path)?;
-    let (entries, search, vault) = {
+    let (entries, search, vault, active) = {
         let mut vaults = registry.lock();
         let open = vaults
             .get_mut(&handle.id)
@@ -1227,9 +1367,10 @@ fn tree_entry_move(
             tree_entries(&open.vault),
             Arc::clone(&open.search),
             open.vault.clone(),
+            Arc::clone(&open.active),
         )
     };
-    spawn_index_rebuild(&search, vault);
+    spawn_index_rebuild(&search, vault, active);
     Ok(entries)
 }
 
@@ -1243,7 +1384,7 @@ fn tree_entry_delete(
     rel_path: String,
 ) -> Result<Vec<TreeEntry>, AppError> {
     let path = VaultPath::new(&rel_path)?;
-    let (entries, search, vault) = {
+    let (entries, search, vault, active) = {
         let mut vaults = registry.lock();
         let open = vaults
             .get_mut(&handle.id)
@@ -1255,9 +1396,10 @@ fn tree_entry_delete(
             tree_entries(&open.vault),
             Arc::clone(&open.search),
             open.vault.clone(),
+            Arc::clone(&open.active),
         )
     };
-    spawn_index_rebuild(&search, vault);
+    spawn_index_rebuild(&search, vault, active);
     Ok(entries)
 }
 
@@ -1684,7 +1826,7 @@ fn watch_subscribe<R: Runtime>(
     edit_history: State<'_, EditHistoryState>,
     handle: VaultHandle,
 ) -> Result<(), AppError> {
-    let (root, vault, watching, reconciler, search, clock) = {
+    let (root, vault, active, publication, watching, reconciler, search, clock, active_watchers) = {
         let vaults = registry.lock();
         let open = vaults
             .get(&handle.id)
@@ -1692,12 +1834,18 @@ fn watch_subscribe<R: Runtime>(
         (
             open.vault.root().to_owned(),
             open.vault.clone(),
+            Arc::clone(&open.active),
+            Arc::clone(&open.publication),
             Arc::clone(&open.watching),
             Arc::clone(&open.reconciler),
             Arc::clone(&open.search),
             registry.clock,
+            Arc::clone(&registry.active_watchers),
         )
     };
+    if !active.load(Ordering::Acquire) {
+        return Err(AppError::unknown_handle());
+    }
     if watching.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
@@ -1707,7 +1855,11 @@ fn watch_subscribe<R: Runtime>(
     // bytes, a changed-on-disk chain surfaces the reconciliation banner and
     // is never applied silently.
     if let Some(journal) = &journal.0 {
-        replay_journal(&app, journal, handle.id, &root);
+        replay_journal(&app, journal, handle.id, &root, &active, &publication);
+    }
+    if !active.load(Ordering::Acquire) {
+        watching.store(false, Ordering::Release);
+        return Ok(());
     }
     if let Some(journal) = &edit_history.0 {
         let _ = journal.garbage_collect(&RealFs, &root);
@@ -1718,14 +1870,25 @@ fn watch_subscribe<R: Runtime>(
         message: format!("failed to start the vault watcher: {error}"),
         path: None,
     })?;
+    if !active.load(Ordering::Acquire) {
+        watching.store(false, Ordering::Release);
+        return Ok(());
+    }
 
     let vault_id = handle.id;
     let edit_history = edit_history.0.clone();
     std::thread::spawn(move || {
+        let _lease = WatchLease::new(active_watchers);
         let mut watcher = watcher;
         loop {
+            if !active.load(Ordering::Acquire) {
+                return;
+            }
             let mut delivered_any = false;
             while let Some(event) = watcher.try_next() {
+                if !active.load(Ordering::Acquire) {
+                    return;
+                }
                 delivered_any = true;
                 let now = clock.now();
                 let Some(change) = translate_event(vault_id, &root, event) else {
@@ -1763,16 +1926,21 @@ fn watch_subscribe<R: Runtime>(
                         let _ = journal.remove_note(&RealFs, &root, path);
                     }
                 }
-                if change.emit(&app).is_err() {
-                    // The app is shutting down; end the watch thread.
+                if !emit_for_open_vault(&app, &active, &publication, VaultChanged::NAME, change) {
                     return;
                 }
+            }
+            if !active.load(Ordering::Acquire) {
+                return;
             }
             let events = {
                 let mut recon = reconciler.lock().unwrap_or_else(PoisonError::into_inner);
                 recon.poll(&RealFs, &root, clock.now())
             };
             for event in events {
+                if !active.load(Ordering::Acquire) {
+                    return;
+                }
                 apply_external_recon_state(&vault, edit_history.as_ref(), &root, &event);
                 // External changes update the search index incrementally:
                 // updates re-read and re-index, removals drop the row.
@@ -1783,7 +1951,7 @@ fn watch_subscribe<R: Runtime>(
                 {
                     let _ = index.apply_recon_event(&RealFs, &root, &event);
                 }
-                if !emit_recon_event(&app, vault_id, event) {
+                if !emit_recon_event(&app, vault_id, event, &active, &publication) {
                     return;
                 }
             }
@@ -1791,7 +1959,7 @@ fn watch_subscribe<R: Runtime>(
                 // Polling cadence for the OS watcher queue. Reconciliation
                 // debounce logic runs on the Clock trait, not on this
                 // interval.
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(20));
             }
         }
     });
@@ -2013,7 +2181,8 @@ fn vault_session_forget(
     Ok(vault_session_to_doc(store.forget(&RealFs, &path)?))
 }
 
-/// Disables automatic startup recovery while keeping recent vault choices.
+/// Clears only the authoritative startup selection while retaining recent
+/// choices. Startup policy can still select one remaining recent vault.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
@@ -2204,9 +2373,12 @@ fn startup_zoom_percent(
 #[cfg(test)]
 mod vault_session_tests {
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
 
-    use super::record_opened_vault;
-    use skribeum_vault::{FileSystem, SimFs, Vault, VaultSession, VaultSessionStore};
+    use super::{VaultRegistry, WatchLease, publish_if_open, record_opened_vault};
+    use skribeum_vault::{FileSystem, SearchIndex, SimFs, Vault, VaultSession, VaultSessionStore};
 
     #[test]
     fn only_a_successful_open_records_the_canonical_vault_root() {
@@ -2214,7 +2386,7 @@ mod vault_session_tests {
         fs.external_create_dir(&PathBuf::from("/config"));
         fs.external_create_dir(&PathBuf::from("/vaults/real"));
         fs.external_symlink(Path::new("/vaults/link"), Path::new("/vaults/real"));
-        let store = VaultSessionStore::new(PathBuf::from("/config/vault-session.json"));
+        let store = VaultSessionStore::new(Path::new("/config/vault-session"));
 
         assert!(Vault::open(&fs, Path::new("/vaults/missing")).is_err());
         assert_eq!(
@@ -2228,6 +2400,106 @@ mod vault_session_tests {
         let session = store.read(&fs).expect("session rereads");
         assert_eq!(session.last_vault.as_deref(), Some("/vaults/real"));
         assert_eq!(session.recent_vaults, ["/vaults/real"]);
+    }
+
+    #[test]
+    fn session_persistence_failure_does_not_prevent_canonical_registration() {
+        let fs = SimFs::new();
+        fs.external_create_dir(&PathBuf::from("/config"));
+        fs.external_create_dir(&PathBuf::from("/vaults/real"));
+        let store = VaultSessionStore::new(Path::new("/config/vault-session"));
+        let vault = Vault::open(&fs, Path::new("/vaults/real")).expect("vault opens");
+        fs.set_read_only(true);
+
+        assert!(record_opened_vault(&fs, Some(&store), &vault).is_err());
+
+        let registry = VaultRegistry::default();
+        let opened = registry.register(vault, Arc::new(Mutex::new(None::<SearchIndex>)));
+        assert_eq!(opened.root, "/vaults/real");
+        assert_eq!(registry.open_count(), 1);
+
+        registry.close(opened.handle);
+        assert_eq!(registry.open_count(), 0);
+    }
+
+    #[test]
+    fn repeated_close_releases_registry_and_watcher_ownership_promptly() {
+        let fs = SimFs::new();
+        fs.external_create_dir(&PathBuf::from("/vaults/real"));
+        let vault = Vault::open(&fs, Path::new("/vaults/real")).expect("vault opens");
+        let registry = Arc::new(VaultRegistry::default());
+        let opened = registry.register(vault, Arc::new(Mutex::new(None::<SearchIndex>)));
+        let (active, watcher_count) = {
+            let vaults = registry.lock();
+            let open = vaults.get(&opened.handle.id).expect("registered vault");
+            (
+                Arc::clone(&open.active),
+                Arc::clone(&registry.active_watchers),
+            )
+        };
+        let (started_tx, started_rx) = mpsc::channel();
+        let (stopped_tx, stopped_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _lease = WatchLease::new(watcher_count);
+            let _ = started_tx.send(());
+            while active.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let _ = stopped_tx.send(());
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("watch worker starts");
+        assert_eq!(registry.watcher_count(), 1);
+
+        registry.close(opened.handle);
+        registry.close(opened.handle);
+        stopped_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("watch worker stops promptly after close");
+        worker.join().expect("watch worker exits after close");
+
+        assert_eq!(registry.open_count(), 0);
+        assert_eq!(registry.watcher_count(), 0);
+    }
+
+    #[test]
+    fn close_blocks_publication_from_in_progress_workers() {
+        let active = Arc::new(AtomicBool::new(true));
+        let publication = Arc::new(Mutex::new(()));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker_active = Arc::clone(&active);
+        let worker_publication = Arc::clone(&publication);
+        let worker = std::thread::spawn(move || {
+            publish_if_open(&worker_active, &worker_publication, || {
+                let _ = entered_tx.send(());
+                release_rx.recv().expect("publication releases");
+            })
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker reaches publication gate");
+
+        let (close_started_tx, close_started_rx) = mpsc::channel();
+        let close_active = Arc::clone(&active);
+        let close_publication = Arc::clone(&publication);
+        let closer = std::thread::spawn(move || {
+            close_active.store(false, Ordering::Release);
+            let _ = close_started_tx.send(());
+            let _guard = close_publication.lock().expect("publication lock");
+        });
+        close_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("close begins before publication releases");
+        release_tx.send(()).expect("worker releases publication");
+        worker.join().expect("worker exits");
+        closer.join().expect("close waits for publication");
+
+        assert!(
+            publish_if_open(&active, &publication, || ()).is_none(),
+            "closed workers must not publish"
+        );
     }
 }
 
@@ -2505,8 +2777,18 @@ fn open_files_take(state: State<'_, OpenFilesState>) -> Result<Vec<String>, AppE
 
 /// Replays the crash journal for one vault, emitting recovery deltas and
 /// divergence banners.
-fn replay_journal<R: Runtime>(app: &AppHandle<R>, journal: &Journal, vault: u32, root: &Path) {
+fn replay_journal<R: Runtime>(
+    app: &AppHandle<R>,
+    journal: &Journal,
+    vault: u32,
+    root: &Path,
+    active: &Arc<AtomicBool>,
+    publication: &Arc<Mutex<()>>,
+) {
     for outcome in journal.replay(&RealFs, root) {
+        if !active.load(Ordering::Acquire) {
+            return;
+        }
         match outcome {
             ReplayOutcome::Recovered {
                 rel_path,
@@ -2525,25 +2807,35 @@ fn replay_journal<R: Runtime>(app: &AppHandle<R>, journal: &Journal, vault: u32,
                         }]
                     }
                 };
-                let _ = NoteRecovered {
-                    vault,
-                    path: rel_path,
-                    change_set: to_ipc_changes(&change_set),
-                    projection_hash,
-                }
-                .emit(app);
+                let _ = emit_for_open_vault(
+                    app,
+                    active,
+                    publication,
+                    NoteRecovered::NAME,
+                    NoteRecovered {
+                        vault,
+                        path: rel_path,
+                        change_set: to_ipc_changes(&change_set),
+                        projection_hash,
+                    },
+                );
             }
             ReplayOutcome::Diverged {
                 rel_path,
                 disk_hash,
             } => {
-                let _ = ReconciliationBanner {
-                    vault,
-                    path: rel_path,
-                    reason: BannerReason::JournalDiverged,
-                    disk_hash,
-                }
-                .emit(app);
+                let _ = emit_for_open_vault(
+                    app,
+                    active,
+                    publication,
+                    ReconciliationBanner::NAME,
+                    ReconciliationBanner {
+                        vault,
+                        path: rel_path,
+                        reason: BannerReason::JournalDiverged,
+                        disk_hash,
+                    },
+                );
             }
             ReplayOutcome::Clean { .. } => {}
         }
@@ -2552,48 +2844,73 @@ fn replay_journal<R: Runtime>(app: &AppHandle<R>, journal: &Journal, vault: u32,
 
 /// Emits one typed reconciliation event; false when the app is shutting
 /// down.
-fn emit_recon_event<R: Runtime>(app: &AppHandle<R>, vault: u32, event: ReconEvent) -> bool {
-    let result = match event {
+fn emit_recon_event<R: Runtime>(
+    app: &AppHandle<R>,
+    vault: u32,
+    event: ReconEvent,
+    active: &Arc<AtomicBool>,
+    publication: &Arc<Mutex<()>>,
+) -> bool {
+    match event {
         ReconEvent::ExternalUpdate {
             path,
             projection_hash,
             change_set,
-        } => ExternalNoteUpdate {
-            vault,
-            path: path.as_str().to_owned(),
-            projection_hash,
-            change_set: to_ipc_changes(&change_set),
-        }
-        .emit(app),
-        ReconEvent::ExternalRemove { path } => ExternalNoteRemove {
-            vault,
-            path: path.as_str().to_owned(),
-        }
-        .emit(app),
+        } => emit_for_open_vault(
+            app,
+            active,
+            publication,
+            ExternalNoteUpdate::NAME,
+            ExternalNoteUpdate {
+                vault,
+                path: path.as_str().to_owned(),
+                projection_hash,
+                change_set: to_ipc_changes(&change_set),
+            },
+        ),
+        ReconEvent::ExternalRemove { path } => emit_for_open_vault(
+            app,
+            active,
+            publication,
+            ExternalNoteRemove::NAME,
+            ExternalNoteRemove {
+                vault,
+                path: path.as_str().to_owned(),
+            },
+        ),
         ReconEvent::Banner {
             path,
             reason,
             disk_hash,
-        } => ReconciliationBanner {
-            vault,
-            path: path.as_str().to_owned(),
-            reason: match reason {
-                skribeum_vault::BannerReason::SizeShrank => BannerReason::SizeShrank,
-                skribeum_vault::BannerReason::BecameEmpty => BannerReason::BecameEmpty,
-                skribeum_vault::BannerReason::EditWithinWriteSettle => {
-                    BannerReason::EditWithinWriteSettle
-                }
+        } => emit_for_open_vault(
+            app,
+            active,
+            publication,
+            ReconciliationBanner::NAME,
+            ReconciliationBanner {
+                vault,
+                path: path.as_str().to_owned(),
+                reason: match reason {
+                    skribeum_vault::BannerReason::SizeShrank => BannerReason::SizeShrank,
+                    skribeum_vault::BannerReason::BecameEmpty => BannerReason::BecameEmpty,
+                    skribeum_vault::BannerReason::EditWithinWriteSettle => {
+                        BannerReason::EditWithinWriteSettle
+                    }
+                },
+                disk_hash,
             },
-            disk_hash,
-        }
-        .emit(app),
-        ReconEvent::BulkDivergence { paths } => BulkDivergenceReview {
-            vault,
-            paths: paths.iter().map(|p| p.as_str().to_owned()).collect(),
-        }
-        .emit(app),
-    };
-    result.is_ok()
+        ),
+        ReconEvent::BulkDivergence { paths } => emit_for_open_vault(
+            app,
+            active,
+            publication,
+            BulkDivergenceReview::NAME,
+            BulkDivergenceReview {
+                vault,
+                paths: paths.iter().map(|p| p.as_str().to_owned()).collect(),
+            },
+        ),
+    }
 }
 
 /// Converts an absolute watcher path into a vault-relative string, dropping
@@ -2672,6 +2989,7 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(tauri_specta::collect_commands![
             vault_open::<tauri::Wry>,
+            vault_close,
             vault_session_read,
             vault_session_forget,
             vault_session_clear_last,

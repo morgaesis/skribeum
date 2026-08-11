@@ -667,16 +667,18 @@ pub fn run() {
                     app.path()
                         .app_config_dir()
                         .ok()
-                        .map(|dir| dir.join(skribeum_vault::VAULT_SESSION_FILE_NAME))
+                        .map(|dir| dir.join(skribeum_vault::VAULT_SESSION_DIRECTORY_NAME))
                 });
             #[cfg(not(feature = "webdriver"))]
             let vault_session_path = app
                 .path()
                 .app_config_dir()
                 .ok()
-                .map(|dir| dir.join(skribeum_vault::VAULT_SESSION_FILE_NAME));
+                .map(|dir| dir.join(skribeum_vault::VAULT_SESSION_DIRECTORY_NAME));
             app.manage(ipc::VaultSessionState(
-                vault_session_path.map(skribeum_vault::VaultSessionStore::new),
+                vault_session_path
+                    .as_deref()
+                    .map(skribeum_vault::VaultSessionStore::new),
                 std::sync::Mutex::new(()),
             ));
             if let Some(window) = app.get_webview_window("main") {

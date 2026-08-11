@@ -43,7 +43,9 @@ pub use vault::{
     classify, is_indexed_path,
 };
 pub use vault_session::{
-    MAX_RECENT_VAULTS, VAULT_SESSION_FILE_NAME, VAULT_SESSION_SCHEMA_VERSION, VaultSession,
-    VaultSessionError, VaultSessionStore,
+    MAX_RECENT_VAULTS, VAULT_SESSION_DIRECTORY_NAME, VAULT_SESSION_FILE_NAME,
+    VAULT_SESSION_SCHEMA_VERSION, VaultSession, VaultSessionError, VaultSessionStore,
 };
-pub use write::{WRITE_TEMP_PREFIX, is_write_temp_name, write_durable, write_temp_path};
+pub use write::{
+    WRITE_TEMP_PREFIX, is_write_temp_name, write_durable, write_durable_private, write_temp_path,
+};

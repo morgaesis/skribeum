@@ -878,6 +878,32 @@ impl FileSystem for SimFs {
         Ok(())
     }
 
+    fn create_private_dir_all(&self, path: &Path) -> Result<(), FsError> {
+        let mut state = self.lock();
+        if state.read_only {
+            return Err(FsError::ReadOnly);
+        }
+        state.app_write_count += 1;
+        state.app_op("create_private_dir_all")?;
+        add_dir_with_parents(&mut state, path);
+        state
+            .trace
+            .push(format!("app-private-mkdir {}", path.display()));
+        Ok(())
+    }
+
+    fn write_private_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
+        self.write_file(path, bytes)?;
+        let mut state = self.lock();
+        let id = state.file_inode(path).ok_or(FsError::NotFound)?;
+        let inode = state.inodes.get_mut(&id).ok_or(FsError::NotFound)?;
+        inode.mode = 0o600;
+        state
+            .trace
+            .push(format!("app-private-file {}", path.display()));
+        Ok(())
+    }
+
     fn metadata(&self, path: &Path) -> Result<FileMetadata, FsError> {
         let state = self.lock();
         let resolved = state.resolve(path);

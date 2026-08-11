@@ -18,6 +18,7 @@ import {
   type NoteStat,
   type TreeEntry,
   type VaultHandle,
+  type VaultOpenResult,
   type WriteResult,
 } from "./bindings";
 
@@ -96,8 +97,19 @@ export function unwrap<T>(
   return result.data;
 }
 
-export async function openVault(path: string): Promise<VaultHandle> {
+/** Opens a vault and returns its canonical native identity. */
+export async function openVaultResult(path: string): Promise<VaultOpenResult> {
   return unwrap(await commands.vaultOpen(path));
+}
+
+/** Compatibility adapter for existing handle-scoped desktop calls. */
+export async function openVault(path: string): Promise<VaultHandle> {
+  return (await openVaultResult(path)).handle;
+}
+
+/** Releases a native vault handle; repeated cleanup is harmless. */
+export async function closeVault(handle: VaultHandle): Promise<void> {
+  unwrap(await commands.vaultClose(handle));
 }
 
 export async function vaultTree(handle: VaultHandle): Promise<TreeEntry[]> {

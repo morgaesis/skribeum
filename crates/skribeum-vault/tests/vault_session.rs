@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use skribeum_vault::{
-    FileSystem, MAX_RECENT_VAULTS, SimFs, VAULT_SESSION_SCHEMA_VERSION, VaultSession,
+    FileSystem, MAX_RECENT_VAULTS, RealFs, SimFs, VAULT_SESSION_SCHEMA_VERSION, VaultSession,
     VaultSessionStore,
 };
 
@@ -11,7 +11,7 @@ fn store() -> (SimFs, VaultSessionStore) {
     fs.external_create_dir(&PathBuf::from("config"));
     (
         fs,
-        VaultSessionStore::new(PathBuf::from("config/vault-session.json")),
+        VaultSessionStore::new(Path::new("config/vault-session")),
     )
 }
 
@@ -110,4 +110,56 @@ fn forgetting_an_explicit_candidate_removes_it_and_clear_last_keeps_recents() {
     let cleared = store.clear_last(&fs).expect("last vault is cleared");
     assert_eq!(cleared.last_vault, None);
     assert_eq!(cleared.recent_vaults, ["/vaults/current"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn session_directory_and_replaced_document_remain_owner_only() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static CALL: AtomicU32 = AtomicU32::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "skribeum-vault-session-mode-{}-{}",
+        std::process::id(),
+        CALL.fetch_add(1, Ordering::Relaxed)
+    ));
+    let store = VaultSessionStore::new(&directory);
+
+    store
+        .record_opened(&RealFs, Path::new("/vaults/first"))
+        .expect("first private session write succeeds");
+    assert_eq!(
+        RealFs
+            .metadata(&directory)
+            .expect("session directory metadata")
+            .mode
+            .expect("Unix mode")
+            & 0o777,
+        0o700,
+        "the session directory is owner-only"
+    );
+    assert_eq!(
+        RealFs
+            .metadata(store.path())
+            .expect("session file metadata")
+            .mode
+            .expect("Unix mode")
+            & 0o777,
+        0o600,
+        "the first absolute-root document is owner-only"
+    );
+
+    store
+        .record_opened(&RealFs, Path::new("/vaults/second"))
+        .expect("replacement private session write succeeds");
+    assert_eq!(
+        RealFs
+            .metadata(store.path())
+            .expect("replacement metadata")
+            .mode
+            .expect("Unix mode")
+            & 0o777,
+        0o600,
+        "atomic replacement preserves the private mode"
+    );
 }

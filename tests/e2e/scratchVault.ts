@@ -25,7 +25,7 @@ export const SCRATCH_SETTINGS_PATH = path.join(
 );
 export const SCRATCH_VAULT_SESSION_PATH = path.join(
   os.tmpdir(),
-  `skribeum-e2e-vault-session-${checkoutKey}.json`,
+  `skribeum-e2e-vault-session-${checkoutKey}`,
 );
 export const SCRATCH_EDIT_HISTORY_PATH = path.join(
   os.tmpdir(),
@@ -307,7 +307,7 @@ export const CANVAS_FILE_CONTENT = JSON.stringify({
  */
 export function createScratchVault(): void {
   rmSync(SCRATCH_SETTINGS_PATH, { force: true });
-  rmSync(SCRATCH_VAULT_SESSION_PATH, { force: true });
+  rmSync(SCRATCH_VAULT_SESSION_PATH, { recursive: true, force: true });
   rmSync(SCRATCH_EDIT_HISTORY_PATH, { force: true });
   mkdirSync(SCRATCH_VAULT_PATH, { recursive: true });
   for (const entry of readdirSync(SCRATCH_VAULT_PATH)) {

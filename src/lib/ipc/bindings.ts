@@ -9,7 +9,12 @@ export const commands = {
 	 *  Opens a vault at an absolute path, validates it and indexes its tree.
 	 *  This is the only command that accepts an absolute path.
 	 */
-	vaultOpen: (path: string) => typedError<VaultHandle, AppError>(__TAURI_INVOKE("vault_open", { path })),
+	vaultOpen: (path: string) => typedError<VaultOpenResult, AppError>(__TAURI_INVOKE("vault_open", { path })),
+	/**
+	 *  Releases a native vault handle. Repeating the close is harmless so a
+	 *  superseded frontend open can always clean up its provisional handle.
+	 */
+	vaultClose: (handle: VaultHandle) => typedError<null, AppError>(__TAURI_INVOKE("vault_close", { handle })),
 	/**
 	 *  Reads the device-local startup-vault session. Missing or corrupt documents
 	 *  safely return an empty session.
@@ -20,7 +25,10 @@ export const commands = {
 	 *  recorded until the frontend deliberately calls this command.
 	 */
 	vaultSessionForget: (path: string) => typedError<VaultSessionDoc, AppError>(__TAURI_INVOKE("vault_session_forget", { path })),
-	/**  Disables automatic startup recovery while keeping recent vault choices. */
+	/**
+	 *  Clears only the authoritative startup selection while retaining recent
+	 *  choices. Startup policy can still select one remaining recent vault.
+	 */
 	vaultSessionClearLast: () => typedError<VaultSessionDoc, AppError>(__TAURI_INVOKE("vault_session_clear_last")),
 	/**  Lists the indexed tree of an open vault, sorted by path. */
 	vaultTree: (handle: VaultHandle) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("vault_tree", { handle })),
@@ -720,6 +728,18 @@ export type VaultFileContent = {
 export type VaultHandle = {
 	/**  Session-local identifier; never persisted. */
 	id: number,
+};
+
+/**
+ *  The canonical vault identity and the handle that owns it for this native
+ *  session. Frontend callers retain `handle` for every handle-scoped command
+ *  and use `root` when they need the canonical path identity.
+ */
+export type VaultOpenResult = {
+	/**  Opaque session-local handle for subsequent vault commands. */
+	handle: VaultHandle,
+	/**  Canonical absolute root accepted by the native vault model. */
+	root: string,
 };
 
 /**

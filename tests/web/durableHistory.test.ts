@@ -3,6 +3,7 @@ import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DurableEditHistory,
+  type DurableHistoryLimits,
   type EditHistoryAction,
   type EditHistoryEntry,
   type EditHistorySnapshot,
@@ -43,6 +44,7 @@ function harness(
   snapshot: EditHistorySnapshot,
   text: string,
   transportOverrides: Partial<EditHistoryTransport> = {},
+  limits?: DurableHistoryLimits,
 ) {
   const appended: Array<{ batch: string; actions: EditHistoryAction[] }> = [];
   const fence = vi.fn(async () => undefined);
@@ -56,15 +58,18 @@ function harness(
     },
   });
   views.push(view);
-  history = new DurableEditHistory({
-    read: async () => snapshot,
-    append: async (batch, actions) => {
-      appended.push({ batch, actions });
+  history = new DurableEditHistory(
+    {
+      read: async () => snapshot,
+      append: async (batch, actions) => {
+        appended.push({ batch, actions });
+      },
+      fence,
+      clear,
+      ...transportOverrides,
     },
-    fence,
-    clear,
-    ...transportOverrides,
-  });
+    limits,
+  );
   return { history, view, appended, fence, clear };
 }
 
@@ -647,5 +652,42 @@ describe("durable edit history", () => {
     await history.clear();
     expect(clear).toHaveBeenCalledOnce();
     expect(await history.depths()).toEqual({ undo: 0, redo: 0 });
+  });
+
+  it("bounds a long large-note session and replays its surviving durable steps", async () => {
+    const source = "x".repeat(256_000);
+    const { history, view, appended } = harness(
+      { undo: [], redo: [] },
+      source,
+      {},
+      { entryCap: 3, byteCap: 1_024 * 1_024 },
+    );
+
+    for (let index = 0; index < 8; index += 1) {
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: String(index) },
+        userEvent: "input.type",
+      });
+      await history.flush();
+    }
+
+    expect(await history.depths()).toEqual({ undo: 3, redo: 0 });
+    expect(await history.retention()).toEqual({
+      entries: 3,
+      serializedBytes: expect.any(Number),
+      retainedDocumentChars: 2 * source.length + 15,
+    });
+    expect(appended).toHaveLength(8);
+
+    for (let index = 0; index < 3; index += 1) {
+      history.undo(view);
+      await history.depths();
+    }
+    expect(view.state.doc.toString()).toBe(`${source}01234`);
+    for (let index = 0; index < 3; index += 1) {
+      history.redo(view);
+      await history.depths();
+    }
+    expect(view.state.doc.toString()).toBe(`${source}01234567`);
   });
 });

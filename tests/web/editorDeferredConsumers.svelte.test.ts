@@ -9,6 +9,7 @@ import type { EditorView } from "@codemirror/view";
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Editor from "../../src/lib/Editor.svelte";
+import { skribeumMarkdownParser } from "../../src/lib/editor/markdown/obsidian";
 import { PostPaintScheduler } from "../../src/lib/editor/postPaintScheduler";
 import {
   type EditorStatistics,
@@ -213,6 +214,7 @@ describe("large-note editor consumers", () => {
   it("shares one root materialization across visible self-embeds", async () => {
     const source = `![[#Details]]\n\n![[#Details]]\n\n![[#Details]]\n\n## Details\n${"embedded body\n".repeat(90_000)}`;
     const materialization = observeMaterialization();
+    const parse = vi.spyOn(skribeumMarkdownParser, "parse");
     const { host } = mountEditor({
       doc: source,
       note: loadedNote(source, "shared-self-embed-hash"),
@@ -235,7 +237,76 @@ describe("large-note editor consumers", () => {
     expect(host.querySelectorAll(".cm-skr-embed")).toHaveLength(3);
     expect(materialization.spy).toHaveBeenCalledTimes(1);
     expect(materialization.units()).toBe(source.length);
+    expect(parse).toHaveBeenCalledTimes(1);
   }, 15_000);
+
+  it("shares one parse across different self-embed sections", async () => {
+    const source =
+      "![[#First]]\n\n![[#Second]]\n\n## First\nfirst body\n\n## Second\nsecond body\n";
+    const parse = vi.spyOn(skribeumMarkdownParser, "parse");
+    const { host } = mountEditor({
+      doc: source,
+      note: loadedNote(source, "different-self-embed-hash"),
+      path: "self-embed.md",
+      linkContext: {
+        paths: ["self-embed.md"],
+        config: {
+          newLinkFormat: "shortest",
+          useMarkdownLinks: false,
+          attachmentFolderPath: null,
+        },
+        currentPath: "self-embed.md",
+        embedAncestry: ["self-embed.md"],
+        embedDepth: 0,
+      },
+    });
+
+    await settlePostPaint();
+
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("first body");
+    expect(host.textContent).toContain("second body");
+  });
+
+  it("does not reuse a self-embed parse after switching note generations", async () => {
+    const sourceA = "![[#Details]]\n\n## Details\nold generation\n";
+    const sourceB = "![[#Details]]\n\n## Details\nnew generation\n";
+    const parse = vi.spyOn(skribeumMarkdownParser, "parse");
+    const props = reactiveState({
+      doc: sourceA,
+      note: loadedNote(sourceA, "self-embed-a") as LoadedNote | null,
+      path: "a.md" as string | null,
+      linkContext: {
+        paths: ["a.md", "b.md"],
+        config: {
+          newLinkFormat: "shortest",
+          useMarkdownLinks: false,
+          attachmentFolderPath: null,
+        },
+        currentPath: "a.md",
+        embedAncestry: ["a.md"],
+        embedDepth: 0,
+      },
+    });
+    const { component, host } = mountEditor(props);
+    await settlePostPaint();
+
+    component.preparePaneSwitch("tab");
+    props.note = loadedNote(sourceB, "self-embed-b");
+    props.path = "b.md";
+    props.doc = sourceB;
+    props.linkContext = {
+      ...props.linkContext,
+      currentPath: "b.md",
+      embedAncestry: ["b.md"],
+    };
+    flushSync();
+    await settlePostPaint();
+
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toContain("new generation");
+    expect(host.textContent).not.toContain("old generation");
+  });
 
   it.each([
     ["Backspace", deleteCharBackward],

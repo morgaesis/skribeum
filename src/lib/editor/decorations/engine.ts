@@ -2435,43 +2435,67 @@ function headingTitle(source: string, node: SyntaxNode): string {
   return (text.split("\n", 1)[0] ?? "").trim();
 }
 
-function embeddedSection(source: string, fragment: string): string | null {
-  if (fragment.length === 0) {
-    return source;
-  }
-  const wanted = fragment.trim().toLocaleLowerCase();
+type ParsedEmbedSource = {
+  source: string;
+  headings: Array<{ from: number; to: number; level: number; title: string }>;
+};
+
+function parseEmbedSource(source: string): ParsedEmbedSource {
   const tree = skribeumMarkdownParser.parse(source);
-  let match: SyntaxNode | null = null;
+  const headings: ParsedEmbedSource["headings"] = [];
   tree.iterate({
     enter(ref) {
-      if (
-        match === null &&
-        headingLevel(ref.name) !== null &&
-        headingTitle(source, ref.node).toLocaleLowerCase() === wanted
-      ) {
-        match = ref.node;
-      }
-      return match === null ? undefined : false;
-    },
-  });
-  if (match === null) {
-    return null;
-  }
-  const heading = match as SyntaxNode;
-  const level = headingLevel(heading.name) ?? 6;
-  let end = source.length;
-  tree.iterate({
-    from: heading.to,
-    enter(ref) {
-      const candidate = headingLevel(ref.name);
-      if (ref.from >= heading.to && candidate !== null && candidate <= level) {
-        end = ref.from;
-        return false;
+      const level = headingLevel(ref.name);
+      if (level !== null) {
+        headings.push({
+          from: ref.from,
+          to: ref.to,
+          level,
+          title: headingTitle(source, ref.node).toLocaleLowerCase(),
+        });
       }
       return undefined;
     },
   });
-  return source.slice(heading.from, end).replace(/\n+$/u, "");
+  return { source, headings };
+}
+
+function extractedEmbedSection(
+  parsed: ParsedEmbedSource,
+  fragment: string,
+): string | null {
+  if (fragment.length === 0) return parsed.source;
+  const wanted = fragment.trim().toLocaleLowerCase();
+  const index = parsed.headings.findIndex(
+    (heading) => heading.title === wanted,
+  );
+  if (index === -1) {
+    return null;
+  }
+  const heading = parsed.headings[index];
+  if (heading === undefined) return null;
+  const next = parsed.headings
+    .slice(index + 1)
+    .find((candidate) => candidate.level <= heading.level);
+  const end = next?.from ?? parsed.source.length;
+  return parsed.source.slice(heading.from, end).replace(/\n+$/u, "");
+}
+
+function embeddedSection(source: string, fragment: string): string | null {
+  return fragment.length === 0
+    ? source
+    : extractedEmbedSection(parseEmbedSource(source), fragment);
+}
+
+function selfEmbedSectionKey(fragment: string): string {
+  return `embed\u0000${fragment.trim().toLocaleLowerCase()}`;
+}
+
+function selectedSelfEmbed(
+  parsed: ParsedEmbedSource,
+  fragment: string,
+): string | null {
+  return extractedEmbedSection(parsed, fragment);
 }
 
 function previewSource(source: string): string {
@@ -2526,6 +2550,7 @@ function renderLinkedNote(
   onRendered: () => void,
   kind: AsyncContentKind = "embed",
   preload?: PreloadedNote,
+  selectedSelfEmbedSource?: () => Promise<string | null>,
 ): () => void {
   const [, fragment = ""] = target.split("#", 2);
   const resolution = resolveWikilinkTarget(target, context);
@@ -2571,28 +2596,34 @@ function renderLinkedNote(
       kind,
       load: () =>
         preload?.source ??
-        (resolution.kind === "self"
-          ? typeof rootSource === "string"
-            ? Promise.resolve(rootSource)
-            : rootSource()
-          : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null))),
+        (selectedSelfEmbedSource === undefined
+          ? resolution.kind === "self"
+            ? typeof rootSource === "string"
+              ? Promise.resolve(rootSource)
+              : rootSource()
+            : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null))
+          : selectedSelfEmbedSource()),
       ...(kind === "preview" && preload?.status === "pending"
         ? { skeletonDelayMs: 0 }
         : {}),
-      unavailable: (source) => source === null,
+      unavailable: (source) =>
+        source === null && selectedSelfEmbedSource === undefined,
       ...(kind === "embed" ? { onRetry: begin } : {}),
       render: (source) => {
-        if (
-          destroyed ||
-          source === null ||
-          (!host.isConnected && !document.body.contains(host))
-        ) {
+        if (destroyed || (!host.isConnected && !document.body.contains(host))) {
           return;
         }
-        const selected = embeddedSection(
-          kind === "preview" ? previewSource(source) : source,
-          fragment,
-        );
+        if (source === null) {
+          notice(STRINGS.embedSectionUnavailable);
+          return;
+        }
+        const selected =
+          selectedSelfEmbedSource === undefined
+            ? embeddedSection(
+                kind === "preview" ? previewSource(source) : source,
+                fragment,
+              )
+            : source;
         if (selected === null) {
           notice(STRINGS.embedSectionUnavailable);
           return;
@@ -2637,7 +2668,7 @@ function renderLinkedNote(
 }
 
 type DeferredRootSourceLease = {
-  load: () => Promise<string>;
+  select: (target: string) => Promise<string | null>;
   release: () => void;
 };
 
@@ -2650,6 +2681,8 @@ type DeferredRootSourceLease = {
 class DeferredRootSource {
   private references = 0;
   private pending: Promise<string> | null = null;
+  private parsed: Promise<ParsedEmbedSource> | null = null;
+  private readonly sections = new Map<string, Promise<string | null>>();
   private readonly scheduler = new PostPaintScheduler();
 
   constructor(private readonly document: Text) {}
@@ -2658,7 +2691,7 @@ class DeferredRootSource {
     this.references += 1;
     let released = false;
     return {
-      load: () => this.load(),
+      select: (target) => this.select(target),
       release: () => {
         if (released) return;
         released = true;
@@ -2666,6 +2699,8 @@ class DeferredRootSource {
         if (this.references === 0) {
           this.scheduler.fence();
           this.pending = null;
+          this.parsed = null;
+          this.sections.clear();
         }
       },
     };
@@ -2678,6 +2713,23 @@ class DeferredRootSource {
       });
     }
     return this.pending;
+  }
+
+  private select(target: string): Promise<string | null> {
+    const [, fragment = ""] = target.split("#", 2);
+    if (fragment.length === 0) return this.load();
+    const key = selfEmbedSectionKey(fragment);
+    let selected = this.sections.get(key);
+    if (selected === undefined) {
+      if (this.parsed === null) {
+        this.parsed = this.load().then(parseEmbedSource);
+      }
+      selected = this.parsed.then((parsed) =>
+        selectedSelfEmbed(parsed, fragment),
+      );
+      this.sections.set(key, selected);
+    }
+    return selected;
   }
 }
 
@@ -2802,18 +2854,22 @@ class EmbedWidget extends WidgetType {
     const source =
       this.rootDocument === null ? null : deferredRootSource(this.rootDocument);
     if (source !== null) this.rootSources.set(host, source);
-    const rootSource = source === null ? "" : source.load;
+    const selectedSelfEmbedSource =
+      source === null ? undefined : () => source.select(this.target);
 
     this.cleanups.set(
       host,
       renderLinkedNote(
         body,
         this.target,
-        rootSource,
+        "",
         this.context,
         `${STRINGS.embedLabel}: ${sourceName}`,
         this.taskStatuses,
         () => view.requestMeasure(),
+        "embed",
+        undefined,
+        selectedSelfEmbedSource,
       ),
     );
     return host;

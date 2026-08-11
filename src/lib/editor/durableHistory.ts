@@ -51,6 +51,22 @@ export type EditHistoryTransport = {
   clear(): Promise<void>;
 };
 
+/**
+ * The live controller mirrors the journal's per-note retention envelope.
+ * Entries beyond either limit are removed oldest-first after they are durable,
+ * leaving the newest undo or redo frontier available for recovery.
+ */
+export type DurableHistoryLimits = {
+  entryCap: number;
+  byteCap: number;
+};
+
+/** Matches the native journal's 2,000-entry, 8 MiB retention policy. */
+export const DEFAULT_DURABLE_HISTORY_LIMITS: DurableHistoryLimits = {
+  entryCap: 2_000,
+  byteCap: 8 * 1024 * 1024,
+};
+
 type RuntimeEntry = {
   serialized?: EditHistoryEntry;
   serializing?: Promise<EditHistoryEntry>;
@@ -67,6 +83,7 @@ type RuntimeEntry = {
 
 type CompactedEntryRun = {
   nodes: RuntimeEntry[];
+  serialized?: EditHistoryEntry;
 };
 
 type PendingAction =
@@ -76,8 +93,8 @@ type PendingAction =
 
 type QueuedOperation =
   | { kind: "entry"; node: RuntimeEntry; sequence: number }
-  | { kind: "undo-to"; doc: Text; sequence: number }
-  | { kind: "redo-to"; doc: Text; sequence: number };
+  | { kind: "undo-to"; doc: Text; startDoc: Text; sequence: number }
+  | { kind: "redo-to"; doc: Text; startDoc: Text; sequence: number };
 
 export type EditHistoryBatch = {
   id: string;
@@ -211,7 +228,12 @@ export class DurableEditHistory {
   private operationChain: Promise<void> = Promise.resolve();
   private readonly readyPromise: Promise<void>;
 
-  constructor(private readonly transport: EditHistoryTransport) {
+  private readonly batchNodes = new WeakMap<EditHistoryBatch, RuntimeEntry[]>();
+
+  constructor(
+    private readonly transport: EditHistoryTransport,
+    private readonly limits: DurableHistoryLimits = DEFAULT_DURABLE_HISTORY_LIMITS,
+  ) {
     this.readyPromise = transport
       .read()
       .catch(() => ({ undo: [], redo: [] }))
@@ -222,6 +244,7 @@ export class DurableEditHistory {
         this.redoEntries = this.discardLoaded
           ? []
           : snapshot.redo.map(loadedNode);
+        this.trimRetained();
         this.initialized = true;
         for (const operation of this.queued.splice(0)) {
           this.applyQueued(operation);
@@ -247,6 +270,7 @@ export class DurableEditHistory {
       this.enqueue({
         kind: "undo-to",
         doc: transaction.newDoc,
+        startDoc: transaction.startState.doc,
         sequence,
       });
       return;
@@ -255,6 +279,7 @@ export class DurableEditHistory {
       this.enqueue({
         kind: "redo-to",
         doc: transaction.newDoc,
+        startDoc: transaction.startState.doc,
         sequence,
       });
       return;
@@ -319,7 +344,11 @@ export class DurableEditHistory {
       const compactedRun = { nodes: compactedNodes };
       for (const node of compactedNodes) node.compactedRun = compactedRun;
     }
-    const serializedActions = await this.serializeActions(actions, stateChecks);
+    const serializedActions = await this.serializeActions(
+      actions,
+      stateChecks,
+      compactedNodes === null ? undefined : compactedNodes[0]?.compactedRun,
+    );
     if (generation !== this.generation) return null;
     const batch = {
       id: batchId(),
@@ -327,6 +356,12 @@ export class DurableEditHistory {
       actions: serializedActions,
     };
     this.batchGenerations.set(batch, generation);
+    this.batchNodes.set(
+      batch,
+      actions.flatMap((action) =>
+        action.kind === "entry" ? [action.node] : [],
+      ),
+    );
     this.retryBatch = batch;
     return batch;
   }
@@ -340,13 +375,16 @@ export class DurableEditHistory {
   private async serializeActions(
     actions: PendingAction[],
     stateChecks: Map<Text, Promise<EditHistoryStateCheck>>,
+    compactedRun?: CompactedEntryRun,
   ): Promise<EditHistoryAction[]> {
     if (actions.every((action) => action.kind === "entry")) {
       const nodes = actions.map((action) => action.node);
+      const entry = await this.serializeEntryRun(nodes, stateChecks);
+      if (compactedRun !== undefined) compactedRun.serialized = entry;
       return [
         {
           kind: "entry",
-          entry: await this.serializeEntryRun(nodes, stateChecks),
+          entry,
         },
       ];
     }
@@ -370,6 +408,8 @@ export class DurableEditHistory {
       (action) => action.sequence > batch.cutoff,
     );
     if (this.retryBatch?.id === batch.id) this.retryBatch = null;
+    this.releaseSerializedDocuments(batch);
+    this.trimRetained();
   }
 
   /** Persists the current action prefix in order with fences and replays. */
@@ -420,6 +460,29 @@ export class DurableEditHistory {
     return { undo: this.undoEntries.length, redo: this.redoEntries.length };
   }
 
+  /** Test and command-surface observation of retained controller memory. */
+  async retention(): Promise<{
+    entries: number;
+    serializedBytes: number;
+    retainedDocumentChars: number;
+  }> {
+    await this.readyPromise;
+    await this.operationChain;
+    const entries = this.retainedTimeline();
+    return {
+      entries: entries.length,
+      serializedBytes: entries.reduce(
+        (total, node) => total + this.serializedBytes(node),
+        0,
+      ),
+      retainedDocumentChars: [...this.undoEntries, ...this.redoEntries].reduce(
+        (total, node) =>
+          total + (node.beforeDoc?.length ?? 0) + (node.afterDoc?.length ?? 0),
+        0,
+      ),
+    };
+  }
+
   private enqueue(operation: QueuedOperation): void {
     if (!this.initialized) {
       this.queued.push(operation);
@@ -445,15 +508,52 @@ export class DurableEditHistory {
       operation.kind === "undo-to" ? this.redoEntries : this.undoEntries;
     const moved: RuntimeEntry[] = [];
     let matched = false;
+    let cursor = operation.startDoc;
     while (source.length > 0) {
       const node = source.at(-1);
       if (node === undefined) break;
-      const expectedDoc =
-        operation.kind === "undo-to" ? node.beforeDoc : node.afterDoc;
+      const run = node.compactedRun;
+      if (run !== undefined) {
+        const expectedNodes =
+          operation.kind === "undo-to" ? run.nodes : [...run.nodes].reverse();
+        const suffix = source.slice(-expectedNodes.length);
+        const entry = run.serialized;
+        if (
+          entry === undefined ||
+          suffix.length !== expectedNodes.length ||
+          !suffix.every((member, index) => member === expectedNodes[index])
+        ) {
+          break;
+        }
+        const expectedDoc = this.replayedDocument(
+          entry,
+          operation.kind === "undo-to" ? "undo" : "redo",
+          cursor,
+        );
+        if (expectedDoc === null || !expectedDoc.eq(operation.doc)) {
+          break;
+        }
+        for (const member of [...expectedNodes].reverse()) {
+          if (source.pop() !== member) {
+            this.fence();
+            return;
+          }
+          target.push(member);
+          moved.push(member);
+        }
+        matched = true;
+        break;
+      }
+      const expectedDoc = this.expectedDocument(
+        node,
+        operation.kind === "undo-to" ? "undo" : "redo",
+        cursor,
+      );
       if (expectedDoc === undefined) break;
       source.pop();
       target.push(node);
       moved.push(node);
+      cursor = expectedDoc;
       if (expectedDoc.eq(operation.doc)) {
         matched = true;
         break;
@@ -483,7 +583,7 @@ export class DurableEditHistory {
           direction === "undo" ? this.undoEntries : this.redoEntries;
         const node = source.at(-1);
         if (node === undefined) return;
-        const entry = await this.serializeEntry(node, new Map());
+        const entry = await this.replayEntry(node);
         const startingText = view.state.doc.toString();
         const expected = direction === "undo" ? entry.after : entry.before;
         const actual = await editHistoryStateCheck(startingText);
@@ -580,7 +680,7 @@ export class DurableEditHistory {
         after,
       };
       node.serialized = entry;
-      delete node.source;
+      if (node.compactedRun === undefined) delete node.source;
       return entry;
     });
     node.serializing = serializing;
@@ -640,6 +740,145 @@ export class DurableEditHistory {
       stateChecks.set(doc, pending);
     }
     return pending;
+  }
+
+  private releaseSerializedDocuments(batch: EditHistoryBatch): void {
+    const nodes = this.batchNodes.get(batch) ?? [];
+    const newest = nodes.at(-1);
+    for (const node of nodes) {
+      if (node === newest) continue;
+      delete node.beforeDoc;
+      delete node.afterDoc;
+      delete node.source;
+    }
+    this.batchNodes.delete(batch);
+    this.releaseStaleDocumentReferences();
+  }
+
+  /** Keeps exact native-history matching only at the two live stack edges. */
+  private releaseStaleDocumentReferences(): void {
+    const retained = new Set<RuntimeEntry>();
+    const undo = this.undoEntries.at(-1);
+    const redo = this.redoEntries.at(-1);
+    if (undo !== undefined) retained.add(undo);
+    if (redo !== undefined) retained.add(redo);
+    for (const node of [...this.undoEntries, ...this.redoEntries]) {
+      if (retained.has(node)) continue;
+      delete node.beforeDoc;
+      delete node.afterDoc;
+      delete node.source;
+    }
+  }
+
+  private expectedDocument(
+    node: RuntimeEntry,
+    direction: "undo" | "redo",
+    current: Text,
+  ): Text | undefined {
+    const retained = direction === "undo" ? node.beforeDoc : node.afterDoc;
+    if (retained !== undefined) return retained;
+    const entry = node.serialized;
+    return entry === undefined
+      ? undefined
+      : (this.replayedDocument(entry, direction, current) ?? undefined);
+  }
+
+  private replayEntry(node: RuntimeEntry): Promise<EditHistoryEntry> {
+    if (node.serialized !== undefined) return Promise.resolve(node.serialized);
+    if (node.beforeDoc !== undefined && node.afterDoc !== undefined) {
+      return this.serializeEntry(node, new Map());
+    }
+    const source = node.source;
+    const grouped = node.compactedRun?.serialized;
+    if (source === undefined || grouped === undefined) {
+      return Promise.reject(new Error("history entry cannot be replayed"));
+    }
+    return Promise.resolve({
+      changes: serializeChanges(source.changes),
+      inverse: serializeChanges(source.inverse),
+      selection_before: serializeSelection(source.selectionBefore),
+      selection_after: serializeSelection(source.selectionAfter),
+      before: grouped.before,
+      after: grouped.after,
+    });
+  }
+
+  private replayedDocument(
+    entry: EditHistoryEntry,
+    direction: "undo" | "redo",
+    current: Text,
+  ): Text | null {
+    const expected = direction === "undo" ? entry.after : entry.before;
+    if (current.length !== expected.length) return null;
+    try {
+      return changeSet(
+        direction === "undo" ? entry.inverse : entry.changes,
+        current.length,
+      ).apply(current);
+    } catch {
+      return null;
+    }
+  }
+
+  private trimRetained(): void {
+    let entries = this.retainedTimeline();
+    let bytes = entries.reduce(
+      (total, node) => total + this.serializedBytes(node),
+      0,
+    );
+    while (
+      entries.length > this.limits.entryCap ||
+      bytes > this.limits.byteCap
+    ) {
+      const oldest = entries[0];
+      if (oldest === undefined || !this.dropOldest(oldest)) return;
+      entries = this.retainedTimeline();
+      bytes = entries.reduce(
+        (total, node) => total + this.serializedBytes(node),
+        0,
+      );
+    }
+  }
+
+  private retainedTimeline(): RuntimeEntry[] {
+    const timeline: RuntimeEntry[] = [];
+    const runs = new Set<CompactedEntryRun>();
+    const add = (node: RuntimeEntry) => {
+      const run = node.compactedRun;
+      if (run !== undefined) {
+        if (runs.has(run)) return;
+        runs.add(run);
+      }
+      timeline.push(node);
+    };
+    for (const node of this.undoEntries) add(node);
+    for (const node of [...this.redoEntries].reverse()) add(node);
+    return timeline;
+  }
+
+  private serializedBytes(node: RuntimeEntry): number {
+    const entry = node.compactedRun?.serialized ?? node.serialized;
+    return entry === undefined
+      ? 0
+      : encoder.encode(JSON.stringify(entry)).length;
+  }
+
+  private dropOldest(oldest: RuntimeEntry): boolean {
+    const members = oldest.compactedRun?.nodes ?? [oldest];
+    const memberSet = new Set(members);
+    const undoCount = this.undoEntries.filter((node) =>
+      memberSet.has(node),
+    ).length;
+    const redoCount = this.redoEntries.filter((node) =>
+      memberSet.has(node),
+    ).length;
+    if (undoCount + redoCount !== members.length) return false;
+    this.undoEntries = this.undoEntries.filter((node) => !memberSet.has(node));
+    this.redoEntries = this.redoEntries.filter((node) => !memberSet.has(node));
+    this.pending = this.pending.filter(
+      (action) => action.kind !== "entry" || !memberSet.has(action.node),
+    );
+    return true;
   }
 
   private applyReplayMovement(

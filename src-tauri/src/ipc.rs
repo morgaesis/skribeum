@@ -2378,7 +2378,7 @@ mod vault_session_tests {
     use std::time::Duration;
 
     use super::{VaultRegistry, WatchLease, publish_if_open, record_opened_vault};
-    use skribeum_vault::{FileSystem, SearchIndex, SimFs, Vault, VaultSession, VaultSessionStore};
+    use skribeum_vault::{SearchIndex, SimFs, Vault, VaultSession, VaultSessionStore};
 
     #[test]
     fn only_a_successful_open_records_the_canonical_vault_root() {

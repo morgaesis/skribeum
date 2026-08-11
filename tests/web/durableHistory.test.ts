@@ -202,6 +202,92 @@ describe("durable edit history", () => {
     expect((await history.beginFlush())?.actions).toHaveLength(1);
   });
 
+  it("bounds blocked initialization, fences its discarded prefix, and preserves its frontier", async () => {
+    const read = Promise.withResolvers<EditHistorySnapshot>();
+    const calls: string[] = [];
+    const appended: EditHistoryAction[][] = [];
+    const persisted = await replaceEntry("before", "seed");
+    const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
+    const { history, view } = harness(
+      { undo: [], redo: [] },
+      "seed",
+      {
+        read: () => read.promise,
+        append: async (_batch, actions) => {
+          calls.push("append");
+          appended.push(actions);
+        },
+        fence: async () => {
+          calls.push("fence");
+        },
+      },
+      { entryCap: 4, byteCap: 8_000 },
+    );
+
+    for (let index = 0; index < 2_048; index += 1) {
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: "x" },
+        userEvent: "input.type",
+      });
+      const retention = await history.retention();
+      expect(retention.entries).toBeLessThanOrEqual(4);
+      expect(retention.serializedBytes).toBeLessThanOrEqual(8_000);
+    }
+    expect(digest).not.toHaveBeenCalled();
+
+    const finalText = view.state.doc.toString();
+    read.resolve({ undo: [persisted], redo: [] });
+    await vi.waitFor(() => expect(calls).toEqual(["fence", "append"]));
+
+    const frontier = appended[0]?.[0];
+    if (frontier?.kind !== "entry") {
+      throw new Error("pre-initialization frontier entry missing");
+    }
+    expect(appended[0]).toHaveLength(1);
+
+    const recovered = harness({ undo: [frontier.entry], redo: [] }, finalText);
+    recovered.history.undo(recovered.view);
+    await recovered.history.depths();
+    expect(recovered.view.state.doc.toString()).not.toBe(finalText);
+    recovered.history.redo(recovered.view);
+    await recovered.history.depths();
+    expect(recovered.view.state.doc.toString()).toBe(finalText);
+  });
+
+  it("orders reset, clear, and fence after blocked initialization", async () => {
+    const read = Promise.withResolvers<EditHistorySnapshot>();
+    const calls: string[] = [];
+    const persisted = await replaceEntry("before", "seed");
+    const { history, view } = harness({ undo: [], redo: [] }, "seed", {
+      read: () => read.promise,
+      fence: async () => {
+        calls.push("fence");
+      },
+      clear: async () => {
+        calls.push("clear");
+      },
+    });
+
+    view.dispatch({
+      changes: { from: 0, to: 4, insert: "external" },
+      annotations: Transaction.userEvent.of("undo"),
+    });
+    const clearing = history.clear();
+    history.fence();
+
+    read.resolve({ undo: [persisted], redo: [] });
+    await clearing;
+    await history.depths();
+
+    expect(calls).toEqual(["fence", "clear", "fence"]);
+    expect(await history.retention()).toEqual({
+      entries: 0,
+      serializedBytes: 0,
+      retainedDocumentChars: 0,
+    });
+    expect(await history.beginFlush()).toBeNull();
+  });
+
   it("does not discard a post-fence edit when an older flush commits", async () => {
     const { history, view } = harness({ undo: [], redo: [] }, "alpha");
     view.dispatch({ changes: { from: 5, insert: " one" } });

@@ -248,8 +248,8 @@ export class DurableEditHistory {
   private undoEntries: RuntimeEntry[] = [];
   private redoEntries: RuntimeEntry[] = [];
   private pending: PendingAction[] = [];
-  private queued: QueuedOperation[] = [];
   private initialized = false;
+  private preInitializationChanged = false;
   private discardLoaded = false;
   private nextSequence = 0;
   private generation = 0;
@@ -273,17 +273,20 @@ export class DurableEditHistory {
       .read()
       .catch(() => ({ undo: [], redo: [] }))
       .then((snapshot) => {
-        this.undoEntries = this.discardLoaded
-          ? []
-          : snapshot.undo.map(loadedNode);
-        this.redoEntries = this.discardLoaded
-          ? []
-          : snapshot.redo.map(loadedNode);
+        if (this.discardLoaded) {
+          this.undoEntries = [];
+          this.redoEntries = [];
+        } else {
+          const loadedUndo = snapshot.undo.map(loadedNode);
+          const loadedRedo = snapshot.redo.map(loadedNode);
+          this.undoEntries = [...loadedUndo, ...this.undoEntries];
+          this.redoEntries = this.preInitializationChanged
+            ? [...loadedRedo, ...this.redoEntries]
+            : loadedRedo;
+        }
         this.trimRetained();
         this.initialized = true;
-        for (const operation of this.queued.splice(0)) {
-          this.applyQueued(operation);
-        }
+        if (this.pressureFlushRequested) this.requestPressureFlush();
       });
   }
 
@@ -487,7 +490,10 @@ export class DurableEditHistory {
   fence(): void {
     this.resetReachable();
     const id = batchId();
-    void this.enqueueOperation(() => this.transport.fence(id));
+    void this.enqueueOperation(async () => {
+      await this.readyPromise;
+      await this.transport.fence(id);
+    });
   }
 
   /** Physically removes this note's persisted journal. */
@@ -516,7 +522,6 @@ export class DurableEditHistory {
     serializedBytes: number;
     retainedDocumentChars: number;
   }> {
-    await this.readyPromise;
     const entries = this.retainedTimeline();
     return {
       entries: entries.length,
@@ -534,8 +539,7 @@ export class DurableEditHistory {
 
   private enqueue(operation: QueuedOperation): void {
     if (!this.initialized) {
-      this.queued.push(operation);
-      return;
+      this.preInitializationChanged = true;
     }
     this.applyQueued(operation);
   }
@@ -680,7 +684,6 @@ export class DurableEditHistory {
     this.undoEntries = [];
     this.redoEntries = [];
     this.pending = [];
-    this.queued = [];
     this.retryBatch = null;
     this.batchPreparation = null;
     this.pressureFlushRequested = false;
@@ -813,6 +816,7 @@ export class DurableEditHistory {
    * for every keystroke while an autosave timer is continually reset.
    */
   private releasePendingDocumentReferences(): void {
+    if (!this.initialized) return;
     if (
       this.pending.length === 0 ||
       !this.pending.every((action) => action.kind === "entry")
@@ -1015,6 +1019,7 @@ export class DurableEditHistory {
 
   /** A pressure flush is latched rather than reset by continued input. */
   private requestPressureFlush(): void {
+    if (!this.initialized) return;
     if (this.pressureFlushQueued || this.pressureFlushRunning) return;
     this.pressureFlushQueued = true;
     setTimeout(() => {

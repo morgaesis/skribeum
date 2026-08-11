@@ -1305,9 +1305,7 @@ fn spawn_index_rebuild<F: FileSystem + 'static>(
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         IndexRebuilds::reap_finished(&mut workers);
-        if !active.load(Ordering::Acquire) {
-            false
-        } else {
+        if active.load(Ordering::Acquire) {
             let rebuilds = Arc::clone(rebuilds);
             workers.push(std::thread::spawn(move || {
                 let _lease = IndexRebuildLease::new(Arc::clone(&rebuilds));
@@ -1343,6 +1341,8 @@ fn spawn_index_rebuild<F: FileSystem + 'static>(
                 }
             }));
             true
+        } else {
+            false
         }
     };
     if started {
@@ -2524,12 +2524,11 @@ fn startup_zoom_percent(
 mod vault_session_tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::{Arc, Mutex, PoisonError, mpsc};
     use std::time::Duration;
 
     use super::{
-        IndexRebuilds, VaultRegistry, WatchLease, publish_if_open, record_opened_vault,
-        spawn_index_rebuild,
+        VaultRegistry, WatchLease, publish_if_open, record_opened_vault, spawn_index_rebuild,
     };
     use skribeum_vault::{
         DirEntry, FileMetadata, FileSystem, FsError, SearchIndex, SimFs, Vault, VaultSession,
@@ -2565,10 +2564,7 @@ mod vault_session_tests {
         fn read(&self, path: &Path) -> Result<Vec<u8>, FsError> {
             if !self.first_read.swap(true, Ordering::AcqRel) {
                 let _ = self.entered.send(());
-                let release = self
-                    .release
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
+                let release = self.release.lock().unwrap_or_else(PoisonError::into_inner);
                 let _ = release.recv();
             }
             self.inner.read(path)

@@ -109,7 +109,7 @@ export async function openVault(path: string): Promise<VaultHandle> {
 
 /** Releases a native vault handle; repeated cleanup is harmless. */
 export async function closeVault(handle: VaultHandle): Promise<void> {
-  unwrap(await commands.vaultClose(handle));
+  await commands.vaultClose(handle);
 }
 
 export async function vaultTree(handle: VaultHandle): Promise<TreeEntry[]> {

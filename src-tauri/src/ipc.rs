@@ -832,6 +832,133 @@ impl Drop for WatchLease {
     }
 }
 
+struct VaultWatchWorker<R: Runtime> {
+    app: AppHandle<R>,
+    vault_id: u32,
+    root: PathBuf,
+    vault: Vault,
+    active: Arc<AtomicBool>,
+    publication: Arc<Mutex<()>>,
+    reconciler: Arc<Mutex<Reconciler>>,
+    search: Arc<Mutex<Option<SearchIndex>>>,
+    edit_history: Option<EditHistoryJournal>,
+    clock: RealClock,
+    active_watchers: Arc<AtomicU32>,
+    watcher: Box<dyn skribeum_vault::Watcher>,
+}
+
+impl<R: Runtime> VaultWatchWorker<R> {
+    fn run(mut self) {
+        let _lease = WatchLease::new(self.active_watchers);
+        loop {
+            if !self.active.load(Ordering::Acquire) {
+                return;
+            }
+            let mut delivered_any = false;
+            while let Some(event) = self.watcher.try_next() {
+                if !self.active.load(Ordering::Acquire) {
+                    return;
+                }
+                delivered_any = true;
+                let now = self.clock.now();
+                let Some(change) = translate_event(self.vault_id, &self.root, event) else {
+                    continue;
+                };
+                {
+                    let mut recon = self
+                        .reconciler
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    for observed in [&change.path, &change.renamed_to] {
+                        if let Some(observed) = observed
+                            && let Ok(path) = VaultPath::new(observed)
+                        {
+                            recon.observe_event(&path, now);
+                        }
+                    }
+                }
+                // Disappearances drop out of the search index directly:
+                // the reconciler only tracks notes this session has read,
+                // so a delete or rename-away of an unopened note would
+                // otherwise leave a stale index row.
+                if matches!(
+                    change.change,
+                    VaultChangeKind::Removed | VaultChangeKind::Renamed
+                ) && let Some(path) = &change.path
+                {
+                    if let Some(index) = self
+                        .search
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .as_ref()
+                    {
+                        let _ = index.remove_note(path);
+                    }
+                    if matches!(change.change, VaultChangeKind::Renamed)
+                        && let Some(journal) = &self.edit_history
+                    {
+                        let _ = journal.remove_note(&RealFs, &self.root, path);
+                    }
+                }
+                if !emit_for_open_vault(
+                    &self.app,
+                    &self.active,
+                    &self.publication,
+                    VaultChanged::NAME,
+                    change,
+                ) {
+                    return;
+                }
+            }
+            if !self.active.load(Ordering::Acquire) {
+                return;
+            }
+            let events = {
+                let mut recon = self
+                    .reconciler
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                recon.poll(&RealFs, &self.root, self.clock.now())
+            };
+            for event in events {
+                if !self.active.load(Ordering::Acquire) {
+                    return;
+                }
+                apply_external_recon_state(
+                    &self.vault,
+                    self.edit_history.as_ref(),
+                    &self.root,
+                    &event,
+                );
+                // External changes update the search index incrementally:
+                // updates re-read and re-index, removals drop the row.
+                if let Some(index) = self
+                    .search
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                {
+                    let _ = index.apply_recon_event(&RealFs, &self.root, &event);
+                }
+                if !emit_recon_event(
+                    &self.app,
+                    self.vault_id,
+                    event,
+                    &self.active,
+                    &self.publication,
+                ) {
+                    return;
+                }
+            }
+            if !delivered_any {
+                // Polling cadence for the OS watcher queue. Reconciliation
+                // debounce logic runs on the Clock trait, not this interval.
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+}
+
 /// Emits while the handle is still active. Holding the publication lock makes
 /// close a linearization point: after close returns, no worker can publish.
 fn publish_if_open<Result>(
@@ -1143,11 +1270,11 @@ fn vault_open<R: Runtime>(
     path: String,
 ) -> Result<VaultOpenResult, AppError> {
     let vault = Vault::open(&RealFs, Path::new(&path))?;
-    let _mutation = session.1.lock().unwrap_or_else(PoisonError::into_inner);
+    let mutation = session.1.lock().unwrap_or_else(PoisonError::into_inner);
     // Startup recovery is best effort. A read-only, full, or inaccessible
     // device-local session store never invalidates a successfully opened vault.
     let _ = record_opened_vault(&RealFs, session.0.as_ref(), &vault);
-    drop(_mutation);
+    drop(mutation);
     let groups: Vec<Vec<String>> = vault
         .collisions()
         .iter()
@@ -1193,9 +1320,8 @@ fn vault_open<R: Runtime>(
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
-fn vault_close(registry: State<'_, VaultRegistry>, handle: VaultHandle) -> Result<(), AppError> {
+fn vault_close(registry: State<'_, VaultRegistry>, handle: VaultHandle) {
     registry.close(handle);
-    Ok(())
 }
 
 /// Converts a vault's indexed tree into its IPC form.
@@ -1875,94 +2001,21 @@ fn watch_subscribe<R: Runtime>(
         return Ok(());
     }
 
-    let vault_id = handle.id;
-    let edit_history = edit_history.0.clone();
-    std::thread::spawn(move || {
-        let _lease = WatchLease::new(active_watchers);
-        let mut watcher = watcher;
-        loop {
-            if !active.load(Ordering::Acquire) {
-                return;
-            }
-            let mut delivered_any = false;
-            while let Some(event) = watcher.try_next() {
-                if !active.load(Ordering::Acquire) {
-                    return;
-                }
-                delivered_any = true;
-                let now = clock.now();
-                let Some(change) = translate_event(vault_id, &root, event) else {
-                    continue;
-                };
-                {
-                    let mut recon = reconciler.lock().unwrap_or_else(PoisonError::into_inner);
-                    for observed in [&change.path, &change.renamed_to] {
-                        if let Some(observed) = observed
-                            && let Ok(path) = VaultPath::new(observed)
-                        {
-                            recon.observe_event(&path, now);
-                        }
-                    }
-                }
-                // Disappearances drop out of the search index directly:
-                // the reconciler only tracks notes this session has read,
-                // so a delete or rename-away of an unopened note would
-                // otherwise leave a stale index row.
-                if matches!(
-                    change.change,
-                    VaultChangeKind::Removed | VaultChangeKind::Renamed
-                ) && let Some(path) = &change.path
-                {
-                    if let Some(index) = search
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .as_ref()
-                    {
-                        let _ = index.remove_note(path);
-                    }
-                    if matches!(change.change, VaultChangeKind::Renamed)
-                        && let Some(journal) = &edit_history
-                    {
-                        let _ = journal.remove_note(&RealFs, &root, path);
-                    }
-                }
-                if !emit_for_open_vault(&app, &active, &publication, VaultChanged::NAME, change) {
-                    return;
-                }
-            }
-            if !active.load(Ordering::Acquire) {
-                return;
-            }
-            let events = {
-                let mut recon = reconciler.lock().unwrap_or_else(PoisonError::into_inner);
-                recon.poll(&RealFs, &root, clock.now())
-            };
-            for event in events {
-                if !active.load(Ordering::Acquire) {
-                    return;
-                }
-                apply_external_recon_state(&vault, edit_history.as_ref(), &root, &event);
-                // External changes update the search index incrementally:
-                // updates re-read and re-index, removals drop the row.
-                if let Some(index) = search
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .as_ref()
-                {
-                    let _ = index.apply_recon_event(&RealFs, &root, &event);
-                }
-                if !emit_recon_event(&app, vault_id, event, &active, &publication) {
-                    return;
-                }
-            }
-            if !delivered_any {
-                // Polling cadence for the OS watcher queue. Reconciliation
-                // debounce logic runs on the Clock trait, not on this
-                // interval.
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
-    });
+    let worker = VaultWatchWorker {
+        app,
+        vault_id: handle.id,
+        root,
+        vault,
+        active,
+        publication,
+        reconciler,
+        search,
+        edit_history: edit_history.0.clone(),
+        clock,
+        active_watchers,
+        watcher,
+    };
+    std::thread::spawn(move || worker.run());
     Ok(())
 }
 

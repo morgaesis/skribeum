@@ -14,7 +14,7 @@ export const commands = {
 	 *  Releases a native vault handle. Repeating the close is harmless so a
 	 *  superseded frontend open can always clean up its provisional handle.
 	 */
-	vaultClose: (handle: VaultHandle) => typedError<null, AppError>(__TAURI_INVOKE("vault_close", { handle })),
+	vaultClose: (handle: VaultHandle) => __TAURI_INVOKE<void>("vault_close", { handle }),
 	/**
 	 *  Reads the device-local startup-vault session. Missing or corrupt documents
 	 *  safely return an empty session.

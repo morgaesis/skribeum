@@ -114,6 +114,8 @@ import {
   treeEntryMove,
   treeEntryReveal,
   treeFolderCreate,
+  vaultSessionForget,
+  vaultSessionRead,
   vaultTreeRefresh,
   zoomSet,
 } from "./lib/ipc/services";
@@ -154,7 +156,17 @@ import ReadOnlyNote from "./lib/rendering/ReadOnlyNote.svelte";
 import { NARROW_BREAKPOINT_REM } from "./lib/responsive";
 import SettingsView from "./lib/SettingsView.svelte";
 import Sheet from "./lib/Sheet.svelte";
+import StartupVaultRecovery from "./lib/StartupVaultRecovery.svelte";
 import Statusline from "./lib/Statusline.svelte";
+import {
+  emptyStartupSurface,
+  failedStartupSurface,
+  isStaleVaultOpenError,
+  nextStartupDecision,
+  type StartupVaultSurface,
+  startupSource,
+  type VaultStartupSession,
+} from "./lib/startupVaultRecovery";
 import { STRINGS } from "./lib/strings";
 import TabStrip from "./lib/TabStrip.svelte";
 import {
@@ -202,6 +214,15 @@ let selectedPath = $state<string | null>(null);
 let note = $state<LoadedNote | null>(null);
 let collisionGroups = $state<string[][]>([]);
 let errorText = $state<string | null>(null);
+function initialStartupVaultSurface(): StartupVaultSurface {
+  return navigationSurface === "desktop" && hasDesktopRuntime()
+    ? { kind: "pending" }
+    : emptyStartupSurface();
+}
+
+let startupVaultSurface = $state<StartupVaultSurface>(
+  initialStartupVaultSurface(),
+);
 let banners = $state<BannerItem[]>([]);
 // Svelte resets a `bind:this` component binding to `null`, not `undefined`,
 // once the bound component unmounts (leaving canvas or the missing-note
@@ -2124,12 +2145,16 @@ async function resolvePermalinkNavigation(
   window.history.replaceState(window.history.state, "", url);
 }
 
-async function openVaultAtPath(path: string, initialNote?: string) {
+async function openVaultAtPath(
+  path: string,
+  initialNote?: string,
+  reportError = true,
+): Promise<unknown | null> {
   errorText = null;
   tagCatalogGeneration += 1;
   if ((await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
-    return;
+    return new Error(errorText);
   }
   const request = contentRequests.next();
   try {
@@ -2193,11 +2218,13 @@ async function openVaultAtPath(path: string, initialNote?: string) {
         await navigation?.start({ path: harnessNote });
       else await navigateToNote(harnessNote);
     }
+    return null;
   } catch (error) {
     if (!contentRequests.isCurrent(request)) {
-      return;
+      return new Error("The vault open request was superseded.");
     }
-    errorText = describeError(STRINGS.vaultOpenFailed, error);
+    if (reportError) errorText = describeError(STRINGS.vaultOpenFailed, error);
+    return error;
   }
 }
 
@@ -2208,7 +2235,7 @@ function comparableNativePath(path: string): string {
     : normalized;
 }
 
-async function handleNativeOpen(path: string): Promise<void> {
+async function handleNativeOpen(path: string): Promise<boolean> {
   try {
     const target = await fileOpenResolve(path);
     if (
@@ -2220,10 +2247,14 @@ async function handleNativeOpen(path: string): Promise<void> {
       await refreshTreeIndex();
       await navigateToNote(target.note_path);
     } else {
-      await openVaultAtPath(target.vault_path, target.note_path);
+      return (
+        (await openVaultAtPath(target.vault_path, target.note_path)) === null
+      );
     }
+    return true;
   } catch {
     errorText = STRINGS.fileOpenFailed;
+    return false;
   }
 }
 
@@ -2234,6 +2265,77 @@ function drainNativeOpenFiles(): void {
     .then(async () => {
       for (const path of await openFilesTake()) await handleNativeOpen(path);
     });
+}
+
+async function recoverStartupVault(
+  session: VaultStartupSession,
+): Promise<void> {
+  const decision = nextStartupDecision(session);
+  if (decision.kind === "surface") {
+    startupVaultSurface = decision.surface;
+    return;
+  }
+
+  const failure = await openVaultAtPath(decision.path, undefined, false);
+  if (failure === null) return;
+  errorText = null;
+  if (failure instanceof IpcError && isStaleVaultOpenError(failure.app.code)) {
+    try {
+      await recoverStartupVault(await vaultSessionForget(decision.path));
+    } catch (forgetError) {
+      startupVaultSurface = emptyStartupSurface(
+        describeError(STRINGS.vaultOpenFailed, forgetError),
+      );
+    }
+    return;
+  }
+  startupVaultSurface = failedStartupSurface(
+    session,
+    decision.path,
+    describeError(STRINGS.vaultOpenFailed, failure),
+  );
+}
+
+async function startDesktopVaultRecovery(
+  webdriverVault: string | undefined,
+): Promise<void> {
+  const source = startupSource({
+    desktop: navigationSurface === "desktop" && hasDesktopRuntime(),
+    ...(webdriverVault === undefined ? {} : { webdriverVault }),
+  });
+  if (source.kind === "browser") {
+    startupVaultSurface = emptyStartupSurface();
+    return;
+  }
+  if (source.kind === "webdriver") {
+    const failure = await openVaultAtPath(source.path);
+    if (failure !== null) {
+      errorText = null;
+      startupVaultSurface = emptyStartupSurface(
+        describeError(STRINGS.vaultOpenFailed, failure),
+      );
+    }
+    return;
+  }
+
+  const initialNativePaths = await openFilesTake();
+  if (initialNativePaths.length > 0) {
+    for (const path of initialNativePaths) await handleNativeOpen(path);
+    if (vault === null) {
+      startupVaultSurface = emptyStartupSurface(errorText ?? undefined);
+      errorText = null;
+    }
+    return;
+  }
+  await nativeOpenQueue;
+  if (vault !== null) return;
+  try {
+    await recoverStartupVault(await vaultSessionRead());
+  } catch (error) {
+    startupVaultSurface = emptyStartupSurface(
+      describeError(STRINGS.vaultOpenFailed, error),
+    );
+  }
 }
 
 async function pickVault() {
@@ -3034,7 +3136,7 @@ onMount(() => {
     }),
   ];
   void settingsStore.load();
-  if (hasDesktopRuntime()) drainNativeOpenFiles();
+  void startDesktopVaultRecovery(debugWindow.__SKRIBEUM_E2E_VAULT__);
   if (hasDesktopRuntime()) {
     void settingsPath()
       .then((path) => {
@@ -3293,20 +3395,12 @@ onMount(() => {
     {/if}
     <div class="skr-workspace" bind:this={workspaceHost}>
       {#if vault === null}
-        <div class="skr-empty-vault">
-          <button
-            type="button"
-            class="skr-btn-primary"
-            disabled={openVaultDisabledReason !== null}
-            title={openVaultDisabledReason ?? undefined}
-            data-command-id="vault.open"
-            data-btn-role="primary"
-            onclick={() => registry.run("vault.open", commandContext())}
-          >
-            {STRINGS.openVault}
-          </button>
-          <p class="sr-only">{STRINGS.emptyStateHint}</p>
-        </div>
+        <StartupVaultRecovery
+          surface={startupVaultSurface}
+          disabledReason={openVaultDisabledReason}
+          onOpen={(path) =>
+            path === undefined ? void pickVault() : void openVaultAtPath(path)}
+        />
       {:else}
         {#each workspace.panes as pane, paneIndex (pane.id)}
           {#if paneIndex === 1}

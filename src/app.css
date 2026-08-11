@@ -851,6 +851,61 @@ select {
   background: var(--skr-surface);
 }
 
+.skr-startup-empty,
+.skr-startup-chooser {
+  display: grid;
+  width: min(100% - 2rem, 32rem);
+  gap: 0.75rem;
+}
+
+.skr-startup-chooser h1 {
+  margin: 0;
+  color: var(--skr-text);
+  font-family: var(--skr-font-interface);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.skr-startup-vault-list {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.skr-startup-vault-row {
+  width: 100%;
+  min-height: 2.75rem;
+  border: 0;
+  border-radius: 0;
+  padding: 0.625rem 0.75rem;
+  color: var(--skr-text);
+  background: transparent;
+  font-family: var(--skr-font-interface);
+  font-size: 13px;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.skr-startup-vault-row:hover,
+.skr-startup-vault-row:focus-visible {
+  background: var(--skr-surface-subtle);
+}
+
+.skr-startup-pending,
+.skr-startup-error {
+  margin: 0;
+  color: var(--skr-text-muted);
+  font-family: var(--skr-font-interface);
+  font-size: 13px;
+}
+
+.skr-startup-error {
+  color: var(--skr-warning);
+}
+
 .skr-shell {
   height: 100dvh;
 }

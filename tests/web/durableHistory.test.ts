@@ -690,4 +690,105 @@ describe("durable edit history", () => {
     }
     expect(view.state.doc.toString()).toBe(`${source}01234567`);
   });
+
+  it("bounds continuous large input before a blocked transport can flush it", async () => {
+    const appendStarted = Promise.withResolvers<void>();
+    const releaseAppend = Promise.withResolvers<void>();
+    const appended: EditHistoryAction[][] = [];
+    const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
+    const source = "x".repeat(128_000);
+    const { history, view, fence } = harness(
+      { undo: [], redo: [] },
+      source,
+      {
+        append: async (_batch, actions) => {
+          appendStarted.resolve();
+          await releaseAppend.promise;
+          appended.push(actions);
+        },
+      },
+      { entryCap: 4, byteCap: 40_000 },
+    );
+
+    for (let index = 0; index < 2_048; index += 1) {
+      const beforeRecord = digest.mock.calls.length;
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: "y".repeat(2_048) },
+        userEvent: "input.type",
+      });
+      expect(digest).toHaveBeenCalledTimes(beforeRecord);
+      const retention = await history.retention();
+      expect(retention.entries).toBeLessThanOrEqual(4);
+      expect(retention.serializedBytes).toBeLessThanOrEqual(40_000);
+      expect(retention.retainedDocumentChars).toBeLessThanOrEqual(
+        view.state.doc.length * 8,
+      );
+    }
+
+    // Input never hashes the full document. One deferred preparation is
+    // allowed to start, then the blocked append prevents work from fanning
+    // out while more input continues to arrive.
+    await appendStarted.promise;
+    expect(digest).toHaveBeenCalledTimes(2);
+    expect(fence).toHaveBeenCalledOnce();
+
+    const afterInput = view.state.doc.toString();
+    releaseAppend.resolve();
+    await history.depths();
+    expect(appended.length).toBeGreaterThanOrEqual(1);
+    expect(appended.at(-1)?.map((action) => action.kind)).toEqual(["entry"]);
+
+    const action = appended.at(-1)?.[0];
+    if (action?.kind !== "entry") {
+      throw new Error("pressure frontier entry missing");
+    }
+    const recovered = harness({ undo: [action.entry], redo: [] }, afterInput);
+    recovered.history.undo(recovered.view);
+    await recovered.history.depths();
+    expect(recovered.view.state.doc.toString()).not.toBe(afterInput);
+    recovered.history.redo(recovered.view);
+    await recovered.history.depths();
+    expect(recovered.view.state.doc.toString()).toBe(afterInput);
+  });
+
+  it("keeps clear and reset ordered while a pressure fence waits behind a write", async () => {
+    const appendStarted = Promise.withResolvers<void>();
+    const releaseAppend = Promise.withResolvers<void>();
+    const calls: string[] = [];
+    const { history, view } = harness(
+      { undo: [], redo: [] },
+      "start",
+      {
+        append: async () => {
+          calls.push("append");
+          appendStarted.resolve();
+          await releaseAppend.promise;
+        },
+        fence: async () => {
+          calls.push("fence");
+        },
+        clear: async () => {
+          calls.push("clear");
+        },
+      },
+      { entryCap: 1, byteCap: 100_000 },
+    );
+
+    view.dispatch({ changes: { from: 5, insert: " one" } });
+    view.dispatch({ changes: { from: 9, insert: " two" } });
+    await appendStarted.promise;
+
+    const clearing = history.clear();
+    history.fence();
+    releaseAppend.resolve();
+    await clearing;
+    await history.depths();
+
+    expect(calls).toEqual(["fence", "append", "clear", "fence"]);
+    expect(await history.retention()).toEqual({
+      entries: 0,
+      serializedBytes: 0,
+      retainedDocumentChars: 0,
+    });
+  });
 });

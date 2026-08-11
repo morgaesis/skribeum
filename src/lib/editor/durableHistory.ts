@@ -53,8 +53,9 @@ export type EditHistoryTransport = {
 
 /**
  * The live controller mirrors the journal's per-note retention envelope.
- * Entries beyond either limit are removed oldest-first after they are durable,
- * leaving the newest undo or redo frontier available for recovery.
+ * Entries beyond either limit are removed oldest-first at record time,
+ * leaving the newest undo or redo frontier available for recovery even while
+ * the journal transport is unavailable.
  */
 export type DurableHistoryLimits = {
   entryCap: number;
@@ -70,6 +71,8 @@ export const DEFAULT_DURABLE_HISTORY_LIMITS: DurableHistoryLimits = {
 type RuntimeEntry = {
   serialized?: EditHistoryEntry;
   serializing?: Promise<EditHistoryEntry>;
+  /** Conservative reservation for this entry before it is serialized. */
+  reservedBytes: number;
   compactedRun?: CompactedEntryRun;
   beforeDoc?: Text;
   afterDoc?: Text;
@@ -205,7 +208,35 @@ function checksEqual(
 }
 
 function loadedNode(entry: EditHistoryEntry): RuntimeEntry {
-  return { serialized: entry };
+  return { serialized: entry, reservedBytes: serializedEntryBytes(entry) };
+}
+
+/**
+ * Bound JSON storage before persistence without materializing or hashing a
+ * whole document. Six bytes per UTF-16 code unit covers JSON escaping; the
+ * structural allowance covers coordinates, selections and record syntax.
+ */
+function sourceReservation(
+  changes: ChangeSet,
+  inverse: ChangeSet,
+  selectionBefore: EditorSelection,
+  selectionAfter: EditorSelection,
+): number {
+  let bytes = 512;
+  const reserveChanges = (set: ChangeSet) => {
+    set.iterChanges((from, to, _fromAfter, _toAfter, inserted) => {
+      bytes +=
+        192 + String(from).length + String(to).length + inserted.length * 6;
+    });
+  };
+  reserveChanges(changes);
+  reserveChanges(inverse);
+  bytes += (selectionBefore.ranges.length + selectionAfter.ranges.length) * 96;
+  return bytes;
+}
+
+function serializedEntryBytes(entry: EditHistoryEntry): number {
+  return encoder.encode(JSON.stringify(entry)).length;
 }
 
 /**
@@ -227,6 +258,10 @@ export class DurableEditHistory {
   private readonly batchGenerations = new WeakMap<EditHistoryBatch, number>();
   private operationChain: Promise<void> = Promise.resolve();
   private readonly readyPromise: Promise<void>;
+  private pressureFenceQueued = false;
+  private pressureFlushQueued = false;
+  private pressureFlushRunning = false;
+  private pressureFlushRequested = false;
 
   private readonly batchNodes = new WeakMap<EditHistoryBatch, RuntimeEntry[]>();
 
@@ -287,6 +322,12 @@ export class DurableEditHistory {
 
     const inverse = transaction.changes.invert(transaction.startState.doc);
     const node: RuntimeEntry = {
+      reservedBytes: sourceReservation(
+        transaction.changes,
+        inverse,
+        transaction.startState.selection,
+        transaction.newSelection,
+      ),
       beforeDoc: transaction.startState.doc,
       afterDoc: transaction.newDoc,
       source: {
@@ -404,16 +445,21 @@ export class DurableEditHistory {
 
   /** Drops a successfully fsynced prefix from the pending queue. */
   commitFlush(batch: EditHistoryBatch): void {
+    if (!this.ownsBatch(batch)) return;
     this.pending = this.pending.filter(
       (action) => action.sequence > batch.cutoff,
     );
     if (this.retryBatch?.id === batch.id) this.retryBatch = null;
+    this.pressureFenceQueued = false;
     this.releaseSerializedDocuments(batch);
     this.trimRetained();
   }
 
   /** Persists the current action prefix in order with fences and replays. */
   async flush(): Promise<void> {
+    // A caller that is already saving owns this drain. The pressure timer stays
+    // latched only until a real flush begins, never until typing stops.
+    this.pressureFlushRequested = false;
     const cutoff = this.nextSequence;
     for (;;) {
       const batch = await this.beginFlush(cutoff);
@@ -460,19 +506,22 @@ export class DurableEditHistory {
     return { undo: this.undoEntries.length, redo: this.redoEntries.length };
   }
 
-  /** Test and command-surface observation of retained controller memory. */
+  /**
+   * Test and command-surface observation of retained controller memory. This
+   * intentionally does not wait for transport: the record-time invariant must
+   * remain observable while a journal append is blocked.
+   */
   async retention(): Promise<{
     entries: number;
     serializedBytes: number;
     retainedDocumentChars: number;
   }> {
     await this.readyPromise;
-    await this.operationChain;
     const entries = this.retainedTimeline();
     return {
       entries: entries.length,
       serializedBytes: entries.reduce(
-        (total, node) => total + this.serializedBytes(node),
+        (total, node) => total + this.reservedBytes(node),
         0,
       ),
       retainedDocumentChars: [...this.undoEntries, ...this.redoEntries].reduce(
@@ -500,6 +549,7 @@ export class DurableEditHistory {
         node: operation.node,
         sequence: operation.sequence,
       });
+      this.trimRetained();
       return;
     }
     const source =
@@ -633,6 +683,8 @@ export class DurableEditHistory {
     this.queued = [];
     this.retryBatch = null;
     this.batchPreparation = null;
+    this.pressureFlushRequested = false;
+    this.pressureFenceQueued = false;
   }
 
   private ownsBatch(batch: EditHistoryBatch): boolean {
@@ -755,6 +807,28 @@ export class DurableEditHistory {
     this.releaseStaleDocumentReferences();
   }
 
+  /**
+   * An entry-only pending stream serializes as one frontier. Keep only its
+   * two boundary documents now, rather than retaining one whole document pair
+   * for every keystroke while an autosave timer is continually reset.
+   */
+  private releasePendingDocumentReferences(): void {
+    if (
+      this.pending.length === 0 ||
+      !this.pending.every((action) => action.kind === "entry")
+    ) {
+      return;
+    }
+    const first = this.pending[0]?.node;
+    const last = this.pending.at(-1)?.node;
+    if (first === undefined || last === undefined) return;
+    for (const node of this.undoEntries) {
+      if (node === first || node === last) continue;
+      delete node.beforeDoc;
+      delete node.afterDoc;
+    }
+  }
+
   /** Keeps exact native-history matching only at the two live stack edges. */
   private releaseStaleDocumentReferences(): void {
     const retained = new Set<RuntimeEntry>();
@@ -778,9 +852,18 @@ export class DurableEditHistory {
     const retained = direction === "undo" ? node.beforeDoc : node.afterDoc;
     if (retained !== undefined) return retained;
     const entry = node.serialized;
-    return entry === undefined
-      ? undefined
-      : (this.replayedDocument(entry, direction, current) ?? undefined);
+    if (entry !== undefined) {
+      return this.replayedDocument(entry, direction, current) ?? undefined;
+    }
+    const source = node.source;
+    if (source === undefined) return undefined;
+    try {
+      return (direction === "undo" ? source.inverse : source.changes).apply(
+        current,
+      );
+    } catch {
+      return undefined;
+    }
   }
 
   private replayEntry(node: RuntimeEntry): Promise<EditHistoryEntry> {
@@ -823,21 +906,24 @@ export class DurableEditHistory {
   private trimRetained(): void {
     let entries = this.retainedTimeline();
     let bytes = entries.reduce(
-      (total, node) => total + this.serializedBytes(node),
+      (total, node) => total + this.reservedBytes(node),
       0,
     );
+    let discarded = false;
     while (
       entries.length > this.limits.entryCap ||
       bytes > this.limits.byteCap
     ) {
       const oldest = entries[0];
       if (oldest === undefined || !this.dropOldest(oldest)) return;
+      discarded = true;
       entries = this.retainedTimeline();
       bytes = entries.reduce(
-        (total, node) => total + this.serializedBytes(node),
+        (total, node) => total + this.reservedBytes(node),
         0,
       );
     }
+    if (discarded) this.pressureFence();
   }
 
   private retainedTimeline(): RuntimeEntry[] {
@@ -856,16 +942,26 @@ export class DurableEditHistory {
     return timeline;
   }
 
-  private serializedBytes(node: RuntimeEntry): number {
+  private reservedBytes(node: RuntimeEntry): number {
     const entry = node.compactedRun?.serialized ?? node.serialized;
     return entry === undefined
-      ? 0
-      : encoder.encode(JSON.stringify(entry)).length;
+      ? node.reservedBytes
+      : Math.max(node.reservedBytes, serializedEntryBytes(entry));
   }
 
   private dropOldest(oldest: RuntimeEntry): boolean {
     const members = oldest.compactedRun?.nodes ?? [oldest];
     const memberSet = new Set(members);
+    const timeline = this.retainedTimeline();
+    const next = timeline[timeline.indexOf(oldest) + 1];
+    const boundary = members.at(-1)?.afterDoc;
+    if (
+      next !== undefined &&
+      next.beforeDoc === undefined &&
+      boundary !== undefined
+    ) {
+      next.beforeDoc = boundary;
+    }
     const undoCount = this.undoEntries.filter((node) =>
       memberSet.has(node),
     ).length;
@@ -878,7 +974,69 @@ export class DurableEditHistory {
     this.pending = this.pending.filter(
       (action) => action.kind !== "entry" || !memberSet.has(action.node),
     );
+    this.releasePendingDocumentReferences();
     return true;
+  }
+
+  /**
+   * The native journal can only drop old entries after an append. Once the
+   * live cap discards an unflushed prefix, fence the durable timeline before
+   * the surviving suffix is allowed to append so crash recovery cannot bridge
+   * that missing segment. The queue makes this ordering hold across retries.
+   */
+  private pressureFence(): void {
+    this.pressureFlushRequested = true;
+    if (!this.pressureFenceQueued) {
+      this.pressureFenceQueued = true;
+      this.generation += 1;
+      this.retryBatch = null;
+      this.batchPreparation = null;
+      const id = batchId();
+      void this.enqueueOperation(async () => {
+        await this.readyPromise;
+        await this.transport.fence(id);
+      })
+        .then(
+          () => {
+            this.requestPressureFlush();
+          },
+          () => {
+            this.pressureFenceQueued = false;
+            this.pressureFlushRequested = true;
+            this.requestPressureFlush();
+          },
+        )
+        .finally(() => {
+          this.requestPressureFlush();
+        });
+    }
+    this.requestPressureFlush();
+  }
+
+  /** A pressure flush is latched rather than reset by continued input. */
+  private requestPressureFlush(): void {
+    if (this.pressureFlushQueued || this.pressureFlushRunning) return;
+    this.pressureFlushQueued = true;
+    setTimeout(() => {
+      this.pressureFlushQueued = false;
+      void this.drainPressureFlush();
+    }, 0);
+  }
+
+  private async drainPressureFlush(): Promise<void> {
+    if (this.pressureFlushRunning) return;
+    this.pressureFlushRunning = true;
+    try {
+      while (this.pressureFlushRequested) {
+        this.pressureFlushRequested = false;
+        await this.flush();
+      }
+    } catch {
+      // The normal save path owns visible transport failures and retries.
+    } finally {
+      this.pressureFlushRunning = false;
+      if (this.pressureFlushRequested) this.requestPressureFlush();
+    }
   }
 
   private applyReplayMovement(

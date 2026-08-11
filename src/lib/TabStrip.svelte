@@ -53,7 +53,7 @@ let {
   focused: boolean;
   closeTooltip?: CommandTooltipOptions;
   onActivate: (path: string) => void;
-  onClose: (path: string) => void;
+  onClose: (path: string, restoreFocus: boolean) => void;
   onReorder: (from: number, to: number) => void;
 } = $props();
 
@@ -112,7 +112,19 @@ const titles = $derived(
 function closeWithMiddleButton(event: MouseEvent, path: string) {
   if (event.button !== 1) return;
   event.preventDefault();
-  onClose(path);
+  onClose(path, false);
+}
+
+function keepPointerFocus(event: MouseEvent) {
+  if (event.button === 0) event.preventDefault();
+}
+
+function closeFromButton(event: MouseEvent, path: string) {
+  event.stopPropagation();
+  onClose(
+    path,
+    event.detail === 0 && document.activeElement === event.currentTarget,
+  );
 }
 
 function finishReorder() {
@@ -374,19 +386,10 @@ function finishScrollDrag(event: PointerEvent) {
     >
       {#each tabs as tab, index (tab.path)}
       {@const title = titles[index]}
-      <button
+      <div
         bind:this={tabElements[index]}
-        type="button"
         class="skr-tab-shell"
-        role="tab"
-        aria-selected={tab.path === activePath}
-        aria-label={
-          tab.dirty === true
-            ? `${title?.displayTitle ?? tab.path}, ${STRINGS.unsavedNote}`
-            : undefined
-        }
-        data-dirty={tab.dirty === true ? "true" : undefined}
-        tabindex={tab.path === activePath ? 0 : -1}
+        role="presentation"
         class:skr-tab-focused={focused && tab.path === activePath}
         class:skr-tab-active={tab.path === activePath}
         class:skr-tab-dirty={tab.dirty === true}
@@ -397,16 +400,6 @@ function finishScrollDrag(event: PointerEvent) {
           : null}
         draggable="true"
         onmousedown={(event) => closeWithMiddleButton(event, tab.path)}
-        onclick={(event) => {
-          if (
-            event.target instanceof Element &&
-            event.target.closest(".skr-tab-close") !== null
-          ) {
-            onClose(tab.path);
-          } else {
-            onActivate(tab.path);
-          }
-        }}
         ondragstart={(event) => {
           dragging = index;
           dragWidth = event.currentTarget.offsetWidth;
@@ -425,12 +418,25 @@ function finishScrollDrag(event: PointerEvent) {
         }}
         ondragend={finishReorder}
       >
-        <span class="skr-tab">
+        <button
+          type="button"
+          class="skr-tab"
+          role="tab"
+          aria-selected={tab.path === activePath}
+          aria-label={
+            tab.dirty === true
+              ? `${title?.displayTitle ?? tab.path}, ${STRINGS.unsavedNote}`
+              : undefined
+          }
+          data-dirty={tab.dirty === true ? "true" : undefined}
+          tabindex={tab.path === activePath ? 0 : -1}
+          onclick={() => onActivate(tab.path)}
+        >
           <span class="skr-tab-label">{title?.displayTitle ?? tab.path}</span>
           {#if title?.collisionSuffix !== undefined}
             <span class="skr-tab-suffix">{title.collisionSuffix}</span>
           {/if}
-        </span>
+        </button>
         <span class="skr-tab-status">
           {#if tab.dirty === true}
             <span
@@ -438,19 +444,24 @@ function finishScrollDrag(event: PointerEvent) {
               aria-label={STRINGS.unsavedNote}
             ></span>
           {/if}
-          <span
+          <button
+            type="button"
             class="skr-tab-close"
             class:skr-tab-close-dirty={tab.dirty === true}
             data-command-id="tab.close"
-            aria-hidden="true"
+            aria-label={STRINGS.closeTab}
+            tabindex={tab.path === activePath ? 0 : -1}
             use:commandTooltip={closeTooltip}
+            onpointerdown={keepPointerFocus}
+            onmousedown={keepPointerFocus}
+            onclick={(event) => closeFromButton(event, tab.path)}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path d="m4.5 4.5 7 7m0-7-7 7" />
             </svg>
-          </span>
+          </button>
         </span>
-      </button>
+      </div>
       {/each}
       <span
         bind:this={indicatorElement}

@@ -159,6 +159,10 @@ import Sheet from "./lib/Sheet.svelte";
 import StartupVaultRecovery from "./lib/StartupVaultRecovery.svelte";
 import Statusline from "./lib/Statusline.svelte";
 import {
+  focusExpandedSidebarTarget,
+  focusTabCloseSuccessor,
+} from "./lib/shellFocus";
+import {
   emptyStartupSurface,
   failedStartupSurface,
   isStaleVaultOpenError,
@@ -475,6 +479,11 @@ function rememberPanelTogglePointerOrigin(event: MouseEvent) {
     active instanceof HTMLElement && active.isConnected ? active : null;
 }
 
+function keepPanelTogglePointerFocus(event: MouseEvent) {
+  rememberPanelTogglePointerOrigin(event);
+  if (event.button === 0) event.preventDefault();
+}
+
 function releasePanelTogglePointerOrigin(event: PointerEvent) {
   if (event.button !== 0 || panelTogglePointerOrigin === undefined) return;
   clearTimeout(panelTogglePointerClearTimer);
@@ -515,6 +524,15 @@ function focusCollapsedPanelRestore(panel: "sidebar" | "outline") {
   target?.focus();
 }
 
+function isCollapsedSidebarToggle(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    target.matches(
+      '.skr-header-leading .skr-desktop-sidebar-toggle[data-command-id="panel.sidebar.toggle"]',
+    )
+  );
+}
+
 function togglePanel(panel: "sidebar" | "outline", origin?: HTMLElement) {
   const pointerOrigin = panelTogglePointerOrigin;
   cancelPanelTogglePointerOrigin();
@@ -543,6 +561,11 @@ function togglePanel(panel: "sidebar" | "outline", origin?: HTMLElement) {
     pointerOrigin !== undefined &&
     focusOrigin instanceof HTMLElement &&
     !panelContainsFocus(panel, focusOrigin);
+  const shouldFocusExpandedSidebar =
+    !wasOpen &&
+    panel === "sidebar" &&
+    pointerOrigin === undefined &&
+    isCollapsedSidebarToggle(focusOrigin);
   if (panel === "sidebar") {
     workspace.sidebarCollapsed = !workspace.sidebarCollapsed;
   } else {
@@ -550,11 +573,18 @@ function togglePanel(panel: "sidebar" | "outline", origin?: HTMLElement) {
     workspace.outlineCollapsed = !outlineOpen;
     if (outlineOpen) refreshOutline();
   }
-  if (shouldRestoreFocus || shouldPreserveExternalPointerFocus) {
+  if (
+    shouldRestoreFocus ||
+    shouldPreserveExternalPointerFocus ||
+    shouldFocusExpandedSidebar
+  ) {
     void tick().then(() => {
       const stillCollapsed =
         panel === "sidebar" ? workspace.sidebarCollapsed : !outlineOpen;
-      if (!stillCollapsed) return;
+      if (!stillCollapsed) {
+        if (shouldFocusExpandedSidebar) focusExpandedSidebarTarget();
+        return;
+      }
       if (shouldRestoreFocus) focusCollapsedPanelRestore(panel);
       else if (focusOrigin instanceof HTMLElement && focusOrigin.isConnected) {
         focusOrigin.focus();
@@ -666,11 +696,34 @@ async function focusWorkspacePane(id: string) {
   updatePaneNavigationState();
 }
 
-async function closeWorkspaceTab(path = focusedWorkspacePane().activePath) {
+let tabCloseFocusGeneration = 0;
+
+function restoreTabCloseFocus(paneId: string, generation: number) {
+  void tick().then(() => {
+    if (generation !== tabCloseFocusGeneration) return;
+    const pane = document.querySelector<HTMLElement>(
+      `[data-pane-id="${CSS.escape(paneId)}"]`,
+    );
+    const fallback =
+      pane?.querySelector<HTMLElement>(".skr-pane-content") ?? null;
+    if (pane !== null && focusTabCloseSuccessor(pane, fallback)) return;
+    if (focusExpandedSidebarTarget()) return;
+    document
+      .querySelector<HTMLElement>('[data-command-id="vault.open"]')
+      ?.focus();
+  });
+}
+
+async function closeWorkspaceTab(
+  path = focusedWorkspacePane().activePath,
+  restoreFocus = false,
+) {
   if (path === null) return;
   const pane = focusedWorkspacePane();
   const index = pane.tabs.findIndex((tab) => tab.path === path);
   if (index < 0) return;
+  const generation = ++tabCloseFocusGeneration;
+  const restoresActiveTabFocus = restoreFocus && pane.activePath === path;
   const closesActiveEditor = pane.activePath === path && selectedPath === path;
   if (closesActiveEditor && (await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
@@ -703,6 +756,9 @@ async function closeWorkspaceTab(path = focusedWorkspacePane().activePath) {
       }
       updatePaneNavigationState();
     }
+    if (restoresActiveTabFocus) {
+      restoreTabCloseFocus(workspace.focusedPaneId, generation);
+    }
     return;
   }
   if (pane.activePath === path) {
@@ -716,6 +772,7 @@ async function closeWorkspaceTab(path = focusedWorkspacePane().activePath) {
       await activateWorkspaceTab(next.path);
     }
   }
+  if (restoresActiveTabFocus) restoreTabCloseFocus(pane.id, generation);
 }
 
 async function reopenClosedWorkspaceTab() {
@@ -999,11 +1056,7 @@ function restoreSurfaceFocus() {
 }
 
 function focusFileTree() {
-  document
-    .querySelector<HTMLElement>(
-      '.skr-desktop-sidebar [role="treeitem"][tabindex="0"]',
-    )
-    ?.focus();
+  focusExpandedSidebarTarget();
 }
 
 /** Re-indexes the tree so newly discovered notes reach indexed surfaces. */
@@ -3205,6 +3258,10 @@ onMount(() => {
           data-command-id="panel.sidebar.toggle"
           aria-label={STRINGS.expandSidebar}
           use:commandTooltip={tooltipForCommand("panel.sidebar.toggle", STRINGS.expandSidebar)}
+          onpointerdown={rememberPanelTogglePointerOrigin}
+          onmousedown={keepPanelTogglePointerFocus}
+          onpointerup={releasePanelTogglePointerOrigin}
+          onpointercancel={cancelPanelTogglePointerOrigin}
           onclick={() => registry.run("panel.sidebar.toggle", commandContext())}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -3357,7 +3414,7 @@ onMount(() => {
                 aria-label={STRINGS.collapseSidebar}
                 use:commandTooltip={tooltipForCommand("panel.sidebar.toggle", STRINGS.collapseSidebar)}
                 onpointerdown={rememberPanelTogglePointerOrigin}
-                onmousedown={rememberPanelTogglePointerOrigin}
+                onmousedown={keepPanelTogglePointerFocus}
                 onpointerup={releasePanelTogglePointerOrigin}
                 onpointercancel={cancelPanelTogglePointerOrigin}
                 onclick={() => registry.run("panel.sidebar.toggle", commandContext())}
@@ -3490,8 +3547,10 @@ onMount(() => {
               onActivate={(path) => {
                 void focusWorkspacePane(pane.id).then(() => activateWorkspaceTab(path));
               }}
-              onClose={(path) => {
-                void focusWorkspacePane(pane.id).then(() => closeWorkspaceTab(path));
+              onClose={(path, restoreFocus) => {
+                void focusWorkspacePane(pane.id).then(() =>
+                  closeWorkspaceTab(path, restoreFocus),
+                );
               }}
               onReorder={(from, to) => {
                 if (pane.id === workspace.focusedPaneId) reorderWorkspaceTabs(from, to);

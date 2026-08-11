@@ -1069,13 +1069,20 @@ describe("tab strip active-tab indicator", () => {
     flushSync();
 
     const shell = document.querySelector<HTMLElement>(".skr-tab-shell");
+    const tab = shell?.querySelector<HTMLElement>('[role="tab"]');
     const status = shell?.querySelector<HTMLElement>(".skr-tab-status");
     const dot = shell?.querySelector<HTMLElement>(".skr-tab-unsaved");
     const close = shell?.querySelector<HTMLElement>(".skr-tab-close");
     expect(status).not.toBeNull();
     expect(dot).not.toBeNull();
     expect(close).not.toBeNull();
-    if (status === null || dot === null || close === null || shell === null)
+    if (
+      status === null ||
+      dot === null ||
+      close === null ||
+      shell === null ||
+      tab === null
+    )
       return;
 
     expect(getComputedStyle(status).width).toBe("16px");
@@ -1091,22 +1098,25 @@ describe("tab strip active-tab indicator", () => {
 
     // Focus supplies the same reveal state as hover while keeping the probe
     // in the keyboard path that must retain its existing semantics.
-    shell.focus();
-    expect(document.activeElement).toBe(shell);
+    tab.focus();
+    expect(document.activeElement).toBe(tab);
     // jsdom does not recompute descendant pseudo-class selectors in computed
     // style, so read the exact declarations from the loaded production sheet.
     expect(
-      loadedDeclarations(".skr-tab-shell:focus .skr-tab-unsaved", "opacity"),
+      loadedDeclarations(
+        ".skr-tab-shell:focus-within .skr-tab-unsaved",
+        "opacity",
+      ),
     ).toContain("0");
     expect(
       loadedDeclarations(
-        ".skr-tab-shell:focus .skr-tab-close-dirty",
+        ".skr-tab-shell:focus-within .skr-tab-close-dirty",
         "opacity",
       ),
     ).toContain("1");
     expect(
       loadedDeclarations(
-        ".skr-tab-shell:focus .skr-tab-close-dirty",
+        ".skr-tab-shell:focus-within .skr-tab-close-dirty",
         "pointer-events",
       ),
     ).toContain("auto");
@@ -1114,7 +1124,7 @@ describe("tab strip active-tab indicator", () => {
     close
       .querySelector("svg")
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(closed).toHaveBeenCalledWith("note-1.md");
+    expect(closed).toHaveBeenCalledWith("note-1.md", false);
 
     void unmount(component);
   });

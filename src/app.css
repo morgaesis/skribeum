@@ -574,8 +574,6 @@ select {
   align-items: center;
   gap: 0.35rem;
   overflow: hidden;
-  border: 0;
-  padding: 0;
   color: inherit;
   background: transparent;
   text-align: left;
@@ -587,6 +585,7 @@ select {
 
 .skr-tab {
   display: flex;
+  height: 100%;
   min-width: 0;
   flex: 1;
   align-items: center;
@@ -717,13 +716,11 @@ select {
 }
 
 .skr-tab-shell:hover .skr-tab-unsaved,
-.skr-tab-shell:focus .skr-tab-unsaved,
 .skr-tab-shell:focus-within .skr-tab-unsaved {
   opacity: 0;
 }
 
 .skr-tab-shell:hover .skr-tab-close-dirty,
-.skr-tab-shell:focus .skr-tab-close-dirty,
 .skr-tab-shell:focus-within .skr-tab-close-dirty {
   opacity: 1;
   pointer-events: auto;

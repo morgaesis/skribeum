@@ -35,6 +35,7 @@ import {
 } from "./editor/frontmatter";
 import { showInvisibleCharacters } from "./editor/invisibles";
 import { NoteSession } from "./editor/noteSession";
+import { PostPaintScheduler } from "./editor/postPaintScheduler";
 import {
   noteRenderingExtensions,
   noteSourceExtensions,
@@ -104,6 +105,7 @@ let {
   onConflict,
   onWriteError,
   onDocChanged,
+  onOutlineChanged,
   onDirtyChanged,
   onTitleVisibilityChange,
   onSaved,
@@ -135,8 +137,10 @@ let {
   historyViewState?: NoteViewState | null;
   onConflict?: () => void;
   onWriteError?: (message: string) => void;
-  /** Notified after any document-changing transaction (outline refresh). */
+  /** Reports the latest source after document-changing transactions settle. */
   onDocChanged?: (source: string, path: string | null) => void;
+  /** Notified when document or background parsing changes the outline. */
+  onOutlineChanged?: () => void;
   /** Reports whether the note has pending or in-flight local edits. */
   onDirtyChanged?: (dirty: boolean) => void;
   /** Reports whether the shell title should be visible for this document. */
@@ -239,11 +243,12 @@ let noteArrivalGeneration = $state(0);
 /** Word and character totals for the whole document, cached per change. */
 let documentWords = 0;
 let documentCharacters = 0;
-let statisticsFrame: number | undefined;
+const deferredConsumers = new PostPaintScheduler();
+let sourceNotificationPending = false;
+let statisticsPublishPending = false;
+let statisticsRecountPending = false;
 
-function recomputeDocumentStatistics(): void {
-  if (view === undefined) return;
-  const text = view.state.doc.toString();
+function recomputeDocumentStatistics(text: string): void {
   documentWords = countWords(text);
   documentCharacters = countCharacters(text);
 }
@@ -266,19 +271,53 @@ function publishStatistics(): void {
   });
 }
 
-let statisticsRecountPending = false;
+function runDeferredConsumers(
+  target: EditorView,
+  targetPath: string | null,
+): void {
+  const notifySource = sourceNotificationPending;
+  const publish = statisticsPublishPending;
+  const recount = statisticsRecountPending;
+  sourceNotificationPending = false;
+  statisticsPublishPending = false;
+  statisticsRecountPending = false;
+  if (view !== target || path !== targetPath || renderedPath !== targetPath) {
+    return;
+  }
+  const source = notifySource || recount ? target.state.doc.toString() : null;
+  if (recount && source !== null) recomputeDocumentStatistics(source);
+  if (notifySource && source !== null) onDocChanged?.(source, targetPath);
+  if (publish) publishStatistics();
+}
 
-function scheduleStatisticsRefresh(recount: boolean): void {
-  statisticsRecountPending = statisticsRecountPending || recount;
-  if (statisticsFrame !== undefined) return;
-  statisticsFrame = requestAnimationFrame(() => {
-    statisticsFrame = undefined;
-    if (statisticsRecountPending) {
-      statisticsRecountPending = false;
-      recomputeDocumentStatistics();
-    }
-    publishStatistics();
-  });
+function scheduleDeferredConsumers({
+  source = false,
+  statistics = false,
+  recount = false,
+}: {
+  source?: boolean;
+  statistics?: boolean;
+  recount?: boolean;
+}): void {
+  sourceNotificationPending =
+    sourceNotificationPending || (source && onDocChanged !== undefined);
+  statisticsPublishPending =
+    statisticsPublishPending ||
+    ((statistics || recount) && onStatisticsChanged !== undefined);
+  statisticsRecountPending =
+    statisticsRecountPending || (recount && onStatisticsChanged !== undefined);
+  if (!sourceNotificationPending && !statisticsPublishPending) return;
+  const target = view;
+  if (target === undefined) return;
+  const targetPath = path;
+  deferredConsumers.schedule(() => runDeferredConsumers(target, targetPath));
+}
+
+function fenceDeferredConsumers(): void {
+  deferredConsumers.fence();
+  sourceNotificationPending = false;
+  statisticsPublishPending = false;
+  statisticsRecountPending = false;
 }
 
 function defaultPropertiesExpanded(): boolean {
@@ -665,21 +704,25 @@ function dispatchTransactions(
     scheduleIdleSave();
   }
   const docChanged = transactions.some((transaction) => transaction.docChanged);
-  if (
-    docChanged ||
-    transactions.some((transaction) => transaction.selection !== undefined)
-  ) {
-    scheduleStatisticsRefresh(docChanged);
+  const selectionChanged = transactions.some(
+    (transaction) => transaction.selection !== undefined,
+  );
+  if (docChanged || selectionChanged) {
+    scheduleDeferredConsumers({
+      source: docChanged,
+      statistics: true,
+      recount: docChanged,
+    });
   }
   if (docChanged) {
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
-    onDocChanged?.(target.state.doc.toString(), path);
+    onOutlineChanged?.();
   } else if (treeGrewInBackground(target)) {
     // Background parsing advanced without a document change. Consumers of
     // the syntax tree (the outline) recompute, or a large note's outline
     // stays truncated at the initial parse slice until the first edit.
-    onDocChanged?.(target.state.doc.toString(), path);
+    onOutlineChanged?.();
   }
 }
 
@@ -887,9 +930,11 @@ export function requestSave(): Promise<boolean> {
 }
 
 /** Saves pending edits and reports whether the buffer is safe to replace. */
-export function flush(): Promise<boolean> {
+export async function flush(): Promise<boolean> {
   clearTimeout(idleSaveTimer);
-  return requestSave();
+  const saved = await requestSave();
+  await deferredConsumers.settled();
+  return saved;
 }
 
 function toIpcChanges(changes: readonly ByteChange[]): ByteRangeReplace[] {
@@ -1098,6 +1143,7 @@ function restoreCachedState(cached: TabSnapshot): void {
 
 function initializeForNote(current: LoadedNote | null) {
   clearTimeout(idleSaveTimer);
+  fenceDeferredConsumers();
   captureOutgoingTabState();
   removed = false;
   addingProperty = false;
@@ -1112,10 +1158,13 @@ function initializeForNote(current: LoadedNote | null) {
     replaceEditorState(doc, false);
     applyLinkContext();
     refreshFrontmatter();
-    scheduleStatisticsRefresh(true);
     scheduleTitleVisibilityRefresh();
-    onDocChanged?.(view?.state.doc.toString() ?? doc, path);
     renderedPath = path;
+    scheduleDeferredConsumers({
+      source: true,
+      statistics: true,
+      recount: true,
+    });
     return;
   }
   if (current.readOnly) {
@@ -1128,10 +1177,13 @@ function initializeForNote(current: LoadedNote | null) {
     replaceEditorState(current.text, true);
     applyLinkContext();
     refreshFrontmatter();
-    scheduleStatisticsRefresh(true);
     scheduleTitleVisibilityRefresh();
-    onDocChanged?.(view?.state.doc.toString() ?? current.text, path);
     renderedPath = path;
+    scheduleDeferredConsumers({
+      source: true,
+      statistics: true,
+      recount: true,
+    });
     return;
   }
   session = new NoteSession(current.bytes, current.meta.projection_hash);
@@ -1180,10 +1232,9 @@ function initializeForNote(current: LoadedNote | null) {
   notifyDirty();
   applyLinkContext();
   refreshFrontmatter();
-  scheduleStatisticsRefresh(true);
   scheduleTitleVisibilityRefresh();
-  onDocChanged?.(view?.state.doc.toString() ?? text, path);
   renderedPath = path;
+  scheduleDeferredConsumers({ source: true, statistics: true, recount: true });
 }
 
 onMount(() => {
@@ -1201,9 +1252,7 @@ onMount(() => {
     if (titleVisibilityFrame !== undefined) {
       cancelAnimationFrame(titleVisibilityFrame);
     }
-    if (statisticsFrame !== undefined) {
-      cancelAnimationFrame(statisticsFrame);
-    }
+    fenceDeferredConsumers();
     view?.scrollDOM.removeEventListener(
       "scroll",
       scheduleTitleVisibilityRefresh,

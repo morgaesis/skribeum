@@ -76,6 +76,7 @@ import {
   obsidianMarkdownExtensionsFor,
   skribeumMarkdownParser,
 } from "../markdown/obsidian";
+import { PostPaintScheduler } from "../postPaintScheduler";
 import { calloutIconSvg, parseCallout } from "./callouts";
 import {
   DECORATION_TABLE,
@@ -2518,7 +2519,7 @@ function nestedMarkdownView(
 function renderLinkedNote(
   host: HTMLElement,
   target: string,
-  rootSource: string,
+  rootSource: string | (() => Promise<string>),
   context: WikilinkResolutionContext,
   label: string,
   taskStatuses: readonly TaskStatus[],
@@ -2571,7 +2572,9 @@ function renderLinkedNote(
       load: () =>
         preload?.source ??
         (resolution.kind === "self"
-          ? Promise.resolve(rootSource)
+          ? typeof rootSource === "string"
+            ? Promise.resolve(rootSource)
+            : rootSource()
           : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null))),
       ...(kind === "preview" && preload?.status === "pending"
         ? { skeletonDelayMs: 0 }
@@ -2635,10 +2638,14 @@ function renderLinkedNote(
 
 class EmbedWidget extends WidgetType {
   private readonly cleanups = new WeakMap<HTMLElement, () => void>();
+  private readonly sourceSchedulers = new WeakMap<
+    HTMLElement,
+    PostPaintScheduler
+  >();
 
   constructor(
     readonly target: string,
-    readonly rootSource: string,
+    readonly rootDocument: Text | null,
     readonly context: WikilinkResolutionContext,
     readonly taskStatuses: readonly TaskStatus[],
   ) {
@@ -2648,7 +2655,7 @@ class EmbedWidget extends WidgetType {
   override eq(other: EmbedWidget): boolean {
     return (
       other.target === this.target &&
-      other.rootSource === this.rootSource &&
+      other.rootDocument === this.rootDocument &&
       other.context === this.context &&
       JSON.stringify(other.taskStatuses) === JSON.stringify(this.taskStatuses)
     );
@@ -2736,13 +2743,24 @@ class EmbedWidget extends WidgetType {
     const body = document.createElement("span");
     body.className = "cm-skr-embed-body";
     host.append(body);
+    const sourceScheduler = new PostPaintScheduler();
+    this.sourceSchedulers.set(host, sourceScheduler);
+    const rootSource =
+      this.rootDocument === null
+        ? ""
+        : () =>
+            new Promise<string>((resolve) => {
+              sourceScheduler.schedule(() =>
+                resolve(this.rootDocument?.toString() ?? ""),
+              );
+            });
 
     this.cleanups.set(
       host,
       renderLinkedNote(
         body,
         this.target,
-        this.rootSource,
+        rootSource,
         this.context,
         `${STRINGS.embedLabel}: ${sourceName}`,
         this.taskStatuses,
@@ -2753,6 +2771,8 @@ class EmbedWidget extends WidgetType {
   }
 
   override destroy(dom: HTMLElement): void {
+    this.sourceSchedulers.get(dom)?.fence();
+    this.sourceSchedulers.delete(dom);
     this.cleanups.get(dom)?.();
     this.cleanups.delete(dom);
   }
@@ -3366,7 +3386,9 @@ function widgetFor(
       return {
         widget: new EmbedWidget(
           targetText,
-          doc.toString(),
+          resolveWikilinkTarget(targetText, wikilinks).kind === "self"
+            ? doc
+            : null,
           wikilinks,
           taskStatuses,
         ),

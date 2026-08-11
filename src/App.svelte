@@ -1872,6 +1872,9 @@ function onEditorDocChanged(source: string, path: string | null) {
     if (path !== null)
       treeTitleSources = { ...treeTitleSources, [path]: source };
   }
+}
+
+function onEditorOutlineChanged() {
   if (outlineOpen) {
     scheduleOutlineRefresh();
   }
@@ -3578,6 +3581,7 @@ onMount(() => {
                   {onConflict}
                   {onWriteError}
                   onDocChanged={onEditorDocChanged}
+                  onOutlineChanged={onEditorOutlineChanged}
                   onDirtyChanged={(dirty) => onEditorDirtyChanged(pane.id, pane.activePath, dirty)}
                   onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
                   onSaved={onEditorSaved}

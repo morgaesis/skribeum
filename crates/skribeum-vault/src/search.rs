@@ -351,6 +351,29 @@ impl SearchIndex {
         vault: &Vault,
         cancelled: impl Fn() -> bool,
     ) -> Result<RebuildOutcome, SearchError> {
+        self.rebuild_cancellable_with_commit(fs, vault, cancelled, |tx| {
+            tx.commit()?;
+            Ok(true)
+        })
+    }
+
+    /// Rebuilds the index until `cancelled` requests that the transaction be
+    /// abandoned. `commit` atomically decides whether the completed
+    /// transaction may publish. Returning `false` drops the transaction
+    /// without committing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SearchError::Storage`] when the index cannot be written.
+    /// Unreadable notes are skipped; the index must never block on one bad
+    /// file.
+    pub fn rebuild_cancellable_with_commit(
+        &self,
+        fs: &dyn FileSystem,
+        vault: &Vault,
+        cancelled: impl Fn() -> bool,
+        commit: impl FnOnce(Transaction<'_>) -> Result<bool, rusqlite::Error>,
+    ) -> Result<RebuildOutcome, SearchError> {
         if cancelled() {
             return Ok(RebuildOutcome::Cancelled);
         }
@@ -378,8 +401,11 @@ impl SearchIndex {
         if cancelled() {
             return Ok(RebuildOutcome::Cancelled);
         }
-        tx.commit()?;
-        Ok(RebuildOutcome::Completed(indexed))
+        if commit(tx)? {
+            Ok(RebuildOutcome::Completed(indexed))
+        } else {
+            Ok(RebuildOutcome::Cancelled)
+        }
     }
 
     /// Applies one reconciliation event to the index: external updates

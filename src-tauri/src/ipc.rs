@@ -806,7 +806,7 @@ impl VaultRegistry {
                 .publication
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            open.rebuilds.join_all();
+            open.rebuilds.cancel_and_join();
         }
     }
 
@@ -829,32 +829,181 @@ impl VaultRegistry {
     }
 }
 
-/// Owns background full-index rebuilds for one vault handle generation.
+/// Owns the latest full-index rebuild request for one vault handle generation.
 #[derive(Default)]
 struct IndexRebuilds {
-    workers: Mutex<Vec<JoinHandle<()>>>,
+    state: Mutex<IndexRebuildState>,
     active_workers: AtomicU32,
+    #[cfg(test)]
+    completed_generations: Mutex<Vec<u64>>,
+    #[cfg(test)]
+    cancelled_generations: Mutex<Vec<u64>>,
+}
+
+#[derive(Default)]
+struct IndexRebuildState {
+    generation: u64,
+    pending: Option<IndexRebuildRequest>,
+    worker: Option<JoinHandle<()>>,
+    running: bool,
+}
+
+struct IndexRebuildRequest {
+    generation: u64,
+    search: Arc<Mutex<Option<SearchIndex>>>,
+    vault: Vault,
+    active: Arc<AtomicBool>,
+    fs: Arc<dyn FileSystem>,
 }
 
 impl IndexRebuilds {
-    fn reap_finished(workers: &mut Vec<JoinHandle<()>>) {
-        let mut pending = Vec::with_capacity(workers.len());
-        for worker in workers.drain(..) {
-            if worker.is_finished() {
-                let _ = worker.join();
-            } else {
-                pending.push(worker);
+    fn request<F: FileSystem + 'static>(
+        self: &Arc<Self>,
+        search: Arc<Mutex<Option<SearchIndex>>>,
+        vault: Vault,
+        active: Arc<AtomicBool>,
+        fs: F,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            let completed = state.worker.as_ref().is_some_and(JoinHandle::is_finished);
+            if state.worker.is_none() || (state.running && !completed) {
+                break;
             }
+            let worker = state.worker.take().expect("finished rebuild worker exists");
+            state.running = false;
+            drop(state);
+            let _ = worker.join();
+            state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         }
-        *workers = pending;
+        if !active.load(Ordering::Acquire) {
+            return;
+        }
+        state.generation = state
+            .generation
+            .checked_add(1)
+            .expect("rebuild generation does not overflow");
+        let generation = state.generation;
+        state.pending = Some(IndexRebuildRequest {
+            generation,
+            search,
+            vault,
+            active,
+            fs: Arc::new(fs),
+        });
+        if state.running {
+            return;
+        }
+        state.running = true;
+        let rebuilds = Arc::clone(self);
+        state.worker = Some(std::thread::spawn(move || rebuilds.run()));
     }
 
-    fn join_all(&self) {
-        let workers = {
-            let mut workers = self.workers.lock().unwrap_or_else(PoisonError::into_inner);
-            std::mem::take(&mut *workers)
+    fn run(self: Arc<Self>) {
+        let _lease = IndexRebuildLease::new(Arc::clone(&self));
+        loop {
+            let request = {
+                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                let Some(request) = state.pending.take() else {
+                    state.running = false;
+                    return;
+                };
+                request
+            };
+            let generation = request.generation;
+            let outcome = {
+                let guard = request
+                    .search
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                if self.is_current(generation, &request.active) {
+                    guard.as_ref().and_then(|index| {
+                        index
+                            .rebuild_cancellable_with_commit(
+                                request.fs.as_ref(),
+                                &request.vault,
+                                || !self.is_current(generation, &request.active),
+                                |tx| {
+                                    let state =
+                                        self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                                    let current = request.active.load(Ordering::Acquire)
+                                        && state.generation == generation;
+                                    if current {
+                                        tx.commit()?;
+                                    }
+                                    Ok(current)
+                                },
+                            )
+                            .ok()
+                    })
+                } else {
+                    None
+                }
+            };
+            let rebuilt = matches!(outcome, Some(skribeum_vault::RebuildOutcome::Completed(_)));
+            #[cfg(test)]
+            if rebuilt {
+                self.completed_generations
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(generation);
+            }
+            #[cfg(test)]
+            if matches!(outcome, Some(skribeum_vault::RebuildOutcome::Cancelled)) {
+                self.cancelled_generations
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(generation);
+            }
+            #[cfg(debug_assertions)]
+            if rebuilt
+                && request.active.load(Ordering::Acquire)
+                && let Some(process_ms) = crate::cold_start_elapsed_milliseconds()
+            {
+                eprintln!(
+                    "SKRIBEUM_COLD_START {{\"event\":\"full-text-index-complete\",\"process_ms\":{process_ms}}}"
+                );
+            }
+            let _ = rebuilt;
+        }
+    }
+
+    fn is_current(&self, generation: u64, active: &AtomicBool) -> bool {
+        active.load(Ordering::Acquire)
+            && self
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .generation
+                == generation
+    }
+
+    fn cancel_and_join(&self) {
+        let worker = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .expect("rebuild generation does not overflow");
+            state.pending = None;
+            state.running = false;
+            state.worker.take()
         };
-        for worker in workers {
+        if let Some(worker) = worker {
+            let _ = worker.join();
+        }
+    }
+
+    #[cfg(test)]
+    fn join_all(&self) {
+        let worker = {
+            self.state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .worker
+                .take()
+        };
+        if let Some(worker) = worker {
             let _ = worker.join();
         }
     }
@@ -862,6 +1011,33 @@ impl IndexRebuilds {
     #[cfg(test)]
     fn active_count(&self) -> u32 {
         self.active_workers.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    fn pending_count(&self) -> usize {
+        usize::from(
+            self.state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pending
+                .is_some(),
+        )
+    }
+
+    #[cfg(test)]
+    fn completed_generations(&self) -> Vec<u64> {
+        self.completed_generations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    #[cfg(test)]
+    fn cancelled_generations(&self) -> Vec<u64> {
+        self.cancelled_generations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -1286,10 +1462,8 @@ fn change_all_window_zoom<R: Runtime>(
     Ok(())
 }
 
-/// Rebuilds a vault's search index on a background thread. The index reads
-/// notes only; a rebuild never writes inside the vault. The function returns
-/// after the worker acquires the index lock, so a subsequent query waits for
-/// the complete rebuild instead of racing ahead of it.
+/// Requests a full-text rebuild for one vault handle. The coordinator retains
+/// only the newest snapshot and gives it exclusive ownership of publication.
 fn spawn_index_rebuild<F: FileSystem + 'static>(
     rebuilds: &Arc<IndexRebuilds>,
     search: &Arc<Mutex<Option<SearchIndex>>>,
@@ -1297,57 +1471,7 @@ fn spawn_index_rebuild<F: FileSystem + 'static>(
     active: Arc<AtomicBool>,
     fs: F,
 ) {
-    let search = Arc::clone(search);
-    let (started_tx, started_rx) = std::sync::mpsc::channel();
-    let started = {
-        let mut workers = rebuilds
-            .workers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        IndexRebuilds::reap_finished(&mut workers);
-        if active.load(Ordering::Acquire) {
-            let rebuilds = Arc::clone(rebuilds);
-            workers.push(std::thread::spawn(move || {
-                let _lease = IndexRebuildLease::new(Arc::clone(&rebuilds));
-                if !active.load(Ordering::Acquire) {
-                    let _ = started_tx.send(());
-                    return;
-                }
-                let guard = search.lock().unwrap_or_else(PoisonError::into_inner);
-                let _ = started_tx.send(());
-                if active.load(Ordering::Acquire)
-                    && let Some(index) = guard.as_ref()
-                {
-                    #[cfg(debug_assertions)]
-                    let rebuilt = matches!(
-                        index.rebuild_cancellable(&fs, &vault, || {
-                            !active.load(Ordering::Acquire)
-                        }),
-                        Ok(skribeum_vault::RebuildOutcome::Completed(_))
-                    );
-                    #[cfg(not(debug_assertions))]
-                    let _ = index.rebuild_cancellable(&fs, &vault, || {
-                        !active.load(Ordering::Acquire)
-                    });
-                    #[cfg(debug_assertions)]
-                    if rebuilt
-                        && active.load(Ordering::Acquire)
-                        && let Some(process_ms) = crate::cold_start_elapsed_milliseconds()
-                    {
-                        eprintln!(
-                            "SKRIBEUM_COLD_START {{\"event\":\"full-text-index-complete\",\"process_ms\":{process_ms}}}"
-                        );
-                    }
-                }
-            }));
-            true
-        } else {
-            false
-        }
-    };
-    if started {
-        let _ = started_rx.recv();
-    }
+    rebuilds.request(Arc::clone(search), vault, active, fs);
 }
 
 /// Opens a vault at an absolute path, validates it and indexes its tree.
@@ -2528,7 +2652,8 @@ mod vault_session_tests {
     use std::time::Duration;
 
     use super::{
-        VaultRegistry, WatchLease, publish_if_open, record_opened_vault, spawn_index_rebuild,
+        IndexRebuilds, VaultRegistry, WatchLease, publish_if_open, record_opened_vault,
+        spawn_index_rebuild,
     };
     use skribeum_vault::{
         DirEntry, FileMetadata, FileSystem, FsError, SearchIndex, SimFs, Vault, VaultSession,
@@ -2643,6 +2768,20 @@ mod vault_session_tests {
         }
     }
 
+    fn wait_for_active_rebuild(rebuilds: &IndexRebuilds) {
+        for _ in 0..10_000 {
+            if rebuilds.active_count() == 1 {
+                return;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            rebuilds.active_count(),
+            1,
+            "the coordinator starts its single rebuild worker"
+        );
+    }
+
     #[test]
     fn only_a_successful_open_records_the_canonical_vault_root() {
         let fs = SimFs::new();
@@ -2727,6 +2866,182 @@ mod vault_session_tests {
     }
 
     #[test]
+    fn rebuild_coordinator_completes_a_normal_generation() {
+        let fs = SimFs::new();
+        let root = PathBuf::from("/vaults/normal-rebuild");
+        fs.external_create_dir(&root);
+        fs.external_write(&root.join("note.md"), b"normal rebuild content\n");
+        fs.deliver_all();
+        let vault = Vault::open(&fs, &root).expect("vault opens");
+        let search = Arc::new(Mutex::new(Some(
+            SearchIndex::in_memory().expect("index opens"),
+        )));
+        let registry = VaultRegistry::default();
+        let opened = registry.register(vault.clone(), Arc::clone(&search));
+        let (active, rebuilds) = {
+            let vaults = registry.lock();
+            let open = vaults.get(&opened.handle.id).expect("registered vault");
+            (Arc::clone(&open.active), Arc::clone(&open.rebuilds))
+        };
+
+        spawn_index_rebuild(&rebuilds, &search, vault, active, fs);
+        rebuilds.join_all();
+
+        assert_eq!(rebuilds.completed_generations(), [1]);
+        assert!(rebuilds.cancelled_generations().is_empty());
+        assert_eq!(rebuilds.active_count(), 0);
+        assert_eq!(
+            search
+                .lock()
+                .expect("search index lock")
+                .as_ref()
+                .expect("index remains available")
+                .query("normal", 10)
+                .expect("query runs")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn newer_generation_wins_when_an_older_worker_waits_on_the_index_mutex() {
+        let fs = SimFs::new();
+        let root = PathBuf::from("/vaults/mutex-order");
+        fs.external_create_dir(&root);
+        fs.external_write(&root.join("older.md"), b"older snapshot\n");
+        fs.deliver_all();
+        let older = Vault::open(&fs, &root).expect("older snapshot opens");
+        fs.external_remove(&root.join("older.md"));
+        fs.external_write(&root.join("newer.md"), b"newer snapshot\n");
+        fs.deliver_all();
+        let newer = Vault::open(&fs, &root).expect("newer snapshot opens");
+        let search = Arc::new(Mutex::new(Some(
+            SearchIndex::in_memory().expect("index opens"),
+        )));
+        let registry = VaultRegistry::default();
+        let opened = registry.register(older.clone(), Arc::clone(&search));
+        let (active, rebuilds) = {
+            let vaults = registry.lock();
+            let open = vaults.get(&opened.handle.id).expect("registered vault");
+            (Arc::clone(&open.active), Arc::clone(&open.rebuilds))
+        };
+
+        let held_index = search.lock().expect("index mutex holds the first worker");
+        spawn_index_rebuild(&rebuilds, &search, older, Arc::clone(&active), fs.clone());
+        wait_for_active_rebuild(&rebuilds);
+        spawn_index_rebuild(&rebuilds, &search, newer, active, fs);
+        assert_eq!(rebuilds.pending_count(), 1);
+        drop(held_index);
+        rebuilds.join_all();
+
+        assert_eq!(rebuilds.completed_generations(), [2]);
+        let index = search.lock().expect("search index lock");
+        let index = index.as_ref().expect("index remains available");
+        assert!(index.query("older", 10).expect("query runs").is_empty());
+        assert_eq!(index.query("newer", 10).expect("query runs").len(), 1);
+    }
+
+    #[test]
+    fn rebuild_coordinator_coalesces_a_mutation_burst_to_its_latest_snapshot() {
+        let fs = SimFs::new();
+        let root = PathBuf::from("/vaults/rebuild-burst");
+        fs.external_create_dir(&root);
+        fs.external_write(&root.join("first.md"), b"first snapshot\n");
+        fs.deliver_all();
+        let first = Vault::open(&fs, &root).expect("first snapshot opens");
+        let search = Arc::new(Mutex::new(Some(
+            SearchIndex::in_memory().expect("index opens"),
+        )));
+        let registry = VaultRegistry::default();
+        let opened = registry.register(first.clone(), Arc::clone(&search));
+        let (active, rebuilds) = {
+            let vaults = registry.lock();
+            let open = vaults.get(&opened.handle.id).expect("registered vault");
+            (Arc::clone(&open.active), Arc::clone(&open.rebuilds))
+        };
+        let (blocking_fs, entered_rx, release_tx) = BlockingFs::new(fs.clone());
+
+        spawn_index_rebuild(&rebuilds, &search, first, Arc::clone(&active), blocking_fs);
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first rebuild blocks during its first note read");
+        for generation in 2..=9 {
+            fs.external_write(
+                &root.join(format!("burst-{generation}.md")),
+                format!("burst generation {generation}\n").as_bytes(),
+            );
+            fs.deliver_all();
+            let latest = Vault::open(&fs, &root).expect("latest snapshot opens");
+            spawn_index_rebuild(&rebuilds, &search, latest, Arc::clone(&active), fs.clone());
+        }
+        assert_eq!(rebuilds.active_count(), 1, "one worker services the burst");
+        assert_eq!(
+            rebuilds.pending_count(),
+            1,
+            "only the latest snapshot remains pending"
+        );
+
+        release_tx.send(()).expect("blocked read releases");
+        rebuilds.join_all();
+
+        assert_eq!(rebuilds.cancelled_generations(), [1]);
+        assert_eq!(rebuilds.completed_generations(), [9]);
+        assert_eq!(rebuilds.active_count(), 0);
+        assert_eq!(
+            search
+                .lock()
+                .expect("search index lock")
+                .as_ref()
+                .expect("index remains available")
+                .query("generation 9", 10)
+                .expect("query runs")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn newer_generation_cancels_a_running_rebuild_before_it_can_commit() {
+        let fs = SimFs::new();
+        let root = PathBuf::from("/vaults/running-cancellation");
+        fs.external_create_dir(&root);
+        fs.external_write(&root.join("older.md"), b"older running snapshot\n");
+        fs.deliver_all();
+        let older = Vault::open(&fs, &root).expect("older snapshot opens");
+        let search = Arc::new(Mutex::new(Some(
+            SearchIndex::in_memory().expect("index opens"),
+        )));
+        let registry = VaultRegistry::default();
+        let opened = registry.register(older.clone(), Arc::clone(&search));
+        let (active, rebuilds) = {
+            let vaults = registry.lock();
+            let open = vaults.get(&opened.handle.id).expect("registered vault");
+            (Arc::clone(&open.active), Arc::clone(&open.rebuilds))
+        };
+        let (blocking_fs, entered_rx, release_tx) = BlockingFs::new(fs.clone());
+
+        spawn_index_rebuild(&rebuilds, &search, older, Arc::clone(&active), blocking_fs);
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("older rebuild blocks during its first note read");
+        fs.external_remove(&root.join("older.md"));
+        fs.external_write(&root.join("newer.md"), b"newer running snapshot\n");
+        fs.deliver_all();
+        let newer = Vault::open(&fs, &root).expect("newer snapshot opens");
+        spawn_index_rebuild(&rebuilds, &search, newer, active, fs);
+
+        release_tx.send(()).expect("blocked read releases");
+        rebuilds.join_all();
+
+        assert_eq!(rebuilds.cancelled_generations(), [1]);
+        assert_eq!(rebuilds.completed_generations(), [2]);
+        let index = search.lock().expect("search index lock");
+        let index = index.as_ref().expect("index remains available");
+        assert!(index.query("older", 10).expect("query runs").is_empty());
+        assert_eq!(index.query("newer", 10).expect("query runs").len(), 1);
+    }
+
+    #[test]
     fn close_cancels_a_blocked_rebuild_and_waits_for_its_worker() {
         let fs = SimFs::new();
         let root = PathBuf::from("/vaults/blocked");
@@ -2794,6 +3109,7 @@ mod vault_session_tests {
 
         assert_eq!(registry.open_count(), 0);
         assert_eq!(rebuilds.active_count(), 0);
+        assert_eq!(rebuilds.cancelled_generations(), [1]);
         let guard = search.lock().expect("search index lock");
         let index = guard.as_ref().expect("search index remains available");
         assert_eq!(

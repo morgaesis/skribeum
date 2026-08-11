@@ -2636,11 +2636,67 @@ function renderLinkedNote(
   };
 }
 
+type DeferredRootSourceLease = {
+  load: () => Promise<string>;
+  release: () => void;
+};
+
+/**
+ * One editor-document generation may mount several self-embed widgets. They
+ * all read the same root `Text`, so defer and materialize it once for that
+ * generation. A different `Text` is a different CodeMirror document
+ * generation; releasing its last widget fences any unpainted stale work.
+ */
+class DeferredRootSource {
+  private references = 0;
+  private pending: Promise<string> | null = null;
+  private readonly scheduler = new PostPaintScheduler();
+
+  constructor(private readonly document: Text) {}
+
+  acquire(): DeferredRootSourceLease {
+    this.references += 1;
+    let released = false;
+    return {
+      load: () => this.load(),
+      release: () => {
+        if (released) return;
+        released = true;
+        this.references -= 1;
+        if (this.references === 0) {
+          this.scheduler.fence();
+          this.pending = null;
+        }
+      },
+    };
+  }
+
+  private load(): Promise<string> {
+    if (this.pending === null) {
+      this.pending = new Promise<string>((resolve) => {
+        this.scheduler.schedule(() => resolve(this.document.toString()));
+      });
+    }
+    return this.pending;
+  }
+}
+
+const deferredRootSources = new WeakMap<Text, DeferredRootSource>();
+
+function deferredRootSource(document: Text): DeferredRootSourceLease {
+  let source = deferredRootSources.get(document);
+  if (source === undefined) {
+    source = new DeferredRootSource(document);
+    deferredRootSources.set(document, source);
+  }
+  return source.acquire();
+}
+
 class EmbedWidget extends WidgetType {
   private readonly cleanups = new WeakMap<HTMLElement, () => void>();
-  private readonly sourceSchedulers = new WeakMap<
+  private readonly rootSources = new WeakMap<
     HTMLElement,
-    PostPaintScheduler
+    DeferredRootSourceLease
   >();
 
   constructor(
@@ -2743,17 +2799,10 @@ class EmbedWidget extends WidgetType {
     const body = document.createElement("span");
     body.className = "cm-skr-embed-body";
     host.append(body);
-    const sourceScheduler = new PostPaintScheduler();
-    this.sourceSchedulers.set(host, sourceScheduler);
-    const rootSource =
-      this.rootDocument === null
-        ? ""
-        : () =>
-            new Promise<string>((resolve) => {
-              sourceScheduler.schedule(() =>
-                resolve(this.rootDocument?.toString() ?? ""),
-              );
-            });
+    const source =
+      this.rootDocument === null ? null : deferredRootSource(this.rootDocument);
+    if (source !== null) this.rootSources.set(host, source);
+    const rootSource = source === null ? "" : source.load;
 
     this.cleanups.set(
       host,
@@ -2771,10 +2820,10 @@ class EmbedWidget extends WidgetType {
   }
 
   override destroy(dom: HTMLElement): void {
-    this.sourceSchedulers.get(dom)?.fence();
-    this.sourceSchedulers.delete(dom);
     this.cleanups.get(dom)?.();
     this.cleanups.delete(dom);
+    this.rootSources.get(dom)?.release();
+    this.rootSources.delete(dom);
   }
 
   override ignoreEvent(): boolean {

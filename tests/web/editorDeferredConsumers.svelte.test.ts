@@ -15,6 +15,7 @@ import {
   formatWordCount,
 } from "../../src/lib/features/noteStatistics";
 import type { LoadedNote } from "../../src/lib/ipc/vault";
+import * as vaultIpc from "../../src/lib/ipc/vault";
 import Statusline from "../../src/lib/Statusline.svelte";
 import TabStrip from "../../src/lib/TabStrip.svelte";
 import { reactiveState } from "./support/reactiveState.svelte";
@@ -61,16 +62,20 @@ async function settlePostPaint(): Promise<void> {
   flushSync();
 }
 
-function observeMaterialization() {
+function observeMaterialization(minimumLength = 0) {
   const original = Text.prototype.toString;
   let units = 0;
+  const fullDocument = vi.fn();
   const spy = vi.spyOn(Text.prototype, "toString").mockImplementation(function (
     this: Text,
   ) {
-    units += this.length;
+    if (this.length >= minimumLength) {
+      units += this.length;
+      fullDocument();
+    }
     return original.call(this);
   });
-  return { spy, units: () => units };
+  return { spy, fullDocument, units: () => units };
 }
 
 afterEach(async () => {
@@ -80,6 +85,48 @@ afterEach(async () => {
 });
 
 describe("large-note editor consumers", () => {
+  it("bounds durable-history work when a real vault note flushes rapid edits", async () => {
+    const source = "x".repeat(1_275_000);
+    const append = vi
+      .spyOn(vaultIpc, "editHistoryAppend")
+      .mockResolvedValue(undefined);
+    vi.spyOn(vaultIpc, "editHistoryRead").mockResolvedValue({
+      undo: [],
+      redo: [],
+    });
+    vi.spyOn(vaultIpc, "noteWrite").mockResolvedValue({
+      result: "written",
+      projection_hash: "after-rapid-edits",
+    });
+    const { component } = mountEditor({
+      doc: source,
+      note: loadedNote(source, "rapid-history-hash"),
+      vault: { id: 1 },
+      path: "rapid-history.md",
+    });
+    await settlePostPaint();
+    const view = component.getView();
+    if (view === undefined) throw new Error("editor did not mount");
+    const materialization = observeMaterialization(source.length);
+
+    for (let index = 0; index < 64; index += 1) {
+      const head = view.state.doc.length;
+      view.dispatch({
+        changes: { from: head, insert: String(index % 10) },
+        selection: { anchor: head + 1 },
+        userEvent: "input.type",
+      });
+    }
+
+    await expect(component.flush()).resolves.toBe(true);
+
+    expect(append).toHaveBeenCalledOnce();
+    expect(materialization.units()).toBeLessThanOrEqual(
+      2 * (source.length + 64),
+    );
+    expect(materialization.fullDocument).toHaveBeenCalledTimes(2);
+  });
+
   it("coalesces rapid input into one post-paint materialization", async () => {
     const source = `${"large note words\n".repeat(75_000)}final word`;
     const changedSources: string[] = [];
@@ -99,7 +146,7 @@ describe("large-note editor consumers", () => {
     changedSources.length = 0;
     statistics.length = 0;
     dirtyStates.length = 0;
-    const materialization = observeMaterialization();
+    const materialization = observeMaterialization(source.length);
 
     for (const character of "abcdefgh") {
       const head = view.state.doc.length;
@@ -118,7 +165,7 @@ describe("large-note editor consumers", () => {
 
     await settlePostPaint();
 
-    expect(materialization.spy).toHaveBeenCalledTimes(1);
+    expect(materialization.fullDocument).toHaveBeenCalledTimes(1);
     expect(materialization.units()).toBe(source.length + 8);
     expect(changedSources).toEqual([`${source}abcdefgh`]);
     expect(statistics).toHaveLength(1);
@@ -162,6 +209,33 @@ describe("large-note editor consumers", () => {
     expect(materialization.spy.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(changedSources).toEqual([`${source}updated`]);
   });
+
+  it("shares one root materialization across visible self-embeds", async () => {
+    const source = `![[#Details]]\n\n![[#Details]]\n\n![[#Details]]\n\n## Details\n${"embedded body\n".repeat(90_000)}`;
+    const materialization = observeMaterialization();
+    const { host } = mountEditor({
+      doc: source,
+      note: loadedNote(source, "shared-self-embed-hash"),
+      path: "self-embed.md",
+      linkContext: {
+        paths: ["self-embed.md"],
+        config: {
+          newLinkFormat: "shortest",
+          useMarkdownLinks: false,
+          attachmentFolderPath: null,
+        },
+        currentPath: "self-embed.md",
+        embedAncestry: ["self-embed.md"],
+        embedDepth: 0,
+      },
+    });
+
+    await settlePostPaint();
+
+    expect(host.querySelectorAll(".cm-skr-embed")).toHaveLength(3);
+    expect(materialization.spy).toHaveBeenCalledTimes(1);
+    expect(materialization.units()).toBe(source.length);
+  }, 15_000);
 
   it.each([
     ["Backspace", deleteCharBackward],

@@ -477,7 +477,7 @@ describe("durable edit history", () => {
     expect(await history.beginFlush()).toBeNull();
   });
 
-  it("serializes a long retry batch in order without fanning out state digests", async () => {
+  it("coalesces a long retry batch at one durable frontier", async () => {
     const releases: Array<() => void> = [];
     let activeDigests = 0;
     let peakDigests = 0;
@@ -517,22 +517,40 @@ describe("durable edit history", () => {
     await vi.waitFor(() => expect(releases).toHaveLength(2));
     expect(peakDigests).toBeLessThanOrEqual(2);
 
-    for (let index = 0; index < 65; index += 1) {
-      await vi.waitFor(() => expect(releases.length).toBeGreaterThan(index));
-      releases[index]?.();
-    }
+    for (const release of releases.splice(0)) release();
 
     const batch = await preparing;
-    expect(batch?.actions).toHaveLength(64);
-    expect(batch?.actions.map((action) => action.kind)).toEqual(
-      Array.from({ length: 64 }, () => "entry"),
+    expect(batch?.actions).toHaveLength(1);
+    expect(batch?.actions[0]).toMatchObject({
+      kind: "entry",
+      entry: {
+        changes: [
+          {
+            insert:
+              "0123456789012345678901234567890123456789012345678901234567890123",
+          },
+        ],
+      },
+    });
+    expect(digest).toHaveBeenCalledTimes(2);
+
+    const compacted = batch?.actions[0];
+    if (compacted?.kind !== "entry") {
+      throw new Error("compacted history entry missing");
+    }
+    const recovered = harness(
+      { undo: [compacted.entry], redo: [] },
+      "0123456789012345678901234567890123456789012345678901234567890123",
     );
-    expect(
-      batch?.actions.map((action) =>
-        action.kind === "entry" ? action.entry.changes[0]?.insert : null,
-      ),
-    ).toEqual(Array.from({ length: 64 }, (_, index) => String(index % 10)));
-    expect(digest).toHaveBeenCalledTimes(65);
+    vi.restoreAllMocks();
+    recovered.history.undo(recovered.view);
+    await recovered.history.depths();
+    expect(recovered.view.state.doc.toString()).toBe("");
+    recovered.history.redo(recovered.view);
+    await recovered.history.depths();
+    expect(recovered.view.state.doc.toString()).toBe(
+      "0123456789012345678901234567890123456789012345678901234567890123",
+    );
 
     await expect(history.flush()).rejects.toThrow("ambiguous response");
     await history.flush();
@@ -540,10 +558,38 @@ describe("durable edit history", () => {
     expect(calls[1]?.batch).toBe(calls[0]?.batch);
     expect(calls[1]?.actions).toEqual(calls[0]?.actions);
 
-    vi.restoreAllMocks();
     history.undo(view);
     await history.depths();
     expect(view.state.doc.toString()).toHaveLength(63);
+  });
+
+  it("maps a compacted typing group through native undo and redo", async () => {
+    const { history, view } = harness({ undo: [], redo: [] }, "");
+    const source =
+      "0123456789012345678901234567890123456789012345678901234567890123";
+    for (const character of source) {
+      const head = view.state.doc.length;
+      view.dispatch({ changes: { from: head, insert: character } });
+    }
+    const entryBatch = await history.beginFlush();
+    if (entryBatch === null) throw new Error("compacted entry batch missing");
+    history.commitFlush(entryBatch);
+
+    view.dispatch({
+      changes: { from: 0, to: source.length, insert: "" },
+      annotations: Transaction.userEvent.of("undo"),
+    });
+    const undoBatch = await history.beginFlush();
+    expect(undoBatch?.actions).toEqual([{ kind: "undo", count: 1 }]);
+    if (undoBatch === null) throw new Error("compacted undo batch missing");
+    history.commitFlush(undoBatch);
+
+    view.dispatch({
+      changes: { from: 0, insert: source },
+      annotations: Transaction.userEvent.of("redo"),
+    });
+    const redoBatch = await history.beginFlush();
+    expect(redoBatch?.actions).toEqual([{ kind: "redo", count: 1 }]);
   });
 
   it("applies a persisted inverse and restores its recorded selection", async () => {

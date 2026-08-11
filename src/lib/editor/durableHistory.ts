@@ -54,6 +54,7 @@ export type EditHistoryTransport = {
 type RuntimeEntry = {
   serialized?: EditHistoryEntry;
   serializing?: Promise<EditHistoryEntry>;
+  compactedRun?: CompactedEntryRun;
   beforeDoc?: Text;
   afterDoc?: Text;
   source?: {
@@ -62,6 +63,10 @@ type RuntimeEntry = {
     selectionBefore: EditorSelection;
     selectionAfter: EditorSelection;
   };
+};
+
+type CompactedEntryRun = {
+  nodes: RuntimeEntry[];
 };
 
 type PendingAction =
@@ -306,18 +311,15 @@ export class DurableEditHistory {
     const actions = this.pending.filter((action) => action.sequence <= cutoff);
     if (actions.length === 0) return null;
     const stateChecks = new Map<Text, Promise<EditHistoryStateCheck>>();
-    const serializedActions: EditHistoryAction[] = [];
-    for (const action of actions) {
-      if (action.kind === "entry") {
-        serializedActions.push({
-          kind: "entry",
-          entry: await this.serializeEntry(action.node, stateChecks),
-        });
-        if (generation !== this.generation) return null;
-      } else {
-        serializedActions.push({ kind: action.kind, count: action.count });
-      }
+    const compactedNodes =
+      actions.length > 1 && actions.every((action) => action.kind === "entry")
+        ? actions.map((action) => action.node)
+        : null;
+    if (compactedNodes !== null) {
+      const compactedRun = { nodes: compactedNodes };
+      for (const node of compactedNodes) node.compactedRun = compactedRun;
     }
+    const serializedActions = await this.serializeActions(actions, stateChecks);
     if (generation !== this.generation) return null;
     const batch = {
       id: batchId(),
@@ -327,6 +329,39 @@ export class DurableEditHistory {
     this.batchGenerations.set(batch, generation);
     this.retryBatch = batch;
     return batch;
+  }
+
+  /**
+   * A flush containing only new entries is one durable frontier: its inverse
+   * restores the batch start and its forward change restores the batch end.
+   * Keep movement-bearing batches expanded because their action counts name
+   * individual reachable entries in the journal.
+   */
+  private async serializeActions(
+    actions: PendingAction[],
+    stateChecks: Map<Text, Promise<EditHistoryStateCheck>>,
+  ): Promise<EditHistoryAction[]> {
+    if (actions.every((action) => action.kind === "entry")) {
+      const nodes = actions.map((action) => action.node);
+      return [
+        {
+          kind: "entry",
+          entry: await this.serializeEntryRun(nodes, stateChecks),
+        },
+      ];
+    }
+    const serializedActions: EditHistoryAction[] = [];
+    for (const action of actions) {
+      if (action.kind === "entry") {
+        serializedActions.push({
+          kind: "entry",
+          entry: await this.serializeEntry(action.node, stateChecks),
+        });
+      } else {
+        serializedActions.push({ kind: action.kind, count: action.count });
+      }
+    }
+    return serializedActions;
   }
 
   /** Drops a successfully fsynced prefix from the pending queue. */
@@ -408,7 +443,7 @@ export class DurableEditHistory {
       operation.kind === "undo-to" ? this.undoEntries : this.redoEntries;
     const target =
       operation.kind === "undo-to" ? this.redoEntries : this.undoEntries;
-    let count = 0;
+    const moved: RuntimeEntry[] = [];
     let matched = false;
     while (source.length > 0) {
       const node = source.at(-1);
@@ -418,13 +453,18 @@ export class DurableEditHistory {
       if (expectedDoc === undefined) break;
       source.pop();
       target.push(node);
-      count += 1;
+      moved.push(node);
       if (expectedDoc.eq(operation.doc)) {
         matched = true;
         break;
       }
     }
     if (!matched) {
+      this.fence();
+      return;
+    }
+    const count = this.persistedMovementCount(moved);
+    if (count === null) {
       this.fence();
       return;
     }
@@ -549,6 +589,59 @@ export class DurableEditHistory {
     });
   }
 
+  private async serializeEntryRun(
+    nodes: RuntimeEntry[],
+    stateChecks: Map<Text, Promise<EditHistoryStateCheck>>,
+  ): Promise<EditHistoryEntry> {
+    const first = nodes[0];
+    const last = nodes.at(-1);
+    if (first === undefined || last === undefined) {
+      throw new Error("history entry run is empty");
+    }
+    if (nodes.length === 1) return this.serializeEntry(first, stateChecks);
+    if (first.beforeDoc === undefined || last.afterDoc === undefined) {
+      throw new Error("history entry run cannot be serialized");
+    }
+    const firstSource = first.source;
+    if (firstSource === undefined) {
+      throw new Error("history entry run cannot be serialized");
+    }
+    let changes = firstSource.changes;
+    let lastSource = firstSource;
+    for (const node of nodes.slice(1)) {
+      const nextSource = node.source;
+      if (nextSource === undefined) {
+        throw new Error("history entry run cannot be serialized");
+      }
+      changes = changes.compose(nextSource.changes);
+      lastSource = nextSource;
+    }
+    const [before, after] = await Promise.all([
+      this.stateCheck(first.beforeDoc, stateChecks),
+      this.stateCheck(last.afterDoc, stateChecks),
+    ]);
+    return {
+      changes: serializeChanges(changes),
+      inverse: serializeChanges(changes.invert(first.beforeDoc)),
+      selection_before: serializeSelection(firstSource.selectionBefore),
+      selection_after: serializeSelection(lastSource.selectionAfter),
+      before,
+      after,
+    };
+  }
+
+  private stateCheck(
+    doc: Text,
+    stateChecks: Map<Text, Promise<EditHistoryStateCheck>>,
+  ): Promise<EditHistoryStateCheck> {
+    let pending = stateChecks.get(doc);
+    if (pending === undefined) {
+      pending = editHistoryStateCheck(doc.toString());
+      stateChecks.set(doc, pending);
+    }
+    return pending;
+  }
+
   private applyReplayMovement(
     direction: "undo" | "redo",
     sequence: number,
@@ -561,6 +654,35 @@ export class DurableEditHistory {
       return;
     }
     target.push(node);
-    this.pending.push({ kind: direction, count: 1, sequence });
+    const count = this.persistedMovementCount([node]);
+    if (count === null) {
+      this.fence();
+      return;
+    }
+    this.pending.push({ kind: direction, count, sequence });
+  }
+
+  /**
+   * A compacted run occupies one durable stack slot. Native history normally
+   * replays the whole typing group at once; a partial replay cannot map to
+   * that durable slot, so fencing is safer than recording a divergent move.
+   */
+  private persistedMovementCount(moved: RuntimeEntry[]): number | null {
+    const movedSet = new Set(moved);
+    const countedRuns = new Set<CompactedEntryRun>();
+    let count = 0;
+    for (const node of moved) {
+      const run = node.compactedRun;
+      if (run === undefined) {
+        count += 1;
+        continue;
+      }
+      if (run.nodes.some((member) => !movedSet.has(member))) return null;
+      if (!countedRuns.has(run)) {
+        countedRuns.add(run);
+        count += 1;
+      }
+    }
+    return count;
   }
 }

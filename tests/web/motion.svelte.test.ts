@@ -1150,7 +1150,9 @@ describe("tab strip active-tab indicator", () => {
       ".skr-tab-shell:not(.skr-tab-dirty)",
     );
     const cleanClose = cleanShell?.querySelector<HTMLElement>(".skr-tab-close");
-    expect(dirtyShell?.getAttribute("aria-label")).toMatch(/unsaved/iu);
+    expect(
+      dirtyShell?.querySelector('[role="tab"]')?.getAttribute("aria-label"),
+    ).toMatch(/unsaved/iu);
     expect(dirtyDot).not.toBeNull();
     expect(dirtyClose).not.toBeNull();
     expect(cleanClose).not.toBeNull();
@@ -1186,8 +1188,8 @@ describe("tab strip active-tab indicator", () => {
     cleanClose.dispatchEvent(
       new MouseEvent("click", { bubbles: true, detail: 1 }),
     );
-    expect(closed).toHaveBeenNthCalledWith(1, "note-1.md");
-    expect(closed).toHaveBeenNthCalledWith(2, "note-2.md");
+    expect(closed).toHaveBeenNthCalledWith(1, "note-1.md", false);
+    expect(closed).toHaveBeenNthCalledWith(2, "note-2.md", false);
 
     void unmount(component);
   });

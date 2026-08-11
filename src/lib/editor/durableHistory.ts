@@ -90,7 +90,7 @@ type CompactedEntryRun = {
 };
 
 type PendingAction =
-  | { kind: "entry"; node: RuntimeEntry; sequence: number }
+  | { kind: "entry"; nodes: RuntimeEntry[]; sequence: number }
   | { kind: "undo"; count: number; sequence: number }
   | { kind: "redo"; count: number; sequence: number };
 
@@ -251,6 +251,7 @@ export class DurableEditHistory {
   private initialized = false;
   private preInitializationChanged = false;
   private discardLoaded = false;
+  private preservePendingOnRead = false;
   private nextSequence = 0;
   private generation = 0;
   private retryBatch: EditHistoryBatch | null = null;
@@ -273,18 +274,23 @@ export class DurableEditHistory {
       .read()
       .catch(() => ({ undo: [], redo: [] }))
       .then((snapshot) => {
-        if (this.discardLoaded) {
+        if (this.discardLoaded && !this.preservePendingOnRead) {
           this.undoEntries = [];
           this.redoEntries = [];
         } else {
-          const loadedUndo = snapshot.undo.map(loadedNode);
-          const loadedRedo = snapshot.redo.map(loadedNode);
+          const loadedUndo = this.discardLoaded
+            ? []
+            : snapshot.undo.map(loadedNode);
+          const loadedRedo = this.discardLoaded
+            ? []
+            : snapshot.redo.map(loadedNode);
           this.undoEntries = [...loadedUndo, ...this.undoEntries];
           this.redoEntries = this.preInitializationChanged
             ? [...loadedRedo, ...this.redoEntries]
             : loadedRedo;
         }
-        this.trimRetained();
+        const discarded = this.trimRetained();
+        this.enforcePendingBounds(discarded);
         this.initialized = true;
         if (this.pressureFlushRequested) this.requestPressureFlush();
       });
@@ -381,8 +387,15 @@ export class DurableEditHistory {
     if (actions.length === 0) return null;
     const stateChecks = new Map<Text, Promise<EditHistoryStateCheck>>();
     const compactedNodes =
-      actions.length > 1 && actions.every((action) => action.kind === "entry")
-        ? actions.map((action) => action.node)
+      actions.length > 1 &&
+      actions.every(
+        (action) =>
+          action.kind === "entry" &&
+          action.nodes.every((node) => node.source !== undefined),
+      )
+        ? actions.flatMap((action) =>
+            action.kind === "entry" ? action.nodes : [],
+          )
         : null;
     if (compactedNodes !== null) {
       const compactedRun = { nodes: compactedNodes };
@@ -403,7 +416,7 @@ export class DurableEditHistory {
     this.batchNodes.set(
       batch,
       actions.flatMap((action) =>
-        action.kind === "entry" ? [action.node] : [],
+        action.kind === "entry" ? action.nodes : [],
       ),
     );
     this.retryBatch = batch;
@@ -421,8 +434,10 @@ export class DurableEditHistory {
     stateChecks: Map<Text, Promise<EditHistoryStateCheck>>,
     compactedRun?: CompactedEntryRun,
   ): Promise<EditHistoryAction[]> {
-    if (actions.every((action) => action.kind === "entry")) {
-      const nodes = actions.map((action) => action.node);
+    if (compactedRun !== undefined) {
+      const nodes = actions.flatMap((action) =>
+        action.kind === "entry" ? action.nodes : [],
+      );
       const entry = await this.serializeEntryRun(nodes, stateChecks);
       if (compactedRun !== undefined) compactedRun.serialized = entry;
       return [
@@ -437,7 +452,7 @@ export class DurableEditHistory {
       if (action.kind === "entry") {
         serializedActions.push({
           kind: "entry",
-          entry: await this.serializeEntry(action.node, stateChecks),
+          entry: await this.serializeEntryRun(action.nodes, stateChecks),
         });
       } else {
         serializedActions.push({ kind: action.kind, count: action.count });
@@ -455,7 +470,8 @@ export class DurableEditHistory {
     if (this.retryBatch?.id === batch.id) this.retryBatch = null;
     this.pressureFenceQueued = false;
     this.releaseSerializedDocuments(batch);
-    this.trimRetained();
+    const discarded = this.trimRetained();
+    this.enforcePendingBounds(discarded);
   }
 
   /** Persists the current action prefix in order with fences and replays. */
@@ -523,13 +539,32 @@ export class DurableEditHistory {
     retainedDocumentChars: number;
   }> {
     const entries = this.retainedTimeline();
+    const retained = this.retainedNodes();
     return {
       entries: entries.length,
       serializedBytes: entries.reduce(
         (total, node) => total + this.reservedBytes(node),
         0,
       ),
-      retainedDocumentChars: [...this.undoEntries, ...this.redoEntries].reduce(
+      retainedDocumentChars: [...retained].reduce(
+        (total, node) =>
+          total + (node.beforeDoc?.length ?? 0) + (node.afterDoc?.length ?? 0),
+        0,
+      ),
+    };
+  }
+
+  /** Observation of the bounded, not-yet-durable action queue. */
+  pendingRetention(): {
+    actions: number;
+    serializedBytes: number;
+    retainedDocumentChars: number;
+  } {
+    const retained = this.retainedNodes();
+    return {
+      actions: this.pending.length,
+      serializedBytes: this.pendingBytes(),
+      retainedDocumentChars: [...retained].reduce(
         (total, node) =>
           total + (node.beforeDoc?.length ?? 0) + (node.afterDoc?.length ?? 0),
         0,
@@ -546,14 +581,16 @@ export class DurableEditHistory {
 
   private applyQueued(operation: QueuedOperation): void {
     if (operation.kind === "entry") {
+      const discardedRedo = this.redoEntries.length > 0;
       this.redoEntries = [];
       this.undoEntries.push(operation.node);
       this.pending.push({
         kind: "entry",
-        node: operation.node,
+        nodes: [operation.node],
         sequence: operation.sequence,
       });
-      this.trimRetained();
+      const discarded = this.trimRetained();
+      this.enforcePendingBounds(discardedRedo || discarded);
       return;
     }
     const source =
@@ -627,6 +664,7 @@ export class DurableEditHistory {
       count,
       sequence: operation.sequence,
     });
+    this.enforcePendingBounds();
   }
 
   private enqueueReplay(direction: "undo" | "redo", view: EditorView): void {
@@ -681,6 +719,7 @@ export class DurableEditHistory {
   private resetReachable(): void {
     this.generation += 1;
     this.discardLoaded = true;
+    this.preservePendingOnRead = false;
     this.undoEntries = [];
     this.redoEntries = [];
     this.pending = [];
@@ -753,6 +792,15 @@ export class DurableEditHistory {
     if (first === undefined || last === undefined) {
       throw new Error("history entry run is empty");
     }
+    const existingRun = first.compactedRun;
+    if (
+      existingRun !== undefined &&
+      existingRun.serialized !== undefined &&
+      existingRun.nodes.length === nodes.length &&
+      existingRun.nodes.every((node, index) => node === nodes[index])
+    ) {
+      return existingRun.serialized;
+    }
     if (nodes.length === 1) return this.serializeEntry(first, stateChecks);
     if (first.beforeDoc === undefined || last.afterDoc === undefined) {
       throw new Error("history entry run cannot be serialized");
@@ -823,14 +871,176 @@ export class DurableEditHistory {
     ) {
       return;
     }
-    const first = this.pending[0]?.node;
-    const last = this.pending.at(-1)?.node;
+    const first = this.pending[0]?.nodes[0];
+    const last = this.pending.at(-1)?.nodes.at(-1);
     if (first === undefined || last === undefined) return;
     for (const node of this.undoEntries) {
       if (node === first || node === last) continue;
       delete node.beforeDoc;
       delete node.afterDoc;
     }
+  }
+
+  /**
+   * Keeps the pending journal delta inside the same envelope as the live
+   * history. Branching over a redo suffix discards its queued prefix, so the
+   * replacement is rebuilt from the surviving stacks behind a durable fence.
+   */
+  private enforcePendingBounds(discardedPrefix = false): void {
+    this.compactPendingMovements();
+    if (discardedPrefix || this.hasDetachedPendingEntries()) {
+      this.rebuildPendingFromRetained();
+      this.pressureFence();
+    }
+    while (!this.pendingWithinLimits()) {
+      const oldest = this.retainedTimeline()[0];
+      if (oldest === undefined || !this.dropOldest(oldest)) {
+        this.releaseDetachedPendingReferences();
+        this.pending = [];
+        this.pressureFence();
+        break;
+      }
+      this.rebuildPendingFromRetained();
+      this.pressureFence();
+    }
+    this.releasePendingDocumentReferences();
+  }
+
+  /** Cancels inverse cursor movement and folds adjacent movement records. */
+  private compactPendingMovements(): void {
+    const compacted: PendingAction[] = [];
+    for (const action of this.pending) {
+      const previous = compacted.at(-1);
+      if (
+        action.kind === "entry" ||
+        previous === undefined ||
+        previous.kind === "entry"
+      ) {
+        compacted.push(action);
+        continue;
+      }
+      if (previous.kind === action.kind) {
+        compacted[compacted.length - 1] = {
+          kind: previous.kind,
+          count: previous.count + action.count,
+          sequence: action.sequence,
+        };
+        continue;
+      }
+      if (previous.count > action.count) {
+        compacted[compacted.length - 1] = {
+          kind: previous.kind,
+          count: previous.count - action.count,
+          sequence: action.sequence,
+        };
+        continue;
+      }
+      if (previous.count === action.count) {
+        compacted.pop();
+        continue;
+      }
+      compacted[compacted.length - 1] = {
+        kind: action.kind,
+        count: action.count - previous.count,
+        sequence: action.sequence,
+      };
+    }
+    this.pending = compacted;
+  }
+
+  private hasDetachedPendingEntries(): boolean {
+    const retained = this.stackNodes();
+    return this.pending.some(
+      (action) =>
+        action.kind === "entry" &&
+        action.nodes.some((node) => !retained.has(node)),
+    );
+  }
+
+  private rebuildPendingFromRetained(): void {
+    this.releaseDetachedPendingReferences();
+    const sequence = this.nextSequence;
+    const timeline = this.persistedTimeline();
+    const redoCount = this.persistedMovementCount(this.redoEntries);
+    if (redoCount === null) {
+      this.pending = [];
+      return;
+    }
+    this.pending = timeline.map((nodes) => ({
+      kind: "entry",
+      nodes,
+      sequence,
+    }));
+    if (redoCount > 0) {
+      this.pending.push({ kind: "undo", count: redoCount, sequence });
+    }
+  }
+
+  private persistedTimeline(): RuntimeEntry[][] {
+    const timeline: RuntimeEntry[][] = [];
+    const runs = new Set<CompactedEntryRun>();
+    const add = (node: RuntimeEntry) => {
+      const run = node.compactedRun;
+      if (run === undefined) {
+        timeline.push([node]);
+        return;
+      }
+      if (runs.has(run)) return;
+      runs.add(run);
+      timeline.push(run.nodes);
+    };
+    for (const node of this.undoEntries) add(node);
+    for (const node of [...this.redoEntries].reverse()) add(node);
+    return timeline;
+  }
+
+  private retainedNodes(): Set<RuntimeEntry> {
+    const nodes = this.stackNodes();
+    for (const action of this.pending) {
+      if (action.kind === "entry") {
+        for (const node of action.nodes) nodes.add(node);
+      }
+    }
+    return nodes;
+  }
+
+  private stackNodes(): Set<RuntimeEntry> {
+    return new Set([...this.undoEntries, ...this.redoEntries]);
+  }
+
+  private releaseDetachedPendingReferences(): void {
+    const retained = this.stackNodes();
+    for (const action of this.pending) {
+      if (action.kind !== "entry") continue;
+      for (const node of action.nodes) {
+        if (retained.has(node)) continue;
+        delete node.beforeDoc;
+        delete node.afterDoc;
+        delete node.source;
+      }
+    }
+  }
+
+  private pendingWithinLimits(): boolean {
+    return (
+      this.pending.length <= this.limits.entryCap &&
+      this.pendingBytes() <= this.limits.byteCap
+    );
+  }
+
+  private pendingBytes(): number {
+    return this.pending.reduce((total, action) => {
+      if (action.kind === "entry") {
+        return (
+          total +
+          action.nodes.reduce(
+            (bytes, node) => bytes + this.reservedBytes(node),
+            0,
+          )
+        );
+      }
+      return total + encoder.encode(JSON.stringify(action)).length;
+    }, 0);
   }
 
   /** Keeps exact native-history matching only at the two live stack edges. */
@@ -907,7 +1117,7 @@ export class DurableEditHistory {
     }
   }
 
-  private trimRetained(): void {
+  private trimRetained(): boolean {
     let entries = this.retainedTimeline();
     let bytes = entries.reduce(
       (total, node) => total + this.reservedBytes(node),
@@ -919,7 +1129,7 @@ export class DurableEditHistory {
       bytes > this.limits.byteCap
     ) {
       const oldest = entries[0];
-      if (oldest === undefined || !this.dropOldest(oldest)) return;
+      if (oldest === undefined || !this.dropOldest(oldest)) return discarded;
       discarded = true;
       entries = this.retainedTimeline();
       bytes = entries.reduce(
@@ -927,7 +1137,7 @@ export class DurableEditHistory {
         0,
       );
     }
-    if (discarded) this.pressureFence();
+    return discarded;
   }
 
   private retainedTimeline(): RuntimeEntry[] {
@@ -975,10 +1185,6 @@ export class DurableEditHistory {
     if (undoCount + redoCount !== members.length) return false;
     this.undoEntries = this.undoEntries.filter((node) => !memberSet.has(node));
     this.redoEntries = this.redoEntries.filter((node) => !memberSet.has(node));
-    this.pending = this.pending.filter(
-      (action) => action.kind !== "entry" || !memberSet.has(action.node),
-    );
-    this.releasePendingDocumentReferences();
     return true;
   }
 
@@ -992,6 +1198,9 @@ export class DurableEditHistory {
     this.pressureFlushRequested = true;
     if (!this.pressureFenceQueued) {
       this.pressureFenceQueued = true;
+      // A fence issued before the initial read makes that snapshot unreachable.
+      this.discardLoaded = true;
+      if (!this.initialized) this.preservePendingOnRead = true;
       this.generation += 1;
       this.retryBatch = null;
       this.batchPreparation = null;

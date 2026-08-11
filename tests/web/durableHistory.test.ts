@@ -254,6 +254,90 @@ describe("durable edit history", () => {
     expect(recovered.view.state.doc.toString()).toBe(finalText);
   });
 
+  it("bounds pending entries and movements during blocked initialization", async () => {
+    const read = Promise.withResolvers<EditHistorySnapshot>();
+    const calls: string[] = [];
+    const appended: EditHistoryAction[][] = [];
+    const limits = { entryCap: 4, byteCap: 8_000 };
+    const persisted = await replaceEntry("before", "seed");
+    const { history } = harness(
+      { undo: [], redo: [] },
+      "seed",
+      {
+        read: () => read.promise,
+        append: async (_batch, actions) => {
+          calls.push("append");
+          appended.push(actions);
+        },
+        fence: async () => {
+          calls.push("fence");
+        },
+      },
+      limits,
+    );
+    let state = EditorState.create({ doc: "seed" });
+    const record = (transaction: Transaction) => {
+      history.record(transaction);
+      state = transaction.state;
+      const retention = history.pendingRetention();
+      const documentCap = state.doc.length * (limits.entryCap * 2 + 2);
+      if (
+        retention.actions > limits.entryCap ||
+        retention.serializedBytes > limits.byteCap ||
+        retention.retainedDocumentChars > documentCap
+      ) {
+        throw new Error("pending history exceeded its retention envelope");
+      }
+    };
+    const update = (spec: Parameters<EditorState["update"]>[0]) => {
+      record(state.update(spec));
+    };
+
+    for (let index = 0; index < 20_000; index += 1) {
+      const end = state.doc.length;
+      update({
+        changes: { from: end, insert: "x" },
+        userEvent: "input.type",
+      });
+      update({
+        changes: { from: end, to: end + 1, insert: "" },
+        annotations: Transaction.userEvent.of("undo"),
+      });
+    }
+
+    update({ changes: { from: 4, insert: "a" } });
+    update({ changes: { from: 5, insert: "b" } });
+    update({
+      changes: { from: 5, to: 6, insert: "" },
+      annotations: Transaction.userEvent.of("undo"),
+    });
+    read.resolve({ undo: [persisted], redo: [] });
+    await vi.waitFor(() => expect(calls).toEqual(["fence", "append"]));
+    expect(await history.depths()).toEqual({ undo: 1, redo: 1 });
+    expect(history.pendingRetention()).toEqual({
+      actions: 0,
+      serializedBytes: 0,
+      retainedDocumentChars: expect.any(Number),
+    });
+
+    const [first, second, movement] = appended[0] ?? [];
+    if (first?.kind !== "entry" || second?.kind !== "entry") {
+      throw new Error("bounded pending frontier entries missing");
+    }
+    expect(movement).toEqual({ kind: "undo", count: 1 });
+
+    const recovered = harness(
+      { undo: [first.entry], redo: [second.entry] },
+      "seeda",
+    );
+    recovered.history.redo(recovered.view);
+    await recovered.history.depths();
+    expect(recovered.view.state.doc.toString()).toBe("seedab");
+    recovered.history.undo(recovered.view);
+    await recovered.history.depths();
+    expect(recovered.view.state.doc.toString()).toBe("seeda");
+  }, 50_000);
+
   it("orders reset, clear, and fence after blocked initialization", async () => {
     const read = Promise.withResolvers<EditHistorySnapshot>();
     const calls: string[] = [];

@@ -10,6 +10,18 @@ export const commands = {
 	 *  This is the only command that accepts an absolute path.
 	 */
 	vaultOpen: (path: string) => typedError<VaultHandle, AppError>(__TAURI_INVOKE("vault_open", { path })),
+	/**
+	 *  Reads the device-local startup-vault session. Missing or corrupt documents
+	 *  safely return an empty session.
+	 */
+	vaultSessionRead: () => typedError<VaultSessionDoc, AppError>(__TAURI_INVOKE("vault_session_read")),
+	/**
+	 *  Forgets an explicitly selected stale vault candidate. Failed opens stay
+	 *  recorded until the frontend deliberately calls this command.
+	 */
+	vaultSessionForget: (path: string) => typedError<VaultSessionDoc, AppError>(__TAURI_INVOKE("vault_session_forget", { path })),
+	/**  Disables automatic startup recovery while keeping recent vault choices. */
+	vaultSessionClearLast: () => typedError<VaultSessionDoc, AppError>(__TAURI_INVOKE("vault_session_clear_last")),
 	/**  Lists the indexed tree of an open vault, sorted by path. */
 	vaultTree: (handle: VaultHandle) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("vault_tree", { handle })),
 	/**
@@ -708,6 +720,19 @@ export type VaultFileContent = {
 export type VaultHandle = {
 	/**  Session-local identifier; never persisted. */
 	id: number,
+};
+
+/**
+ *  The typed startup-vault session document. It is independent of
+ *  `settings.json` so selecting a vault never changes user preferences.
+ */
+export type VaultSessionDoc = {
+	/**  Schema version of the document. */
+	schema_version: number,
+	/**  Canonical root selected for automatic startup recovery, if any. */
+	last_vault: string | null,
+	/**  Canonical vault roots ordered newest first. */
+	recent_vaults: string[],
 };
 
 /**

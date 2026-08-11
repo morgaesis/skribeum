@@ -657,6 +657,28 @@ pub fn run() {
                 .and_then(|store| store.read(&RealFs).ok())
                 .map(|document| document.theme);
             app.manage(ipc::SettingsState(settings, std::sync::Mutex::new(())));
+            // Startup-vault recovery has its own app-config document. It is
+            // never mixed into settings, and WebDriver can isolate it without
+            // altering the suite's normal startup-vault injection.
+            #[cfg(feature = "webdriver")]
+            let vault_session_path = std::env::var_os("SKRIBEUM_E2E_VAULT_SESSION")
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    app.path()
+                        .app_config_dir()
+                        .ok()
+                        .map(|dir| dir.join(skribeum_vault::VAULT_SESSION_FILE_NAME))
+                });
+            #[cfg(not(feature = "webdriver"))]
+            let vault_session_path = app
+                .path()
+                .app_config_dir()
+                .ok()
+                .map(|dir| dir.join(skribeum_vault::VAULT_SESSION_FILE_NAME));
+            app.manage(ipc::VaultSessionState(
+                vault_session_path.map(skribeum_vault::VaultSessionStore::new),
+                std::sync::Mutex::new(()),
+            ));
             if let Some(window) = app.get_webview_window("main") {
                 let dark = match persisted_theme.as_deref() {
                     Some("dark") => true,

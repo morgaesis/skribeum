@@ -8,6 +8,7 @@ import {
   SCRATCH_EDIT_HISTORY_PATH,
   SCRATCH_SETTINGS_PATH,
   SCRATCH_VAULT_PATH,
+  SCRATCH_VAULT_SESSION_PATH,
 } from "./scratchVault";
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -123,6 +124,7 @@ async function prepareSuite(): Promise<void> {
 }
 process.env.SKRIBEUM_E2E_VAULT = SCRATCH_VAULT_PATH;
 process.env.SKRIBEUM_E2E_SETTINGS = SCRATCH_SETTINGS_PATH;
+process.env.SKRIBEUM_E2E_VAULT_SESSION = SCRATCH_VAULT_SESSION_PATH;
 process.env.SKRIBEUM_E2E_RESET_WORKSPACE = "1";
 process.env.SKRIBEUM_E2E_EDIT_HISTORY = SCRATCH_EDIT_HISTORY_PATH;
 

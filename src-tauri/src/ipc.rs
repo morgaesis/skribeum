@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use skribeum_vault::{
     Clock, EditHistoryJournal, Encoding, EntryKind, FileSystem, Journal, RealClock, RealFs,
     ReconEvent, Reconciler, ReplayOutcome, SearchIndex, Settings, SettingsError, SettingsStore,
-    Vault, VaultPath, is_indexed_path,
+    Vault, VaultPath, VaultSession, VaultSessionStore, is_indexed_path,
 };
 use tauri::ipc::InvokeResponseBody;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
@@ -768,6 +768,10 @@ pub struct EditHistoryState(pub Option<EditHistoryJournal>);
 /// Absent only when that directory could not be resolved.
 pub struct SettingsState(pub Option<SettingsStore>, pub Mutex<()>);
 
+/// The device-local startup-vault session store, separate from settings.
+/// Absent only when the OS app-config directory could not be resolved.
+pub struct VaultSessionState(pub Option<VaultSessionStore>, pub Mutex<()>);
+
 /// File paths waiting for the frontend to resolve after an open-with request.
 #[derive(Default)]
 pub struct OpenFilesState(pub Mutex<Vec<String>>);
@@ -822,6 +826,18 @@ pub struct OpenFileTarget {
     pub vault_path: String,
     /// Vault-relative note path to select.
     pub note_path: String,
+}
+
+/// The typed startup-vault session document. It is independent of
+/// `settings.json` so selecting a vault never changes user preferences.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct VaultSessionDoc {
+    /// Schema version of the document.
+    pub schema_version: u32,
+    /// Canonical root selected for automatic startup recovery, if any.
+    pub last_vault: Option<String>,
+    /// Canonical vault roots ordered newest first.
+    pub recent_vaults: Vec<String>,
 }
 
 /// Queues validated native paths and wakes the frontend without placing paths
@@ -924,6 +940,25 @@ fn settings_from_doc(doc: SettingsDoc) -> Settings {
     }
 }
 
+fn vault_session_to_doc(session: VaultSession) -> VaultSessionDoc {
+    VaultSessionDoc {
+        schema_version: session.schema_version,
+        last_vault: session.last_vault,
+        recent_vaults: session.recent_vaults,
+    }
+}
+
+fn record_opened_vault(
+    fs: &dyn FileSystem,
+    session: Option<&VaultSessionStore>,
+    vault: &Vault,
+) -> Result<(), AppError> {
+    if let Some(session) = session {
+        session.record_opened(fs, vault.root())?;
+    }
+    Ok(())
+}
+
 fn set_all_window_zoom<R: Runtime>(app: &AppHandle<R>, zoom_percent: u32) -> Result<(), AppError> {
     skribeum_vault::validate_zoom_percent(zoom_percent).map_err(AppError::from)?;
     let factor = f64::from(zoom_percent) / 100.0;
@@ -992,9 +1027,13 @@ fn spawn_index_rebuild(search: &Arc<Mutex<Option<SearchIndex>>>, vault: Vault) {
 fn vault_open<R: Runtime>(
     app: AppHandle<R>,
     registry: State<'_, VaultRegistry>,
+    session: State<'_, VaultSessionState>,
     path: String,
 ) -> Result<VaultHandle, AppError> {
     let vault = Vault::open(&RealFs, Path::new(&path))?;
+    let _mutation = session.1.lock().unwrap_or_else(PoisonError::into_inner);
+    record_opened_vault(&RealFs, session.0.as_ref(), &vault)?;
+    drop(_mutation);
     let id = registry.next_id.fetch_add(1, Ordering::Relaxed) + 1;
     let groups: Vec<Vec<String>> = vault
         .collisions()
@@ -1944,6 +1983,51 @@ fn settings_read(settings: State<'_, SettingsState>) -> Result<SettingsDoc, AppE
     Ok(settings_to_doc(doc))
 }
 
+/// Reads the device-local startup-vault session. Missing or corrupt documents
+/// safely return an empty session.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn vault_session_read(session: State<'_, VaultSessionState>) -> Result<VaultSessionDoc, AppError> {
+    let store = session
+        .0
+        .as_ref()
+        .ok_or_else(AppError::vault_session_unavailable)?;
+    Ok(vault_session_to_doc(store.read(&RealFs)?))
+}
+
+/// Forgets an explicitly selected stale vault candidate. Failed opens stay
+/// recorded until the frontend deliberately calls this command.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn vault_session_forget(
+    session: State<'_, VaultSessionState>,
+    path: String,
+) -> Result<VaultSessionDoc, AppError> {
+    let _mutation = session.1.lock().unwrap_or_else(PoisonError::into_inner);
+    let store = session
+        .0
+        .as_ref()
+        .ok_or_else(AppError::vault_session_unavailable)?;
+    Ok(vault_session_to_doc(store.forget(&RealFs, &path)?))
+}
+
+/// Disables automatic startup recovery while keeping recent vault choices.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
+fn vault_session_clear_last(
+    session: State<'_, VaultSessionState>,
+) -> Result<VaultSessionDoc, AppError> {
+    let _mutation = session.1.lock().unwrap_or_else(PoisonError::into_inner);
+    let store = session
+        .0
+        .as_ref()
+        .ok_or_else(AppError::vault_session_unavailable)?;
+    Ok(vault_session_to_doc(store.clear_last(&RealFs)?))
+}
+
 /// Returns the resolved settings document path for display in the settings
 /// footer and About section.
 #[tauri::command]
@@ -2114,6 +2198,36 @@ fn startup_zoom_percent(
         Some(Ok(document)) => (document.zoom_percent, None),
         Some(Err(error)) => (Settings::default().zoom_percent, Some(error)),
         None => (Settings::default().zoom_percent, None),
+    }
+}
+
+#[cfg(test)]
+mod vault_session_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::record_opened_vault;
+    use skribeum_vault::{FileSystem, SimFs, Vault, VaultSession, VaultSessionStore};
+
+    #[test]
+    fn only_a_successful_open_records_the_canonical_vault_root() {
+        let fs = SimFs::new();
+        fs.external_create_dir(&PathBuf::from("/config"));
+        fs.external_create_dir(&PathBuf::from("/vaults/real"));
+        fs.external_symlink(Path::new("/vaults/link"), Path::new("/vaults/real"));
+        let store = VaultSessionStore::new(PathBuf::from("/config/vault-session.json"));
+
+        assert!(Vault::open(&fs, Path::new("/vaults/missing")).is_err());
+        assert_eq!(
+            store.read(&fs).expect("session reads"),
+            VaultSession::default()
+        );
+
+        let vault = Vault::open(&fs, Path::new("/vaults/link")).expect("vault opens");
+        record_opened_vault(&fs, Some(&store), &vault).expect("opened vault records");
+
+        let session = store.read(&fs).expect("session rereads");
+        assert_eq!(session.last_vault.as_deref(), Some("/vaults/real"));
+        assert_eq!(session.recent_vaults, ["/vaults/real"]);
     }
 }
 
@@ -2558,6 +2672,9 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(tauri_specta::collect_commands![
             vault_open::<tauri::Wry>,
+            vault_session_read,
+            vault_session_forget,
+            vault_session_clear_last,
             vault_tree,
             vault_tree_refresh::<tauri::Wry>,
             note_create,

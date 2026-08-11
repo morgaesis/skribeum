@@ -202,6 +202,7 @@ export class DurableEditHistory {
   private generation = 0;
   private retryBatch: EditHistoryBatch | null = null;
   private batchPreparation: BatchPreparation | null = null;
+  private readonly batchGenerations = new WeakMap<EditHistoryBatch, number>();
   private operationChain: Promise<void> = Promise.resolve();
   private readonly readyPromise: Promise<void>;
 
@@ -323,6 +324,7 @@ export class DurableEditHistory {
       cutoff,
       actions: serializedActions,
     };
+    this.batchGenerations.set(batch, generation);
     this.retryBatch = batch;
     return batch;
   }
@@ -341,10 +343,10 @@ export class DurableEditHistory {
     for (;;) {
       const batch = await this.beginFlush(cutoff);
       if (batch === null) return;
-      const write = this.operationChain.then(() =>
+      if (!this.ownsBatch(batch)) return;
+      const write = this.enqueueOperation(() =>
         this.transport.append(batch.id, batch.actions),
       );
-      this.operationChain = write.catch(() => undefined);
       await write;
       this.commitFlush(batch);
     }
@@ -364,17 +366,16 @@ export class DurableEditHistory {
   fence(): void {
     this.resetReachable();
     const id = batchId();
-    this.operationChain = this.operationChain
-      .then(() => this.transport.fence(id))
-      .catch(() => undefined);
+    void this.enqueueOperation(() => this.transport.fence(id));
   }
 
   /** Physically removes this note's persisted journal. */
   async clear(): Promise<void> {
-    await this.readyPromise;
-    await this.operationChain;
-    await this.transport.clear();
     this.resetReachable();
+    await this.enqueueOperation(async () => {
+      await this.readyPromise;
+      await this.transport.clear();
+    });
   }
 
   /** Test and command-surface observation of the loaded stack depths. */
@@ -491,6 +492,17 @@ export class DurableEditHistory {
     this.pending = [];
     this.queued = [];
     this.retryBatch = null;
+    this.batchPreparation = null;
+  }
+
+  private ownsBatch(batch: EditHistoryBatch): boolean {
+    return this.batchGenerations.get(batch) === this.generation;
+  }
+
+  private enqueueOperation(operation: () => Promise<void>): Promise<void> {
+    const queued = this.operationChain.then(operation);
+    this.operationChain = queued.catch(() => undefined);
+    return queued;
   }
 
   private serializeEntry(

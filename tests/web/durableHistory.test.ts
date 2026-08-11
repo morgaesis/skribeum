@@ -284,6 +284,87 @@ describe("durable edit history", () => {
     expect(await history.beginFlush()).toBeNull();
   });
 
+  it("invalidates preparation when clear starts before the batch publishes", async () => {
+    const releases = controlDigests();
+    const clearStarted = Promise.withResolvers<void>();
+    const clearFinished = Promise.withResolvers<void>();
+    const { history, view, appended } = harness(
+      { undo: [], redo: [] },
+      "alpha",
+      {
+        clear: async () => {
+          clearStarted.resolve();
+          await clearFinished.promise;
+        },
+      },
+    );
+    view.dispatch({ changes: { from: 5, insert: " old" } });
+
+    const preparing = history.beginFlush();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    const clearing = history.clear();
+    await clearStarted.promise;
+    for (const release of releases.splice(0)) release();
+    await expect(preparing).resolves.toBeNull();
+    expect(appended).toHaveLength(0);
+
+    clearFinished.resolve();
+    await clearing;
+  });
+
+  it("does not append a published retry batch once clear has started", async () => {
+    const clearStarted = Promise.withResolvers<void>();
+    const clearFinished = Promise.withResolvers<void>();
+    const { history, view, appended } = harness(
+      { undo: [], redo: [] },
+      "alpha",
+      {
+        clear: async () => {
+          clearStarted.resolve();
+          await clearFinished.promise;
+        },
+      },
+    );
+    view.dispatch({ changes: { from: 5, insert: " old" } });
+    expect(await history.beginFlush()).not.toBeNull();
+
+    const clearing = history.clear();
+    await clearStarted.promise;
+    const flushing = history.flush();
+    for (let index = 0; index < 4; index += 1) await Promise.resolve();
+    expect(appended).toHaveLength(0);
+
+    clearFinished.resolve();
+    await clearing;
+    await flushing;
+  });
+
+  it("orders an external fence after an active clear", async () => {
+    const calls: string[] = [];
+    const clearStarted = Promise.withResolvers<void>();
+    const clearFinished = Promise.withResolvers<void>();
+    const { history, fence } = harness({ undo: [], redo: [] }, "alpha", {
+      clear: async () => {
+        calls.push("clear");
+        clearStarted.resolve();
+        await clearFinished.promise;
+      },
+      fence: async () => {
+        calls.push("fence");
+      },
+    });
+
+    const clearing = history.clear();
+    await clearStarted.promise;
+    history.fence();
+    expect(fence).not.toHaveBeenCalled();
+
+    clearFinished.resolve();
+    await clearing;
+    await history.depths();
+    expect(calls).toEqual(["clear", "fence"]);
+  });
+
   it("does not publish a pre-reset batch after preparation completes", async () => {
     const releases = controlDigests();
     const calls: string[] = [];

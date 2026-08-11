@@ -169,6 +169,8 @@ import {
   isStaleVaultOpenError,
   nextStartupDecision,
   type StartupVaultSurface,
+  selectedStartupFailureSurface,
+  staleChooserStartupDecision,
   startupSource,
   type VaultStartupSession,
 } from "./lib/startupVaultRecovery";
@@ -187,6 +189,7 @@ import {
   installNativeOpenListener,
   NativeOpenQueue,
   StartupPathGate,
+  StartupRecoveryGuard,
   VaultOwnership,
 } from "./lib/vaultLifecycle";
 import { bindVisualViewportCss } from "./lib/visualViewport";
@@ -225,6 +228,7 @@ const vaultOwnership = new VaultOwnership<VaultHandle>({
   close: closeVault,
 });
 const endToEndVaultStartup = new StartupPathGate();
+const startupRecoveryGuard = new StartupRecoveryGuard();
 let tree = $state<TreeEntry[]>([]);
 let treeTitleSources = $state<Record<string, string>>({});
 let selectedPath = $state<string | null>(null);
@@ -2253,6 +2257,7 @@ async function openVaultAtPath(
   path: string,
   initialNote?: string,
   reportError = true,
+  isCurrent: () => boolean = () => true,
 ): Promise<unknown | null> {
   errorText = null;
   tagCatalogGeneration += 1;
@@ -2300,7 +2305,7 @@ async function openVaultAtPath(
       recentTags = [];
       refreshLinkContext();
     },
-    () => contentRequests.isCurrent(request),
+    () => contentRequests.isCurrent(request) && isCurrent(),
   );
   if (replacement.kind === "superseded") {
     return new Error("The vault open request was superseded.");
@@ -2386,7 +2391,6 @@ const nativeOpenQueue = new NativeOpenQueue(async () => {
   while (true) {
     const paths = await openFilesTake();
     if (paths.length === 0) return;
-    nativeOpenIntent = true;
     for (const path of paths) await handleNativeOpen(path);
   }
 });
@@ -2397,20 +2401,47 @@ function drainNativeOpenFiles(): Promise<void> {
 
 async function recoverStartupVault(
   session: VaultStartupSession,
+  isCurrent: () => boolean,
 ): Promise<void> {
+  if (!isCurrent()) return;
   const decision = nextStartupDecision(session);
   if (decision.kind === "surface") {
     startupVaultSurface = decision.surface;
     return;
   }
 
-  const failure = await openVaultAtPath(decision.path, undefined, false);
+  const failure = await openVaultAtPath(
+    decision.path,
+    undefined,
+    false,
+    isCurrent,
+  );
+  if (!isCurrent()) return;
   if (failure === null) return;
   errorText = null;
   if (failure instanceof IpcError && isStaleVaultOpenError(failure.app.code)) {
     try {
-      await recoverStartupVault(await vaultSessionForget(decision.path));
+      const nextSession = await vaultSessionForget(decision.path);
+      if (!isCurrent()) return;
+      const next = nextStartupDecision(nextSession);
+      if (next.kind === "surface") {
+        startupVaultSurface = next.surface;
+        return;
+      }
+      const fallbackFailure = await openVaultAtPath(
+        next.path,
+        undefined,
+        false,
+        isCurrent,
+      );
+      if (!isCurrent() || fallbackFailure === null) return;
+      startupVaultSurface = failedStartupSurface(
+        nextSession,
+        next.path,
+        describeError(STRINGS.vaultOpenFailed, fallbackFailure),
+      );
     } catch (forgetError) {
+      if (!isCurrent()) return;
       startupVaultSurface = emptyStartupSurface(
         describeError(STRINGS.vaultOpenFailed, forgetError),
       );
@@ -2422,6 +2453,48 @@ async function recoverStartupVault(
     decision.path,
     describeError(STRINGS.vaultOpenFailed, failure),
   );
+}
+
+async function openStartupVault(path?: string): Promise<void> {
+  if (path === undefined) {
+    await pickVault();
+    return;
+  }
+  const failure = await openVaultAtPath(path, undefined, false);
+  if (failure === null) return;
+  errorText = null;
+  const error = describeError(STRINGS.vaultOpenFailed, failure);
+  if (
+    !(failure instanceof IpcError && isStaleVaultOpenError(failure.app.code))
+  ) {
+    startupVaultSurface = selectedStartupFailureSurface(
+      startupVaultSurface,
+      path,
+      error,
+    );
+    return;
+  }
+  try {
+    const nextSession = await vaultSessionForget(path);
+    const next = staleChooserStartupDecision(nextSession);
+    if (next.kind === "surface") {
+      startupVaultSurface = next.surface;
+      return;
+    }
+    const fallbackFailure = await openVaultAtPath(next.path, undefined, false);
+    if (fallbackFailure === null) return;
+    startupVaultSurface = failedStartupSurface(
+      nextSession,
+      next.path,
+      describeError(STRINGS.vaultOpenFailed, fallbackFailure),
+    );
+  } catch (forgetError) {
+    startupVaultSurface = selectedStartupFailureSurface(
+      startupVaultSurface,
+      path,
+      describeError(STRINGS.vaultOpenFailed, forgetError),
+    );
+  }
 }
 
 async function startDesktopVaultRecovery(
@@ -2447,7 +2520,6 @@ async function startDesktopVaultRecovery(
   }
 
   await drainNativeOpenFiles();
-  await nativeOpenQueue.untilQuiescent();
   if (nativeOpenIntent) {
     if (vault === null) {
       startupVaultSurface = emptyStartupSurface(errorText ?? undefined);
@@ -2456,9 +2528,16 @@ async function startDesktopVaultRecovery(
     return;
   }
   if (vault !== null) return;
+  const recoveryEpoch = startupRecoveryGuard.beginRecovery();
+  if (recoveryEpoch === null) return;
   try {
-    await recoverStartupVault(await vaultSessionRead());
+    const session = await vaultSessionRead();
+    if (!startupRecoveryGuard.isRecoveryCurrent(recoveryEpoch)) return;
+    await recoverStartupVault(session, () =>
+      startupRecoveryGuard.isRecoveryCurrent(recoveryEpoch),
+    );
   } catch (error) {
+    if (!startupRecoveryGuard.isRecoveryCurrent(recoveryEpoch)) return;
     startupVaultSurface = emptyStartupSurface(
       describeError(STRINGS.vaultOpenFailed, error),
     );
@@ -3158,6 +3237,10 @@ onMount(() => {
   const nativeOpenFilesListener = installNativeOpenListener(
     (available) => events.openFilesAvailable.listen(available),
     nativeOpenQueue,
+    () => {
+      nativeOpenIntent = true;
+      startupRecoveryGuard.observeNativeOpen();
+    },
   );
   void nativeOpenFilesListener.then(async (dispose) => {
     if (disposed) {
@@ -3562,8 +3645,7 @@ onMount(() => {
         <StartupVaultRecovery
           surface={startupVaultSurface}
           disabledReason={openVaultDisabledReason}
-          onOpen={(path) =>
-            path === undefined ? void pickVault() : void openVaultAtPath(path)}
+          onOpen={(path) => void openStartupVault(path)}
         />
       {:else}
         {#each workspace.panes as pane, paneIndex (pane.id)}

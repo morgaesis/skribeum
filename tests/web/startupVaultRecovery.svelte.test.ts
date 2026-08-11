@@ -6,9 +6,12 @@ import {
   failedStartupSurface,
   isStaleVaultOpenError,
   nextStartupDecision,
+  selectedStartupFailureSurface,
+  staleChooserStartupDecision,
   startupSource,
   type VaultStartupSession,
 } from "../../src/lib/startupVaultRecovery";
+import StartupVaultRecoveryHarness from "./StartupVaultRecoveryHarness.svelte";
 
 const emptySession: VaultStartupSession = {
   schema_version: 1,
@@ -108,6 +111,26 @@ describe("startup vault recovery decisions", () => {
     });
   });
 
+  it("removes a stale chooser choice and auto-opens only a sole remaining recent vault", () => {
+    expect(
+      staleChooserStartupDecision({
+        ...emptySession,
+        last_vault: "/vaults/ignored-last",
+        recent_vaults: ["/vaults/newest", "/vaults/older"],
+      }),
+    ).toMatchObject({
+      kind: "surface",
+      surface: { kind: "chooser" },
+    });
+    expect(
+      staleChooserStartupDecision({
+        ...emptySession,
+        last_vault: "/vaults/ignored-last",
+        recent_vaults: ["/vaults/only"],
+      }),
+    ).toEqual({ kind: "open", path: "/vaults/only" });
+  });
+
   it("preserves non-stale failures in a chooser with a browse action", () => {
     expect(isStaleVaultOpenError("vault/not-found")).toBe(true);
     expect(isStaleVaultOpenError("vault/not-a-directory")).toBe(true);
@@ -127,6 +150,37 @@ describe("startup vault recovery decisions", () => {
     });
     if (surface.kind !== "chooser") return;
     expect(surface.rows.map((row) => row.path)).toEqual(["/vaults/locked"]);
+  });
+
+  it("keeps every chooser row after a non-stale explicit selection failure", () => {
+    const surface = selectedStartupFailureSurface(
+      {
+        kind: "chooser",
+        rows: [
+          {
+            path: "/vaults/newest",
+            label: "newest",
+            accessibleLabel: "Open vault /vaults/newest",
+          },
+          {
+            path: "/vaults/older",
+            label: "older",
+            accessibleLabel: "Open vault /vaults/older",
+          },
+        ],
+      },
+      "/vaults/newest",
+      "Opening the vault failed: permission denied",
+    );
+    expect(surface).toMatchObject({
+      kind: "chooser",
+      error: "Opening the vault failed: permission denied",
+    });
+    if (surface.kind !== "chooser") return;
+    expect(surface.rows.map((row) => row.path)).toEqual([
+      "/vaults/newest",
+      "/vaults/older",
+    ]);
   });
 });
 
@@ -184,6 +238,40 @@ describe("startup vault recovery surface", () => {
     expect(document.activeElement?.getAttribute("data-command-id")).toBe(
       "vault.open",
     );
+    void unmount(component);
+  });
+
+  it("moves focus to the newest remaining row when a stale chooser row is forgotten", async () => {
+    const component = mount(StartupVaultRecoveryHarness, {
+      target: document.body,
+      props: {
+        initialSurface: nextStartupDecision({
+          ...emptySession,
+          recent_vaults: ["/vaults/stale", "/vaults/newest", "/vaults/older"],
+        }).surface,
+      },
+    });
+    flushSync();
+    await tick();
+
+    component.setSurface(
+      nextStartupDecision({
+        ...emptySession,
+        recent_vaults: ["/vaults/newest", "/vaults/older"],
+      }).surface,
+    );
+    flushSync();
+    await tick();
+    await tick();
+
+    expect(
+      [
+        ...document.querySelectorAll<HTMLElement>("[data-startup-vault-path]"),
+      ].map((row) => row.dataset.startupVaultPath),
+    ).toEqual(["/vaults/newest", "/vaults/older"]);
+    expect(
+      document.activeElement?.getAttribute("data-startup-vault-path"),
+    ).toBe("/vaults/newest");
     void unmount(component);
   });
 });

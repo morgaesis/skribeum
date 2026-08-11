@@ -21,12 +21,38 @@ export class NativeOpenQueue {
   }
 }
 
+/**
+ * Makes explicit operating-system opens permanently outrank automatic session
+ * recovery for one frontend lifetime. The event callback advances the epoch
+ * before its queued drain begins, so an already-open recovery closes itself
+ * instead of becoming active when it resolves.
+ */
+export class StartupRecoveryGuard {
+  private nativeOpenObserved = false;
+  private epoch = 0;
+
+  observeNativeOpen(): void {
+    this.nativeOpenObserved = true;
+    this.epoch += 1;
+  }
+
+  beginRecovery(): number | null {
+    return this.nativeOpenObserved ? null : this.epoch;
+  }
+
+  isRecoveryCurrent(epoch: number): boolean {
+    return !this.nativeOpenObserved && this.epoch === epoch;
+  }
+}
+
 /** Installs the native listener before any caller begins its initial drain. */
 export async function installNativeOpenListener(
   listen: (available: () => void) => Promise<() => void>,
   queue: NativeOpenQueue,
+  observeNativeOpen: () => void = () => {},
 ): Promise<() => void> {
   return await listen(() => {
+    observeNativeOpen();
     void queue.enqueue();
   });
 }

@@ -3,6 +3,7 @@ import {
   installNativeOpenListener,
   NativeOpenQueue,
   StartupPathGate,
+  StartupRecoveryGuard,
   VaultOwnership,
   type VaultSession,
 } from "../../src/lib/vaultLifecycle";
@@ -61,6 +62,78 @@ describe("startup path ownership", () => {
     slow.resolve();
     await Promise.all([direct, polled]);
     expect(calls).toBe(1);
+  });
+});
+
+describe("startup recovery priority", () => {
+  it("keeps an OS target authoritative before, during, and after recovery completes", async () => {
+    for (const timing of ["before", "during", "after"] as const) {
+      const closed: number[] = [];
+      const recoveryOpened = deferred<{ handle: number; root: string }>();
+      const priority = new StartupRecoveryGuard();
+      const ownership = new VaultOwnership<number>({
+        open: async (path) => {
+          if (path === "/session") return recoveryOpened.promise;
+          return { handle: 2, root: "/os" };
+        },
+        close: async (handle) => {
+          closed.push(handle);
+        },
+      });
+      const token = priority.beginRecovery();
+
+      if (timing === "before") priority.observeNativeOpen();
+      const recovery =
+        token === null || !priority.isRecoveryCurrent(token)
+          ? Promise.resolve({ kind: "superseded" as const })
+          : ownership.replace(
+              "/session",
+              async () => undefined,
+              () => {},
+              () => priority.isRecoveryCurrent(token),
+            );
+
+      if (timing === "during") priority.observeNativeOpen();
+      if (timing !== "before")
+        recoveryOpened.resolve({ handle: 1, root: "/session" });
+
+      if (timing === "after") {
+        await recovery;
+        priority.observeNativeOpen();
+      }
+
+      const os = await ownership.replace(
+        "/os",
+        async () => undefined,
+        () => {},
+      );
+      await recovery;
+
+      expect(os.kind, timing).toBe("opened");
+      expect(ownership.current()?.root, timing).toBe("/os");
+      if (timing === "before") expect(closed, timing).not.toContain(1);
+      else expect(closed, timing).toContain(1);
+    }
+  });
+
+  it("marks native intent synchronously before its queued drain runs", async () => {
+    const priority = new StartupRecoveryGuard();
+    const blocked = deferred<void>();
+    const queue = new NativeOpenQueue(async () => blocked.promise);
+    let available: (() => void) | undefined;
+    await installNativeOpenListener(
+      async (callback) => {
+        available = callback;
+        return () => {};
+      },
+      queue,
+      () => priority.observeNativeOpen(),
+    );
+
+    available?.();
+
+    expect(priority.beginRecovery()).toBeNull();
+    blocked.resolve();
   });
 });
 

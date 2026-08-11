@@ -15,7 +15,7 @@ let {
 
 let browseButton = $state<HTMLButtonElement>();
 let firstRecentButton = $state<HTMLButtonElement>();
-let focusedKind = $state<StartupVaultSurface["kind"] | null>(null);
+let focusedSurface = $state<string | null>(null);
 
 function bindFirstRecent(node: HTMLButtonElement, index: number) {
   if (index === 0) firstRecentButton = node;
@@ -28,11 +28,19 @@ function bindFirstRecent(node: HTMLButtonElement, index: number) {
 
 $effect(() => {
   const kind = surface.kind;
-  if (kind === "pending" || focusedKind === kind) return;
-  focusedKind = kind;
+  const focusKey =
+    kind === "chooser"
+      ? `${kind}:${surface.rows.map((row) => row.path).join("\u0000")}`
+      : kind;
+  if (kind === "pending" || focusedSurface === focusKey) return;
+  focusedSurface = focusKey;
   void tick().then(() => {
-    if (kind === "chooser") firstRecentButton?.focus();
-    else browseButton?.focus();
+    if (kind === "chooser") {
+      const first =
+        firstRecentButton ??
+        document.querySelector<HTMLButtonElement>("[data-startup-vault-path]");
+      first?.focus();
+    } else browseButton?.focus();
   });
 });
 </script>

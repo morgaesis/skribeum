@@ -110,6 +110,31 @@ export function failedStartupSurface(
   return chooserStartupSurface(paths, error);
 }
 
+/** Keeps an explicitly selected candidate available after a non-stale failure. */
+export function selectedStartupFailureSurface(
+  surface: StartupVaultSurface,
+  failedPath: string,
+  error: string,
+): StartupVaultSurface {
+  if (surface.kind === "chooser") return { ...surface, error };
+  return failedStartupSurface(
+    {
+      schema_version: 1,
+      last_vault: failedPath,
+      recent_vaults: [failedPath],
+    },
+    failedPath,
+    error,
+  );
+}
+
+/** Applies chooser policy after forgetting one explicitly selected stale row. */
+export function staleChooserStartupDecision(
+  session: VaultStartupSession,
+): StartupVaultDecision {
+  return nextStartupDecision({ ...session, last_vault: null });
+}
+
 /** Establishes whether recovery may read the native session at all. */
 export function startupSource(options: {
   desktop: boolean;

@@ -120,10 +120,11 @@ import {
   zoomSet,
 } from "./lib/ipc/services";
 import {
+  closeVault,
   IpcError,
   type LoadedNote,
   noteCreate,
-  openVault,
+  openVaultResult,
   readNote,
   readNoteStat,
   readVaultConfigFile,
@@ -182,6 +183,12 @@ import {
   isThemeName,
 } from "./lib/themes/theme";
 import UnifiedCommandSurface from "./lib/UnifiedCommandSurface.svelte";
+import {
+  installNativeOpenListener,
+  NativeOpenQueue,
+  StartupPathGate,
+  VaultOwnership,
+} from "./lib/vaultLifecycle";
 import { bindVisualViewportCss } from "./lib/visualViewport";
 import WindowControls from "./lib/WindowControls.svelte";
 import { showWindowSystemMenu } from "./lib/windowChrome";
@@ -212,6 +219,12 @@ let {
 
 let vault = $state<VaultHandle | null>(null);
 let activeVaultPath = $state<string | null>(null);
+let activeVaultGeneration = 0;
+const vaultOwnership = new VaultOwnership<VaultHandle>({
+  open: openVaultResult,
+  close: closeVault,
+});
+const endToEndVaultStartup = new StartupPathGate();
 let tree = $state<TreeEntry[]>([]);
 let treeTitleSources = $state<Record<string, string>>({});
 let selectedPath = $state<string | null>(null);
@@ -423,6 +436,29 @@ const vaultName = $derived(
     .at(-1) ?? STRINGS.appTitle,
 );
 
+function activeVaultMatches(
+  handle: VaultHandle,
+  generation = activeVaultGeneration,
+): boolean {
+  const session = vaultOwnership.current();
+  return (
+    vault?.id === handle.id &&
+    activeVaultGeneration === generation &&
+    session !== null &&
+    session.generation === generation &&
+    session.handle.id === handle.id
+  );
+}
+
+function activeVaultMatchesEvent(handleId: number): boolean {
+  const session = vaultOwnership.current();
+  return (
+    session !== null &&
+    activeVaultMatches(session.handle, session.generation) &&
+    session.handle.id === handleId
+  );
+}
+
 $effect(() => {
   const identity = workspaceIdentity;
   if (identity === null) return;
@@ -444,6 +480,7 @@ $effect(() => {
 
 async function loadTreeTitles(handle: VaultHandle, entries: TreeEntry[]) {
   const generation = ++titleLoadGeneration;
+  const vaultGeneration = activeVaultGeneration;
   const paths = entries
     .filter((entry) => entry.kind === "note")
     .map((entry) => entry.path);
@@ -463,7 +500,11 @@ async function loadTreeTitles(handle: VaultHandle, entries: TreeEntry[]) {
         }
       }),
     );
-    if (generation !== titleLoadGeneration || vault?.id !== handle.id) return;
+    if (
+      generation !== titleLoadGeneration ||
+      !activeVaultMatches(handle, vaultGeneration)
+    )
+      return;
     for (const [path, source] of loaded) next[path] = source;
     treeTitleSources = { ...next };
   }
@@ -1065,14 +1106,15 @@ async function refreshTreeIndex(refreshTags = false) {
   if (activeVault === null) {
     return;
   }
+  const vaultGeneration = activeVaultGeneration;
   try {
     const refreshedTree = await vaultTreeRefresh(activeVault);
-    if (vault?.id !== activeVault.id) {
+    if (!activeVaultMatches(activeVault, vaultGeneration)) {
       return;
     }
     if (refreshTags) {
       await refreshTagCatalog(activeVault);
-      if (vault?.id !== activeVault.id) {
+      if (!activeVaultMatches(activeVault, vaultGeneration)) {
         return;
       }
     }
@@ -1757,9 +1799,13 @@ async function refreshTagCatalog(handle = vault) {
     return;
   }
   const generation = ++tagCatalogGeneration;
+  const vaultGeneration = activeVaultGeneration;
   try {
     const entries = await tagCatalog(handle);
-    if (generation === tagCatalogGeneration && vault?.id === handle.id) {
+    if (
+      generation === tagCatalogGeneration &&
+      activeVaultMatches(handle, vaultGeneration)
+    ) {
       setTagCatalog(entries);
     }
   } catch {
@@ -1768,8 +1814,9 @@ async function refreshTagCatalog(handle = vault) {
 }
 
 async function refreshTreeAfterTagCatalog(handle: VaultHandle) {
+  const vaultGeneration = activeVaultGeneration;
   await refreshTagCatalog(handle);
-  if (vault?.id === handle.id) {
+  if (activeVaultMatches(handle, vaultGeneration)) {
     await refreshTree();
   }
 }
@@ -2145,10 +2192,11 @@ async function loadObsidianConfig(handle: VaultHandle) {
 
 async function readObsidianConfig(handle: VaultHandle) {
   const generation = ++obsidianReadGeneration;
+  const vaultGeneration = activeVaultGeneration;
   const next = await loadObsidianConfig(handle);
   if (
     generation !== obsidianReadGeneration ||
-    vault?.id !== handle.id ||
+    !activeVaultMatches(handle, vaultGeneration) ||
     !settingsState.document.honor_obsidian_config
   ) {
     return;
@@ -2213,40 +2261,59 @@ async function openVaultAtPath(
     return new Error(errorText);
   }
   const request = contentRequests.next();
+  const replacement = await vaultOwnership.replace(
+    path,
+    async (session) => {
+      const [nextTree, config, , nextTags] = await Promise.all([
+        vaultTree(session.handle),
+        loadObsidianConfig(session.handle),
+        watchSubscribe(session.handle),
+        tagCatalog(session.handle).catch(() => []),
+      ]);
+      if (navigationSurface === "browser") {
+        await resolvePermalinkNavigation(session.handle, nextTree);
+      }
+      return { nextTree, config, nextTags };
+    },
+    (session, prepared) => {
+      const { nextTree, config, nextTags } = prepared;
+      vault = session.handle;
+      activeVaultGeneration = session.generation;
+      activeVaultPath = session.root;
+      workspaceIdentity = session.root;
+      workspace = loadWorkspaceState(session.root);
+      outlineOpen = !workspace.outlineCollapsed;
+      tree = nextTree;
+      selectedPath = workspace.selectedPath;
+      treeTitleSources = {};
+      void loadTreeTitles(session.handle, nextTree);
+      note = null;
+      currentNoteSource = "";
+      sourceMode = false;
+      missingAddress = null;
+      contentView = null;
+      canvas = null;
+      canvasError = null;
+      obsidianConfig = config.config;
+      propertyTypes = config.types;
+      setTagCatalog(nextTags);
+      recentTags = [];
+      refreshLinkContext();
+    },
+    () => contentRequests.isCurrent(request),
+  );
+  if (replacement.kind === "superseded") {
+    return new Error("The vault open request was superseded.");
+  }
+  if (replacement.kind === "failed") {
+    if (reportError)
+      errorText = describeError(STRINGS.vaultOpenFailed, replacement.error);
+    return replacement.error;
+  }
+  const { session } = replacement;
   try {
-    const handle = await openVault(path);
-    const [nextTree, config, , nextTags] = await Promise.all([
-      vaultTree(handle),
-      loadObsidianConfig(handle),
-      watchSubscribe(handle),
-      tagCatalog(handle).catch(() => []),
-    ]);
-    if (!contentRequests.isCurrent(request)) {
-      return;
-    }
-    vault = handle;
-    activeVaultPath = path;
-    workspaceIdentity = path;
-    workspace = loadWorkspaceState(path);
-    outlineOpen = !workspace.outlineCollapsed;
-    tree = nextTree;
-    selectedPath = workspace.selectedPath;
-    treeTitleSources = {};
-    void loadTreeTitles(handle, nextTree);
-    note = null;
-    currentNoteSource = "";
-    sourceMode = false;
-    missingAddress = null;
-    contentView = null;
-    canvas = null;
-    canvasError = null;
-    obsidianConfig = config.config;
-    propertyTypes = config.types;
-    setTagCatalog(nextTags);
-    recentTags = [];
-    refreshLinkContext();
-    if (navigationSurface === "browser") {
-      await resolvePermalinkNavigation(handle, nextTree);
+    if (!activeVaultMatches(session.handle, session.generation)) {
+      return new Error("The vault open request was superseded.");
     }
     const harnessNote = (window as Window & { __SKRIBEUM_E2E_NOTE__?: string })
       .__SKRIBEUM_E2E_NOTE__;
@@ -2258,7 +2325,7 @@ async function openVaultAtPath(
     } else if (
       navigationSurface === "desktop" &&
       focusedWorkspacePane().activePath !== null &&
-      notePathsOf(nextTree).includes(focusedWorkspacePane().activePath ?? "")
+      notePathsOf(tree).includes(focusedWorkspacePane().activePath ?? "")
     ) {
       const pane = focusedWorkspacePane();
       const path = pane.activePath;
@@ -2276,7 +2343,7 @@ async function openVaultAtPath(
     }
     return null;
   } catch (error) {
-    if (!contentRequests.isCurrent(request)) {
+    if (!activeVaultMatches(session.handle, session.generation)) {
       return new Error("The vault open request was superseded.");
     }
     if (reportError) errorText = describeError(STRINGS.vaultOpenFailed, error);
@@ -2314,13 +2381,18 @@ async function handleNativeOpen(path: string): Promise<boolean> {
   }
 }
 
-let nativeOpenQueue = Promise.resolve();
-function drainNativeOpenFiles(): void {
-  nativeOpenQueue = nativeOpenQueue
-    .catch(() => {})
-    .then(async () => {
-      for (const path of await openFilesTake()) await handleNativeOpen(path);
-    });
+let nativeOpenIntent = false;
+const nativeOpenQueue = new NativeOpenQueue(async () => {
+  while (true) {
+    const paths = await openFilesTake();
+    if (paths.length === 0) return;
+    nativeOpenIntent = true;
+    for (const path of paths) await handleNativeOpen(path);
+  }
+});
+
+function drainNativeOpenFiles(): Promise<void> {
+  return nativeOpenQueue.enqueue();
 }
 
 async function recoverStartupVault(
@@ -2364,7 +2436,7 @@ async function startDesktopVaultRecovery(
     return;
   }
   if (source.kind === "webdriver") {
-    const failure = await openVaultAtPath(source.path);
+    const failure = await openEndToEndVault(source.path);
     if (failure !== null) {
       errorText = null;
       startupVaultSurface = emptyStartupSurface(
@@ -2374,16 +2446,15 @@ async function startDesktopVaultRecovery(
     return;
   }
 
-  const initialNativePaths = await openFilesTake();
-  if (initialNativePaths.length > 0) {
-    for (const path of initialNativePaths) await handleNativeOpen(path);
+  await drainNativeOpenFiles();
+  await nativeOpenQueue.untilQuiescent();
+  if (nativeOpenIntent) {
     if (vault === null) {
       startupVaultSurface = emptyStartupSurface(errorText ?? undefined);
       errorText = null;
     }
     return;
   }
-  await nativeOpenQueue;
   if (vault !== null) return;
   try {
     await recoverStartupVault(await vaultSessionRead());
@@ -2402,14 +2473,19 @@ async function pickVault() {
   await openVaultAtPath(path);
 }
 
+function openEndToEndVault(path: string): Promise<unknown | null> {
+  return endToEndVaultStartup.run(path, () => openVaultAtPath(path));
+}
+
 async function refreshTree() {
   const currentVault = vault;
   if (currentVault === null) {
     return;
   }
+  const vaultGeneration = activeVaultGeneration;
   try {
     const nextTree = await vaultTree(currentVault);
-    if (vault !== currentVault) {
+    if (!activeVaultMatches(currentVault, vaultGeneration)) {
       return;
     }
     tree = nextTree;
@@ -2437,6 +2513,7 @@ async function openNote(
   if (currentVault === null) {
     return false;
   }
+  const vaultGeneration = activeVaultGeneration;
   const request = contentRequests.next();
   errorText = null;
   // Persist pending edits of the current note before switching away.
@@ -2455,7 +2532,10 @@ async function openNote(
   delete debugWindow.__SKRIBEUM_DEBUG_NOTE_OPEN_MS__;
   try {
     const loaded = await readNote(currentVault, path);
-    if (vault !== currentVault || !contentRequests.isCurrent(request)) {
+    if (
+      !activeVaultMatches(currentVault, vaultGeneration) ||
+      !contentRequests.isCurrent(request)
+    ) {
       return false;
     }
     const recovered = pendingRecovered.get(path);
@@ -2504,7 +2584,10 @@ async function openNote(
     }
     return true;
   } catch (error) {
-    if (vault !== currentVault || !contentRequests.isCurrent(request)) {
+    if (
+      !activeVaultMatches(currentVault, vaultGeneration) ||
+      !contentRequests.isCurrent(request)
+    ) {
       return false;
     }
     if (isMissingNoteError(error)) {
@@ -3001,7 +3084,7 @@ function pollEndToEndVault() {
         setEndToEndSelectionFromLastMatch;
       target.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__ = activeTabDirty;
       clearInterval(timer);
-      void openVaultAtPath(path);
+      void openEndToEndVault(path);
     } else if (attempts > 50 || vault !== null) {
       clearInterval(timer);
     }
@@ -3070,18 +3153,29 @@ onMount(() => {
       setEndToEndSelectionFromLastMatch;
     debugWindow.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__ = activeTabDirty;
   }
+  let disposed = false;
+  let nativeOpenFilesDispose: (() => void) | undefined;
+  const nativeOpenFilesListener = installNativeOpenListener(
+    (available) => events.openFilesAvailable.listen(available),
+    nativeOpenQueue,
+  );
+  void nativeOpenFilesListener.then(async (dispose) => {
+    if (disposed) {
+      dispose();
+      return;
+    }
+    nativeOpenFilesDispose = dispose;
+    await startDesktopVaultRecovery(debugWindow.__SKRIBEUM_E2E_VAULT__);
+  });
   const unlisteners = [
     events.vaultCollisionsDetected.listen((event) => {
       collisionGroups = event.payload.groups;
-    }),
-    events.openFilesAvailable.listen(() => {
-      drainNativeOpenFiles();
     }),
     // Raw watcher events refresh the tree; content reconciliation for open
     // notes arrives through the typed events below, never through raw
     // (possibly unstable) modification events.
     events.vaultChanged.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      if (!activeVaultMatchesEvent(event.payload.vault)) {
         return;
       }
       if (event.payload.change === "overflow") {
@@ -3093,10 +3187,14 @@ onMount(() => {
       }
     }),
     events.externalNoteUpdate.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      const activeVault = vault;
+      if (
+        activeVault === null ||
+        !activeVaultMatchesEvent(event.payload.vault)
+      ) {
         return;
       }
-      void refreshTagCatalog(vault);
+      void refreshTagCatalog(activeVault);
       if (event.payload.path !== selectedPath || note === null) {
         return;
       }
@@ -3110,10 +3208,14 @@ onMount(() => {
       );
     }),
     events.externalNoteRemove.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      const activeVault = vault;
+      if (
+        activeVault === null ||
+        !activeVaultMatchesEvent(event.payload.vault)
+      ) {
         return;
       }
-      void refreshTreeAfterTagCatalog(vault);
+      void refreshTreeAfterTagCatalog(activeVault);
       if (event.payload.path === selectedPath) {
         editor?.markRemoved();
         pushBanner({
@@ -3123,7 +3225,7 @@ onMount(() => {
       }
     }),
     events.reconciliationBanner.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      if (!activeVaultMatchesEvent(event.payload.vault)) {
         return;
       }
       const path = event.payload.path;
@@ -3140,7 +3242,7 @@ onMount(() => {
       ];
     }),
     events.bulkDivergenceReview.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      if (!activeVaultMatchesEvent(event.payload.vault)) {
         return;
       }
       const paths = event.payload.paths;
@@ -3163,7 +3265,7 @@ onMount(() => {
       ];
     }),
     events.noteRecovered.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      if (!activeVaultMatchesEvent(event.payload.vault)) {
         return;
       }
       const path = event.payload.path;
@@ -3192,7 +3294,6 @@ onMount(() => {
     }),
   ];
   void settingsStore.load();
-  void startDesktopVaultRecovery(debugWindow.__SKRIBEUM_E2E_VAULT__);
   if (hasDesktopRuntime()) {
     void settingsPath()
       .then((path) => {
@@ -3204,6 +3305,7 @@ onMount(() => {
   }
   const pollTimer = pollEndToEndVault();
   return () => {
+    disposed = true;
     stopVisualViewportCss();
     narrowQuery.removeEventListener("change", updateNarrowViewport);
     navigation?.dispose();
@@ -3217,6 +3319,8 @@ onMount(() => {
     delete debugWindow.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__;
     delete debugWindow.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__;
     clearInterval(pollTimer);
+    nativeOpenFilesDispose?.();
+    void vaultOwnership.dispose();
     cancelOutlineRefresh?.();
     for (const unlisten of unlisteners) {
       void unlisten.then((dispose) => dispose());

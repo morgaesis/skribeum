@@ -24,6 +24,12 @@ export type LoadedNote = {
   recoveredChangeSet?: ByteRangeReplace[];
 };
 
+/** Browser-equivalent vault identity for the frontend native-lifecycle seam. */
+export type VaultOpenResult = {
+  handle: VaultHandle;
+  root: string;
+};
+
 type PermissionMode = "read" | "readwrite";
 type PermissionDescriptor = { mode?: PermissionMode };
 type WritableFile = {
@@ -388,7 +394,7 @@ function indexedTree(vault: DemoVault): TreeEntry[] {
   );
 }
 
-export async function openVault(path: string): Promise<VaultHandle> {
+export async function openVaultResult(path: string): Promise<VaultOpenResult> {
   const vault = folderSelections.get(path) ?? seededVault();
   folderSelections.delete(path);
   activeVault = vault;
@@ -399,7 +405,17 @@ export async function openVault(path: string): Promise<VaultHandle> {
   }
   nextVaultId += 1;
   vaults.set(nextVaultId, vault);
-  return { id: nextVaultId };
+  return { handle: { id: nextVaultId }, root: path };
+}
+
+/** Compatibility adapter for callers that only retain a browser handle. */
+export async function openVault(path: string): Promise<VaultHandle> {
+  return (await openVaultResult(path)).handle;
+}
+
+/** Mirrors native idempotent teardown without altering browser vault data. */
+export async function closeVault(handle: VaultHandle): Promise<void> {
+  vaults.delete(handle.id);
 }
 
 export async function vaultTree(handle: VaultHandle): Promise<TreeEntry[]> {

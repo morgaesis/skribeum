@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use skribeum_vault::{
-    FileSystem, RealFs, ReconEvent, Reconciler, ReconcilerConfig, SearchIndex, SimFs, Vault,
-    VaultPath, write_durable,
+    FileSystem, RealFs, RebuildOutcome, ReconEvent, Reconciler, ReconcilerConfig, SearchIndex,
+    SimFs, Vault, VaultPath, write_durable,
 };
 
 fn corpus_dir() -> PathBuf {
@@ -202,9 +202,11 @@ fn fts_finds_every_brute_force_hit_over_synthetic_scale_vault() {
     );
     let index = SearchIndex::in_memory().expect("index opens");
     assert_eq!(
-        index.rebuild(&fs, &vault).expect("rebuild runs"),
-        SEARCH_SCALE_NOTE_COUNT,
-        "the rebuild indexes every synthetic note"
+        index
+            .rebuild_cancellable(&fs, &vault, || false)
+            .expect("rebuild runs"),
+        RebuildOutcome::Completed(SEARCH_SCALE_NOTE_COUNT),
+        "an active rebuild indexes every synthetic note"
     );
 
     let tokenized = tokenized_notes(&notes);

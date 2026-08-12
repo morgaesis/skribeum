@@ -114,14 +114,17 @@ import {
   treeEntryMove,
   treeEntryReveal,
   treeFolderCreate,
+  vaultSessionForget,
+  vaultSessionRead,
   vaultTreeRefresh,
   zoomSet,
 } from "./lib/ipc/services";
 import {
+  closeVault,
   IpcError,
   type LoadedNote,
   noteCreate,
-  openVault,
+  openVaultResult,
   readNote,
   readNoteStat,
   readVaultConfigFile,
@@ -154,7 +157,23 @@ import ReadOnlyNote from "./lib/rendering/ReadOnlyNote.svelte";
 import { NARROW_BREAKPOINT_REM } from "./lib/responsive";
 import SettingsView from "./lib/SettingsView.svelte";
 import Sheet from "./lib/Sheet.svelte";
+import StartupVaultRecovery from "./lib/StartupVaultRecovery.svelte";
 import Statusline from "./lib/Statusline.svelte";
+import {
+  focusExpandedSidebarTarget,
+  focusTabCloseSuccessor,
+} from "./lib/shellFocus";
+import {
+  emptyStartupSurface,
+  failedStartupSurface,
+  isStaleVaultOpenError,
+  nextStartupDecision,
+  type StartupVaultSurface,
+  selectedStartupFailureSurface,
+  staleChooserStartupDecision,
+  startupSource,
+  type VaultStartupSession,
+} from "./lib/startupVaultRecovery";
 import { STRINGS } from "./lib/strings";
 import TabStrip from "./lib/TabStrip.svelte";
 import {
@@ -166,6 +185,13 @@ import {
   isThemeName,
 } from "./lib/themes/theme";
 import UnifiedCommandSurface from "./lib/UnifiedCommandSurface.svelte";
+import {
+  installNativeOpenListener,
+  NativeOpenQueue,
+  StartupPathGate,
+  StartupRecoveryGuard,
+  VaultOwnership,
+} from "./lib/vaultLifecycle";
 import { bindVisualViewportCss } from "./lib/visualViewport";
 import WindowControls from "./lib/WindowControls.svelte";
 import { showWindowSystemMenu } from "./lib/windowChrome";
@@ -196,12 +222,28 @@ let {
 
 let vault = $state<VaultHandle | null>(null);
 let activeVaultPath = $state<string | null>(null);
+let activeVaultGeneration = 0;
+const vaultOwnership = new VaultOwnership<VaultHandle>({
+  open: openVaultResult,
+  close: closeVault,
+});
+const endToEndVaultStartup = new StartupPathGate();
+const startupRecoveryGuard = new StartupRecoveryGuard();
 let tree = $state<TreeEntry[]>([]);
 let treeTitleSources = $state<Record<string, string>>({});
 let selectedPath = $state<string | null>(null);
 let note = $state<LoadedNote | null>(null);
 let collisionGroups = $state<string[][]>([]);
 let errorText = $state<string | null>(null);
+function initialStartupVaultSurface(): StartupVaultSurface {
+  return navigationSurface === "desktop" && hasDesktopRuntime()
+    ? { kind: "pending" }
+    : emptyStartupSurface();
+}
+
+let startupVaultSurface = $state<StartupVaultSurface>(
+  initialStartupVaultSurface(),
+);
 let banners = $state<BannerItem[]>([]);
 // Svelte resets a `bind:this` component binding to `null`, not `undefined`,
 // once the bound component unmounts (leaving canvas or the missing-note
@@ -276,6 +318,7 @@ let noteTitleVisible = $state(true);
 let currentNoteSource = $state("");
 let sourceMode = $state(false);
 let surfaceFocusOrigin = $state<HTMLElement | null>(null);
+let surfaceFocusRestoreFrame: number | null = null;
 let taskStatusSurfaceMarker = $state<number | null>(null);
 let tableCellSurfaceActive = $state(false);
 let overflowContextPrepared = false;
@@ -398,6 +441,29 @@ const vaultName = $derived(
     .at(-1) ?? STRINGS.appTitle,
 );
 
+function activeVaultMatches(
+  handle: VaultHandle,
+  generation = activeVaultGeneration,
+): boolean {
+  const session = vaultOwnership.current();
+  return (
+    vault?.id === handle.id &&
+    activeVaultGeneration === generation &&
+    session !== null &&
+    session.generation === generation &&
+    session.handle.id === handle.id
+  );
+}
+
+function activeVaultMatchesEvent(handleId: number): boolean {
+  const session = vaultOwnership.current();
+  return (
+    session !== null &&
+    activeVaultMatches(session.handle, session.generation) &&
+    session.handle.id === handleId
+  );
+}
+
 $effect(() => {
   const identity = workspaceIdentity;
   if (identity === null) return;
@@ -419,6 +485,7 @@ $effect(() => {
 
 async function loadTreeTitles(handle: VaultHandle, entries: TreeEntry[]) {
   const generation = ++titleLoadGeneration;
+  const vaultGeneration = activeVaultGeneration;
   const paths = entries
     .filter((entry) => entry.kind === "note")
     .map((entry) => entry.path);
@@ -438,13 +505,83 @@ async function loadTreeTitles(handle: VaultHandle, entries: TreeEntry[]) {
         }
       }),
     );
-    if (generation !== titleLoadGeneration || vault?.id !== handle.id) return;
+    if (
+      generation !== titleLoadGeneration ||
+      !activeVaultMatches(handle, vaultGeneration)
+    )
+      return;
     for (const [path, source] of loaded) next[path] = source;
     treeTitleSources = { ...next };
   }
 }
 
-function togglePanel(panel: "sidebar" | "outline") {
+let panelTogglePointerOrigin: HTMLElement | null | undefined;
+let panelTogglePointerClearTimer: ReturnType<typeof setTimeout> | undefined;
+
+function rememberPanelTogglePointerOrigin(event: MouseEvent) {
+  if (event.button !== 0 || panelTogglePointerOrigin !== undefined) return;
+  const active = document.activeElement;
+  panelTogglePointerOrigin =
+    active instanceof HTMLElement && active.isConnected ? active : null;
+}
+
+function keepPanelTogglePointerFocus(event: MouseEvent) {
+  rememberPanelTogglePointerOrigin(event);
+  if (event.button === 0) event.preventDefault();
+}
+
+function releasePanelTogglePointerOrigin(event: PointerEvent) {
+  if (event.button !== 0 || panelTogglePointerOrigin === undefined) return;
+  clearTimeout(panelTogglePointerClearTimer);
+  panelTogglePointerClearTimer = setTimeout(() => {
+    panelTogglePointerOrigin = undefined;
+  });
+}
+
+function cancelPanelTogglePointerOrigin() {
+  clearTimeout(panelTogglePointerClearTimer);
+  panelTogglePointerOrigin = undefined;
+}
+
+function panelElement(panel: "sidebar" | "outline"): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    panel === "sidebar"
+      ? ".skr-desktop-sidebar"
+      : '[data-testid="desktop-outline-panel"]',
+  );
+}
+
+function panelContainsFocus(
+  panel: "sidebar" | "outline",
+  focusTarget: Element | null,
+): boolean {
+  return (
+    focusTarget !== null && panelElement(panel)?.contains(focusTarget) === true
+  );
+}
+
+function focusCollapsedPanelRestore(panel: "sidebar" | "outline") {
+  const target =
+    panel === "sidebar"
+      ? document.querySelector<HTMLElement>(
+          '.skr-header-leading [data-command-id="panel.sidebar.toggle"]',
+        )
+      : document.querySelector<HTMLElement>('[aria-label="More actions"]');
+  target?.focus();
+}
+
+function isCollapsedSidebarToggle(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    target.matches(
+      '.skr-header-leading .skr-desktop-sidebar-toggle[data-command-id="panel.sidebar.toggle"]',
+    )
+  );
+}
+
+function togglePanel(panel: "sidebar" | "outline", origin?: HTMLElement) {
+  const pointerOrigin = panelTogglePointerOrigin;
+  cancelPanelTogglePointerOrigin();
   if (narrowViewport) {
     if (panel === "sidebar") {
       if (activeSheet === "file-tree") closeSheet();
@@ -456,12 +593,49 @@ function togglePanel(panel: "sidebar" | "outline") {
     }
     return;
   }
+  const wasOpen =
+    panel === "sidebar" ? !workspace.sidebarCollapsed : outlineOpen;
+  const focusOrigin =
+    origin !== undefined
+      ? origin
+      : pointerOrigin !== undefined
+        ? pointerOrigin
+        : document.activeElement;
+  const shouldRestoreFocus = wasOpen && panelContainsFocus(panel, focusOrigin);
+  const shouldPreserveExternalPointerFocus =
+    wasOpen &&
+    pointerOrigin !== undefined &&
+    focusOrigin instanceof HTMLElement &&
+    !panelContainsFocus(panel, focusOrigin);
+  const shouldFocusExpandedSidebar =
+    !wasOpen &&
+    panel === "sidebar" &&
+    pointerOrigin === undefined &&
+    isCollapsedSidebarToggle(focusOrigin);
   if (panel === "sidebar") {
     workspace.sidebarCollapsed = !workspace.sidebarCollapsed;
   } else {
     outlineOpen = !outlineOpen;
     workspace.outlineCollapsed = !outlineOpen;
     if (outlineOpen) refreshOutline();
+  }
+  if (
+    shouldRestoreFocus ||
+    shouldPreserveExternalPointerFocus ||
+    shouldFocusExpandedSidebar
+  ) {
+    void tick().then(() => {
+      const stillCollapsed =
+        panel === "sidebar" ? workspace.sidebarCollapsed : !outlineOpen;
+      if (!stillCollapsed) {
+        if (shouldFocusExpandedSidebar) focusExpandedSidebarTarget();
+        return;
+      }
+      if (shouldRestoreFocus) focusCollapsedPanelRestore(panel);
+      else if (focusOrigin instanceof HTMLElement && focusOrigin.isConnected) {
+        focusOrigin.focus();
+      }
+    });
   }
 }
 
@@ -568,11 +742,34 @@ async function focusWorkspacePane(id: string) {
   updatePaneNavigationState();
 }
 
-async function closeWorkspaceTab(path = focusedWorkspacePane().activePath) {
+let tabCloseFocusGeneration = 0;
+
+function restoreTabCloseFocus(paneId: string, generation: number) {
+  void tick().then(() => {
+    if (generation !== tabCloseFocusGeneration) return;
+    const pane = document.querySelector<HTMLElement>(
+      `[data-pane-id="${CSS.escape(paneId)}"]`,
+    );
+    const fallback =
+      pane?.querySelector<HTMLElement>(".skr-pane-content") ?? null;
+    if (pane !== null && focusTabCloseSuccessor(pane, fallback)) return;
+    if (focusExpandedSidebarTarget()) return;
+    document
+      .querySelector<HTMLElement>('[data-command-id="vault.open"]')
+      ?.focus();
+  });
+}
+
+async function closeWorkspaceTab(
+  path = focusedWorkspacePane().activePath,
+  restoreFocus = false,
+) {
   if (path === null) return;
   const pane = focusedWorkspacePane();
   const index = pane.tabs.findIndex((tab) => tab.path === path);
   if (index < 0) return;
+  const generation = ++tabCloseFocusGeneration;
+  const restoresActiveTabFocus = restoreFocus && pane.activePath === path;
   const closesActiveEditor = pane.activePath === path && selectedPath === path;
   if (closesActiveEditor && (await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
@@ -605,6 +802,9 @@ async function closeWorkspaceTab(path = focusedWorkspacePane().activePath) {
       }
       updatePaneNavigationState();
     }
+    if (restoresActiveTabFocus) {
+      restoreTabCloseFocus(workspace.focusedPaneId, generation);
+    }
     return;
   }
   if (pane.activePath === path) {
@@ -618,6 +818,7 @@ async function closeWorkspaceTab(path = focusedWorkspacePane().activePath) {
       await activateWorkspaceTab(next.path);
     }
   }
+  if (restoresActiveTabFocus) restoreTabCloseFocus(pane.id, generation);
 }
 
 async function reopenClosedWorkspaceTab() {
@@ -892,20 +1093,25 @@ function restoreSurfaceFocus() {
   const origin = surfaceFocusOrigin;
   surfaceFocusOrigin = null;
   void tick().then(() => {
-    if (origin?.isConnected) {
-      origin.focus();
-    } else {
-      focusContent();
+    // Clearing `inert` takes effect with the browser's next render. Restore
+    // focus after that render so WebKit accepts the invoking chrome control.
+    if (surfaceFocusRestoreFrame !== null) {
+      cancelAnimationFrame(surfaceFocusRestoreFrame);
     }
+    surfaceFocusRestoreFrame = requestAnimationFrame(() => {
+      surfaceFocusRestoreFrame = null;
+      if (activeSheet !== null || activeOverlay !== null) return;
+      if (origin?.isConnected) {
+        origin.focus({ preventScroll: true });
+      } else {
+        focusContent();
+      }
+    });
   });
 }
 
 function focusFileTree() {
-  document
-    .querySelector<HTMLElement>(
-      '.skr-desktop-sidebar [role="treeitem"][tabindex="0"]',
-    )
-    ?.focus();
+  focusExpandedSidebarTarget();
 }
 
 /** Re-indexes the tree so newly discovered notes reach indexed surfaces. */
@@ -914,14 +1120,15 @@ async function refreshTreeIndex(refreshTags = false) {
   if (activeVault === null) {
     return;
   }
+  const vaultGeneration = activeVaultGeneration;
   try {
     const refreshedTree = await vaultTreeRefresh(activeVault);
-    if (vault?.id !== activeVault.id) {
+    if (!activeVaultMatches(activeVault, vaultGeneration)) {
       return;
     }
     if (refreshTags) {
       await refreshTagCatalog(activeVault);
-      if (vault?.id !== activeVault.id) {
+      if (!activeVaultMatches(activeVault, vaultGeneration)) {
         return;
       }
     }
@@ -1050,7 +1257,7 @@ function validateTreeRename(
   return null;
 }
 
-async function renameTreeEntry(path: string) {
+async function renameTreeEntry(path: string, restoreFocus?: () => void) {
   const activeVault = vault;
   if (activeVault === null) return;
   const requiresNoteExtension =
@@ -1086,12 +1293,14 @@ async function renameTreeEntry(path: string) {
     if (affectsActive && selectedPath !== null) {
       await openNote(selectedPath, activeViewState);
     }
+    await tick();
+    restoreFocus?.();
   } catch (error) {
     errorText = describeError(STRINGS.treeOperationFailed, error);
   }
 }
 
-async function deleteTreeEntry(path: string) {
+async function deleteTreeEntry(path: string, restoreFocus?: () => void) {
   const activeVault = vault;
   if (activeVault === null) return;
   const confirmed = await showConfirmDialog({
@@ -1127,6 +1336,8 @@ async function deleteTreeEntry(path: string) {
         await openNote(nextPath, tab.viewState, "tab");
       }
     }
+    await tick();
+    restoreFocus?.();
   } catch (error) {
     errorText = describeError(STRINGS.treeOperationFailed, error);
   }
@@ -1394,15 +1605,12 @@ function currentTaskStatusMarker(
 
 function prepareOverflowContext(
   focusTarget: EventTarget | null = document.activeElement,
+  contextTarget: EventTarget | null = document.activeElement,
 ) {
-  if (
-    surfaceFocusOrigin === null &&
-    focusTarget instanceof HTMLElement &&
-    focusTarget.isConnected
-  ) {
+  if (focusTarget instanceof HTMLElement && focusTarget.isConnected) {
     surfaceFocusOrigin = focusTarget;
   }
-  taskStatusSurfaceMarker = currentTaskStatusMarker(focusTarget);
+  taskStatusSurfaceMarker = currentTaskStatusMarker(contextTarget);
   const view = editor?.getView();
   tableCellSurfaceActive =
     view !== undefined && focusedRenderedTableCell(view) !== null;
@@ -1602,9 +1810,13 @@ async function refreshTagCatalog(handle = vault) {
     return;
   }
   const generation = ++tagCatalogGeneration;
+  const vaultGeneration = activeVaultGeneration;
   try {
     const entries = await tagCatalog(handle);
-    if (generation === tagCatalogGeneration && vault?.id === handle.id) {
+    if (
+      generation === tagCatalogGeneration &&
+      activeVaultMatches(handle, vaultGeneration)
+    ) {
       setTagCatalog(entries);
     }
   } catch {
@@ -1613,8 +1825,9 @@ async function refreshTagCatalog(handle = vault) {
 }
 
 async function refreshTreeAfterTagCatalog(handle: VaultHandle) {
+  const vaultGeneration = activeVaultGeneration;
   await refreshTagCatalog(handle);
-  if (vault?.id === handle.id) {
+  if (activeVaultMatches(handle, vaultGeneration)) {
     await refreshTree();
   }
 }
@@ -1770,6 +1983,9 @@ function onEditorDocChanged(source: string, path: string | null) {
     if (path !== null)
       treeTitleSources = { ...treeTitleSources, [path]: source };
   }
+}
+
+function onEditorOutlineChanged() {
   if (outlineOpen) {
     scheduleOutlineRefresh();
   }
@@ -1987,10 +2203,11 @@ async function loadObsidianConfig(handle: VaultHandle) {
 
 async function readObsidianConfig(handle: VaultHandle) {
   const generation = ++obsidianReadGeneration;
+  const vaultGeneration = activeVaultGeneration;
   const next = await loadObsidianConfig(handle);
   if (
     generation !== obsidianReadGeneration ||
-    vault?.id !== handle.id ||
+    !activeVaultMatches(handle, vaultGeneration) ||
     !settingsState.document.honor_obsidian_config
   ) {
     return;
@@ -2043,48 +2260,72 @@ async function resolvePermalinkNavigation(
   window.history.replaceState(window.history.state, "", url);
 }
 
-async function openVaultAtPath(path: string, initialNote?: string) {
+async function openVaultAtPath(
+  path: string,
+  initialNote?: string,
+  reportError = true,
+  isCurrent: () => boolean = () => true,
+): Promise<unknown | null> {
   errorText = null;
   tagCatalogGeneration += 1;
   if ((await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
-    return;
+    return new Error(errorText);
   }
   const request = contentRequests.next();
+  const replacement = await vaultOwnership.replace(
+    path,
+    async (session) => {
+      const [nextTree, config, , nextTags] = await Promise.all([
+        vaultTree(session.handle),
+        loadObsidianConfig(session.handle),
+        watchSubscribe(session.handle),
+        tagCatalog(session.handle).catch(() => []),
+      ]);
+      if (navigationSurface === "browser") {
+        await resolvePermalinkNavigation(session.handle, nextTree);
+      }
+      return { nextTree, config, nextTags };
+    },
+    (session, prepared) => {
+      const { nextTree, config, nextTags } = prepared;
+      vault = session.handle;
+      activeVaultGeneration = session.generation;
+      activeVaultPath = session.root;
+      workspaceIdentity = session.root;
+      workspace = loadWorkspaceState(session.root);
+      outlineOpen = !workspace.outlineCollapsed;
+      tree = nextTree;
+      selectedPath = workspace.selectedPath;
+      treeTitleSources = {};
+      void loadTreeTitles(session.handle, nextTree);
+      note = null;
+      currentNoteSource = "";
+      sourceMode = false;
+      missingAddress = null;
+      contentView = null;
+      canvas = null;
+      canvasError = null;
+      obsidianConfig = config.config;
+      propertyTypes = config.types;
+      setTagCatalog(nextTags);
+      recentTags = [];
+      refreshLinkContext();
+    },
+    () => contentRequests.isCurrent(request) && isCurrent(),
+  );
+  if (replacement.kind === "superseded") {
+    return new Error("The vault open request was superseded.");
+  }
+  if (replacement.kind === "failed") {
+    if (reportError)
+      errorText = describeError(STRINGS.vaultOpenFailed, replacement.error);
+    return replacement.error;
+  }
+  const { session } = replacement;
   try {
-    const handle = await openVault(path);
-    const [nextTree, config, , nextTags] = await Promise.all([
-      vaultTree(handle),
-      loadObsidianConfig(handle),
-      watchSubscribe(handle),
-      tagCatalog(handle).catch(() => []),
-    ]);
-    if (!contentRequests.isCurrent(request)) {
-      return;
-    }
-    vault = handle;
-    activeVaultPath = path;
-    workspaceIdentity = path;
-    workspace = loadWorkspaceState(path);
-    outlineOpen = !workspace.outlineCollapsed;
-    tree = nextTree;
-    selectedPath = workspace.selectedPath;
-    treeTitleSources = {};
-    void loadTreeTitles(handle, nextTree);
-    note = null;
-    currentNoteSource = "";
-    sourceMode = false;
-    missingAddress = null;
-    contentView = null;
-    canvas = null;
-    canvasError = null;
-    obsidianConfig = config.config;
-    propertyTypes = config.types;
-    setTagCatalog(nextTags);
-    recentTags = [];
-    refreshLinkContext();
-    if (navigationSurface === "browser") {
-      await resolvePermalinkNavigation(handle, nextTree);
+    if (!activeVaultMatches(session.handle, session.generation)) {
+      return new Error("The vault open request was superseded.");
     }
     const harnessNote = (window as Window & { __SKRIBEUM_E2E_NOTE__?: string })
       .__SKRIBEUM_E2E_NOTE__;
@@ -2096,7 +2337,7 @@ async function openVaultAtPath(path: string, initialNote?: string) {
     } else if (
       navigationSurface === "desktop" &&
       focusedWorkspacePane().activePath !== null &&
-      notePathsOf(nextTree).includes(focusedWorkspacePane().activePath ?? "")
+      notePathsOf(tree).includes(focusedWorkspacePane().activePath ?? "")
     ) {
       const pane = focusedWorkspacePane();
       const path = pane.activePath;
@@ -2112,11 +2353,13 @@ async function openVaultAtPath(path: string, initialNote?: string) {
         await navigation?.start({ path: harnessNote });
       else await navigateToNote(harnessNote);
     }
+    return null;
   } catch (error) {
-    if (!contentRequests.isCurrent(request)) {
-      return;
+    if (!activeVaultMatches(session.handle, session.generation)) {
+      return new Error("The vault open request was superseded.");
     }
-    errorText = describeError(STRINGS.vaultOpenFailed, error);
+    if (reportError) errorText = describeError(STRINGS.vaultOpenFailed, error);
+    return error;
   }
 }
 
@@ -2127,7 +2370,7 @@ function comparableNativePath(path: string): string {
     : normalized;
 }
 
-async function handleNativeOpen(path: string): Promise<void> {
+async function handleNativeOpen(path: string): Promise<boolean> {
   try {
     const target = await fileOpenResolve(path);
     if (
@@ -2139,20 +2382,173 @@ async function handleNativeOpen(path: string): Promise<void> {
       await refreshTreeIndex();
       await navigateToNote(target.note_path);
     } else {
-      await openVaultAtPath(target.vault_path, target.note_path);
+      return (
+        (await openVaultAtPath(target.vault_path, target.note_path)) === null
+      );
     }
+    return true;
   } catch {
     errorText = STRINGS.fileOpenFailed;
+    return false;
   }
 }
 
-let nativeOpenQueue = Promise.resolve();
-function drainNativeOpenFiles(): void {
-  nativeOpenQueue = nativeOpenQueue
-    .catch(() => {})
-    .then(async () => {
-      for (const path of await openFilesTake()) await handleNativeOpen(path);
-    });
+let nativeOpenIntent = false;
+const nativeOpenQueue = new NativeOpenQueue(async () => {
+  while (true) {
+    const paths = await openFilesTake();
+    if (paths.length === 0) return;
+    for (const path of paths) await handleNativeOpen(path);
+  }
+});
+
+function drainNativeOpenFiles(): Promise<void> {
+  return nativeOpenQueue.enqueue();
+}
+
+async function recoverStartupVault(
+  session: VaultStartupSession,
+  isCurrent: () => boolean,
+): Promise<void> {
+  if (!isCurrent()) return;
+  const decision = nextStartupDecision(session);
+  if (decision.kind === "surface") {
+    startupVaultSurface = decision.surface;
+    return;
+  }
+
+  const failure = await openVaultAtPath(
+    decision.path,
+    undefined,
+    false,
+    isCurrent,
+  );
+  if (!isCurrent()) return;
+  if (failure === null) return;
+  errorText = null;
+  if (failure instanceof IpcError && isStaleVaultOpenError(failure.app.code)) {
+    try {
+      const nextSession = await vaultSessionForget(decision.path);
+      if (!isCurrent()) return;
+      const next = nextStartupDecision(nextSession);
+      if (next.kind === "surface") {
+        startupVaultSurface = next.surface;
+        return;
+      }
+      const fallbackFailure = await openVaultAtPath(
+        next.path,
+        undefined,
+        false,
+        isCurrent,
+      );
+      if (!isCurrent() || fallbackFailure === null) return;
+      startupVaultSurface = failedStartupSurface(
+        nextSession,
+        next.path,
+        describeError(STRINGS.vaultOpenFailed, fallbackFailure),
+      );
+    } catch (forgetError) {
+      if (!isCurrent()) return;
+      startupVaultSurface = emptyStartupSurface(
+        describeError(STRINGS.vaultOpenFailed, forgetError),
+      );
+    }
+    return;
+  }
+  startupVaultSurface = failedStartupSurface(
+    session,
+    decision.path,
+    describeError(STRINGS.vaultOpenFailed, failure),
+  );
+}
+
+async function openStartupVault(path?: string): Promise<void> {
+  if (path === undefined) {
+    await pickVault();
+    return;
+  }
+  const failure = await openVaultAtPath(path, undefined, false);
+  if (failure === null) return;
+  errorText = null;
+  const error = describeError(STRINGS.vaultOpenFailed, failure);
+  if (
+    !(failure instanceof IpcError && isStaleVaultOpenError(failure.app.code))
+  ) {
+    startupVaultSurface = selectedStartupFailureSurface(
+      startupVaultSurface,
+      path,
+      error,
+    );
+    return;
+  }
+  try {
+    const nextSession = await vaultSessionForget(path);
+    const next = staleChooserStartupDecision(nextSession);
+    if (next.kind === "surface") {
+      startupVaultSurface = next.surface;
+      return;
+    }
+    const fallbackFailure = await openVaultAtPath(next.path, undefined, false);
+    if (fallbackFailure === null) return;
+    startupVaultSurface = failedStartupSurface(
+      nextSession,
+      next.path,
+      describeError(STRINGS.vaultOpenFailed, fallbackFailure),
+    );
+  } catch (forgetError) {
+    startupVaultSurface = selectedStartupFailureSurface(
+      startupVaultSurface,
+      path,
+      describeError(STRINGS.vaultOpenFailed, forgetError),
+    );
+  }
+}
+
+async function startDesktopVaultRecovery(
+  webdriverVault: string | undefined,
+): Promise<void> {
+  const source = startupSource({
+    desktop: navigationSurface === "desktop" && hasDesktopRuntime(),
+    ...(webdriverVault === undefined ? {} : { webdriverVault }),
+  });
+  if (source.kind === "browser") {
+    startupVaultSurface = emptyStartupSurface();
+    return;
+  }
+  if (source.kind === "webdriver") {
+    const failure = await openEndToEndVault(source.path);
+    if (failure !== null) {
+      errorText = null;
+      startupVaultSurface = emptyStartupSurface(
+        describeError(STRINGS.vaultOpenFailed, failure),
+      );
+    }
+    return;
+  }
+
+  await drainNativeOpenFiles();
+  if (nativeOpenIntent) {
+    if (vault === null) {
+      startupVaultSurface = emptyStartupSurface(errorText ?? undefined);
+      errorText = null;
+    }
+    return;
+  }
+  if (vault !== null) return;
+  const recoveryEpoch = startupRecoveryGuard.beginRecovery();
+  if (recoveryEpoch === null) return;
+  try {
+    const session = await vaultSessionRead();
+    if (!startupRecoveryGuard.isRecoveryCurrent(recoveryEpoch)) return;
+    await recoverStartupVault(session, () =>
+      startupRecoveryGuard.isRecoveryCurrent(recoveryEpoch),
+    );
+  } catch (error) {
+    if (!startupRecoveryGuard.isRecoveryCurrent(recoveryEpoch)) return;
+    startupVaultSurface = emptyStartupSurface(
+      describeError(STRINGS.vaultOpenFailed, error),
+    );
+  }
 }
 
 async function pickVault() {
@@ -2163,14 +2559,19 @@ async function pickVault() {
   await openVaultAtPath(path);
 }
 
+function openEndToEndVault(path: string): Promise<unknown | null> {
+  return endToEndVaultStartup.run(path, () => openVaultAtPath(path));
+}
+
 async function refreshTree() {
   const currentVault = vault;
   if (currentVault === null) {
     return;
   }
+  const vaultGeneration = activeVaultGeneration;
   try {
     const nextTree = await vaultTree(currentVault);
-    if (vault !== currentVault) {
+    if (!activeVaultMatches(currentVault, vaultGeneration)) {
       return;
     }
     tree = nextTree;
@@ -2198,6 +2599,7 @@ async function openNote(
   if (currentVault === null) {
     return false;
   }
+  const vaultGeneration = activeVaultGeneration;
   const request = contentRequests.next();
   errorText = null;
   // Persist pending edits of the current note before switching away.
@@ -2216,7 +2618,10 @@ async function openNote(
   delete debugWindow.__SKRIBEUM_DEBUG_NOTE_OPEN_MS__;
   try {
     const loaded = await readNote(currentVault, path);
-    if (vault !== currentVault || !contentRequests.isCurrent(request)) {
+    if (
+      !activeVaultMatches(currentVault, vaultGeneration) ||
+      !contentRequests.isCurrent(request)
+    ) {
       return false;
     }
     const recovered = pendingRecovered.get(path);
@@ -2265,7 +2670,10 @@ async function openNote(
     }
     return true;
   } catch (error) {
-    if (vault !== currentVault || !contentRequests.isCurrent(request)) {
+    if (
+      !activeVaultMatches(currentVault, vaultGeneration) ||
+      !contentRequests.isCurrent(request)
+    ) {
       return false;
     }
     if (isMissingNoteError(error)) {
@@ -2762,7 +3170,7 @@ function pollEndToEndVault() {
         setEndToEndSelectionFromLastMatch;
       target.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__ = activeTabDirty;
       clearInterval(timer);
-      void openVaultAtPath(path);
+      void openEndToEndVault(path);
     } else if (attempts > 50 || vault !== null) {
       clearInterval(timer);
     }
@@ -2831,18 +3239,33 @@ onMount(() => {
       setEndToEndSelectionFromLastMatch;
     debugWindow.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__ = activeTabDirty;
   }
+  let disposed = false;
+  let nativeOpenFilesDispose: (() => void) | undefined;
+  const nativeOpenFilesListener = installNativeOpenListener(
+    (available) => events.openFilesAvailable.listen(available),
+    nativeOpenQueue,
+    () => {
+      nativeOpenIntent = true;
+      startupRecoveryGuard.observeNativeOpen();
+    },
+  );
+  void nativeOpenFilesListener.then(async (dispose) => {
+    if (disposed) {
+      dispose();
+      return;
+    }
+    nativeOpenFilesDispose = dispose;
+    await startDesktopVaultRecovery(debugWindow.__SKRIBEUM_E2E_VAULT__);
+  });
   const unlisteners = [
     events.vaultCollisionsDetected.listen((event) => {
       collisionGroups = event.payload.groups;
-    }),
-    events.openFilesAvailable.listen(() => {
-      drainNativeOpenFiles();
     }),
     // Raw watcher events refresh the tree; content reconciliation for open
     // notes arrives through the typed events below, never through raw
     // (possibly unstable) modification events.
     events.vaultChanged.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      if (!activeVaultMatchesEvent(event.payload.vault)) {
         return;
       }
       if (event.payload.change === "overflow") {
@@ -2854,10 +3277,14 @@ onMount(() => {
       }
     }),
     events.externalNoteUpdate.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      const activeVault = vault;
+      if (
+        activeVault === null ||
+        !activeVaultMatchesEvent(event.payload.vault)
+      ) {
         return;
       }
-      void refreshTagCatalog(vault);
+      void refreshTagCatalog(activeVault);
       if (event.payload.path !== selectedPath || note === null) {
         return;
       }
@@ -2871,10 +3298,14 @@ onMount(() => {
       );
     }),
     events.externalNoteRemove.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      const activeVault = vault;
+      if (
+        activeVault === null ||
+        !activeVaultMatchesEvent(event.payload.vault)
+      ) {
         return;
       }
-      void refreshTreeAfterTagCatalog(vault);
+      void refreshTreeAfterTagCatalog(activeVault);
       if (event.payload.path === selectedPath) {
         editor?.markRemoved();
         pushBanner({
@@ -2884,7 +3315,7 @@ onMount(() => {
       }
     }),
     events.reconciliationBanner.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      if (!activeVaultMatchesEvent(event.payload.vault)) {
         return;
       }
       const path = event.payload.path;
@@ -2901,7 +3332,7 @@ onMount(() => {
       ];
     }),
     events.bulkDivergenceReview.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      if (!activeVaultMatchesEvent(event.payload.vault)) {
         return;
       }
       const paths = event.payload.paths;
@@ -2924,7 +3355,7 @@ onMount(() => {
       ];
     }),
     events.noteRecovered.listen((event) => {
-      if (vault === null || event.payload.vault !== vault.id) {
+      if (!activeVaultMatchesEvent(event.payload.vault)) {
         return;
       }
       const path = event.payload.path;
@@ -2953,7 +3384,6 @@ onMount(() => {
     }),
   ];
   void settingsStore.load();
-  if (hasDesktopRuntime()) drainNativeOpenFiles();
   if (hasDesktopRuntime()) {
     void settingsPath()
       .then((path) => {
@@ -2965,6 +3395,7 @@ onMount(() => {
   }
   const pollTimer = pollEndToEndVault();
   return () => {
+    disposed = true;
     stopVisualViewportCss();
     narrowQuery.removeEventListener("change", updateNarrowViewport);
     navigation?.dispose();
@@ -2978,6 +3409,8 @@ onMount(() => {
     delete debugWindow.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__;
     delete debugWindow.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__;
     clearInterval(pollTimer);
+    nativeOpenFilesDispose?.();
+    void vaultOwnership.dispose();
     cancelOutlineRefresh?.();
     for (const unlisten of unlisteners) {
       void unlisten.then((dispose) => dispose());
@@ -3019,6 +3452,10 @@ onMount(() => {
           data-command-id="panel.sidebar.toggle"
           aria-label={STRINGS.expandSidebar}
           use:commandTooltip={tooltipForCommand("panel.sidebar.toggle", STRINGS.expandSidebar)}
+          onpointerdown={rememberPanelTogglePointerOrigin}
+          onmousedown={keepPanelTogglePointerFocus}
+          onpointerup={releasePanelTogglePointerOrigin}
+          onpointercancel={cancelPanelTogglePointerOrigin}
           onclick={() => registry.run("panel.sidebar.toggle", commandContext())}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -3096,8 +3533,12 @@ onMount(() => {
         class="skr-header-overflow skr-header-icon-button"
         aria-label={STRINGS.overflowMenuLabel}
         aria-haspopup={narrowViewport ? "dialog" : "menu"}
-        onpointerdown={() => prepareOverflowContext()}
-        onfocus={(event) => prepareOverflowContext(event.relatedTarget)}
+        onpointerdown={(event) => prepareOverflowContext(event.currentTarget)}
+        onfocus={(event) => {
+          if (!overflowContextPrepared) {
+            prepareOverflowContext(event.currentTarget, event.relatedTarget);
+          }
+        }}
         onclick={(event) => openSheet("overflow", event.currentTarget)}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -3170,6 +3611,10 @@ onMount(() => {
                 data-command-id="panel.sidebar.toggle"
                 aria-label={STRINGS.collapseSidebar}
                 use:commandTooltip={tooltipForCommand("panel.sidebar.toggle", STRINGS.collapseSidebar)}
+                onpointerdown={rememberPanelTogglePointerOrigin}
+                onmousedown={keepPanelTogglePointerFocus}
+                onpointerup={releasePanelTogglePointerOrigin}
+                onpointercancel={cancelPanelTogglePointerOrigin}
                 onclick={() => registry.run("panel.sidebar.toggle", commandContext())}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -3201,27 +3646,18 @@ onMount(() => {
           edge="right"
           label={STRINGS.sidebarResize}
           onResize={(value) => (workspace.sidebarWidthRem = value)}
-          onCollapse={() => togglePanel("sidebar")}
+          onCollapse={(origin) => togglePanel("sidebar", origin)}
         />
         {/if}
       </div>
     {/if}
     <div class="skr-workspace" bind:this={workspaceHost}>
       {#if vault === null}
-        <div class="skr-empty-vault">
-          <button
-            type="button"
-            class="skr-btn-primary"
-            disabled={openVaultDisabledReason !== null}
-            title={openVaultDisabledReason ?? undefined}
-            data-command-id="vault.open"
-            data-btn-role="primary"
-            onclick={() => registry.run("vault.open", commandContext())}
-          >
-            {STRINGS.openVault}
-          </button>
-          <p class="sr-only">{STRINGS.emptyStateHint}</p>
-        </div>
+        <StartupVaultRecovery
+          surface={startupVaultSurface}
+          disabledReason={openVaultDisabledReason}
+          onOpen={(path) => void openStartupVault(path)}
+        />
       {:else}
         {#each workspace.panes as pane, paneIndex (pane.id)}
           {#if paneIndex === 1}
@@ -3308,8 +3744,10 @@ onMount(() => {
               onActivate={(path) => {
                 void focusWorkspacePane(pane.id).then(() => activateWorkspaceTab(path));
               }}
-              onClose={(path) => {
-                void focusWorkspacePane(pane.id).then(() => closeWorkspaceTab(path));
+              onClose={(path, restoreFocus) => {
+                void focusWorkspacePane(pane.id).then(() =>
+                  closeWorkspaceTab(path, restoreFocus),
+                );
               }}
               onReorder={(from, to) => {
                 if (pane.id === workspace.focusedPaneId) reorderWorkspaceTabs(from, to);
@@ -3399,6 +3837,7 @@ onMount(() => {
                   {onConflict}
                   {onWriteError}
                   onDocChanged={onEditorDocChanged}
+                  onOutlineChanged={onEditorOutlineChanged}
                   onDirtyChanged={(dirty) => onEditorDirtyChanged(pane.id, pane.activePath, dirty)}
                   onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
                   onSaved={onEditorSaved}
@@ -3431,7 +3870,7 @@ onMount(() => {
           edge="left"
           label={STRINGS.outlineResize}
           onResize={(value) => (workspace.outlineWidthRem = value)}
-          onCollapse={() => togglePanel("outline")}
+          onCollapse={(origin) => togglePanel("outline", origin)}
         />
         <section class="skr-outline-content" aria-label={STRINGS.outlineLabel}>
           <div class="skr-outline-header">
@@ -3441,6 +3880,10 @@ onMount(() => {
               data-command-id="panel.outline.toggle"
               aria-label={STRINGS.collapseOutline}
               use:commandTooltip={tooltipForCommand("panel.outline.toggle", STRINGS.collapseOutline)}
+              onpointerdown={rememberPanelTogglePointerOrigin}
+              onmousedown={rememberPanelTogglePointerOrigin}
+              onpointerup={releasePanelTogglePointerOrigin}
+              onpointercancel={cancelPanelTogglePointerOrigin}
               onclick={() => registry.run("panel.outline.toggle", commandContext())}
             >
               <svg viewBox="0 0 16 16" aria-hidden="true">

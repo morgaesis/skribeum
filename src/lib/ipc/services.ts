@@ -14,6 +14,7 @@ import {
   type TreeEntry,
   type UpdateCheckDoc,
   type VaultHandle,
+  type VaultSessionDoc,
 } from "./bindings";
 import { unwrap } from "./vault";
 
@@ -101,6 +102,18 @@ export async function windowSetMaximizeButtonRect(
 /** Drains native file-open paths queued by argv or operating-system events. */
 export async function openFilesTake(): Promise<string[]> {
   return unwrap(await commands.openFilesTake());
+}
+
+/** Reads the device-local vault recovery session. */
+export async function vaultSessionRead(): Promise<VaultSessionDoc> {
+  return unwrap(await commands.vaultSessionRead());
+}
+
+/** Removes one stale vault path from the device-local recovery session. */
+export async function vaultSessionForget(
+  path: string,
+): Promise<VaultSessionDoc> {
+  return unwrap(await commands.vaultSessionForget(path));
 }
 
 /** Resolves a native file path to the vault root and relative note path. */

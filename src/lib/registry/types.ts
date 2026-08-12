@@ -54,6 +54,8 @@ export type CommandContext = {
   copyPermalink?(): Promise<void>;
   /** Tree row targeted by a contextual command. */
   treePath?: string;
+  /** Restores focus after a contextual tree operation changes its target. */
+  restoreTreeFocus?: () => void;
   /** Folder targeted by a tree move, or null for the vault root. */
   treeDestination?: string | null;
   /** Creates a note inside a named folder. */
@@ -61,9 +63,9 @@ export type CommandContext = {
   /** Creates a folder inside a named folder. */
   createTreeFolder?(folder: string): Promise<void>;
   /** Renames one vault entry. */
-  renameTreeEntry?(path: string): Promise<void>;
+  renameTreeEntry?(path: string, restoreFocus?: () => void): Promise<void>;
   /** Deletes one vault entry after confirmation. */
-  deleteTreeEntry?(path: string): Promise<void>;
+  deleteTreeEntry?(path: string, restoreFocus?: () => void): Promise<void>;
   /** Moves one vault entry into a folder or the vault root. */
   moveTreeEntry?(path: string, destination: string | null): Promise<void>;
   /** Copies a stable link to a tree note. */

@@ -6,6 +6,7 @@
 use serde::Serialize;
 use skribeum_vault::{
     EditHistoryError, FsError, SearchError, SettingsError, VaultError, VaultPathError,
+    VaultSessionError,
 };
 
 /// The one error shape that crosses IPC.
@@ -60,6 +61,16 @@ impl AppError {
         Self {
             code: "settings/unavailable",
             message: "the settings directory could not be resolved".to_owned(),
+            path: None,
+        }
+    }
+
+    /// An error for an unresolvable vault-session location.
+    #[must_use]
+    pub fn vault_session_unavailable() -> Self {
+        Self {
+            code: "vault-session/unavailable",
+            message: "the vault session directory could not be resolved".to_owned(),
             path: None,
         }
     }
@@ -182,6 +193,20 @@ impl From<SettingsError> for AppError {
     }
 }
 
+impl From<VaultSessionError> for AppError {
+    fn from(error: VaultSessionError) -> Self {
+        let code = match &error {
+            VaultSessionError::Fs(fs) => fs_code(fs),
+            VaultSessionError::Serialize => "vault-session/serialize",
+        };
+        Self {
+            code,
+            message: error.to_string(),
+            path: None,
+        }
+    }
+}
+
 impl From<EditHistoryError> for AppError {
     fn from(error: EditHistoryError) -> Self {
         let code = match &error {
@@ -270,6 +295,14 @@ mod tests {
             ),
             (SettingsError::Fs(FsError::NoSpace).into(), "fs/no-space"),
             (AppError::settings_unavailable(), "settings/unavailable"),
+            (
+                AppError::vault_session_unavailable(),
+                "vault-session/unavailable",
+            ),
+            (
+                VaultSessionError::Serialize.into(),
+                "vault-session/serialize",
+            ),
             (
                 AppError::edit_history_unavailable(),
                 "edit-history/unavailable",

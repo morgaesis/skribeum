@@ -2,6 +2,10 @@
   "description": "The committed IPC command allowlist. CI fails when the tauri-specta generated bindings expose a command set different from this list. Additions are deliberate contract changes, never side effects.",
   "commands": [
     "vault_open",
+    "vault_close",
+    "vault_session_read",
+    "vault_session_forget",
+    "vault_session_clear_last",
     "vault_tree",
     "vault_tree_refresh",
     "note_create",
@@ -36,6 +40,10 @@
   ],
   "plugin_commands": ["plugin:dialog|confirm", "plugin:opener|open_url"],
   "notes": {
+    "vault_session_read": "Reads the device-local startup-vault session document. Missing, corrupt, or unsupported documents produce an empty session.",
+    "vault_session_forget": "Forgets one explicitly selected stale startup-vault candidate. Failed opens remain recorded until this command is called.",
+    "vault_close": "Releases one native vault handle and stops its watcher and reconciliation workers. Repeating the command is harmless so superseded opens can clean up safely.",
+    "vault_session_clear_last": "Clears only the authoritative automatic-startup selection while preserving the recent list; startup policy can still select one remaining recent vault.",
     "note_create": "Creates an empty Markdown note at a validated vault-relative path without overwriting an existing file, then refreshes the vault index.",
     "tree_folder_create": "Creates a folder at a validated vault-relative path and refreshes the vault and search indexes.",
     "tree_entry_move": "Moves or renames one indexed vault entry without replacing an existing entry, then refreshes the vault and search indexes.",

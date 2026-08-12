@@ -611,6 +611,16 @@ export async function openFilesTake(): Promise<string[]> {
   return [];
 }
 
+/** The browser demo has no device-local vault session. */
+export async function vaultSessionRead(): Promise<never> {
+  throw new Error(STRINGS.nativeFileHandlingDesktopRequired);
+}
+
+/** The browser demo never mutates a device-local vault session. */
+export async function vaultSessionForget(_path: string): Promise<never> {
+  throw new Error(STRINGS.nativeFileHandlingDesktopRequired);
+}
+
 export async function fileOpenResolve(_path: string): Promise<OpenFileTarget> {
   throw new Error(STRINGS.nativeFileHandlingDesktopRequired);
 }

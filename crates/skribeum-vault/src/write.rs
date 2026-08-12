@@ -72,6 +72,35 @@ pub fn write_durable(fs: &dyn FileSystem, path: &Path, bytes: &[u8]) -> Result<(
     Ok(())
 }
 
+/// Atomically and durably replaces an owner-only file. The temporary and
+/// replacement files are restricted to the current user on Unix, including
+/// when a stale temporary file already existed. Windows keeps its native ACL
+/// behavior unchanged.
+///
+/// # Errors
+///
+/// Propagates the first failed filesystem operation.
+pub fn write_durable_private(
+    fs: &dyn FileSystem,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), FsError> {
+    let target = fs.resolve_write_target(path)?;
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or(FsError::NotADirectory)?;
+    let temp = write_temp_path(&target).ok_or(FsError::NotADirectory)?;
+    let cleanup = |error: FsError| {
+        let _ = fs.remove_file(&temp);
+        error
+    };
+    fs.write_private_file(&temp, bytes).map_err(cleanup)?;
+    fs.fsync_file(&temp).map_err(cleanup)?;
+    fs.rename(&temp, &target).map_err(cleanup)?;
+    fs.fsync_dir(parent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

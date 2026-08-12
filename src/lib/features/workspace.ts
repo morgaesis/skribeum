@@ -43,7 +43,9 @@ export function registerWorkspaceCommands(
     run: (context) =>
       withTreePath(
         context.treePath,
-        (path) => context.renameTreeEntry?.(path) ?? Promise.resolve(),
+        (path) =>
+          context.renameTreeEntry?.(path, context.restoreTreeFocus) ??
+          Promise.resolve(),
       ),
   });
   registry.register({
@@ -54,7 +56,9 @@ export function registerWorkspaceCommands(
     run: (context) =>
       withTreePath(
         context.treePath,
-        (path) => context.deleteTreeEntry?.(path) ?? Promise.resolve(),
+        (path) =>
+          context.deleteTreeEntry?.(path, context.restoreTreeFocus) ??
+          Promise.resolve(),
       ),
   });
   registry.register({

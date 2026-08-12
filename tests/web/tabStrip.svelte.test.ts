@@ -1,3 +1,4 @@
+import axe from "axe-core";
 import { flushSync, mount, tick, unmount } from "svelte";
 import { describe, expect, it } from "vitest";
 import TabStrip from "../../src/lib/TabStrip.svelte";
@@ -11,6 +12,72 @@ function tabs(count: number): WorkspaceTab[] {
 }
 
 describe("tab strip", () => {
+  it("exposes its nested tabs as tablist children without hiding close controls", async () => {
+    const component = mount(TabStrip, {
+      target: document.body,
+      props: {
+        tabs: tabs(2),
+        activePath: "note-1.md",
+        titleSources: {},
+        focused: true,
+        onActivate: () => {},
+        onClose: () => {},
+        onReorder: () => {},
+      },
+    });
+    flushSync();
+
+    const tablist = document.querySelector<HTMLElement>('[role="tablist"]');
+    const tabButtons = [
+      ...document.querySelectorAll<HTMLElement>('[role="tab"]'),
+    ];
+    expect(tablist?.getAttribute("aria-owns")?.split(" ")).toEqual(
+      tabButtons.map((tab) => tab.id),
+    );
+    expect(
+      document.querySelectorAll<HTMLButtonElement>(".skr-tab-close"),
+    ).toHaveLength(2);
+    const results = await axe.run(document.body, {
+      runOnly: { type: "rule", values: ["aria-required-children"] },
+    });
+    expect(results.violations).toEqual([]);
+
+    await unmount(component);
+  });
+
+  it("keeps keyboard close controls focusable without pointer focus theft", async () => {
+    const origin = document.createElement("button");
+    origin.type = "button";
+    document.body.append(origin);
+    const component = mount(TabStrip, {
+      target: document.body,
+      props: {
+        tabs: tabs(2),
+        activePath: "note-1.md",
+        titleSources: {},
+        focused: true,
+        onActivate: () => {},
+        onClose: () => {},
+        onReorder: () => {},
+      },
+    });
+    flushSync();
+
+    const close = document.querySelector<HTMLButtonElement>(
+      '.skr-tab-active [data-command-id="tab.close"]',
+    );
+    expect(close).not.toBeNull();
+    close?.focus();
+    expect(document.activeElement).toBe(close);
+
+    origin.focus();
+    close?.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+    );
+    expect(document.activeElement).toBe(origin);
+    await unmount(component);
+  });
+
   it("stays absent for one note and exposes activation and close routes", async () => {
     const closed: string[] = [];
     const activated: string[] = [];

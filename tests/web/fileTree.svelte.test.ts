@@ -1,9 +1,11 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { describe, expect, it } from "vitest";
+import { showConfirmDialog, showPromptDialog } from "../../src/lib/dialogs";
 import FileTree from "../../src/lib/FileTree.svelte";
 import { createAppRegistry } from "../../src/lib/features";
 import type { TreeEntry } from "../../src/lib/ipc/bindings";
 import type { CommandContext } from "../../src/lib/registry";
+import { reactiveProps } from "./helpers/reactiveProps.svelte";
 
 const ROW_HEIGHT = 28;
 
@@ -265,6 +267,161 @@ describe("designed file tree", () => {
     await tick();
     expect(document.querySelector('[role="menu"]')).toBeNull();
     expect(actions?.getAttribute("aria-expanded")).toBe("false");
+
+    await unmount(component);
+  });
+
+  it("returns menu commands to their originating tree row for pointer and keyboard use", async () => {
+    const copied: string[] = [];
+    const registry = createAppRegistry(undefined, true);
+    const context = commandContext({
+      copyTreeNoteLink: async (path) => {
+        copied.push(path);
+      },
+    });
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        onOpenPath: () => {},
+        registry,
+        commandContext: () => context,
+        desktop: true,
+      },
+    });
+    flushSync();
+
+    const row = document.querySelector<HTMLElement>('[data-path="plain.md"]');
+    const actions = row?.querySelector<HTMLButtonElement>(".skr-tree-actions");
+    actions?.click();
+    await tick();
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-command-id="tree.note.copy-link"]',
+      )
+      ?.click();
+    await tick();
+    expect(document.activeElement).toBe(row);
+
+    row?.focus();
+    row?.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "F10",
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+    await tick();
+    const menu = document.querySelector<HTMLElement>('[role="menu"]');
+    menu?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    menu?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    menu?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await tick();
+
+    expect(copied).toEqual(["plain.md", "plain.md"]);
+    expect(document.activeElement).toBe(row);
+
+    await unmount(component);
+  });
+
+  it("returns a cancelled rename dialog to its tree row", async () => {
+    const registry = createAppRegistry(undefined, true);
+    const context = commandContext({
+      renameTreeEntry: async () => {
+        await showPromptDialog({
+          title: "Rename",
+          confirmLabel: "Rename",
+        });
+      },
+    });
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        onOpenPath: () => {},
+        registry,
+        commandContext: () => context,
+        desktop: true,
+      },
+    });
+    flushSync();
+
+    const row = document.querySelector<HTMLElement>('[data-path="plain.md"]');
+    row?.querySelector<HTMLButtonElement>(".skr-tree-actions")?.click();
+    await tick();
+    document
+      .querySelector<HTMLButtonElement>('[data-command-id="tree.entry.rename"]')
+      ?.click();
+    await tick();
+    document
+      .querySelector<HTMLButtonElement>('[data-testid="dialog-cancel"]')
+      ?.click();
+    await tick();
+
+    expect(document.activeElement).toBe(row);
+
+    await unmount(component);
+  });
+
+  it("hands deletion focus to the next surviving tree row", async () => {
+    const registry = createAppRegistry(undefined, true);
+    const props = reactiveProps({
+      entries: [...entries],
+      expandedPaths: ["Folder"],
+      onOpenPath: () => {},
+      desktop: true,
+      registry,
+      commandContext: undefined as (() => CommandContext) | undefined,
+    });
+    const context = commandContext({
+      deleteTreeEntry: async (path, restoreFocus) => {
+        const confirmed = await showConfirmDialog({
+          title: "Delete",
+          message: "Delete this entry?",
+          confirmLabel: "Delete",
+          destructive: true,
+        });
+        if (!confirmed) return;
+        props.entries = props.entries.filter((entry) => entry.path !== path);
+        await tick();
+        restoreFocus?.();
+      },
+    });
+    props.commandContext = () => context;
+    const component = mount(FileTree, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const removed = document.querySelector<HTMLElement>(
+      '[data-path="Folder/one.md"]',
+    );
+    removed?.querySelector<HTMLButtonElement>(".skr-tree-actions")?.click();
+    await tick();
+    document
+      .querySelector<HTMLButtonElement>('[data-command-id="tree.entry.delete"]')
+      ?.click();
+    await tick();
+    document
+      .querySelector<HTMLButtonElement>('[data-testid="dialog-confirm"]')
+      ?.click();
+    await tick();
+    await tick();
+    await tick();
+
+    expect(document.activeElement?.getAttribute("data-path")).toBe(
+      "Folder/two.md",
+    );
+    expect(document.activeElement).not.toBe(document.body);
 
     await unmount(component);
   });

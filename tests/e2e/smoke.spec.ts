@@ -852,20 +852,53 @@ function browserDemoUrl(): string {
   return demoUrl;
 }
 
-async function waitForBrowserDemoNote(): Promise<void> {
+let browserDemoNavigationId = 0;
+
+/**
+ * Opens a fresh browser-demo document and waits for that exact navigation to
+ * commit. `browser.url()` can resolve while WebKit still paints the preceding
+ * document, whose matching shell and editor satisfy the generic readiness
+ * checks. A per-navigation query token survives note-address normalization, so
+ * the fixture never sends input to a page that is about to be replaced.
+ */
+async function openBrowserDemo(url: string | URL): Promise<void> {
+  const target = new URL(url);
+  const navigationId = String(++browserDemoNavigationId);
+  target.searchParams.set("e2e-navigation", navigationId);
+  await browser.url(target.href);
   await browser.waitUntil(
     () =>
-      browser.execute(() => {
+      browser.execute((expectedNavigationId) => {
+        type DemoWindow = Window & {
+          __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
+          __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
+            sourceText: string,
+            relativeOffset: number,
+          ) => number | null;
+          __SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?: () => boolean | null;
+        };
         const content = document.querySelector<HTMLElement>(".cm-content");
         const text = content?.textContent ?? "";
+        const harness = window as DemoWindow;
         return (
+          document.readyState === "complete" &&
+          new URL(window.location.href).searchParams.get("e2e-navigation") ===
+            expectedNavigationId &&
+          document.querySelector(".demo-shell") !== null &&
           content !== null &&
           content.getClientRects().length > 0 &&
           text.trim().length > 0 &&
-          !text.includes("scaffold fixture")
+          !text.includes("scaffold fixture") &&
+          typeof harness.__SKRIBEUM_E2E_CURRENT_PATH__ === "function" &&
+          harness.__SKRIBEUM_E2E_CURRENT_PATH__() !== null &&
+          typeof harness.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__ === "function" &&
+          typeof harness.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__ === "function"
         );
-      }),
-    { timeout: 30000, timeoutMsg: "browser demo note content did not load" },
+      }, navigationId),
+    {
+      timeout: 30000,
+      timeoutMsg: "browser demo did not commit its requested ready document",
+    },
   );
 }
 
@@ -891,8 +924,9 @@ async function demoTagCompletionTargetText(): Promise<string | null> {
  * (`true`) reads differently from a pane with no active tab (`null`) or a
  * page that never installed the probe.
  */
-async function waitForActiveTabSaved(): Promise<void> {
+async function waitForActiveTabSaved(requireDirty = false): Promise<void> {
   let observed: boolean | null | undefined;
+  let sawDirty = false;
   try {
     await browser.waitUntil(
       async () => {
@@ -903,7 +937,8 @@ async function waitForActiveTabSaved(): Promise<void> {
             }
           ).__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?.(),
         );
-        return observed === false;
+        sawDirty ||= observed === true;
+        return observed === false && (!requireDirty || sawDirty);
       },
       { timeout: 10000 },
     );
@@ -911,7 +946,7 @@ async function waitForActiveTabSaved(): Promise<void> {
     throw new Error(
       `autosave did not settle: the active tab dirty probe reported ${
         observed === undefined ? "no probe on the page" : String(observed)
-      }`,
+      }${requireDirty && !sawDirty ? " without observing the edit" : ""}`,
     );
   }
 }
@@ -920,8 +955,7 @@ async function prepareDemoTagCompletionTarget(): Promise<void> {
   const targetUrl = new URL(browserDemoUrl());
   targetUrl.searchParams.set("note", "about.md");
   targetUrl.searchParams.set("tag-fixture", Date.now().toString());
-  await browser.url(targetUrl.href);
-  await $(".demo-shell").waitForExist({ timeout: 15000 });
+  await openBrowserDemo(targetUrl);
   await browser.waitUntil(
     async () => (await editorText()).includes("About this vault"),
     { timeout: 15000, timeoutMsg: "browser demo target did not open" },
@@ -940,7 +974,7 @@ async function prepareDemoTagCompletionTarget(): Promise<void> {
   // The next call navigates away (a fresh browser.url() for the next
   // prepare() cycle); wait for this edit to actually reach persistent
   // storage first so that navigation cannot race an in-flight write.
-  await waitForActiveTabSaved();
+  await waitForActiveTabSaved(true);
 }
 
 const demoTagCompletionHarness: TagCompletionHarness = {
@@ -954,7 +988,7 @@ const demoTagCompletionHarness: TagCompletionHarness = {
   async waitForQuerySaved() {
     // The demo persists to browser storage, which the test process cannot
     // read, so the tab's own dirty signal is the available oracle.
-    await waitForActiveTabSaved();
+    await waitForActiveTabSaved(true);
   },
 };
 
@@ -2816,10 +2850,9 @@ describe("skribeum shell", () => {
       const surface = $('[data-testid="unified-command-surface"]');
       await surface.waitForDisplayed({ timeout: 10000 });
       await surface.$('[role="combobox"]').addValue(query);
-      await surface
-        .$(`[role="option"][data-command-id="${id}"]`)
-        .waitForDisplayed({ timeout: 10000 });
-      await browser.keys(Key.Enter);
+      const command = surface.$(`[role="option"][data-command-id="${id}"]`);
+      await command.waitForDisplayed({ timeout: 10000 });
+      await command.click();
       await surface.waitForExist({ reverse: true, timeout: 10000 });
     };
     const runPointerCommand = async (id: string) => {
@@ -3065,7 +3098,13 @@ describe("skribeum shell", () => {
       const deletedExpected = original.replace(firstTable, "");
       await browser.keys([modifierKey, "s"]);
       await waitForDisk(TABLE_EDITING_NOTE_NAME, deletedExpected);
-      expect(await $$(".cm-skr-table-grid")).toHaveLength(1);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 1,
+        {
+          timeout: 10000,
+          timeoutMsg: "deleted rendered table did not settle",
+        },
+      );
 
       await resetAndOpen();
       const dragCellRect = await tableRect(true);
@@ -4928,14 +4967,14 @@ describe("skribeum shell", () => {
 
     await placeCursorAtEditorTextStart("Editable task");
     await browser.keys(Key.Backspace);
-    expect(
-      await browser.execute(
-        () =>
-          [...document.querySelectorAll<HTMLElement>(".cm-line")].find((line) =>
-            line.textContent?.includes("Editable task"),
-          )?.textContent ?? "",
-      ),
-    ).toBe("- [x]Editable task");
+    await browser.keys([modifierKey, "s"]);
+    await browser.waitUntil(
+      () =>
+        noteOnDisk(TASK_TRACKS_NOTE_NAME)
+          .split("\n")
+          .includes("- [x]Editable task"),
+      { timeout: 10000, timeoutMsg: "task source did not preserve its status" },
+    );
     for (let press = 0; press < 5; press += 1) {
       await browser.keys(Key.Backspace);
     }
@@ -6755,6 +6794,46 @@ describe("skribeum core editing surfaces", () => {
     await $('[role="tree"]').waitForExist({ timeout: 15000 });
   });
 
+  it("contains_malicious_mermaid_configuration_and_resource_requests", async () => {
+    await openNoteFromTree(RENDERING_NOTE_NAME);
+    await browser.waitUntil(
+      async () => {
+        const states = await browser.execute(() =>
+          [...document.querySelectorAll<HTMLElement>(".cm-skr-mermaid")].map(
+            (host) =>
+              host.classList.contains("cm-skr-render-error") ||
+              host.querySelector("svg") !== null,
+          ),
+        );
+        return states.length === 6 && states.every(Boolean);
+      },
+      {
+        timeout: 30000,
+        timeoutMsg: "Mermaid security fixtures did not settle",
+      },
+    );
+
+    const result = await browser.execute(() => {
+      const diagrams = [
+        ...document.querySelectorAll<HTMLElement>(".cm-skr-mermaid"),
+      ];
+      const cssFixture = diagrams.at(-1);
+      return {
+        prototypePolluted: Object.hasOwn(
+          Object.prototype,
+          "mermaidPrototypePollutionMarker",
+        ),
+        cssFixtureContained:
+          cssFixture?.classList.contains("cm-skr-render-error") ||
+          (cssFixture?.querySelector("svg") !== null &&
+            cssFixture.childElementCount === 1),
+      };
+    });
+
+    expect(result.prototypePolluted).toBe(false);
+    expect(result.cssFixtureContained).toBe(true);
+  });
+
   it("opens_and_operates_the_read_only_canvas_by_keyboard", async () => {
     await openNoteFromTree(CANVAS_FILE_NAME);
     const viewer = $('[data-testid="canvas-view"]');
@@ -7239,23 +7318,11 @@ describe("skribeum core editing surfaces", () => {
   // CRLF and live-preview notes exclusively.
 
   it("browser_demo_restores_default_appearance_and_persists", async () => {
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(browserDemoUrl());
     await browser.execute(() => {
       localStorage.removeItem("skribeum.demo.settings");
     });
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(browserDemoUrl());
 
     const editor = $(".cm-content");
     await editor.waitForDisplayed({ timeout: 15000 });
@@ -7315,13 +7382,7 @@ describe("skribeum core editing surfaces", () => {
   });
 
   it("browser_demo_claims_mod_f_before_the_editor_has_focus", async () => {
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(browserDemoUrl());
 
     // Focus lands outside the editor, matching a visitor who opens the
     // demo and immediately reaches for find without clicking into the
@@ -7352,13 +7413,7 @@ describe("skribeum core editing surfaces", () => {
   it("browser_demo_renders_embed_skeletons_and_resolved_content", async () => {
     const fixtureUrl = new URL(browserDemoUrl());
     fixtureUrl.searchParams.set("embed-start", Date.now().toString());
-    await browser.url(fixtureUrl.href);
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(fixtureUrl);
     await browser.execute(() => {
       type GateWindow = Window & {
         __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
@@ -7505,8 +7560,7 @@ describe("skribeum core editing surfaces", () => {
   });
 
   it("browser_demo_serves_scheme_aware_favicon_metadata", async () => {
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await openBrowserDemo(browserDemoUrl());
     const metadata = await browser.executeAsync<
       {
         iconType: string | null;
@@ -7563,8 +7617,7 @@ Promise.all([
   it("browser_demo_highlights_lazy_languages_with_palette_tokens", async () => {
     const target = new URL(browserDemoUrl());
     target.searchParams.set("note", "Features/code-blocks.md");
-    await browser.url(target.href);
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await openBrowserDemo(target);
     await browser.waitUntil(
       () =>
         browser.execute(() =>

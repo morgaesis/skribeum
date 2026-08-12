@@ -3,6 +3,8 @@
 export const STRINGS = {
   appTitle: "Skribeum",
   openVault: "Open vault",
+  vaultRecoveryPending: "Preparing vault recovery",
+  vaultRecoveryHeading: "Open a recent vault",
   commandZoomIn: "Zoom in",
   commandZoomOut: "Zoom out",
   commandZoomReset: "Reset zoom",

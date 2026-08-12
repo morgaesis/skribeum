@@ -1,5 +1,5 @@
 <script lang="ts">
-import { onMount, tick } from "svelte";
+import { onDestroy, onMount, tick } from "svelte";
 import AnchoredMenu from "./AnchoredMenu.svelte";
 import { type CommandTooltipOptions, commandTooltip } from "./commandTooltip";
 import { enterMotionSurface, motionDurationMilliseconds } from "./motion";
@@ -11,7 +11,33 @@ import type { WorkspaceTab } from "./workspaceState";
 // clock, matching the reorder reflow's own clock below.
 const ACTIVE_INDICATOR_TRAVEL_TRANSITION =
   "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)";
+let nextTablistId = 0;
 
+function transformOffset(element: HTMLElement): number {
+  const transform = getComputedStyle(element).transform.trim();
+  if (transform === "" || transform === "none") return 0;
+  const matrix3d = transform.match(/^matrix3d\(([^)]+)\)$/);
+  if (matrix3d !== null) {
+    return Number.parseFloat(matrix3d[1]?.split(",")[12] ?? "0");
+  }
+  const matrix = transform.match(/^matrix\(([^)]+)\)$/);
+  if (matrix !== null) {
+    return Number.parseFloat(matrix[1]?.split(",")[4] ?? "0");
+  }
+  const translate = transform.match(
+    /^translate\(\s*(-?[\d.]+)px(?:,\s*(-?[\d.]+)px)?\s*\)$/,
+  );
+  if (translate !== null) return Number.parseFloat(translate[1] ?? "0");
+  const axisTranslate = transform.match(/^translateX\(\s*(-?[\d.]+)px\s*\)$/);
+  return axisTranslate === null
+    ? 0
+    : Number.parseFloat(axisTranslate[1] ?? "0");
+}
+
+function renderedLeft(element: HTMLElement, fallback: number): number {
+  const left = Number.parseFloat(element.style.left);
+  return (Number.isFinite(left) ? left : fallback) + transformOffset(element);
+}
 let {
   tabs,
   activePath,
@@ -28,7 +54,7 @@ let {
   focused: boolean;
   closeTooltip?: CommandTooltipOptions;
   onActivate: (path: string) => void;
-  onClose: (path: string) => void;
+  onClose: (path: string, restoreFocus: boolean) => void;
   onReorder: (from: number, to: number) => void;
 } = $props();
 
@@ -53,6 +79,32 @@ let indicatorElement = $state<HTMLElement>();
 let indicatorRestLeft: number | null = null;
 let indicatorAnimatedPath: string | null = null;
 let indicatorMotionGeneration = 0;
+let indicatorMotionFrame: number | null = null;
+let indicatorMotionTimer: ReturnType<typeof setTimeout> | null = null;
+let indicatorTraveling = false;
+let mounted = true;
+const tablistId = `skr-tablist-${nextTablistId++}`;
+
+function tabId(index: number): string {
+  return `${tablistId}-tab-${index}`;
+}
+
+function cancelIndicatorCallbacks(): void {
+  if (indicatorMotionFrame !== null) {
+    cancelAnimationFrame(indicatorMotionFrame);
+    indicatorMotionFrame = null;
+  }
+  if (indicatorMotionTimer !== null) {
+    clearTimeout(indicatorMotionTimer);
+    indicatorMotionTimer = null;
+  }
+}
+
+onDestroy(() => {
+  mounted = false;
+  indicatorMotionGeneration += 1;
+  cancelIndicatorCallbacks();
+});
 
 const titles = $derived(
   resolveTitleCollisions(
@@ -66,7 +118,19 @@ const titles = $derived(
 function closeWithMiddleButton(event: MouseEvent, path: string) {
   if (event.button !== 1) return;
   event.preventDefault();
-  onClose(path);
+  onClose(path, false);
+}
+
+function keepPointerFocus(event: MouseEvent) {
+  if (event.button === 0) event.preventDefault();
+}
+
+function closeFromButton(event: MouseEvent, path: string) {
+  event.stopPropagation();
+  onClose(
+    path,
+    event.detail === 0 && document.activeElement === event.currentTarget,
+  );
 }
 
 function finishReorder() {
@@ -91,6 +155,7 @@ function reorderOffset(index: number): number {
 }
 
 function measureOverflow() {
+  if (!mounted) return;
   const element = itemsElement;
   overflowed =
     element instanceof HTMLElement &&
@@ -98,22 +163,57 @@ function measureOverflow() {
   if (!overflowed) listOpen = false;
 }
 
+function scheduleIndicatorTravel(generation: number): void {
+  const element = indicatorElement;
+  if (!mounted || element === undefined) return;
+  const duration = motionDurationMilliseconds(
+    "--skr-motion-panel-duration",
+    itemsElement ?? document.documentElement,
+  );
+  indicatorMotionFrame = requestAnimationFrame(() => {
+    indicatorMotionFrame = null;
+    if (!mounted || generation !== indicatorMotionGeneration) return;
+    element.style.transition = ACTIVE_INDICATOR_TRAVEL_TRANSITION;
+    element.style.transform = "";
+    indicatorMotionTimer = setTimeout(() => {
+      indicatorMotionTimer = null;
+      if (!mounted || generation !== indicatorMotionGeneration) return;
+      element.style.transition = "";
+      indicatorTraveling = false;
+    }, duration);
+  });
+}
+
 /**
- * Re-reads the active tab's geometry with no choreography, for a resize
- * that shifts the flexible tab widths without any selection change. Any
- * choreographed travel or entrance is left untouched: this only ever runs
- * outside the animated effect below, from the resize observer and handler.
+ * Re-reads the active tab's geometry after the strip changes size. If the
+ * indicator is traveling, its current rendered position becomes the start
+ * of a new panel-clock leg so a resize does not create a visible jump.
  */
 function syncActiveIndicatorGeometry() {
   const element = indicatorElement;
-  if (element === undefined) return;
+  if (!mounted || element === undefined) return;
   const activeIndex =
     activePath === null ? -1 : tabs.findIndex((tab) => tab.path === activePath);
   const tabElement = activeIndex < 0 ? undefined : tabElements[activeIndex];
   if (tabElement === undefined) return;
-  element.style.left = `${tabElement.offsetLeft}px`;
-  element.style.width = `${tabElement.offsetWidth}px`;
-  indicatorRestLeft = tabElement.offsetLeft;
+  const left = tabElement.offsetLeft;
+  const width = tabElement.offsetWidth;
+  if (indicatorTraveling) {
+    const currentLeft = renderedLeft(element, indicatorRestLeft ?? left);
+    const generation = ++indicatorMotionGeneration;
+    cancelIndicatorCallbacks();
+    element.style.transition = "none";
+    element.style.left = `${left}px`;
+    element.style.width = `${width}px`;
+    element.style.transform = `translateX(${currentLeft - left}px)`;
+    indicatorRestLeft = left;
+    void element.offsetWidth;
+    scheduleIndicatorTravel(generation);
+    return;
+  }
+  element.style.left = `${left}px`;
+  element.style.width = `${width}px`;
+  indicatorRestLeft = left;
 }
 
 function measureOverflowAndIndicator() {
@@ -123,7 +223,9 @@ function measureOverflowAndIndicator() {
 
 $effect(() => {
   void tabs.length;
-  void tick().then(measureOverflow);
+  void tick().then(() => {
+    if (mounted) measureOverflow();
+  });
 });
 
 /**
@@ -140,8 +242,10 @@ $effect(() => {
   const element = indicatorElement;
   const items = itemsElement;
   if (element === undefined || items === undefined) {
+    cancelIndicatorCallbacks();
     indicatorRestLeft = null;
     indicatorAnimatedPath = null;
+    indicatorTraveling = false;
     return;
   }
   const activeIndex =
@@ -166,6 +270,11 @@ $effect(() => {
   const previousStillOpen =
     previousPath !== null && tabs.some((tab) => tab.path === previousPath);
   indicatorAnimatedPath = path;
+  const previousLeft =
+    indicatorRestLeft === null
+      ? null
+      : renderedLeft(element, indicatorRestLeft);
+  cancelIndicatorCallbacks();
   const generation = ++indicatorMotionGeneration;
 
   const left = tabElement.offsetLeft;
@@ -176,6 +285,7 @@ $effect(() => {
   );
 
   if (duration === 0 || !isNewSelection) {
+    indicatorTraveling = false;
     delete element.dataset.motionSurface;
     element.style.transition = "";
     element.style.transform = "";
@@ -187,6 +297,7 @@ $effect(() => {
   }
 
   if (indicatorRestLeft === null || !previousStillOpen) {
+    indicatorTraveling = false;
     element.style.transition = "";
     element.style.transform = "";
     element.style.opacity = "";
@@ -199,7 +310,7 @@ $effect(() => {
     return;
   }
 
-  const previousLeft = indicatorRestLeft;
+  if (previousLeft === null) return;
   delete element.dataset.motionSurface;
   element.style.transition = "none";
   element.style.opacity = "1";
@@ -207,16 +318,9 @@ $effect(() => {
   element.style.width = `${width}px`;
   element.style.transform = `translateX(${previousLeft - left}px)`;
   indicatorRestLeft = left;
+  indicatorTraveling = true;
   void element.offsetWidth;
-  requestAnimationFrame(() => {
-    if (generation !== indicatorMotionGeneration) return;
-    element.style.transition = ACTIVE_INDICATOR_TRAVEL_TRANSITION;
-    element.style.transform = "";
-    setTimeout(() => {
-      if (generation !== indicatorMotionGeneration) return;
-      element.style.transition = "";
-    }, duration);
-  });
+  scheduleIndicatorTravel(generation);
 });
 
 onMount(() => {
@@ -276,9 +380,7 @@ function finishScrollDrag(event: PointerEvent) {
       class="skr-tab-items"
       class:skr-tab-items-scrolling={scrollPointer !== null}
       class:skr-tab-items-reordering={dragging !== null}
-      role="tablist"
-      tabindex="-1"
-      aria-label={STRINGS.openTabs}
+      role="presentation"
       bind:this={itemsElement}
       onwheel={scrollWithWheel}
       onpointerdown={beginScrollDrag}
@@ -286,17 +388,25 @@ function finishScrollDrag(event: PointerEvent) {
       onpointerup={finishScrollDrag}
       onpointercancel={finishScrollDrag}
     >
+      <!-- The tablist owns the tabs explicitly because each visible tab also
+           needs an independently focusable close control. Keeping that
+           control outside the tablist's owned children preserves both the
+           ARIA tab pattern and the close command's keyboard route. -->
+      <div
+        class="skr-tablist"
+        role="tablist"
+        aria-label={STRINGS.openTabs}
+        aria-owns={tabs.map((_, index) => tabId(index)).join(" ")}
+      ></div>
       {#each tabs as tab, index (tab.path)}
       {@const title = titles[index]}
-      <button
+      <div
         bind:this={tabElements[index]}
-        type="button"
         class="skr-tab-shell"
-        role="tab"
-        aria-selected={tab.path === activePath}
-        tabindex={tab.path === activePath ? 0 : -1}
+        role="presentation"
         class:skr-tab-focused={focused && tab.path === activePath}
         class:skr-tab-active={tab.path === activePath}
+        class:skr-tab-dirty={tab.dirty === true}
         class:skr-tab-insertion={insertion === index && dragging !== index}
         class:skr-tab-dragging={dragging === index}
         style:transform={dragging !== null && dragging !== index
@@ -304,16 +414,6 @@ function finishScrollDrag(event: PointerEvent) {
           : null}
         draggable="true"
         onmousedown={(event) => closeWithMiddleButton(event, tab.path)}
-        onclick={(event) => {
-          if (
-            event.target instanceof Element &&
-            event.target.closest(".skr-tab-close") !== null
-          ) {
-            onClose(tab.path);
-          } else {
-            onActivate(tab.path);
-          }
-        }}
         ondragstart={(event) => {
           dragging = index;
           dragWidth = event.currentTarget.offsetWidth;
@@ -332,27 +432,51 @@ function finishScrollDrag(event: PointerEvent) {
         }}
         ondragend={finishReorder}
       >
-        <span class="skr-tab">
+        <button
+          type="button"
+          class="skr-tab"
+          role="tab"
+          id={tabId(index)}
+          aria-selected={tab.path === activePath}
+          aria-label={
+            tab.dirty === true
+              ? `${title?.displayTitle ?? tab.path}, ${STRINGS.unsavedNote}`
+              : undefined
+          }
+          data-dirty={tab.dirty === true ? "true" : undefined}
+          tabindex={tab.path === activePath ? 0 : -1}
+          onclick={() => onActivate(tab.path)}
+        >
           <span class="skr-tab-label">{title?.displayTitle ?? tab.path}</span>
           {#if title?.collisionSuffix !== undefined}
             <span class="skr-tab-suffix">{title.collisionSuffix}</span>
           {/if}
+        </button>
+        <span class="skr-tab-status">
+          {#if tab.dirty === true}
+            <span
+              class="skr-tab-unsaved"
+              aria-label={STRINGS.unsavedNote}
+            ></span>
+          {/if}
+          <button
+            type="button"
+            class="skr-tab-close"
+            class:skr-tab-close-dirty={tab.dirty === true}
+            data-command-id="tab.close"
+            aria-label={STRINGS.closeTab}
+            tabindex={tab.path === activePath ? 0 : -1}
+            use:commandTooltip={closeTooltip}
+            onpointerdown={keepPointerFocus}
+            onmousedown={keepPointerFocus}
+            onclick={(event) => closeFromButton(event, tab.path)}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m4.5 4.5 7 7m0-7-7 7" />
+            </svg>
+          </button>
         </span>
-        {#if tab.dirty === true}
-          <span class="skr-tab-unsaved" aria-label={STRINGS.unsavedNote}></span>
-        {/if}
-        <span
-          class="skr-tab-close"
-          class:skr-tab-close-dirty={tab.dirty === true}
-          data-command-id="tab.close"
-          aria-hidden="true"
-          use:commandTooltip={closeTooltip}
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="m4.5 4.5 7 7m0-7-7 7" />
-          </svg>
-        </span>
-      </button>
+      </div>
       {/each}
       <span
         bind:this={indicatorElement}

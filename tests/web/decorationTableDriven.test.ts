@@ -4,10 +4,11 @@
 // diff changing the table touches only the table file, tests and the
 // rules document.
 
+import { deleteCharBackward, history, redo, undo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
-import { Decoration, EditorView } from "@codemirror/view";
+import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import {
   BULK_TEXT_INPUT_LENGTH,
@@ -51,6 +52,21 @@ function mountedView(extra: Parameters<Compartment["of"]>[0]): EditorView {
     throw new Error("fixture syntax tree did not finish parsing");
   }
   return view;
+}
+
+function waitForFrames(count: number): Promise<void> {
+  return new Promise((resolve) => {
+    const next = (remaining: number) => {
+      requestAnimationFrame(() => {
+        if (remaining === 1) {
+          resolve();
+        } else {
+          next(remaining - 1);
+        }
+      });
+    };
+    next(count);
+  });
 }
 
 describe("data-driven decoration table", () => {
@@ -137,6 +153,124 @@ describe("data-driven decoration table", () => {
       expect(
         serializeDecorationSet(engineDecorations(view) ?? Decoration.none),
       ).toContain("cm-skr-wikilink");
+    } finally {
+      view.destroy();
+      view.dom.remove();
+    }
+  });
+
+  it("updates source reveal immediately through deferred deletion and history", async () => {
+    const doc = "# reveal\n\noutside";
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: { anchor: doc.lastIndexOf("#") + 1 },
+        extensions: [
+          markdown({
+            base: markdownLanguage,
+            extensions: obsidianMarkdownExtensions,
+          }),
+          history(),
+          decorationEngine(),
+        ],
+      }),
+      parent: document.body,
+    });
+    try {
+      expect(forceParsing(view, view.state.doc.length, 1_000)).toBe(true);
+      expect(deleteCharBackward(view)).toBe(true);
+      expect(view.dom.querySelector(".cm-skr-reveal-marker")).toBeNull();
+
+      expect(undo(view)).toBe(true);
+      expect(
+        view.dom
+          .querySelector(".cm-skr-reveal-marker")
+          ?.classList.contains("cm-skr-reveal-marker-active"),
+      ).toBe(true);
+
+      view.dispatch({ selection: { anchor: view.state.doc.length } });
+      expect(
+        view.dom
+          .querySelector(".cm-skr-reveal-marker")
+          ?.classList.contains("cm-skr-reveal-marker-active"),
+      ).toBe(false);
+
+      view.dispatch({ selection: { anchor: 1 } });
+      expect(redo(view)).toBe(true);
+      expect(view.dom.querySelector(".cm-skr-reveal-marker")).toBeNull();
+    } finally {
+      view.destroy();
+      view.dom.remove();
+    }
+  }, 15_000);
+
+  it("keeps a deferred block refresh scheduled across a viewport update", async () => {
+    let viewportUpdates = 0;
+    const viewportProbe = ViewPlugin.fromClass(
+      class {
+        update(update: { viewportChanged: boolean }): void {
+          if (update.viewportChanged) viewportUpdates += 1;
+        }
+      },
+    );
+    const view = mountedView(
+      new Compartment().of([bulkTextInput(), viewportProbe]),
+    );
+    document.body.append(view.dom);
+    try {
+      Object.defineProperty(view.scrollDOM, "clientHeight", {
+        configurable: true,
+        value: 120,
+      });
+      const text = `${"plain line\n".repeat(BULK_TEXT_INPUT_LENGTH / 4)}\n| A |\n| --- |\n| B |`;
+      expect(
+        view.contentDOM.dispatchEvent(
+          new InputEvent("beforeinput", {
+            bubbles: true,
+            cancelable: true,
+            data: text,
+            inputType: "insertText",
+          }),
+        ),
+      ).toBe(false);
+      expect(forceParsing(view, view.state.doc.length, 1_000)).toBe(true);
+
+      view.scrollDOM.scrollTop = 160;
+      view.scrollDOM.dispatchEvent(new Event("scroll"));
+      await waitForFrames(1);
+      expect(viewportUpdates).toBeGreaterThan(0);
+
+      await waitForFrames(4);
+      expect(view.dom.querySelector('[role="grid"]')).not.toBeNull();
+    } finally {
+      view.destroy();
+      view.dom.remove();
+    }
+  });
+
+  it("renders explicit structural changes synchronously", () => {
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "plain",
+        extensions: [
+          markdown({
+            base: markdownLanguage,
+            extensions: obsidianMarkdownExtensions,
+          }),
+          decorationEngine(),
+        ],
+      }),
+      parent: document.body,
+    });
+    try {
+      view.dispatch({
+        changes: [
+          { from: 0, insert: "**" },
+          { from: view.state.doc.length, insert: "**" },
+        ],
+        userEvent: "input.format",
+      });
+      expect(view.dom.querySelector(".cm-skr-strong")).not.toBeNull();
     } finally {
       view.destroy();
       view.dom.remove();

@@ -76,6 +76,7 @@ import {
   obsidianMarkdownExtensionsFor,
   skribeumMarkdownParser,
 } from "../markdown/obsidian";
+import { PostPaintScheduler } from "../postPaintScheduler";
 import { calloutIconSvg, parseCallout } from "./callouts";
 import {
   DECORATION_TABLE,
@@ -2434,43 +2435,67 @@ function headingTitle(source: string, node: SyntaxNode): string {
   return (text.split("\n", 1)[0] ?? "").trim();
 }
 
-function embeddedSection(source: string, fragment: string): string | null {
-  if (fragment.length === 0) {
-    return source;
-  }
-  const wanted = fragment.trim().toLocaleLowerCase();
+type ParsedEmbedSource = {
+  source: string;
+  headings: Array<{ from: number; to: number; level: number; title: string }>;
+};
+
+function parseEmbedSource(source: string): ParsedEmbedSource {
   const tree = skribeumMarkdownParser.parse(source);
-  let match: SyntaxNode | null = null;
+  const headings: ParsedEmbedSource["headings"] = [];
   tree.iterate({
     enter(ref) {
-      if (
-        match === null &&
-        headingLevel(ref.name) !== null &&
-        headingTitle(source, ref.node).toLocaleLowerCase() === wanted
-      ) {
-        match = ref.node;
-      }
-      return match === null ? undefined : false;
-    },
-  });
-  if (match === null) {
-    return null;
-  }
-  const heading = match as SyntaxNode;
-  const level = headingLevel(heading.name) ?? 6;
-  let end = source.length;
-  tree.iterate({
-    from: heading.to,
-    enter(ref) {
-      const candidate = headingLevel(ref.name);
-      if (ref.from >= heading.to && candidate !== null && candidate <= level) {
-        end = ref.from;
-        return false;
+      const level = headingLevel(ref.name);
+      if (level !== null) {
+        headings.push({
+          from: ref.from,
+          to: ref.to,
+          level,
+          title: headingTitle(source, ref.node).toLocaleLowerCase(),
+        });
       }
       return undefined;
     },
   });
-  return source.slice(heading.from, end).replace(/\n+$/u, "");
+  return { source, headings };
+}
+
+function extractedEmbedSection(
+  parsed: ParsedEmbedSource,
+  fragment: string,
+): string | null {
+  if (fragment.length === 0) return parsed.source;
+  const wanted = fragment.trim().toLocaleLowerCase();
+  const index = parsed.headings.findIndex(
+    (heading) => heading.title === wanted,
+  );
+  if (index === -1) {
+    return null;
+  }
+  const heading = parsed.headings[index];
+  if (heading === undefined) return null;
+  const next = parsed.headings
+    .slice(index + 1)
+    .find((candidate) => candidate.level <= heading.level);
+  const end = next?.from ?? parsed.source.length;
+  return parsed.source.slice(heading.from, end).replace(/\n+$/u, "");
+}
+
+function embeddedSection(source: string, fragment: string): string | null {
+  return fragment.length === 0
+    ? source
+    : extractedEmbedSection(parseEmbedSource(source), fragment);
+}
+
+function selfEmbedSectionKey(fragment: string): string {
+  return `embed\u0000${fragment.trim().toLocaleLowerCase()}`;
+}
+
+function selectedSelfEmbed(
+  parsed: ParsedEmbedSource,
+  fragment: string,
+): string | null {
+  return extractedEmbedSection(parsed, fragment);
 }
 
 function previewSource(source: string): string {
@@ -2518,13 +2543,14 @@ function nestedMarkdownView(
 function renderLinkedNote(
   host: HTMLElement,
   target: string,
-  rootSource: string,
+  rootSource: string | (() => Promise<string>),
   context: WikilinkResolutionContext,
   label: string,
   taskStatuses: readonly TaskStatus[],
   onRendered: () => void,
   kind: AsyncContentKind = "embed",
   preload?: PreloadedNote,
+  selectedSelfEmbedSource?: () => Promise<string | null>,
 ): () => void {
   const [, fragment = ""] = target.split("#", 2);
   const resolution = resolveWikilinkTarget(target, context);
@@ -2570,26 +2596,34 @@ function renderLinkedNote(
       kind,
       load: () =>
         preload?.source ??
-        (resolution.kind === "self"
-          ? Promise.resolve(rootSource)
-          : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null))),
+        (selectedSelfEmbedSource === undefined
+          ? resolution.kind === "self"
+            ? typeof rootSource === "string"
+              ? Promise.resolve(rootSource)
+              : rootSource()
+            : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null))
+          : selectedSelfEmbedSource()),
       ...(kind === "preview" && preload?.status === "pending"
         ? { skeletonDelayMs: 0 }
         : {}),
-      unavailable: (source) => source === null,
+      unavailable: (source) =>
+        source === null && selectedSelfEmbedSource === undefined,
       ...(kind === "embed" ? { onRetry: begin } : {}),
       render: (source) => {
-        if (
-          destroyed ||
-          source === null ||
-          (!host.isConnected && !document.body.contains(host))
-        ) {
+        if (destroyed || (!host.isConnected && !document.body.contains(host))) {
           return;
         }
-        const selected = embeddedSection(
-          kind === "preview" ? previewSource(source) : source,
-          fragment,
-        );
+        if (source === null) {
+          notice(STRINGS.embedSectionUnavailable);
+          return;
+        }
+        const selected =
+          selectedSelfEmbedSource === undefined
+            ? embeddedSection(
+                kind === "preview" ? previewSource(source) : source,
+                fragment,
+              )
+            : source;
         if (selected === null) {
           notice(STRINGS.embedSectionUnavailable);
           return;
@@ -2633,12 +2667,93 @@ function renderLinkedNote(
   };
 }
 
+type DeferredRootSourceLease = {
+  select: (target: string) => Promise<string | null>;
+  release: () => void;
+};
+
+/**
+ * One editor-document generation may mount several self-embed widgets. They
+ * all read the same root `Text`, so defer and materialize it once for that
+ * generation. A different `Text` is a different CodeMirror document
+ * generation; releasing its last widget fences any unpainted stale work.
+ */
+class DeferredRootSource {
+  private references = 0;
+  private pending: Promise<string> | null = null;
+  private parsed: Promise<ParsedEmbedSource> | null = null;
+  private readonly sections = new Map<string, Promise<string | null>>();
+  private readonly scheduler = new PostPaintScheduler();
+
+  constructor(private readonly document: Text) {}
+
+  acquire(): DeferredRootSourceLease {
+    this.references += 1;
+    let released = false;
+    return {
+      select: (target) => this.select(target),
+      release: () => {
+        if (released) return;
+        released = true;
+        this.references -= 1;
+        if (this.references === 0) {
+          this.scheduler.fence();
+          this.pending = null;
+          this.parsed = null;
+          this.sections.clear();
+        }
+      },
+    };
+  }
+
+  private load(): Promise<string> {
+    if (this.pending === null) {
+      this.pending = new Promise<string>((resolve) => {
+        this.scheduler.schedule(() => resolve(this.document.toString()));
+      });
+    }
+    return this.pending;
+  }
+
+  private select(target: string): Promise<string | null> {
+    const [, fragment = ""] = target.split("#", 2);
+    if (fragment.length === 0) return this.load();
+    const key = selfEmbedSectionKey(fragment);
+    let selected = this.sections.get(key);
+    if (selected === undefined) {
+      if (this.parsed === null) {
+        this.parsed = this.load().then(parseEmbedSource);
+      }
+      selected = this.parsed.then((parsed) =>
+        selectedSelfEmbed(parsed, fragment),
+      );
+      this.sections.set(key, selected);
+    }
+    return selected;
+  }
+}
+
+const deferredRootSources = new WeakMap<Text, DeferredRootSource>();
+
+function deferredRootSource(document: Text): DeferredRootSourceLease {
+  let source = deferredRootSources.get(document);
+  if (source === undefined) {
+    source = new DeferredRootSource(document);
+    deferredRootSources.set(document, source);
+  }
+  return source.acquire();
+}
+
 class EmbedWidget extends WidgetType {
   private readonly cleanups = new WeakMap<HTMLElement, () => void>();
+  private readonly rootSources = new WeakMap<
+    HTMLElement,
+    DeferredRootSourceLease
+  >();
 
   constructor(
     readonly target: string,
-    readonly rootSource: string,
+    readonly rootDocument: Text | null,
     readonly context: WikilinkResolutionContext,
     readonly taskStatuses: readonly TaskStatus[],
   ) {
@@ -2648,7 +2763,7 @@ class EmbedWidget extends WidgetType {
   override eq(other: EmbedWidget): boolean {
     return (
       other.target === this.target &&
-      other.rootSource === this.rootSource &&
+      other.rootDocument === this.rootDocument &&
       other.context === this.context &&
       JSON.stringify(other.taskStatuses) === JSON.stringify(this.taskStatuses)
     );
@@ -2736,17 +2851,25 @@ class EmbedWidget extends WidgetType {
     const body = document.createElement("span");
     body.className = "cm-skr-embed-body";
     host.append(body);
+    const source =
+      this.rootDocument === null ? null : deferredRootSource(this.rootDocument);
+    if (source !== null) this.rootSources.set(host, source);
+    const selectedSelfEmbedSource =
+      source === null ? undefined : () => source.select(this.target);
 
     this.cleanups.set(
       host,
       renderLinkedNote(
         body,
         this.target,
-        this.rootSource,
+        "",
         this.context,
         `${STRINGS.embedLabel}: ${sourceName}`,
         this.taskStatuses,
         () => view.requestMeasure(),
+        "embed",
+        undefined,
+        selectedSelfEmbedSource,
       ),
     );
     return host;
@@ -2755,6 +2878,8 @@ class EmbedWidget extends WidgetType {
   override destroy(dom: HTMLElement): void {
     this.cleanups.get(dom)?.();
     this.cleanups.delete(dom);
+    this.rootSources.get(dom)?.release();
+    this.rootSources.delete(dom);
   }
 
   override ignoreEvent(): boolean {
@@ -3366,7 +3491,9 @@ function widgetFor(
       return {
         widget: new EmbedWidget(
           targetText,
-          doc.toString(),
+          resolveWikilinkTarget(targetText, wikilinks).kind === "self"
+            ? doc
+            : null,
           wikilinks,
           taskStatuses,
         ),
@@ -3802,6 +3929,135 @@ function refreshRequested(transaction: Transaction) {
   );
 }
 
+/**
+ * Native deletion and history replay may change a very large document while
+ * leaving the user waiting for the next paint. Existing decorations map
+ * exactly through those changes, so defer their expensive syntax walk until
+ * after the input transaction. Commands that deliberately change structure
+ * retain the synchronous rebuild they need to update their rendered control.
+ */
+function changesTouchBlockDecoration(
+  changes: Transaction["changes"],
+  decorations: DecorationSet | undefined,
+): boolean {
+  if (decorations === undefined) return false;
+  let touched = false;
+  changes.iterChangedRanges((fromA, toA) => {
+    decorations.between(fromA, toA, () => {
+      touched = true;
+    });
+  });
+  return touched;
+}
+
+function defersDecorationRebuild(
+  transaction: Transaction,
+  blockDecorations?: DecorationSet,
+): boolean {
+  return (
+    transaction.docChanged &&
+    !changesTouchBlockDecoration(transaction.changes, blockDecorations) &&
+    (transaction.annotation(bulkTextInputAnnotation) === true ||
+      transaction.isUserEvent("delete") ||
+      transaction.isUserEvent("undo") ||
+      transaction.isUserEvent("redo"))
+  );
+}
+
+function activeRevealIn(state: EditorState): RevealRegion | null {
+  const table = state.facet(decorationTable);
+  return findActiveReveal(
+    state.doc,
+    syntaxTree(state),
+    table,
+    revealSelection(state),
+    state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    state.facet(taskStatusConfiguration),
+  );
+}
+
+function mappedReveal(
+  reveal: RevealRegion | null,
+  transaction: Transaction,
+): RevealRegion | null {
+  return reveal === null
+    ? null
+    : {
+        ...reveal,
+        from: transaction.changes.mapPos(reveal.from, -1),
+        to: transaction.changes.mapPos(reveal.to, 1),
+      };
+}
+
+function refreshRevealDecorations(
+  decorations: DecorationSet,
+  transaction: Transaction,
+  kind: "inline" | "block",
+): DecorationSet {
+  const previous = mappedReveal(
+    activeRevealIn(transaction.startState),
+    transaction,
+  );
+  const active = activeRevealIn(transaction.state);
+  const ranges = [previous, active].filter(
+    (range): range is RevealRegion => range !== null,
+  );
+  if (ranges.length === 0) return decorations;
+
+  const state = transaction.state;
+  const table = splitTable(state.facet(decorationTable))[kind];
+  const replacement = computeDecorations({
+    doc: state.doc,
+    tree: syntaxTree(state),
+    table,
+    selection: revealSelection(state),
+    ranges,
+    wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    taskStatuses: state.facet(taskStatusConfiguration),
+    activeReveal: active,
+    explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
+    ...(kind === "inline"
+      ? {
+          suppressRenderedTableDescendants:
+            state.field(explicitTableSourceField, false) === null,
+        }
+      : {}),
+  });
+  const added: ReturnType<Decoration["range"]>[] = [];
+  const cursor = replacement.iter();
+  while (cursor.value !== null) {
+    added.push(cursor.value.range(cursor.from, cursor.to));
+    cursor.next();
+  }
+  return decorations.update({
+    filter: (from, to) =>
+      !ranges.some((range) => from <= range.to && to >= range.from),
+    add: added,
+    sort: true,
+  });
+}
+
+function decorationInputsChanged(
+  state: EditorState,
+  startState: EditorState,
+): boolean {
+  return (
+    state.facet(decorationTable) !== startState.facet(decorationTable) ||
+    state.facet(sourceRevealEnabled) !==
+      startState.facet(sourceRevealEnabled) ||
+    state.facet(sourceRevealFocusEnabled) !==
+      startState.facet(sourceRevealFocusEnabled) ||
+    state.field(tableCellRevealField, false) !==
+      startState.field(tableCellRevealField, false) ||
+    state.facet(taskStatusConfiguration) !==
+      startState.facet(taskStatusConfiguration) ||
+    state.field(wikilinkContext, false) !==
+      startState.field(wikilinkContext, false) ||
+    state.field(explicitTableSourceField, false) !==
+      startState.field(explicitTableSourceField, false)
+  );
+}
+
 const blockEngineField = StateField.define<BlockEngineState>({
   create: (state) => ({
     decorations: buildBlockDecorations(state),
@@ -3814,33 +4070,38 @@ const blockEngineField = StateField.define<BlockEngineState>({
         deferred: false,
       };
     }
-    if (
-      value.deferred ||
-      transaction.annotation(bulkTextInputAnnotation) === true
-    ) {
+    if (defersDecorationRebuild(transaction, value.decorations)) {
+      const decorations = transaction.docChanged
+        ? value.decorations.map(transaction.changes)
+        : value.decorations;
       return {
-        decorations: transaction.docChanged
-          ? value.decorations.map(transaction.changes)
-          : value.decorations,
+        decorations:
+          transaction.selection !== transaction.startState.selection
+            ? refreshRevealDecorations(decorations, transaction, "block")
+            : decorations,
         deferred: true,
       };
+    }
+    if (value.deferred && !transaction.docChanged) {
+      if (transaction.selection !== transaction.startState.selection) {
+        return {
+          decorations: refreshRevealDecorations(
+            value.decorations,
+            transaction,
+            "block",
+          ),
+          deferred: true,
+        };
+      }
+      if (!decorationInputsChanged(transaction.state, transaction.startState)) {
+        return { ...value, deferred: true };
+      }
     }
     if (
       transaction.docChanged ||
       transaction.selection !== transaction.startState.selection ||
       syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ||
-      transaction.state.facet(decorationTable) !==
-        transaction.startState.facet(decorationTable) ||
-      transaction.state.facet(sourceRevealEnabled) !==
-        transaction.startState.facet(sourceRevealEnabled) ||
-      transaction.state.field(tableCellRevealField, false) !==
-        transaction.startState.field(tableCellRevealField, false) ||
-      transaction.state.facet(taskStatusConfiguration) !==
-        transaction.startState.facet(taskStatusConfiguration) ||
-      transaction.state.field(wikilinkContext, false) !==
-        transaction.startState.field(wikilinkContext, false) ||
-      transaction.state.field(explicitTableSourceField, false) !==
-        transaction.startState.field(explicitTableSourceField, false)
+      decorationInputsChanged(transaction.state, transaction.startState)
     ) {
       return {
         decorations: buildBlockDecorations(transaction.state),
@@ -3859,19 +4120,12 @@ function needsRebuild(update: ViewUpdate): boolean {
     update.viewportChanged ||
     update.selectionSet ||
     syntaxTree(update.state) !== syntaxTree(update.startState) ||
-    update.state.facet(decorationTable) !==
-      update.startState.facet(decorationTable) ||
-    update.state.facet(sourceRevealEnabled) !==
-      update.startState.facet(sourceRevealEnabled) ||
-    update.state.field(tableCellRevealField, false) !==
-      update.startState.field(tableCellRevealField, false) ||
-    update.state.facet(taskStatusConfiguration) !==
-      update.startState.facet(taskStatusConfiguration) ||
-    update.state.field(wikilinkContext, false) !==
-      update.startState.field(wikilinkContext, false) ||
-    update.state.field(explicitTableSourceField, false) !==
-      update.startState.field(explicitTableSourceField, false)
+    decorationInputsChanged(update.state, update.startState)
   );
+}
+
+function deferredUpdateNeedsImmediateRebuild(update: ViewUpdate): boolean {
+  return decorationInputsChanged(update.state, update.startState);
 }
 
 const enginePlugin = ViewPlugin.fromClass(
@@ -3888,24 +4142,54 @@ const enginePlugin = ViewPlugin.fromClass(
     update(update: ViewUpdate): void {
       if (update.transactions.some(refreshRequested)) {
         this.deferred = false;
-        this.decorations = buildViewDecorations(update.view);
+        this.decorations = this.build(update.view);
         return;
       }
-      const bulkInput = update.transactions.some(
-        (transaction) =>
-          transaction.annotation(bulkTextInputAnnotation) === true,
+      const blockDecorations = update.startState.field(
+        blockEngineField,
+        false,
+      )?.decorations;
+      const deferredInput = update.transactions.some((transaction) =>
+        defersDecorationRebuild(transaction, blockDecorations),
       );
-      if (this.deferred || bulkInput) {
-        if (update.docChanged) {
-          this.decorations = this.decorations.map(update.changes);
-        }
+      if (deferredInput) {
+        const decorations = update.docChanged
+          ? this.decorations.map(update.changes)
+          : this.decorations;
+        const transaction = update.transactions.at(-1);
+        this.decorations =
+          update.selectionSet && transaction !== undefined
+            ? refreshRevealDecorations(decorations, transaction, "inline")
+            : decorations;
         this.deferred = true;
         this.scheduleRefresh(update.view);
         return;
       }
-      if (needsRebuild(update)) {
-        this.decorations = buildViewDecorations(update.view);
+      if (this.deferred) {
+        if (
+          !update.docChanged &&
+          !deferredUpdateNeedsImmediateRebuild(update)
+        ) {
+          const transaction = update.transactions.at(-1);
+          if (update.selectionSet && transaction !== undefined) {
+            this.decorations = refreshRevealDecorations(
+              this.decorations,
+              transaction,
+              "inline",
+            );
+          }
+          return;
+        }
+        this.cancelRefresh();
+        this.deferred = false;
       }
+      if (needsRebuild(update)) {
+        this.decorations = this.build(update.view);
+      }
+    }
+
+    private build(view: EditorView): DecorationSet {
+      return buildViewDecorations(view);
     }
 
     private scheduleRefresh(view: EditorView): void {
@@ -3931,11 +4215,16 @@ const enginePlugin = ViewPlugin.fromClass(
       afterPaint(3);
     }
 
-    destroy(): void {
-      this.destroyed = true;
+    private cancelRefresh(): void {
       if (this.refreshFrame !== null) {
         cancelAnimationFrame(this.refreshFrame);
+        this.refreshFrame = null;
       }
+    }
+
+    destroy(): void {
+      this.destroyed = true;
+      this.cancelRefresh();
     }
   },
   { decorations: (plugin) => plugin.decorations },
@@ -4004,6 +4293,7 @@ class LinkPreviewController {
   private coneTimer: ReturnType<typeof setTimeout> | null = null;
   private closeTimer: ReturnType<typeof setTimeout> | null = null;
   private preload: PreloadedNote | null = null;
+  private placementFrame: number | null = null;
   private readonly stopObservingViewport: () => void;
 
   constructor(readonly view: EditorView) {
@@ -4145,12 +4435,40 @@ class LinkPreviewController {
     panel.append(header, body);
     this.view.dom.append(panel);
 
-    const viewport = visualViewportRect(
-      this.view.dom.ownerDocument.defaultView ?? window,
+    this.place(panel, link);
+    enterMotionSurface(panel);
+
+    this.activeLink = link;
+    this.panel = panel;
+    this.leavePoint = null;
+    this.previousDescription = link.getAttribute("aria-describedby");
+    this.previousControls = link.getAttribute("aria-controls");
+    this.previousExpanded = link.getAttribute("aria-expanded");
+    link.setAttribute("aria-describedby", panel.id);
+    link.setAttribute("aria-controls", panel.id);
+    link.setAttribute("aria-expanded", "true");
+    this.cleanupRender = renderLinkedNote(
+      body,
+      target,
+      this.view.state.doc.toString(),
+      context,
+      `${STRINGS.linkPreviewLabel}: ${sourceName}`,
+      this.view.state.facet(taskStatusConfiguration),
+      () => {
+        this.view.requestMeasure();
+        this.schedulePlacement(panel, link);
+      },
+      "preview",
+      preload,
     );
+  }
+
+  private place(panel: HTMLElement, link: HTMLElement): void {
+    const ownerWindow = this.view.dom.ownerDocument.defaultView ?? window;
+    const viewport = visualViewportRect(ownerWindow);
     const bounds = link.getBoundingClientRect();
     const rootSize = Number.parseFloat(
-      getComputedStyle(document.documentElement).fontSize,
+      getComputedStyle(this.view.dom.ownerDocument.documentElement).fontSize,
     );
     panel.style.maxHeight = `${Math.min(
       18 * rootSize,
@@ -4173,33 +4491,31 @@ class LinkPreviewController {
     panel.dataset.motionSurface = placedBelow
       ? "anchored-top"
       : "anchored-bottom";
-    enterMotionSurface(panel);
+  }
 
-    this.activeLink = link;
-    this.panel = panel;
-    this.leavePoint = null;
-    this.previousDescription = link.getAttribute("aria-describedby");
-    this.previousControls = link.getAttribute("aria-controls");
-    this.previousExpanded = link.getAttribute("aria-expanded");
-    link.setAttribute("aria-describedby", panel.id);
-    link.setAttribute("aria-controls", panel.id);
-    link.setAttribute("aria-expanded", "true");
-    this.cleanupRender = renderLinkedNote(
-      body,
-      target,
-      this.view.state.doc.toString(),
-      context,
-      `${STRINGS.linkPreviewLabel}: ${sourceName}`,
-      this.view.state.facet(taskStatusConfiguration),
-      () => this.view.requestMeasure(),
-      "preview",
-      preload,
-    );
+  private schedulePlacement(panel: HTMLElement, link: HTMLElement): void {
+    if (this.placementFrame !== null) {
+      return;
+    }
+    this.placementFrame = requestAnimationFrame(() => {
+      this.placementFrame = null;
+      if (
+        this.panel === panel &&
+        this.activeLink === link &&
+        panel.isConnected
+      ) {
+        this.place(panel, link);
+      }
+    });
   }
 
   private dismiss(): void {
     this.cancelTimer();
     this.cancelTravelTimers();
+    if (this.placementFrame !== null) {
+      cancelAnimationFrame(this.placementFrame);
+      this.placementFrame = null;
+    }
     const panel = this.panel;
     const cleanupRender = this.cleanupRender;
     this.cleanupRender = null;
@@ -4284,11 +4600,6 @@ class LinkPreviewController {
   };
 
   private readonly onPointerMove = (event: PointerEvent) => {
-    const link = this.previewLink(event.target);
-    if (link !== null && link === this.scheduledLink) {
-      this.cancelTimer();
-      this.schedule(link);
-    }
     if (this.panel === null || this.leavePoint === null) return;
     if (
       this.panelContains(event.target) ||

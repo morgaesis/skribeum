@@ -17,6 +17,15 @@ fn store() -> (SimFs, VaultSessionStore) {
     )
 }
 
+fn vault_root(name: &str) -> PathBuf {
+    PathBuf::from(if cfg!(windows) {
+        r"C:\vaults"
+    } else {
+        "/vaults"
+    })
+    .join(name)
+}
+
 #[test]
 fn missing_or_corrupt_document_reads_as_an_empty_session() {
     let (fs, store) = store();
@@ -44,18 +53,19 @@ fn missing_or_corrupt_document_reads_as_an_empty_session() {
 #[test]
 fn opened_vault_becomes_canonical_last_and_newest_recent_entry() {
     let (fs, store) = store();
-    let canonical_root = Path::new("/vaults/canonical-root");
+    let canonical_root = vault_root("canonical-root");
+    let canonical = canonical_root.to_string_lossy().into_owned();
 
     store
-        .record_opened(&fs, canonical_root)
+        .record_opened(&fs, &canonical_root)
         .expect("opened vault is recorded");
 
     assert_eq!(
         store.read(&fs).expect("session rereads"),
         VaultSession {
             schema_version: VAULT_SESSION_SCHEMA_VERSION,
-            last_vault: Some("/vaults/canonical-root".to_owned()),
-            recent_vaults: vec!["/vaults/canonical-root".to_owned()],
+            last_vault: Some(canonical.clone()),
+            recent_vaults: vec![canonical],
         }
     );
     let document: Value =
@@ -67,51 +77,58 @@ fn opened_vault_becomes_canonical_last_and_newest_recent_entry() {
 fn recent_vaults_are_newest_first_deduplicated_and_bounded() {
     let (fs, store) = store();
     for index in 0..=MAX_RECENT_VAULTS {
-        store
-            .record_opened(&fs, Path::new(&format!("/vaults/{index}")))
-            .expect("vault is recorded");
+        let root = vault_root(&index.to_string());
+        store.record_opened(&fs, &root).expect("vault is recorded");
     }
+    let selected = vault_root("3").to_string_lossy().into_owned();
     store
-        .record_opened(&fs, Path::new("/vaults/3"))
+        .record_opened(&fs, Path::new(&selected))
         .expect("existing vault moves to the front");
 
     let session = store.read(&fs).expect("session rereads");
-    assert_eq!(session.last_vault.as_deref(), Some("/vaults/3"));
+    assert_eq!(session.last_vault.as_deref(), Some(selected.as_str()));
     assert_eq!(session.recent_vaults.len(), MAX_RECENT_VAULTS);
     assert_eq!(
         session.recent_vaults.first().map(String::as_str),
-        Some("/vaults/3")
+        Some(selected.as_str())
     );
     assert_eq!(
         session
             .recent_vaults
             .iter()
-            .filter(|path| path.as_str() == "/vaults/3")
+            .filter(|path| path.as_str() == selected)
             .count(),
         1
     );
-    assert!(!session.recent_vaults.iter().any(|path| path == "/vaults/0"));
+    assert!(
+        !session
+            .recent_vaults
+            .iter()
+            .any(|path| path == &vault_root("0").to_string_lossy())
+    );
 }
 
 #[test]
 fn forgetting_an_explicit_candidate_removes_it_and_clear_last_keeps_recents() {
     let (fs, store) = store();
+    let older = vault_root("older").to_string_lossy().into_owned();
+    let current = vault_root("current").to_string_lossy().into_owned();
     store
-        .record_opened(&fs, Path::new("/vaults/older"))
+        .record_opened(&fs, Path::new(&older))
         .expect("older vault is recorded");
     store
-        .record_opened(&fs, Path::new("/vaults/current"))
+        .record_opened(&fs, Path::new(&current))
         .expect("current vault is recorded");
 
     let forgotten = store
-        .forget(&fs, "/vaults/older")
+        .forget(&fs, &older)
         .expect("explicit stale candidate is forgotten");
-    assert_eq!(forgotten.last_vault.as_deref(), Some("/vaults/current"));
-    assert_eq!(forgotten.recent_vaults, ["/vaults/current"]);
+    assert_eq!(forgotten.last_vault.as_deref(), Some(current.as_str()));
+    assert_eq!(forgotten.recent_vaults, std::slice::from_ref(&current));
 
     let cleared = store.clear_last(&fs).expect("last vault is cleared");
     assert_eq!(cleared.last_vault, None);
-    assert_eq!(cleared.recent_vaults, ["/vaults/current"]);
+    assert_eq!(cleared.recent_vaults, [current]);
 }
 
 #[cfg(unix)]

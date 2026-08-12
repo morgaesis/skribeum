@@ -2831,23 +2831,36 @@ mod vault_session_tests {
     #[test]
     fn only_a_successful_open_records_the_canonical_vault_root() {
         let fs = SimFs::new();
-        fs.external_create_dir(&PathBuf::from("/config"));
-        fs.external_create_dir(&PathBuf::from("/vaults/real"));
-        fs.external_symlink(Path::new("/vaults/link"), Path::new("/vaults/real"));
-        let store = VaultSessionStore::new(Path::new("/config/vault-session"));
+        let config = PathBuf::from(if cfg!(windows) {
+            r"C:\config"
+        } else {
+            "/config"
+        });
+        let vaults = PathBuf::from(if cfg!(windows) {
+            r"C:\vaults"
+        } else {
+            "/vaults"
+        });
+        let real = vaults.join("real");
+        let link = vaults.join("link");
+        fs.external_create_dir(&config);
+        fs.external_create_dir(&real);
+        fs.external_symlink(&link, &real);
+        let store = VaultSessionStore::new(&config.join("vault-session"));
 
-        assert!(Vault::open(&fs, Path::new("/vaults/missing")).is_err());
+        assert!(Vault::open(&fs, &vaults.join("missing")).is_err());
         assert_eq!(
             store.read(&fs).expect("session reads"),
             VaultSession::default()
         );
 
-        let vault = Vault::open(&fs, Path::new("/vaults/link")).expect("vault opens");
+        let vault = Vault::open(&fs, &link).expect("vault opens");
         record_opened_vault(&fs, Some(&store), &vault).expect("opened vault records");
 
         let session = store.read(&fs).expect("session rereads");
-        assert_eq!(session.last_vault.as_deref(), Some("/vaults/real"));
-        assert_eq!(session.recent_vaults, ["/vaults/real"]);
+        let canonical = vault.root().to_string_lossy().into_owned();
+        assert_eq!(session.last_vault.as_deref(), Some(canonical.as_str()));
+        assert_eq!(session.recent_vaults, [canonical]);
     }
 
     #[test]

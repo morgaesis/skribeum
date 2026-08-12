@@ -891,8 +891,9 @@ async function demoTagCompletionTargetText(): Promise<string | null> {
  * (`true`) reads differently from a pane with no active tab (`null`) or a
  * page that never installed the probe.
  */
-async function waitForActiveTabSaved(): Promise<void> {
+async function waitForActiveTabSaved(requireDirty = false): Promise<void> {
   let observed: boolean | null | undefined;
+  let sawDirty = false;
   try {
     await browser.waitUntil(
       async () => {
@@ -903,7 +904,8 @@ async function waitForActiveTabSaved(): Promise<void> {
             }
           ).__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?.(),
         );
-        return observed === false;
+        sawDirty ||= observed === true;
+        return observed === false && (!requireDirty || sawDirty);
       },
       { timeout: 10000 },
     );
@@ -911,7 +913,7 @@ async function waitForActiveTabSaved(): Promise<void> {
     throw new Error(
       `autosave did not settle: the active tab dirty probe reported ${
         observed === undefined ? "no probe on the page" : String(observed)
-      }`,
+      }${requireDirty && !sawDirty ? " without observing the edit" : ""}`,
     );
   }
 }
@@ -940,7 +942,7 @@ async function prepareDemoTagCompletionTarget(): Promise<void> {
   // The next call navigates away (a fresh browser.url() for the next
   // prepare() cycle); wait for this edit to actually reach persistent
   // storage first so that navigation cannot race an in-flight write.
-  await waitForActiveTabSaved();
+  await waitForActiveTabSaved(true);
 }
 
 const demoTagCompletionHarness: TagCompletionHarness = {
@@ -954,7 +956,7 @@ const demoTagCompletionHarness: TagCompletionHarness = {
   async waitForQuerySaved() {
     // The demo persists to browser storage, which the test process cannot
     // read, so the tab's own dirty signal is the available oracle.
-    await waitForActiveTabSaved();
+    await waitForActiveTabSaved(true);
   },
 };
 
@@ -3064,7 +3066,13 @@ describe("skribeum shell", () => {
       const deletedExpected = original.replace(firstTable, "");
       await browser.keys([modifierKey, "s"]);
       await waitForDisk(TABLE_EDITING_NOTE_NAME, deletedExpected);
-      expect(await $$(".cm-skr-table-grid")).toHaveLength(1);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 1,
+        {
+          timeout: 10000,
+          timeoutMsg: "deleted rendered table did not settle",
+        },
+      );
 
       await resetAndOpen();
       const dragCellRect = await tableRect(true);

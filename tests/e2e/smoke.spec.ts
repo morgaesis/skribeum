@@ -852,20 +852,53 @@ function browserDemoUrl(): string {
   return demoUrl;
 }
 
-async function waitForBrowserDemoNote(): Promise<void> {
+let browserDemoNavigationId = 0;
+
+/**
+ * Opens a fresh browser-demo document and waits for that exact navigation to
+ * commit. `browser.url()` can resolve while WebKit still paints the preceding
+ * document, whose matching shell and editor satisfy the generic readiness
+ * checks. A per-navigation query token survives note-address normalization, so
+ * the fixture never sends input to a page that is about to be replaced.
+ */
+async function openBrowserDemo(url: string | URL): Promise<void> {
+  const target = new URL(url);
+  const navigationId = String(++browserDemoNavigationId);
+  target.searchParams.set("e2e-navigation", navigationId);
+  await browser.url(target.href);
   await browser.waitUntil(
     () =>
-      browser.execute(() => {
+      browser.execute((expectedNavigationId) => {
+        type DemoWindow = Window & {
+          __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
+          __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
+            sourceText: string,
+            relativeOffset: number,
+          ) => number | null;
+          __SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?: () => boolean | null;
+        };
         const content = document.querySelector<HTMLElement>(".cm-content");
         const text = content?.textContent ?? "";
+        const harness = window as DemoWindow;
         return (
+          document.readyState === "complete" &&
+          new URL(window.location.href).searchParams.get("e2e-navigation") ===
+            expectedNavigationId &&
+          document.querySelector(".demo-shell") !== null &&
           content !== null &&
           content.getClientRects().length > 0 &&
           text.trim().length > 0 &&
-          !text.includes("scaffold fixture")
+          !text.includes("scaffold fixture") &&
+          typeof harness.__SKRIBEUM_E2E_CURRENT_PATH__ === "function" &&
+          harness.__SKRIBEUM_E2E_CURRENT_PATH__() !== null &&
+          typeof harness.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__ === "function" &&
+          typeof harness.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__ === "function"
         );
-      }),
-    { timeout: 30000, timeoutMsg: "browser demo note content did not load" },
+      }, navigationId),
+    {
+      timeout: 30000,
+      timeoutMsg: "browser demo did not commit its requested ready document",
+    },
   );
 }
 
@@ -922,8 +955,7 @@ async function prepareDemoTagCompletionTarget(): Promise<void> {
   const targetUrl = new URL(browserDemoUrl());
   targetUrl.searchParams.set("note", "about.md");
   targetUrl.searchParams.set("tag-fixture", Date.now().toString());
-  await browser.url(targetUrl.href);
-  await $(".demo-shell").waitForExist({ timeout: 15000 });
+  await openBrowserDemo(targetUrl);
   await browser.waitUntil(
     async () => (await editorText()).includes("About this vault"),
     { timeout: 15000, timeoutMsg: "browser demo target did not open" },
@@ -7286,23 +7318,11 @@ describe("skribeum core editing surfaces", () => {
   // CRLF and live-preview notes exclusively.
 
   it("browser_demo_restores_default_appearance_and_persists", async () => {
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(browserDemoUrl());
     await browser.execute(() => {
       localStorage.removeItem("skribeum.demo.settings");
     });
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(browserDemoUrl());
 
     const editor = $(".cm-content");
     await editor.waitForDisplayed({ timeout: 15000 });
@@ -7362,13 +7382,7 @@ describe("skribeum core editing surfaces", () => {
   });
 
   it("browser_demo_claims_mod_f_before_the_editor_has_focus", async () => {
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(browserDemoUrl());
 
     // Focus lands outside the editor, matching a visitor who opens the
     // demo and immediately reaches for find without clicking into the
@@ -7399,13 +7413,7 @@ describe("skribeum core editing surfaces", () => {
   it("browser_demo_renders_embed_skeletons_and_resolved_content", async () => {
     const fixtureUrl = new URL(browserDemoUrl());
     fixtureUrl.searchParams.set("embed-start", Date.now().toString());
-    await browser.url(fixtureUrl.href);
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(fixtureUrl);
     await browser.execute(() => {
       type GateWindow = Window & {
         __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
@@ -7552,8 +7560,7 @@ describe("skribeum core editing surfaces", () => {
   });
 
   it("browser_demo_serves_scheme_aware_favicon_metadata", async () => {
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await openBrowserDemo(browserDemoUrl());
     const metadata = await browser.executeAsync<
       {
         iconType: string | null;
@@ -7610,8 +7617,7 @@ Promise.all([
   it("browser_demo_highlights_lazy_languages_with_palette_tokens", async () => {
     const target = new URL(browserDemoUrl());
     target.searchParams.set("note", "Features/code-blocks.md");
-    await browser.url(target.href);
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await openBrowserDemo(target);
     await browser.waitUntil(
       () =>
         browser.execute(() =>

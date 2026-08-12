@@ -96,6 +96,45 @@ async function renderedBox(selector: string): Promise<Box> {
   return box;
 }
 
+async function renderedTabShellBox(selector: string): Promise<Box> {
+  const box = await browser.execute((target) => {
+    const tab = document.querySelector(target);
+    const shell = tab?.closest<HTMLElement>(".skr-tab-shell");
+    if (shell === null || shell === undefined) return null;
+    const rect = shell.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+  }, selector);
+  if (box === null) throw new Error(`${selector} has no tab shell`);
+  return box;
+}
+
+async function setViewport(width: number, height: number): Promise<void> {
+  let outerWidth = width;
+  let outerHeight = height;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await browser.setWindowSize(outerWidth, outerHeight);
+    const actual = await browser.executeAsync<
+      { width: number; height: number },
+      []
+    >((done) => {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() =>
+          done({ width: window.innerWidth, height: window.innerHeight }),
+        ),
+      );
+    });
+    if (actual.width === width && actual.height === height) return;
+    outerWidth += width - actual.width;
+    outerHeight += height - actual.height;
+  }
+  throw new Error(`viewport did not reach ${width}×${height}`);
+}
+
 function expectRenderedBoxes(boxes: Box[], count = 12): void {
   expect(boxes).toHaveLength(count);
   for (const box of boxes) {
@@ -332,8 +371,12 @@ describe("packaged motion geometry", () => {
     const tabCount = await browser.execute(
       () => document.querySelectorAll('[role="tab"]').length,
     );
-    const penultimateTab = $(`[role="tab"]:nth-of-type(${tabCount - 1})`);
-    const finalTab = $(`[role="tab"]:nth-of-type(${tabCount})`);
+    const tabs = await $$('[role="tab"]');
+    const penultimateTab = tabs[tabCount - 2];
+    const finalTab = tabs[tabCount - 1];
+    if (penultimateTab === undefined || finalTab === undefined) {
+      throw new Error("tab retarget fixture is unavailable");
+    }
     await beginMotionCapture(".skr-tab-active-indicator");
     await penultimateTab.click();
     await browser.pause(24);
@@ -379,6 +422,7 @@ describe("packaged motion geometry", () => {
   });
 
   it("samples active-tab rectangles before, during, and after a real resize", async () => {
+    await setViewport(1280, 800);
     await expandFixtureFolder();
     await selectTreePath(TREE_FIRST_NOTE_NAME);
     await selectTreePath(TREE_SECOND_NOTE_NAME);
@@ -390,29 +434,39 @@ describe("packaged motion geometry", () => {
       );
       return activeIndex === 0 ? 1 : 0;
     });
-    const targetSelector = `[role="tab"]:nth-of-type(${targetIndex + 1})`;
-    const targetTab = $(targetSelector);
+    const targetTab = (await $$('[role="tab"]'))[targetIndex];
+    if (targetTab === undefined) {
+      throw new Error("tab resize fixture is unavailable");
+    }
     await targetTab.waitForDisplayed({ timeout: 10000 });
+    const targetId = await targetTab.getAttribute("id");
+    if (targetId === null) throw new Error("tab resize fixture has no id");
+    const targetSelector = `#${targetId}`;
     await beginMotionCapture(".skr-tab-active-indicator", 24);
     await targetTab.click();
     await browser.pause(24);
     const before = await renderedBox(".skr-tab-active-indicator");
-    const beforeTarget = await renderedBox(targetSelector);
-    await browser.setWindowSize(1060, 800);
+    const beforeTarget = await renderedTabShellBox(targetSelector);
+    await setViewport(1000, 800);
     const during = await renderedBox(".skr-tab-active-indicator");
-    const duringTarget = await renderedBox(targetSelector);
+    const duringTarget = await renderedTabShellBox(targetSelector);
     await browser.pause(220);
     const after = await renderedBox(".skr-tab-active-indicator");
-    const afterTarget = await renderedBox(targetSelector);
+    const afterTarget = await renderedTabShellBox(targetSelector);
     const captured = await completedMotionCapture();
     expectRenderedBoxes(captured, 24);
     expectRenderedBoxes([before, during, after], 3);
     expectRenderedBoxes([beforeTarget, duringTarget, afterTarget], 3);
     if (await animationsCanTravel()) {
-      expect(Math.abs(before.left - during.left)).toBeLessThan(1);
+      expectContinuousTrajectory(
+        captured,
+        "left",
+        before.left,
+        duringTarget.left,
+      );
     }
     expect(Math.abs(after.left - afterTarget.left)).toBeLessThan(1);
     expect(Math.abs(after.width - afterTarget.width)).toBeLessThan(1);
-    await browser.setWindowSize(1280, 800);
+    await setViewport(1280, 800);
   });
 });

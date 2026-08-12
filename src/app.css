@@ -561,6 +561,15 @@ select {
   scrollbar-width: none;
 }
 
+/* Semantically, a tablist may own only tabs. The visible layout also carries
+   independently focusable close controls, so its tablist exists as a
+   non-interactive overlay and owns the corresponding tab buttons explicitly. */
+.skr-tablist {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .skr-tab-items::-webkit-scrollbar {
   display: none;
 }

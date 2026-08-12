@@ -11,6 +11,7 @@ import type { WorkspaceTab } from "./workspaceState";
 // clock, matching the reorder reflow's own clock below.
 const ACTIVE_INDICATOR_TRAVEL_TRANSITION =
   "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)";
+let nextTablistId = 0;
 
 function transformOffset(element: HTMLElement): number {
   const transform = getComputedStyle(element).transform.trim();
@@ -82,6 +83,11 @@ let indicatorMotionFrame: number | null = null;
 let indicatorMotionTimer: ReturnType<typeof setTimeout> | null = null;
 let indicatorTraveling = false;
 let mounted = true;
+const tablistId = `skr-tablist-${nextTablistId++}`;
+
+function tabId(index: number): string {
+  return `${tablistId}-tab-${index}`;
+}
 
 function cancelIndicatorCallbacks(): void {
   if (indicatorMotionFrame !== null) {
@@ -374,9 +380,7 @@ function finishScrollDrag(event: PointerEvent) {
       class="skr-tab-items"
       class:skr-tab-items-scrolling={scrollPointer !== null}
       class:skr-tab-items-reordering={dragging !== null}
-      role="tablist"
-      tabindex="-1"
-      aria-label={STRINGS.openTabs}
+      role="presentation"
       bind:this={itemsElement}
       onwheel={scrollWithWheel}
       onpointerdown={beginScrollDrag}
@@ -384,6 +388,16 @@ function finishScrollDrag(event: PointerEvent) {
       onpointerup={finishScrollDrag}
       onpointercancel={finishScrollDrag}
     >
+      <!-- The tablist owns the tabs explicitly because each visible tab also
+           needs an independently focusable close control. Keeping that
+           control outside the tablist's owned children preserves both the
+           ARIA tab pattern and the close command's keyboard route. -->
+      <div
+        class="skr-tablist"
+        role="tablist"
+        aria-label={STRINGS.openTabs}
+        aria-owns={tabs.map((_, index) => tabId(index)).join(" ")}
+      ></div>
       {#each tabs as tab, index (tab.path)}
       {@const title = titles[index]}
       <div
@@ -422,6 +436,7 @@ function finishScrollDrag(event: PointerEvent) {
           type="button"
           class="skr-tab"
           role="tab"
+          id={tabId(index)}
           aria-selected={tab.path === activePath}
           aria-label={
             tab.dirty === true

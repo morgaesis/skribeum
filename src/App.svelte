@@ -318,6 +318,7 @@ let noteTitleVisible = $state(true);
 let currentNoteSource = $state("");
 let sourceMode = $state(false);
 let surfaceFocusOrigin = $state<HTMLElement | null>(null);
+let surfaceFocusRestoreFrame: number | null = null;
 let taskStatusSurfaceMarker = $state<number | null>(null);
 let tableCellSurfaceActive = $state(false);
 let overflowContextPrepared = false;
@@ -1092,11 +1093,20 @@ function restoreSurfaceFocus() {
   const origin = surfaceFocusOrigin;
   surfaceFocusOrigin = null;
   void tick().then(() => {
-    if (origin?.isConnected) {
-      origin.focus();
-    } else {
-      focusContent();
+    // Clearing `inert` takes effect with the browser's next render. Restore
+    // focus after that render so WebKit accepts the invoking chrome control.
+    if (surfaceFocusRestoreFrame !== null) {
+      cancelAnimationFrame(surfaceFocusRestoreFrame);
     }
+    surfaceFocusRestoreFrame = requestAnimationFrame(() => {
+      surfaceFocusRestoreFrame = null;
+      if (activeSheet !== null || activeOverlay !== null) return;
+      if (origin?.isConnected) {
+        origin.focus({ preventScroll: true });
+      } else {
+        focusContent();
+      }
+    });
   });
 }
 
@@ -1595,15 +1605,12 @@ function currentTaskStatusMarker(
 
 function prepareOverflowContext(
   focusTarget: EventTarget | null = document.activeElement,
+  contextTarget: EventTarget | null = document.activeElement,
 ) {
-  if (
-    surfaceFocusOrigin === null &&
-    focusTarget instanceof HTMLElement &&
-    focusTarget.isConnected
-  ) {
+  if (focusTarget instanceof HTMLElement && focusTarget.isConnected) {
     surfaceFocusOrigin = focusTarget;
   }
-  taskStatusSurfaceMarker = currentTaskStatusMarker(focusTarget);
+  taskStatusSurfaceMarker = currentTaskStatusMarker(contextTarget);
   const view = editor?.getView();
   tableCellSurfaceActive =
     view !== undefined && focusedRenderedTableCell(view) !== null;
@@ -3526,8 +3533,12 @@ onMount(() => {
         class="skr-header-overflow skr-header-icon-button"
         aria-label={STRINGS.overflowMenuLabel}
         aria-haspopup={narrowViewport ? "dialog" : "menu"}
-        onpointerdown={() => prepareOverflowContext()}
-        onfocus={(event) => prepareOverflowContext(event.relatedTarget)}
+        onpointerdown={(event) => prepareOverflowContext(event.currentTarget)}
+        onfocus={(event) => {
+          if (!overflowContextPrepared) {
+            prepareOverflowContext(event.currentTarget, event.relatedTarget);
+          }
+        }}
         onclick={(event) => openSheet("overflow", event.currentTarget)}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">

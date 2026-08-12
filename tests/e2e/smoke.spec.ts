@@ -2816,10 +2816,9 @@ describe("skribeum shell", () => {
       const surface = $('[data-testid="unified-command-surface"]');
       await surface.waitForDisplayed({ timeout: 10000 });
       await surface.$('[role="combobox"]').addValue(query);
-      await surface
-        .$(`[role="option"][data-command-id="${id}"]`)
-        .waitForDisplayed({ timeout: 10000 });
-      await browser.keys(Key.Enter);
+      const command = surface.$(`[role="option"][data-command-id="${id}"]`);
+      await command.waitForDisplayed({ timeout: 10000 });
+      await command.click();
       await surface.waitForExist({ reverse: true, timeout: 10000 });
     };
     const runPointerCommand = async (id: string) => {

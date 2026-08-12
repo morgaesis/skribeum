@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+#[cfg(unix)]
+use skribeum_vault::RealFs;
 use skribeum_vault::{
-    FileSystem, MAX_RECENT_VAULTS, RealFs, SimFs, VAULT_SESSION_SCHEMA_VERSION, VaultSession,
+    FileSystem, MAX_RECENT_VAULTS, SimFs, VAULT_SESSION_SCHEMA_VERSION, VaultSession,
     VaultSessionStore,
 };
 

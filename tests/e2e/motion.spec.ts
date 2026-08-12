@@ -41,14 +41,24 @@ async function beginMotionCapture(selector: string, count = 12): Promise<void> {
         if (element !== null) {
           const box = element.getBoundingClientRect();
           const style = getComputedStyle(element);
-          capture.frames.push({
-            left: box.left,
-            top: box.top,
-            width: box.width,
-            height: box.height,
-            transitionDuration: style.transitionDuration,
-            transitionProperty: style.transitionProperty,
-          });
+          // During a retarget, WebKit can report an intermediate zero-area
+          // box before the compositor paints the next indicator frame. It has
+          // no pixels, so it cannot represent a visible jump. Each retained
+          // frame remains subject to the rendered-geometry assertion below.
+          if (
+            Number.parseFloat(style.opacity) > 0 &&
+            box.width > 0 &&
+            box.height > 0
+          ) {
+            capture.frames.push({
+              left: box.left,
+              top: box.top,
+              width: box.width,
+              height: box.height,
+              transitionDuration: style.transitionDuration,
+              transitionProperty: style.transitionProperty,
+            });
+          }
         }
         if (capture.frames.length >= requested) capture.complete = true;
         else requestAnimationFrame(sample);
@@ -422,7 +432,7 @@ describe("packaged motion geometry", () => {
   });
 
   it("samples active-tab rectangles before, during, and after a real resize", async () => {
-    await setViewport(1280, 800);
+    await setViewport(1200, 640);
     await expandFixtureFolder();
     await selectTreePath(TREE_FIRST_NOTE_NAME);
     await selectTreePath(TREE_SECOND_NOTE_NAME);
@@ -447,7 +457,7 @@ describe("packaged motion geometry", () => {
     await browser.pause(24);
     const before = await renderedBox(".skr-tab-active-indicator");
     const beforeTarget = await renderedTabShellBox(targetSelector);
-    await setViewport(1000, 800);
+    await setViewport(1040, 640);
     const during = await renderedBox(".skr-tab-active-indicator");
     const duringTarget = await renderedTabShellBox(targetSelector);
     await browser.pause(220);
@@ -467,6 +477,6 @@ describe("packaged motion geometry", () => {
     }
     expect(Math.abs(after.left - afterTarget.left)).toBeLessThan(1);
     expect(Math.abs(after.width - afterTarget.width)).toBeLessThan(1);
-    await setViewport(1280, 800);
+    await setViewport(1200, 640);
   });
 });

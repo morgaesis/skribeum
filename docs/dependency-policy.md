@@ -22,6 +22,13 @@ The active package-manager constraints are:
   `@wdio/tauri-service` and is reviewed with each WebdriverIO refresh.
 - `serialize-javascript` overrides Mocha's vulnerable version range with a
   release outside GHSA-qj8w-gfj5-8c6v and GHSA-5c6j-r48x-rmvq.
+- The JavaScript audit ignores GHSA-jmr9-qjv8-65gv (extract-zip symlink path
+  traversal, CVE-2026-56876). No patched release exists, and the only
+  consumer is `@puppeteer/browsers`' browser-download path inside the
+  WebdriverIO toolchain, which this repository never invokes because the
+  end-to-end suite uses the embedded driver provider. Remove the ignore once
+  a WebdriverIO refresh resolves an `extract-zip`-free `@puppeteer/browsers`
+  major or upstream publishes a fix.
 
 Refresh the complete Rust and JavaScript trees together at least once per month
 and whenever Dependabot opens an alert. Check crates.io and `bun outdated`,

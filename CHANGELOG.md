@@ -6,6 +6,54 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Stable note permalinks: `Copy permalink` in the command palette writes an
+  11-character id into the note's frontmatter on first use and copies
+  `https://skribeum.app/?n=<id>`, a URL that survives file moves and renames
+  because the id lives in the note content. The browser demo resolves the id
+  to the note and falls back to normal landing when nothing matches;
+  `?note=<path>` URLs keep working.
+- Canvas boards are directly manipulable: double-click opens a card's note,
+  single click selects it, cards drag 1:1 with the pointer and persist their
+  position, a toolbar action adds an existing note as a card, and a per-card
+  control removes it from the board without touching the note file. Canvas
+  changes write through a whole-document atomic file path in the vault.
+
+### Changed
+
+- Reveal marker glyphs enter with a 120ms fade and a small slide inside their
+  instantly reserved space, and leave mirroring the same motion; the reserved
+  width still applies in one frame, so the caret is never dragged sideways.
+- The file tree's open-note highlight and the tab strip's active-tab
+  indicator travel to the newly active row or tab instead of reappearing,
+  entering in place when no previous position is on screen.
+- Switching tabs keeps each tab's live editor state: undo history, caret, and
+  scroll position restore instantly, the pane crossfades instead of
+  rebuilding, and the first note after startup transitions in place rather
+  than remounting the editor.
+- Menus share one anchored placement and dismissal engine: outside-press,
+  Escape, and window-blur dismissal, viewport-aware flipping from the
+  invoking control, arrow-key navigation, interface typography, and hover
+  highlights, covering the all-tabs list, the wide-viewport overflow menu,
+  the file tree's row menu, and the task status control, which now tracks
+  its checkbox while the editor scrolls.
+- Canvas wheel input stays on the board: an unmodified wheel or two-finger
+  scroll pans, ctrl-wheel and trackpad pinch zoom anchored at the pointer,
+  and keyboard and toolbar zoom anchor at the viewport center.
+
+### Fixed
+
+- Canvas cards no longer draw their path label, title, and content on top of
+  each other; content clips with a bottom fade.
+- Notes with frontmatter no longer show an oversized gap between the
+  properties panel and the first block, and ArrowUp from the first visible
+  line keeps the caret out of the hidden frontmatter text instead of
+  stranding it at the top of the document.
+- Opening a note by URL in the browser demo no longer rebuilds the page
+  shell, and opening a note after viewing a canvas works again instead of
+  failing silently for the rest of the session.
+
 ## [0.0.7] - 2026-08-05
 
 ### Added

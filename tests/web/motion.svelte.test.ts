@@ -20,7 +20,7 @@ import FileTree from "../../src/lib/FileTree.svelte";
 import type { TreeEntry } from "../../src/lib/ipc/bindings";
 import TabStrip from "../../src/lib/TabStrip.svelte";
 import type { WorkspaceTab } from "../../src/lib/workspaceState";
-import { reactiveProps } from "./helpers/reactiveProps.svelte";
+import { reactiveState } from "./helpers/reactiveState.svelte";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -470,7 +470,7 @@ describe("file tree folder reveal", () => {
   });
 
   it("animates auto-expanded folders closed with inert leaving ghosts", async () => {
-    const props = reactiveProps({
+    const props = reactiveState({
       entries: treeEntries,
       selectedPath: "Folder/one.md" as string | null,
       onOpenPath: () => {},
@@ -580,7 +580,7 @@ type HighlightProps = {
 
 describe("file tree active-note highlight", () => {
   it("enters in place on first selection, then travels between rows on the panel clock", async () => {
-    const props = reactiveProps<HighlightProps>({
+    const props = reactiveState<HighlightProps>({
       entries: highlightEntries,
       selectedPath: "alpha.md",
       onOpenPath: () => {},
@@ -632,7 +632,7 @@ describe("file tree active-note highlight", () => {
 
   it("snaps the highlight instantly with no choreography when motion is off", async () => {
     document.documentElement.dataset.animations = "false";
-    const props = reactiveProps<HighlightProps>({
+    const props = reactiveState<HighlightProps>({
       entries: highlightEntries,
       selectedPath: "alpha.md",
       onOpenPath: () => {},
@@ -661,7 +661,7 @@ describe("file tree active-note highlight", () => {
     await unmount(component);
   });
   it("retargets from the highlight's current rendered position", async () => {
-    const props = reactiveProps<HighlightProps>({
+    const props = reactiveState<HighlightProps>({
       entries: highlightEntries,
       selectedPath: "alpha.md",
       onOpenPath: () => {},
@@ -845,7 +845,7 @@ type TabStripProps = {
 };
 
 function tabStripProps(overrides: Partial<TabStripProps> = {}): TabStripProps {
-  return reactiveProps<TabStripProps>({
+  return reactiveState<TabStripProps>({
     tabs: stripTabs(3),
     activePath: "note-1.md",
     titleSources: {},
@@ -1199,7 +1199,7 @@ describe("motion lifecycle", () => {
   it("cancels scheduled tree and tab callbacks when they unmount", async () => {
     const cancelFrame = vi.spyOn(globalThis, "cancelAnimationFrame");
     const clearTimer = vi.spyOn(globalThis, "clearTimeout");
-    const treeProps = reactiveProps<HighlightProps>({
+    const treeProps = reactiveState<HighlightProps>({
       entries: highlightEntries,
       selectedPath: "alpha.md",
       onOpenPath: () => {},

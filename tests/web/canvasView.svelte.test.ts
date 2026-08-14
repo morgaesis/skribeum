@@ -472,11 +472,43 @@ describe("canvas viewer interactions and note rendering", () => {
     expect(opened).toHaveLength(0);
     expect(card.dataset.selected).toBe("true");
 
-    card.dispatchEvent(
-      new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
-    );
+    // The double-click open gesture is detected from the raw pointer
+    // stream: the viewport cancels pointerdown, so the browser never
+    // synthesizes click or dblclick events for cards.
+    card.dispatchEvent(pointerEvent("pointerdown", 1, 30, 40));
+    card.dispatchEvent(pointerEvent("pointerup", 1, 30, 40));
     flushSync();
     expect(opened).toEqual(["Note.md"]);
+
+    await unmount(component);
+  });
+
+  it("does not open the note when the second tap arrives after the window", async () => {
+    const opened: string[] = [];
+    const component = mount(CanvasView, {
+      target: document.body,
+      props: {
+        canvas: canvasWithNote(),
+        previews: { "Note.md": "content" },
+        onOpenNode: (path: string) => opened.push(path),
+      },
+    });
+    flushSync();
+
+    const card = document.querySelector<HTMLElement>('[data-node-id="note"]');
+    expect(card).not.toBeNull();
+    if (card === null) return;
+
+    const now = vi.spyOn(performance, "now");
+    now.mockReturnValue(1000);
+    card.dispatchEvent(pointerEvent("pointerdown", 1, 30, 40));
+    card.dispatchEvent(pointerEvent("pointerup", 1, 30, 40));
+    now.mockReturnValue(1600);
+    card.dispatchEvent(pointerEvent("pointerdown", 1, 30, 40));
+    card.dispatchEvent(pointerEvent("pointerup", 1, 30, 40));
+    flushSync();
+    expect(opened).toHaveLength(0);
+    now.mockRestore();
 
     await unmount(component);
   });

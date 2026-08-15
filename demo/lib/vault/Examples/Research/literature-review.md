@@ -42,13 +42,17 @@ recurring recommendations appear across the sources:
 ## Daylight and orientation
 
 Daylight access correlates with self-reported satisfaction more strongly
-than square footage per person in every study reviewed. The practical
-guidance converges on:
+than square footage per person in every study reviewed[^daylight-control].
+The practical guidance converges on:
 
 - Seating within four meters of a window for at least half of all desks.
 - Avoiding screens directly facing unshaded south-facing glass.
 - Supplementing, not replacing, daylight with tunable warm and cool
   electric light for late-afternoon use.
+
+[^daylight-control]: The correlation held even after controlling for total
+    floor area, which is why square footage alone was not a reliable
+    predictor across sources.
 
 ## Furniture flexibility
 
@@ -76,7 +80,12 @@ findings:
 - Unenforced quiet hours are worse than no stated quiet hours, because
   they create a false expectation.
 - Volunteer-run spaces need a named point of contact, not a rotating
-  roster, for at least the first six months.
+  roster, for at least the first six months[^short-pilots].
+
+[^short-pilots]: Sources that tracked only the first few weeks
+    consistently overstated how quickly a rotating roster could substitute
+    for one named person; the six-month figure comes from the sources that
+    kept watching after the opening rush faded.
 
 Governance sources also agreed, with unusual consistency, that written
 rules matter less than who is present to model them. A posted quiet-hours

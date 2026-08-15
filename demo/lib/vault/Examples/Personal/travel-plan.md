@@ -24,6 +24,12 @@ A quiet two-day visit built around walking, sketching, and a long lunch. The pla
 - Spend one hour sketching boats, ropes, or rooflines.
 - Pick up bread and fruit before the return train.
 
+The western pier holds a rotating handful of moored boats and catches the
+sun low over the water in late afternoon, which makes it the better of the
+two sketching stops:
+
+![Flat illustration of the harbor at dusk: three boats moored along a wooden pier under a low sun](harbor-sketch.png)
+
 ## Route alternatives
 
 | Conditions | Route | Approximate character |

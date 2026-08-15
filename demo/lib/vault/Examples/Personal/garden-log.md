@@ -17,6 +17,10 @@ Pea shoots are roughly a hand high. Two supports leaned after the rain, so they 
 
 Three beds with the dimensions used in [[Features/block-math|Block math]] would require more soil than this small garden can store at once. Ordering in two deliveries would keep the path usable.
 
+A quick sketch of the layout keeps the drainage line straight in memory before the details fade:
+
+![Top-down diagram of the garden beds: the upper bed, the cedar planter, the chive marker, the shallow drainage channel, the gravel edge, and the bench](garden-beds.svg)
+
 The bench receives shade from about mid-afternoon. That makes it a good place for the seedling tray, provided someone remembers to move the tray before a cold night.
 
 > [!warning] Slug pressure

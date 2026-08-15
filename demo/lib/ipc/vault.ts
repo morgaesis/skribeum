@@ -5,7 +5,7 @@ import type {
 } from "../../../src/lib/editor/durableHistory";
 import { isNotePath } from "../../../src/lib/noteTitles";
 import { STRINGS } from "../../../src/lib/strings";
-import { DEMO_FILES } from "../vault/seed";
+import { DEMO_BINARY_FILES, DEMO_FILES } from "../vault/seed";
 import type {
   AppError,
   ByteRangeReplace,
@@ -78,12 +78,16 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 function seededFiles(): Map<string, Uint8Array> {
-  return new Map(
+  const files = new Map(
     Object.entries(DEMO_FILES).map(([path, content]) => [
       path,
       encoder.encode(content),
     ]),
   );
+  for (const [path, bytes] of Object.entries(DEMO_BINARY_FILES)) {
+    files.set(path, bytes);
+  }
+  return files;
 }
 
 type DemoVault = {

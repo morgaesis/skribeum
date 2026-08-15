@@ -12,6 +12,7 @@ This index provides a stable starting point for browsing the sample vault.
 
 - [[Features/wikilinks|Wikilinks]]
 - [[Features/embeds|Embeds]]
+- [[Features/images|Images, footnotes and rules]]
 - [[Features/tags|Tags]]
 - [[Features/callouts|Callouts]]
 - [[Features/tasks|Tasks]]

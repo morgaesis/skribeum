@@ -84,8 +84,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pane's empty state and every route out of it now agree, and the tab strip's
   geometry effects no longer throw when the strip is removed mid-update.
 - The address bar follows the focused pane's active tab, including plain tab
-  switches and renames, and a restored workspace now wins over the address
-  bar instead of having its note forced into the focused pane.
+  switches and renames, without overwriting the note a `?note=<path>` address
+  asks for: reloading such a link opens that note and adds it to the focused
+  pane's strip, so every restored tab survives. A restored workspace decides
+  what opens only when the address names no note.
 - The workspace reserves the sidebar's width from the first paint, so the
   editor area no longer jumps sideways when the vault finishes opening.
 

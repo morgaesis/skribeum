@@ -2080,8 +2080,14 @@ $effect(() => {
 $effect(() => {
   if (navigationSurface !== "browser") return;
   const path = focusedWorkspacePane().activePath;
+  // The address reports the note the shell is showing, so it follows only
+  // once the pane's active tab has actually loaded. A restored workspace
+  // names its note, and restores the selected path, before anything opens;
+  // until the note itself is loaded the address is still an input, naming
+  // the note a `?note=` link asked for.
+  if (path === null || note === null || selectedPath !== path) return;
   const current = navigation?.state().address ?? null;
-  if (path === null || current?.path === path) return;
+  if (current?.path === path) return;
   navigation?.syncAddress({ path });
 });
 
@@ -2759,15 +2765,19 @@ async function openVaultAtPath(
         await openNote(path, tab.viewState);
         updatePaneNavigationState();
       }
+    } else if (addressed !== null) {
+      // An address that names a note is a request for that note, on a reload
+      // as much as on a first visit, so it outranks whatever the restored
+      // workspace last showed. The note joins the focused pane's strip
+      // instead of replacing a restored tab, so nothing persisted is lost.
+      await navigation?.start(addressed);
     } else if (
-      addressed !== null &&
       navigationSurface === "browser" &&
       focusedWorkspacePane().activePath !== null &&
       notePathsOf(tree).includes(focusedWorkspacePane().activePath ?? "")
     ) {
-      // A restored workspace wins over the address bar: the persisted pane
-      // already knows what each pane was showing, and force-opening the
-      // query parameter's note would rewrite the focused pane's tab.
+      // With no note in the address, the restored workspace decides what the
+      // focused pane shows and the address bar follows it.
       const pane = focusedWorkspacePane();
       const path = pane.activePath;
       if (path !== null) {
@@ -2776,8 +2786,6 @@ async function openVaultAtPath(
         navigation?.syncAddress({ path });
         updatePaneNavigationState();
       }
-    } else if (addressed !== null) {
-      await navigation?.start(addressed);
     } else if (typeof harnessNote === "string") {
       if (navigationSurface === "browser")
         await navigation?.start({ path: harnessNote });
@@ -3602,6 +3610,16 @@ function setEndToEndSelectionFromLastMatch(
 // that plants the value.
 function pollEndToEndVault() {
   let attempts = 0;
+  // The announcement is planted before this component mounts, so its absence
+  // right now already answers for the reserved sidebar column: nothing is
+  // arriving to fill it, and the empty state must not sit beside it while a
+  // poll confirms that. The poll still runs, for the slower webview race.
+  if (
+    typeof (window as { __SKRIBEUM_E2E_VAULT__?: string })
+      .__SKRIBEUM_E2E_VAULT__ !== "string"
+  ) {
+    settleStartupVaultSource("announced");
+  }
   const timer = setInterval(() => {
     attempts += 1;
     const path = (window as { __SKRIBEUM_E2E_VAULT__?: string })
@@ -3645,12 +3663,8 @@ function pollEndToEndVault() {
       void openEndToEndVault(path).finally(() =>
         settleStartupVaultSource("announced"),
       );
-    } else {
-      // The announcement is planted at page load, so a few empty polls
-      // are enough to conclude this route will not produce a vault; the
-      // poll itself keeps running for the slower webview race.
-      if (attempts > 3) settleStartupVaultSource("announced");
-      if (attempts > 50 || vault !== null) clearInterval(timer);
+    } else if (attempts > 50 || vault !== null) {
+      clearInterval(timer);
     }
   }, 100);
   return timer;

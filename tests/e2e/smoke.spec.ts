@@ -5636,6 +5636,9 @@ describe("skribeum core editing surfaces", () => {
     await closeIfOpen('[data-testid="settings-view"]');
     await closeIfOpen('[data-testid="dialog"]');
     await restoreNativeMatchMedia();
+    // A test that throws between a narrow-viewport check and its restore
+    // would otherwise run every following test at phone width.
+    await restoreDesktopViewport();
   });
 
   it("quick_switcher_opens_a_note_end_to_end", async () => {

@@ -7,6 +7,7 @@
 // exactly. Any touched byte outside a declared range would break the
 // reconstruction.
 
+import { Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import {
   applyByteChangeSet,
@@ -16,6 +17,7 @@ import {
   applyTableOperation,
   editTable,
   editTableCell,
+  extendedTableDocumentEnd,
   formatTableChanges,
   isDelimiterLine,
   type TableOperation,
@@ -300,6 +302,86 @@ describe("table cell navigation model", () => {
       "c",
       "d",
     ]);
+  });
+});
+
+describe("table block end over a partial row", () => {
+  const table = [
+    "| Name  | Score |",
+    "| :--- | ---: |",
+    "| café   | keep  |",
+    "| Ada | 10 |",
+  ].join("\n");
+  const document = Text.of(
+    [
+      "# Table cell editing",
+      "",
+      "Before editable table.",
+      "",
+      ...table.split("\n"),
+      "",
+      "Large table follows.",
+      "",
+    ]
+      .join("\n")
+      .split("\n"),
+  );
+  const tableFrom = document.toString().indexOf("| Name");
+  // A table block spans whole rows. A reported end that stops inside a
+  // row must still resolve to that row's end, because every offset a
+  // table edit declares is measured against the block text.
+  const partialRowEnd = tableFrom + 46;
+
+  it("completes a row the reported end stops inside", () => {
+    expect(document.sliceString(partialRowEnd - 3, partialRowEnd)).toBe("| k");
+    expect(extendedTableDocumentEnd(document, tableFrom, partialRowEnd)).toBe(
+      tableFrom + table.length,
+    );
+  });
+
+  it("never splices a structure edit into the middle of a row", () => {
+    const block = document.sliceString(
+      tableFrom,
+      extendedTableDocumentEnd(document, tableFrom, partialRowEnd),
+    );
+    const spans = editTable(block, {
+      kind: "insert-row",
+      line: 2,
+      position: "below",
+    });
+    const source = document.toString();
+    const edited = spans.reduce(
+      (text, span) =>
+        text.slice(0, tableFrom + span.from) +
+        span.insert +
+        text.slice(tableFrom + span.to),
+      source,
+    );
+    expect(edited).toBe(
+      source.replace("| café   | keep  |\n", "| café   | keep  |\n| | |\n"),
+    );
+  });
+
+  it("leaves a row-aligned reported end unchanged", () => {
+    for (const rows of [1, 2, 3, 4]) {
+      const end =
+        tableFrom + table.split("\n").slice(0, rows).join("\n").length;
+      expect(extendedTableDocumentEnd(document, tableFrom, end)).toBe(
+        tableFrom + table.length,
+      );
+    }
+  });
+
+  it("completes only partial rows, never a following paragraph", () => {
+    const prose = Text.of(
+      ["| a | b |", "| --- | --- |", "| c | d |", "", "Following prose."]
+        .join("\n")
+        .split("\n"),
+    );
+    const blockEnd = prose.toString().indexOf("\n\nFollowing");
+    // An end inside the paragraph is not a partial row, so it stays put
+    // rather than growing the block over prose.
+    expect(extendedTableDocumentEnd(prose, 0, blockEnd + 4)).toBe(blockEnd + 4);
   });
 });
 

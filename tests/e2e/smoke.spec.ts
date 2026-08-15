@@ -6437,15 +6437,25 @@ describe("skribeum core editing surfaces", () => {
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
     const systemToggle = $('[data-testid="settings-match-system"]');
-    expect(await systemToggle.isSelected()).toBe(true);
-    expect(
-      await $('[data-testid="settings-palette-gazette"]').getAttribute(
-        "aria-checked",
-      ),
-    ).toBe("true");
-    expect(
-      await $('[data-testid="settings-palette-signal"]').getAttribute("class"),
-    ).toContain("paired");
+    // The dialog's existence only means the container mounted; the controls
+    // inside it commit the persisted document a moment later, so poll for
+    // that committed state rather than asserting immediately on open.
+    await browser.waitUntil(
+      async () =>
+        (await systemToggle.isSelected()) &&
+        (await $('[data-testid="settings-palette-gazette"]').getAttribute(
+          "aria-checked",
+        )) === "true" &&
+        (
+          await $('[data-testid="settings-palette-signal"]').getAttribute(
+            "class",
+          )
+        ).includes("paired"),
+      {
+        timeout: 10000,
+        timeoutMsg: "settings surface did not commit the persisted document",
+      },
+    );
 
     await browser.execute(() => {
       const testWindow = window as unknown as {

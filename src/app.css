@@ -675,7 +675,7 @@ select {
   color: var(--skr-text-muted);
   background: var(--skr-surface);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   opacity: 1;
   pointer-events: none;
   /* Declared at rest so the one attribute flip below always transitions. */

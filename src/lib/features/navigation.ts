@@ -62,6 +62,8 @@ export type WikilinkResolutionContext = {
   currentPath?: string | null;
   /** Read-only note loader used by rendered embeds and link previews. */
   loadNote?: (path: string) => Promise<string | null>;
+  /** Read-only byte loader for vault files rendered images read. */
+  loadAsset?: (path: string) => Promise<Uint8Array | null>;
   /** Resolved note paths enclosing a nested embed. */
   embedAncestry?: readonly string[];
   /** Current rendered-embed nesting depth. */

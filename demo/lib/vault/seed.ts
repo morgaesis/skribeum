@@ -17,9 +17,11 @@ import callouts from "./Features/callouts.md?raw";
 import codeBlocks from "./Features/code-blocks.md?raw";
 import embeds from "./Features/embeds.md?raw";
 import frontmatter from "./Features/frontmatter.md?raw";
+import images from "./Features/images.md?raw";
 import inlineMath from "./Features/inline-math.md?raw";
 import mermaidDiagram from "./Features/mermaid-diagram.md?raw";
 import showcase from "./Features/showcase.md?raw";
+import skribeumMark from "./Features/skribeum-mark.svg?raw";
 import tables from "./Features/tables.md?raw";
 import tags from "./Features/tags.md?raw";
 import tasks from "./Features/tasks.md?raw";
@@ -69,7 +71,9 @@ export const DEMO_FILES: Readonly<Record<string, string>> = Object.freeze({
   "Features/code-blocks.md": codeBlocks,
   "Features/embeds.md": embeds,
   "Features/frontmatter.md": frontmatter,
+  "Features/images.md": images,
   "Features/inline-math.md": inlineMath,
+  "Features/skribeum-mark.svg": skribeumMark,
   "Features/mermaid-diagram.md": mermaidDiagram,
   "Features/showcase.md": showcase,
   "Features/tables.md": tables,

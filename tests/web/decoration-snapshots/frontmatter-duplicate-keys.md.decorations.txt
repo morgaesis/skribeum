@@ -37,3 +37,4 @@
 527..528 hide node=CodeMark
 527..534 mark class="cm-skr-inline-code"
 533..534 hide node=CodeMark
+742..745 widget thematic-break aria-label="Thematic break" role="separator"

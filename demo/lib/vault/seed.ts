@@ -3,7 +3,9 @@ import demoCanvas from "./demo.canvas?raw";
 import communityEventPlan from "./Examples/Community/event-plan.md?raw";
 import homeKitchenNotes from "./Examples/Home/kitchen-notes.md?raw";
 import homeMaintenanceLog from "./Examples/Home/maintenance-log.md?raw";
+import personalGardenBeds from "./Examples/Personal/garden-beds.svg?raw";
 import personalGardenLog from "./Examples/Personal/garden-log.md?raw";
+import harborSketchDataUrl from "./Examples/Personal/harbor-sketch.png?inline";
 import personalTravelPlan from "./Examples/Personal/travel-plan.md?raw";
 import personalWeeklyReview from "./Examples/Personal/weekly-review.md?raw";
 import researchInterviewNotes from "./Examples/Research/interview-notes.md?raw";
@@ -57,6 +59,7 @@ export const DEMO_FILES: Readonly<Record<string, string>> = Object.freeze({
   "Examples/Community/event-plan.md": communityEventPlan,
   "Examples/Home/kitchen-notes.md": homeKitchenNotes,
   "Examples/Home/maintenance-log.md": homeMaintenanceLog,
+  "Examples/Personal/garden-beds.svg": personalGardenBeds,
   "Examples/Personal/garden-log.md": personalGardenLog,
   "Examples/Personal/travel-plan.md": personalTravelPlan,
   "Examples/Personal/weekly-review.md": personalWeeklyReview,
@@ -82,6 +85,28 @@ export const DEMO_FILES: Readonly<Record<string, string>> = Object.freeze({
   "Features/wikilinks.md": wikilinks,
   "index.md": index,
   "quickstart.md": quickstart,
+});
+
+/** Decodes a `data:` URL produced by Vite's `?inline` import into raw bytes. */
+function decodeInlinedAsset(dataUrl: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+/**
+ * Non-text sample assets, keyed the same way as `DEMO_FILES`. A raster image
+ * cannot survive `DEMO_FILES`' UTF-8 text pipeline intact, so its bytes come
+ * in through an inlined `data:` URL and are decoded once here instead.
+ */
+export const DEMO_BINARY_FILES: Readonly<
+  Record<string, Uint8Array<ArrayBuffer>>
+> = Object.freeze({
+  "Examples/Personal/harbor-sketch.png":
+    decodeInlinedAsset(harborSketchDataUrl),
 });
 
 export const DEMO_INITIAL_NOTE = "quickstart.md";

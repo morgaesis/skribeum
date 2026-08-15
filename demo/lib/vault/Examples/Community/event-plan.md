@@ -16,6 +16,10 @@ Host a half-day gathering where neighbors can learn simple repair skills, work a
 
 The shared-tool-table result in [[Features/tables|Tables]] suggests splitting common supplies between the object and bicycle zones. Clear labels should match the spoken orientation, following the access notes from [[Examples/Research/interview-notes|Interview notes]].
 
+A bicycle station from another repair cafe, for scale: a stand, a floor pump within reach, and enough space to kneel beside the wheel.
+
+![A volunteer stands a bicycle in a repair stand and works on the front wheel at an outdoor repair cafe table](https://live.staticflickr.com/7160/13192369153_2b38402fdf_n.jpg)
+
 ## Volunteer briefing
 
 - Begin by asking what outcome the visitor wants.

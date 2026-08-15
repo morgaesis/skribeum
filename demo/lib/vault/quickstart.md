@@ -18,6 +18,7 @@ Write here: **replace this prompt with an observation.**
 
 - Follow [[Features/wikilinks|Wikilinks]] to see links with aliases, headings, and nested paths.
 - Open [[Features/embeds|Embeds]] for transclusion examples.
+- Open [[Features/images|Images, footnotes and rules]] to see a vault image, a footnote, and a thematic break render in place.
 - Compare [[Features/inline-math|Inline math]] with [[Features/block-math|Block math]].
 - View [[Features/mermaid-diagram|Mermaid diagram]] for a rendered flow.
 - Inspect [[Features/frontmatter|Frontmatter]] and its properties.

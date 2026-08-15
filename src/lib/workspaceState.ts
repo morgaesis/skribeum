@@ -6,7 +6,12 @@ export const SIDEBAR_DEFAULT_REM = 16;
 export const OUTLINE_MIN_REM = 12;
 export const OUTLINE_MAX_REM = 20;
 export const OUTLINE_DEFAULT_REM = 15;
+/** Width floor for one leaf pane: the prose measure needs the harder floor. */
 export const SPLIT_MIN_REM = 20;
+/** Height floor for one leaf pane: a note scrolls instead of reflowing. */
+export const SPLIT_MIN_HEIGHT_REM = 12;
+/** Guard rail on the tree, the focus search, and the persisted shape. */
+export const MAX_LEAF_PANES = 8;
 
 export type WorkspaceTab = {
   path: string;
@@ -20,52 +25,181 @@ export type WorkspaceHistoryEntry = {
   viewState: NoteViewState | null;
 };
 
-export type WorkspacePane = {
+/** One pane: its own tab strip, editor, and navigation history. */
+export type WorkspaceLeaf = {
+  type: "leaf";
   id: string;
   tabs: WorkspaceTab[];
   activePath: string | null;
   history: WorkspaceHistoryEntry[];
   historyIndex: number;
+  /**
+   * Transient: an empty focused tab opened from the strip's "+" control,
+   * filled by the next open-in-place route. Never persisted, because a
+   * blank tab has nothing to restore.
+   */
+  emptyTab?: boolean;
 };
 
+/** Two child nodes side by side (`row`) or stacked (`column`). */
+export type WorkspaceSplit = {
+  type: "split";
+  axis: "row" | "column";
+  ratio: number;
+  children: [WorkspaceNode, WorkspaceNode];
+};
+
+export type WorkspaceNode = WorkspaceLeaf | WorkspaceSplit;
+
+/** Where a new pane lands relative to the pane being split. */
+export type SplitSide = "up" | "down" | "left" | "right";
+
 export type VaultWorkspaceState = {
-  version: 1;
+  version: 2;
   sidebarWidthRem: number;
   sidebarCollapsed: boolean;
   outlineWidthRem: number;
   outlineCollapsed: boolean;
-  splitRatio: number;
   expandedFolders: string[];
   selectedPath: string | null;
-  panes: WorkspacePane[];
+  layout: WorkspaceNode;
   focusedPaneId: string;
   closedTabs: WorkspaceTab[];
 };
 
-export function defaultWorkspaceState(): VaultWorkspaceState {
+export function emptyPane(id: string): WorkspaceLeaf {
   return {
-    version: 1,
-    sidebarWidthRem: SIDEBAR_DEFAULT_REM,
-    sidebarCollapsed: false,
-    outlineWidthRem: OUTLINE_DEFAULT_REM,
-    outlineCollapsed: true,
-    splitRatio: 0.5,
-    expandedFolders: [],
-    selectedPath: null,
-    panes: [emptyPane("pane-1")],
-    focusedPaneId: "pane-1",
-    closedTabs: [],
-  };
-}
-
-export function emptyPane(id: string): WorkspacePane {
-  return {
+    type: "leaf",
     id,
     tabs: [],
     activePath: null,
     history: [],
     historyIndex: -1,
   };
+}
+
+export function defaultWorkspaceState(): VaultWorkspaceState {
+  return {
+    version: 2,
+    sidebarWidthRem: SIDEBAR_DEFAULT_REM,
+    sidebarCollapsed: false,
+    outlineWidthRem: OUTLINE_DEFAULT_REM,
+    outlineCollapsed: true,
+    expandedFolders: [],
+    selectedPath: null,
+    layout: emptyPane("pane-1"),
+    focusedPaneId: "pane-1",
+    closedTabs: [],
+  };
+}
+
+/** Every leaf in depth-first, top-to-bottom, left-to-right order. */
+export function workspaceLeaves(node: WorkspaceNode): WorkspaceLeaf[] {
+  if (node.type === "leaf") return [node];
+  return [
+    ...workspaceLeaves(node.children[0]),
+    ...workspaceLeaves(node.children[1]),
+  ];
+}
+
+export function findWorkspaceLeaf(
+  node: WorkspaceNode,
+  id: string,
+): WorkspaceLeaf | null {
+  if (node.type === "leaf") return node.id === id ? node : null;
+  return (
+    findWorkspaceLeaf(node.children[0], id) ??
+    findWorkspaceLeaf(node.children[1], id)
+  );
+}
+
+/** An identifier no leaf in the tree currently holds. */
+export function nextPaneId(node: WorkspaceNode): string {
+  const used = new Set(workspaceLeaves(node).map((leaf) => leaf.id));
+  let index = used.size + 1;
+  while (used.has(`pane-${index}`)) index += 1;
+  return `pane-${index}`;
+}
+
+/**
+ * Replaces one leaf with a split holding it and `addition` on `side`. The
+ * caller enforces the leaf cap; this operation only rewrites the shape.
+ */
+export function splitWorkspaceLeaf(
+  node: WorkspaceNode,
+  leafId: string,
+  side: SplitSide,
+  addition: WorkspaceLeaf,
+): WorkspaceNode {
+  if (node.type === "leaf") {
+    if (node.id !== leafId) return node;
+    const axis = side === "left" || side === "right" ? "row" : "column";
+    const children: [WorkspaceNode, WorkspaceNode] =
+      side === "left" || side === "up" ? [addition, node] : [node, addition];
+    return { type: "split", axis, ratio: 0.5, children };
+  }
+  const first = splitWorkspaceLeaf(node.children[0], leafId, side, addition);
+  const second = splitWorkspaceLeaf(node.children[1], leafId, side, addition);
+  return first === node.children[0] && second === node.children[1]
+    ? node
+    : { ...node, children: [first, second] };
+}
+
+/**
+ * Drops one leaf, replacing its parent split with the surviving sibling so
+ * no single-child split is ever left behind. Returns null when the removed
+ * leaf was the whole tree.
+ */
+export function removeWorkspaceLeaf(
+  node: WorkspaceNode,
+  leafId: string,
+): WorkspaceNode | null {
+  if (node.type === "leaf") return node.id === leafId ? null : node;
+  const first = removeWorkspaceLeaf(node.children[0], leafId);
+  const second = removeWorkspaceLeaf(node.children[1], leafId);
+  if (first === null) return second;
+  if (second === null) return first;
+  return first === node.children[0] && second === node.children[1]
+    ? node
+    : { ...node, children: [first, second] };
+}
+
+/**
+ * Collapses a tree into one pane, concatenating every leaf's tabs in the
+ * tree's own depth-first order. Narrow viewports carry one pane only.
+ */
+export function flattenWorkspaceLayout(node: WorkspaceNode): WorkspaceLeaf {
+  const leaves = workspaceLeaves(node);
+  const [first] = leaves;
+  if (first === undefined) return emptyPane("pane-1");
+  if (leaves.length === 1) return first;
+  const tabs: WorkspaceTab[] = [];
+  for (const leaf of leaves) {
+    for (const tab of leaf.tabs) {
+      if (!tabs.some((candidate) => candidate.path === tab.path))
+        tabs.push(tab);
+    }
+  }
+  return {
+    ...first,
+    tabs,
+    activePath:
+      first.activePath ??
+      leaves.find((leaf) => leaf.activePath !== null)?.activePath ??
+      null,
+  };
+}
+
+/** The minimum extent one node needs along an axis, in rem. */
+export function minimumNodeExtentRem(
+  node: WorkspaceNode,
+  axis: "row" | "column",
+): number {
+  const floor = axis === "row" ? SPLIT_MIN_REM : SPLIT_MIN_HEIGHT_REM;
+  if (node.type === "leaf") return floor;
+  const first = minimumNodeExtentRem(node.children[0], axis);
+  const second = minimumNodeExtentRem(node.children[1], axis);
+  return node.axis === axis ? first + second : Math.max(first, second);
 }
 
 function finiteNumber(value: unknown, fallback: number): number {
@@ -119,7 +253,7 @@ function historyEntryFrom(value: unknown): WorkspaceHistoryEntry | null {
   };
 }
 
-function paneFrom(value: unknown, index: number): WorkspacePane | null {
+function leafFrom(value: unknown, fallbackId: string): WorkspaceLeaf | null {
   if (typeof value !== "object" || value === null) return null;
   const pane = value as Record<string, unknown>;
   const tabs = Array.isArray(pane.tabs)
@@ -130,9 +264,7 @@ function paneFrom(value: unknown, index: number): WorkspacePane | null {
       tabs.findIndex((item) => item.path === tab.path) === tabIndex,
   );
   const id =
-    typeof pane.id === "string" && pane.id.length > 0
-      ? pane.id
-      : `pane-${index + 1}`;
+    typeof pane.id === "string" && pane.id.length > 0 ? pane.id : fallbackId;
   const requestedActive =
     typeof pane.activePath === "string" ? pane.activePath : null;
   const history = Array.isArray(pane.history)
@@ -142,6 +274,7 @@ function paneFrom(value: unknown, index: number): WorkspacePane | null {
         .slice(-100)
     : [];
   return {
+    type: "leaf",
     id,
     tabs: uniqueTabs,
     activePath:
@@ -158,22 +291,77 @@ function paneFrom(value: unknown, index: number): WorkspacePane | null {
   };
 }
 
+function nodeFrom(value: unknown, depth: number): WorkspaceNode | null {
+  if (typeof value !== "object" || value === null) return null;
+  const node = value as Record<string, unknown>;
+  if (node.type !== "split") return leafFrom(value, `pane-${depth + 1}`);
+  // A recursion guard only: the leaf cap is enforced after parsing so an
+  // over-large tree loses its shape rather than the tabs it carried.
+  if (depth > 64 || !Array.isArray(node.children)) return null;
+  const first = nodeFrom(node.children[0], depth + 1);
+  const second = nodeFrom(node.children[1], depth + 1);
+  if (first === null) return second;
+  if (second === null) return first;
+  return {
+    type: "split",
+    axis: node.axis === "column" ? "column" : "row",
+    ratio: clamp(finiteNumber(node.ratio, 0.5), 0.05, 0.95),
+    children: [first, second],
+  };
+}
+
+/** Renames duplicate identifiers so every leaf addresses exactly one pane. */
+function withUniquePaneIds(node: WorkspaceNode, used: Set<string>): void {
+  if (node.type === "leaf") {
+    if (node.id.length === 0 || used.has(node.id)) {
+      let index = 1;
+      while (used.has(`pane-${index}`)) index += 1;
+      node.id = `pane-${index}`;
+    }
+    used.add(node.id);
+    return;
+  }
+  withUniquePaneIds(node.children[0], used);
+  withUniquePaneIds(node.children[1], used);
+}
+
+/**
+ * Enforces the leaf cap by folding every leaf past it into the last kept
+ * pane, so an over-large persisted tree loses its shape rather than tabs.
+ */
+function withLeafCap(node: WorkspaceNode): WorkspaceNode {
+  const leaves = workspaceLeaves(node);
+  if (leaves.length <= MAX_LEAF_PANES) return node;
+  const kept = leaves.slice(0, MAX_LEAF_PANES);
+  const survivor = kept[MAX_LEAF_PANES - 1];
+  let layout = node;
+  for (const leaf of leaves.slice(MAX_LEAF_PANES)) {
+    if (survivor !== undefined) {
+      for (const tab of leaf.tabs) {
+        if (!survivor.tabs.some((candidate) => candidate.path === tab.path)) {
+          survivor.tabs.push(tab);
+        }
+      }
+    }
+    layout = removeWorkspaceLeaf(layout, leaf.id) ?? layout;
+  }
+  return layout;
+}
+
 /** Validates persisted state so corrupt local data cannot break the shell. */
 export function normalizeWorkspaceState(value: unknown): VaultWorkspaceState {
   const defaults = defaultWorkspaceState();
   if (typeof value !== "object" || value === null) return defaults;
   const stored = value as Record<string, unknown>;
-  const panes = Array.isArray(stored.panes)
-    ? stored.panes
-        .slice(0, 2)
-        .map(paneFrom)
-        .filter((pane): pane is WorkspacePane => pane !== null)
-    : [];
-  const normalizedPanes = panes.length > 0 ? panes : defaults.panes;
+  const layout = withLeafCap(
+    nodeFrom(stored.layout, 0) ?? migratedPaneArray(stored) ?? defaults.layout,
+  );
+  withUniquePaneIds(layout, new Set());
+  const leaves = workspaceLeaves(layout);
   const requestedFocused =
     typeof stored.focusedPaneId === "string" ? stored.focusedPaneId : "";
   return {
-    version: 1,
+    version: 2,
     sidebarWidthRem: clamp(
       finiteNumber(stored.sidebarWidthRem, SIDEBAR_DEFAULT_REM),
       SIDEBAR_MIN_REM,
@@ -186,7 +374,6 @@ export function normalizeWorkspaceState(value: unknown): VaultWorkspaceState {
       OUTLINE_MAX_REM,
     ),
     outlineCollapsed: stored.outlineCollapsed !== false,
-    splitRatio: clamp(finiteNumber(stored.splitRatio, 0.5), 0.2, 0.8),
     expandedFolders: Array.isArray(stored.expandedFolders)
       ? stored.expandedFolders.filter(
           (path): path is string => typeof path === "string" && path.length > 0,
@@ -194,10 +381,10 @@ export function normalizeWorkspaceState(value: unknown): VaultWorkspaceState {
       : [],
     selectedPath:
       typeof stored.selectedPath === "string" ? stored.selectedPath : null,
-    panes: normalizedPanes,
-    focusedPaneId: normalizedPanes.some((pane) => pane.id === requestedFocused)
+    layout,
+    focusedPaneId: leaves.some((leaf) => leaf.id === requestedFocused)
       ? requestedFocused
-      : (normalizedPanes[0]?.id ?? "pane-1"),
+      : (leaves[0]?.id ?? "pane-1"),
     closedTabs: Array.isArray(stored.closedTabs)
       ? stored.closedTabs
           .map(tabFrom)
@@ -207,13 +394,40 @@ export function normalizeWorkspaceState(value: unknown): VaultWorkspaceState {
   };
 }
 
-function vaultKey(vaultIdentity: string): string {
+/**
+ * Reads the earlier document shape, a flat pane list with one ratio, as the
+ * equivalent tree: two panes become one row split carrying that ratio.
+ */
+function migratedPaneArray(
+  stored: Record<string, unknown>,
+): WorkspaceNode | null {
+  if (!Array.isArray(stored.panes)) return null;
+  const leaves = stored.panes
+    .map((pane, index) => leafFrom(pane, `pane-${index + 1}`))
+    .filter((leaf): leaf is WorkspaceLeaf => leaf !== null);
+  const [first, ...rest] = leaves;
+  if (first === undefined) return null;
+  const ratio = clamp(finiteNumber(stored.splitRatio, 0.5), 0.05, 0.95);
+  return rest.reduce<WorkspaceNode>(
+    (accumulated, leaf) => ({
+      type: "split",
+      axis: "row",
+      ratio,
+      children: [accumulated, leaf],
+    }),
+    first,
+  );
+}
+
+const STORAGE_PREFIX = "skribeum.workspace";
+
+function vaultKey(vaultIdentity: string, version: number): string {
   let hash = 2_166_136_261;
   for (const character of vaultIdentity.normalize("NFC")) {
     hash ^= character.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 16_777_619);
   }
-  return `skribeum.workspace.v1.${(hash >>> 0).toString(16)}`;
+  return `${STORAGE_PREFIX}.v${version}.${(hash >>> 0).toString(16)}`;
 }
 
 export function loadWorkspaceState(
@@ -221,7 +435,11 @@ export function loadWorkspaceState(
   storage: Pick<Storage, "getItem"> = localStorage,
 ): VaultWorkspaceState {
   try {
-    const value = storage.getItem(vaultKey(vaultIdentity));
+    // A document written by the earlier shape still restores: its own key
+    // is read when no current document exists, and the normalizer migrates.
+    const value =
+      storage.getItem(vaultKey(vaultIdentity, 2)) ??
+      storage.getItem(vaultKey(vaultIdentity, 1));
     return value === null
       ? defaultWorkspaceState()
       : normalizeWorkspaceState(JSON.parse(value));
@@ -237,7 +455,7 @@ export function saveWorkspaceState(
 ): void {
   try {
     storage.setItem(
-      vaultKey(vaultIdentity),
+      vaultKey(vaultIdentity, 2),
       JSON.stringify(normalizeWorkspaceState(state)),
     );
   } catch {
@@ -255,6 +473,21 @@ function remappedPath(candidate: string, from: string, to: string): string {
     : candidate;
 }
 
+function mapLeaves(
+  node: WorkspaceNode,
+  transform: (leaf: WorkspaceLeaf) => WorkspaceLeaf,
+): WorkspaceNode {
+  return node.type === "leaf"
+    ? transform(node)
+    : {
+        ...node,
+        children: [
+          mapLeaves(node.children[0], transform),
+          mapLeaves(node.children[1], transform),
+        ],
+      };
+}
+
 /** Reconciles every persisted reference after a file or folder move. */
 export function remapWorkspacePath(
   state: VaultWorkspaceState,
@@ -270,17 +503,17 @@ export function remapWorkspacePath(
     expandedFolders: state.expandedFolders.map((path) =>
       remappedPath(path, from, to),
     ),
-    panes: state.panes.map((pane) => ({
-      ...pane,
-      tabs: pane.tabs.map((tab) => ({
+    layout: mapLeaves(state.layout, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) => ({
         ...tab,
         path: remappedPath(tab.path, from, to),
       })),
       activePath:
-        pane.activePath === null
+        leaf.activePath === null
           ? null
-          : remappedPath(pane.activePath, from, to),
-      history: pane.history.map((entry) => ({
+          : remappedPath(leaf.activePath, from, to),
+      history: leaf.history.map((entry) => ({
         ...entry,
         address: {
           ...entry.address,
@@ -300,25 +533,31 @@ export function removeWorkspacePath(
   state: VaultWorkspaceState,
   removedPath: string,
 ): VaultWorkspaceState {
-  const panes = state.panes.map((pane) => {
-    const tabs = pane.tabs.filter((tab) => !pathWithin(tab.path, removedPath));
-    const history = pane.history.filter(
+  const pruned = mapLeaves(state.layout, (leaf) => {
+    const tabs = leaf.tabs.filter((tab) => !pathWithin(tab.path, removedPath));
+    const history = leaf.history.filter(
       (entry) => !pathWithin(entry.address.path, removedPath),
     );
     return {
-      ...pane,
+      ...leaf,
       tabs,
       activePath:
-        pane.activePath !== null && pathWithin(pane.activePath, removedPath)
+        leaf.activePath !== null && pathWithin(leaf.activePath, removedPath)
           ? (tabs[0]?.path ?? null)
-          : pane.activePath,
+          : leaf.activePath,
       history,
-      historyIndex: Math.min(pane.historyIndex, history.length - 1),
+      historyIndex: Math.min(leaf.historyIndex, history.length - 1),
     };
   });
-  const populated = panes.filter((pane) => pane.tabs.length > 0);
-  const retained =
-    populated.length > 0 ? populated : [panes[0] ?? emptyPane("pane-1")];
+  // An emptied pane collapses into its sibling exactly as closing its last
+  // tab would, so a deletion never leaves a blank pane behind.
+  let layout = pruned;
+  for (const leaf of workspaceLeaves(pruned)) {
+    if (leaf.tabs.length > 0) continue;
+    const remaining = removeWorkspaceLeaf(layout, leaf.id);
+    if (remaining !== null) layout = remaining;
+  }
+  const leaves = workspaceLeaves(layout);
   return normalizeWorkspaceState({
     ...state,
     selectedPath:
@@ -328,10 +567,10 @@ export function removeWorkspacePath(
     expandedFolders: state.expandedFolders.filter(
       (path) => !pathWithin(path, removedPath),
     ),
-    panes: retained,
-    focusedPaneId: retained.some((pane) => pane.id === state.focusedPaneId)
+    layout,
+    focusedPaneId: leaves.some((leaf) => leaf.id === state.focusedPaneId)
       ? state.focusedPaneId
-      : (retained[0]?.id ?? "pane-1"),
+      : (leaves[0]?.id ?? "pane-1"),
     closedTabs: state.closedTabs.filter(
       (tab) => !pathWithin(tab.path, removedPath),
     ),

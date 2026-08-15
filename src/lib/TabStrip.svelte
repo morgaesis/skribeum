@@ -1,3 +1,27 @@
+<script module lang="ts">
+/**
+ * The tab a pointer is currently dragging. A drag's payload also travels in
+ * the drag event's own data, but `dragover` may not read that data, and the
+ * edge drop zones have to know which pane a tab came from while the pointer
+ * is still moving. Dragging tabs between windows is out of scope, so one
+ * document-scoped record answers it.
+ */
+export type TabDragOrigin = { path: string; paneId: string };
+
+let activeTabDrag: TabDragOrigin | null = null;
+
+export function currentTabDrag(): TabDragOrigin | null {
+  return activeTabDrag;
+}
+
+export function setTabDrag(origin: TabDragOrigin | null): void {
+  activeTabDrag = origin;
+}
+
+/** Identifies the transient empty tab, which owns no note path. */
+export const EMPTY_TAB_KEY = "\u0000empty-tab";
+</script>
+
 <script lang="ts">
 import { onDestroy, onMount, tick } from "svelte";
 import AnchoredMenu from "./AnchoredMenu.svelte";
@@ -11,6 +35,9 @@ import type { WorkspaceTab } from "./workspaceState";
 // clock, matching the reorder reflow's own clock below.
 const ACTIVE_INDICATOR_TRAVEL_TRANSITION =
   "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)";
+// The strip's own reflow after held widths release: the same panel clock,
+// on the same compositor-only property.
+const REORDER_REFLOW_TRANSITION = ACTIVE_INDICATOR_TRAVEL_TRANSITION;
 let nextTablistId = 0;
 
 function transformOffset(element: HTMLElement): number {
@@ -39,23 +66,37 @@ function renderedLeft(element: HTMLElement, fallback: number): number {
   return (Number.isFinite(left) ? left : fallback) + transformOffset(element);
 }
 let {
+  paneId,
   tabs,
   activePath,
   titleSources,
   focused,
+  visible,
+  emptyTab = false,
   closeTooltip = { title: STRINGS.closeTab },
   onActivate,
   onClose,
   onReorder,
+  onNewTab,
+  onAdopt,
 }: {
+  paneId: string;
   tabs: readonly WorkspaceTab[];
   activePath: string | null;
   titleSources: Readonly<Record<string, string>>;
   focused: boolean;
+  /**
+   * A pane's strip is present once it holds a second note, and while any
+   * split is open so every pane keeps its own close control.
+   */
+  visible: boolean;
+  emptyTab?: boolean;
   closeTooltip?: CommandTooltipOptions;
-  onActivate: (path: string) => void;
-  onClose: (path: string, restoreFocus: boolean) => void;
+  onActivate: (path: string | null) => void;
+  onClose: (path: string | null, restoreFocus: boolean) => void;
   onReorder: (from: number, to: number) => void;
+  onNewTab: () => void;
+  onAdopt: (origin: TabDragOrigin, index: number) => void;
 } = $props();
 
 let dragging = $state<number | null>(null);
@@ -83,6 +124,20 @@ let indicatorMotionFrame: number | null = null;
 let indicatorMotionTimer: ReturnType<typeof setTimeout> | null = null;
 let indicatorTraveling = false;
 let mounted = true;
+/**
+ * The tab that owns the strip's single tab stop. It follows the active tab
+ * until an arrow key moves it, which is the tabs pattern's roving tabindex.
+ */
+let rovingIndex = $state(0);
+/**
+ * Tab widths held after a close while the pointer is still over the strip,
+ * so the next tab's close control lands under the pointer exactly as it
+ * does in a browser. Released, with a compositor-only reflow, on exit.
+ */
+let heldWidths = $state<Map<string, number> | null>(null);
+let pointerOverStrip = false;
+let measuredWidths = new Map<string, number>();
+let previousEntryCount = 0;
 const tablistId = `skr-tablist-${nextTablistId++}`;
 
 function tabId(index: number): string {
@@ -115,7 +170,42 @@ const titles = $derived(
   ),
 );
 
-function closeWithMiddleButton(event: MouseEvent, path: string) {
+type StripEntry = {
+  key: string;
+  path: string | null;
+  tab: WorkspaceTab | null;
+  label: string;
+  suffix: string | undefined;
+};
+
+/** Open notes, plus the transient empty tab when one is open. */
+const entries = $derived.by((): StripEntry[] => {
+  const open = tabs.map((tab, index) => ({
+    key: tab.path,
+    path: tab.path,
+    tab,
+    label: titles[index]?.displayTitle ?? tab.path,
+    suffix: titles[index]?.collisionSuffix,
+  }));
+  return emptyTab
+    ? [
+        ...open,
+        {
+          key: EMPTY_TAB_KEY,
+          path: null,
+          tab: null,
+          label: STRINGS.emptyTabLabel,
+          suffix: undefined,
+        },
+      ]
+    : open;
+});
+
+const activeKey = $derived(
+  activePath ?? (emptyTab ? EMPTY_TAB_KEY : null),
+) as string | null;
+
+function closeWithMiddleButton(event: MouseEvent, path: string | null) {
   if (event.button !== 1) return;
   event.preventDefault();
   onClose(path, false);
@@ -125,7 +215,7 @@ function keepPointerFocus(event: MouseEvent) {
   if (event.button === 0) event.preventDefault();
 }
 
-function closeFromButton(event: MouseEvent, path: string) {
+function closeFromButton(event: MouseEvent, path: string | null) {
   event.stopPropagation();
   onClose(
     path,
@@ -139,6 +229,33 @@ function finishReorder() {
   }
   dragging = null;
   insertion = null;
+  setTabDrag(null);
+}
+
+/** A tab dragged out of another pane's strip, or null for a local drag. */
+function foreignDrag(): TabDragOrigin | null {
+  const origin = currentTabDrag();
+  return origin === null || origin.paneId === paneId ? null : origin;
+}
+
+function acceptForeignDragOver(event: DragEvent, index: number) {
+  if (foreignDrag() === null) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  insertion =
+    event.clientX < bounds.left + bounds.width / 2 ? index : index + 1;
+}
+
+function acceptForeignDrop(event: DragEvent, index: number) {
+  const origin = foreignDrag();
+  if (origin === null) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const target = insertion ?? index;
+  insertion = null;
+  setTabDrag(null);
+  onAdopt(origin, target);
 }
 
 /**
@@ -165,7 +282,7 @@ function measureOverflow() {
 
 function scheduleIndicatorTravel(generation: number): void {
   const element = indicatorElement;
-  if (!mounted || element === undefined) return;
+  if (!mounted || !(element instanceof HTMLElement)) return;
   const duration = motionDurationMilliseconds(
     "--skr-motion-panel-duration",
     itemsElement ?? document.documentElement,
@@ -191,11 +308,13 @@ function scheduleIndicatorTravel(generation: number): void {
  */
 function syncActiveIndicatorGeometry() {
   const element = indicatorElement;
-  if (!mounted || element === undefined) return;
+  if (!mounted || !(element instanceof HTMLElement)) return;
   const activeIndex =
-    activePath === null ? -1 : tabs.findIndex((tab) => tab.path === activePath);
+    activeKey === null
+      ? -1
+      : entries.findIndex((entry) => entry.key === activeKey);
   const tabElement = activeIndex < 0 ? undefined : tabElements[activeIndex];
-  if (tabElement === undefined) return;
+  if (!(tabElement instanceof HTMLElement)) return;
   const left = tabElement.offsetLeft;
   const width = tabElement.offsetWidth;
   if (indicatorTraveling) {
@@ -216,13 +335,138 @@ function syncActiveIndicatorGeometry() {
   indicatorRestLeft = left;
 }
 
+/** Brings the active tab into view when the strip scrolls horizontally. */
+function revealActiveTab() {
+  const items = itemsElement;
+  if (!mounted || !(items instanceof HTMLElement)) return;
+  const activeIndex =
+    activeKey === null
+      ? -1
+      : entries.findIndex((entry) => entry.key === activeKey);
+  const tabElement = activeIndex < 0 ? undefined : tabElements[activeIndex];
+  if (!(tabElement instanceof HTMLElement)) return;
+  const left = tabElement.offsetLeft;
+  const right = left + tabElement.offsetWidth;
+  if (left < items.scrollLeft) items.scrollLeft = left;
+  else if (right > items.scrollLeft + items.clientWidth) {
+    items.scrollLeft = right - items.clientWidth;
+  }
+}
+
 function measureOverflowAndIndicator() {
   measureOverflow();
+  revealActiveTab();
   syncActiveIndicatorGeometry();
 }
 
+/**
+ * Captures the strip's geometry before each update so a close can hold the
+ * widths it had rather than the ones the reflow already produced.
+ */
+$effect.pre(() => {
+  void entries.length;
+  if (!(itemsElement instanceof HTMLElement)) return;
+  const measured = new Map<string, number>();
+  for (const [index, element] of tabElements.entries()) {
+    const key = entries[index]?.key;
+    if (key !== undefined && element instanceof HTMLElement) {
+      measured.set(key, element.offsetWidth);
+    }
+  }
+  measuredWidths = measured;
+});
+
+/**
+ * Holds the surviving tabs at their pre-close widths while the pointer
+ * stays over the strip. The tab is gone from state immediately; only the
+ * geometry waits, so repeated clicks in one place close successive tabs.
+ */
 $effect(() => {
-  void tabs.length;
+  const count = entries.length;
+  const shrank = count < previousEntryCount;
+  previousEntryCount = count;
+  if (!shrank || !pointerOverStrip || count === 0) return;
+  const held = new Map<string, number>();
+  for (const entry of entries) {
+    const width = measuredWidths.get(entry.key);
+    if (width !== undefined && width > 0) held.set(entry.key, width);
+  }
+  if (held.size === count) heldWidths = held;
+});
+
+/**
+ * Releases the held widths when the pointer leaves, animating the one
+ * reflow on the panel clock with a compositor-only transform.
+ */
+function releaseHeldWidths() {
+  pointerOverStrip = false;
+  if (heldWidths === null) return;
+  const before = tabElements.map((element) =>
+    element instanceof HTMLElement ? element.offsetLeft : null,
+  );
+  heldWidths = null;
+  void tick().then(() => {
+    if (!mounted) return;
+    const duration = motionDurationMilliseconds(
+      "--skr-motion-panel-duration",
+      itemsElement ?? document.documentElement,
+    );
+    for (const [index, element] of tabElements.entries()) {
+      const from = before[index];
+      if (!(element instanceof HTMLElement) || from === null || from === undefined)
+        continue;
+      const delta = from - element.offsetLeft;
+      if (delta === 0 || duration === 0) continue;
+      element.style.transition = "none";
+      element.style.transform = `translateX(${delta}px)`;
+      void element.offsetWidth;
+      element.style.transition = REORDER_REFLOW_TRANSITION;
+      element.style.transform = "";
+      setTimeout(() => {
+        element.style.transition = "";
+      }, duration);
+    }
+  });
+}
+
+// registry-exempt keydown: the ARIA tabs pattern's own roving focus. Every
+// command the strip offers (activate, close, new tab) stays registered.
+function onTabKeydown(event: KeyboardEvent) {
+  const last = entries.length - 1;
+  let next = rovingIndex;
+  if (event.key === "ArrowRight") next = rovingIndex >= last ? 0 : rovingIndex + 1;
+  else if (event.key === "ArrowLeft")
+    next = rovingIndex <= 0 ? last : rovingIndex - 1;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = last;
+  else return;
+  event.preventDefault();
+  rovingIndex = next;
+  void tick().then(() => {
+    const element = tabElements[next];
+    element?.querySelector<HTMLElement>('[role="tab"]')?.focus();
+  });
+}
+
+$effect(() => {
+  const activeIndex =
+    activeKey === null
+      ? -1
+      : entries.findIndex((entry) => entry.key === activeKey);
+  if (activeIndex >= 0) rovingIndex = activeIndex;
+  else if (rovingIndex > entries.length - 1) rovingIndex = 0;
+});
+
+$effect(() => {
+  void activeKey;
+  void entries.length;
+  void tick().then(() => {
+    if (mounted) revealActiveTab();
+  });
+});
+
+$effect(() => {
+  void entries.length;
   void tick().then(() => {
     if (mounted) measureOverflow();
   });
@@ -238,10 +482,10 @@ $effect(() => {
  * indicator enters in place with the surface class instead.
  */
 $effect(() => {
-  const path = activePath;
+  const path = activeKey;
   const element = indicatorElement;
   const items = itemsElement;
-  if (element === undefined || items === undefined) {
+  if (!(element instanceof HTMLElement) || !(items instanceof HTMLElement)) {
     cancelIndicatorCallbacks();
     indicatorRestLeft = null;
     indicatorAnimatedPath = null;
@@ -249,10 +493,10 @@ $effect(() => {
     return;
   }
   const activeIndex =
-    path === null ? -1 : tabs.findIndex((tab) => tab.path === path);
+    path === null ? -1 : entries.findIndex((entry) => entry.key === path);
   const tabElement = activeIndex < 0 ? undefined : tabElements[activeIndex];
 
-  if (tabElement === undefined) {
+  if (!(tabElement instanceof HTMLElement)) {
     // Deliberately leaves `indicatorAnimatedPath` untouched: the active
     // tab's own element can resolve to undefined on an intermediate pass
     // within the same flush (its `bind:this` not settled yet) before
@@ -268,7 +512,8 @@ $effect(() => {
   const previousPath = indicatorAnimatedPath;
   const isNewSelection = path !== previousPath;
   const previousStillOpen =
-    previousPath !== null && tabs.some((tab) => tab.path === previousPath);
+    previousPath !== null &&
+    entries.some((entry) => entry.key === previousPath);
   indicatorAnimatedPath = path;
   const previousLeft =
     indicatorRestLeft === null
@@ -335,7 +580,7 @@ onMount(() => {
 });
 
 function scrollWithWheel(event: WheelEvent) {
-  if (itemsElement === undefined || !overflowed) return;
+  if (!(itemsElement instanceof HTMLElement) || !overflowed) return;
   const delta =
     Math.abs(event.deltaX) > Math.abs(event.deltaY)
       ? event.deltaX
@@ -348,7 +593,7 @@ function scrollWithWheel(event: WheelEvent) {
 function beginScrollDrag(event: PointerEvent) {
   if (
     event.button !== 0 ||
-    itemsElement === undefined ||
+    !(itemsElement instanceof HTMLElement) ||
     !overflowed ||
     event.target !== itemsElement
   ) {
@@ -361,12 +606,14 @@ function beginScrollDrag(event: PointerEvent) {
 }
 
 function updateScrollDrag(event: PointerEvent) {
-  if (event.pointerId !== scrollPointer || itemsElement === undefined) return;
+  if (event.pointerId !== scrollPointer || !(itemsElement instanceof HTMLElement))
+    return;
   itemsElement.scrollLeft = scrollOriginLeft - (event.clientX - scrollOriginX);
 }
 
 function finishScrollDrag(event: PointerEvent) {
-  if (event.pointerId !== scrollPointer || itemsElement === undefined) return;
+  if (event.pointerId !== scrollPointer || !(itemsElement instanceof HTMLElement))
+    return;
   if (itemsElement.hasPointerCapture(event.pointerId)) {
     itemsElement.releasePointerCapture(event.pointerId);
   }
@@ -374,8 +621,14 @@ function finishScrollDrag(event: PointerEvent) {
 }
 </script>
 
-{#if tabs.length > 1}
-  <div class="skr-tab-strip">
+{#if visible}
+  <div
+    class="skr-tab-strip"
+    data-pane-strip={paneId}
+    role="presentation"
+    onpointerenter={() => (pointerOverStrip = true)}
+    onpointerleave={releaseHeldWidths}
+  >
     <div
       class="skr-tab-items"
       class:skr-tab-items-scrolling={scrollPointer !== null}
@@ -387,6 +640,14 @@ function finishScrollDrag(event: PointerEvent) {
       onpointermove={updateScrollDrag}
       onpointerup={finishScrollDrag}
       onpointercancel={finishScrollDrag}
+      onkeydown={onTabKeydown}
+      ondragover={(event) => acceptForeignDragOver(event, entries.length)}
+      ondragleave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          insertion = null;
+        }
+      }}
+      ondrop={(event) => acceptForeignDrop(event, entries.length)}
     >
       <!-- The tablist owns the tabs explicitly because each visible tab also
            needs an independently focusable close control. Keeping that
@@ -396,38 +657,53 @@ function finishScrollDrag(event: PointerEvent) {
         class="skr-tablist"
         role="tablist"
         aria-label={STRINGS.openTabs}
-        aria-owns={tabs.map((_, index) => tabId(index)).join(" ")}
+        aria-owns={entries.map((_, index) => tabId(index)).join(" ")}
       ></div>
-      {#each tabs as tab, index (tab.path)}
-      {@const title = titles[index]}
+      {#each entries as entry, index (entry.key)}
       <div
         bind:this={tabElements[index]}
         class="skr-tab-shell"
         role="presentation"
-        class:skr-tab-focused={focused && tab.path === activePath}
-        class:skr-tab-active={tab.path === activePath}
-        class:skr-tab-dirty={tab.dirty === true}
+        class:skr-tab-focused={focused && entry.key === activeKey}
+        class:skr-tab-active={entry.key === activeKey}
+        class:skr-tab-dirty={entry.tab?.dirty === true}
         class:skr-tab-insertion={insertion === index && dragging !== index}
         class:skr-tab-dragging={dragging === index}
+        style:flex={heldWidths?.get(entry.key) === undefined
+          ? null
+          : `0 0 ${heldWidths.get(entry.key)}px`}
         style:transform={dragging !== null && dragging !== index
           ? `translateX(${reorderOffset(index)}px)`
           : null}
-        draggable="true"
-        onmousedown={(event) => closeWithMiddleButton(event, tab.path)}
+        draggable={entry.path !== null}
+        onmousedown={(event) => closeWithMiddleButton(event, entry.path)}
         ondragstart={(event) => {
+          if (entry.path === null) {
+            event.preventDefault();
+            return;
+          }
           dragging = index;
           dragWidth = event.currentTarget.offsetWidth;
-          event.dataTransfer?.setData("application/x-skribeum-tab", tab.path);
+          setTabDrag({ path: entry.path, paneId });
+          event.dataTransfer?.setData("application/x-skribeum-tab", entry.path);
           if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = "move";
         }}
         ondragover={(event) => {
-          if (dragging === null) return;
+          if (dragging === null) {
+            acceptForeignDragOver(event, index);
+            return;
+          }
           event.preventDefault();
           const bounds = event.currentTarget.getBoundingClientRect();
           insertion = event.clientX < bounds.left + bounds.width / 2 ? index : index + 1;
         }}
         ondrop={(event) => {
+          if (dragging === null) {
+            acceptForeignDrop(event, index);
+            return;
+          }
           event.preventDefault();
+          event.stopPropagation();
           finishReorder();
         }}
         ondragend={finishReorder}
@@ -437,23 +713,24 @@ function finishScrollDrag(event: PointerEvent) {
           class="skr-tab"
           role="tab"
           id={tabId(index)}
-          aria-selected={tab.path === activePath}
+          aria-selected={entry.key === activeKey}
           aria-label={
-            tab.dirty === true
-              ? `${title?.displayTitle ?? tab.path}, ${STRINGS.unsavedNote}`
+            entry.tab?.dirty === true
+              ? `${entry.label}, ${STRINGS.unsavedNote}`
               : undefined
           }
-          data-dirty={tab.dirty === true ? "true" : undefined}
-          tabindex={tab.path === activePath ? 0 : -1}
-          onclick={() => onActivate(tab.path)}
+          data-dirty={entry.tab?.dirty === true ? "true" : undefined}
+          data-empty-tab={entry.path === null ? "true" : undefined}
+          tabindex={index === rovingIndex ? 0 : -1}
+          onclick={() => onActivate(entry.path)}
         >
-          <span class="skr-tab-label">{title?.displayTitle ?? tab.path}</span>
-          {#if title?.collisionSuffix !== undefined}
-            <span class="skr-tab-suffix">{title.collisionSuffix}</span>
+          <span class="skr-tab-label">{entry.label}</span>
+          {#if entry.suffix !== undefined}
+            <span class="skr-tab-suffix">{entry.suffix}</span>
           {/if}
         </button>
         <span class="skr-tab-status">
-          {#if tab.dirty === true}
+          {#if entry.tab?.dirty === true}
             <span
               class="skr-tab-unsaved"
               aria-label={STRINGS.unsavedNote}
@@ -462,14 +739,14 @@ function finishScrollDrag(event: PointerEvent) {
           <button
             type="button"
             class="skr-tab-close"
-            class:skr-tab-close-dirty={tab.dirty === true}
+            class:skr-tab-close-dirty={entry.tab?.dirty === true}
             data-command-id="tab.close"
             aria-label={STRINGS.closeTab}
-            tabindex={tab.path === activePath ? 0 : -1}
+            tabindex={index === rovingIndex ? 0 : -1}
             use:commandTooltip={closeTooltip}
             onpointerdown={keepPointerFocus}
             onmousedown={keepPointerFocus}
-            onclick={(event) => closeFromButton(event, tab.path)}
+            onclick={(event) => closeFromButton(event, entry.path)}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path d="m4.5 4.5 7 7m0-7-7 7" />
@@ -485,6 +762,18 @@ function finishScrollDrag(event: PointerEvent) {
         aria-hidden="true"
       ></span>
     </div>
+    <button
+      type="button"
+      class="skr-tab-new"
+      data-command-id="tab.new-empty"
+      aria-label={STRINGS.newTab}
+      use:commandTooltip={{ title: STRINGS.newTab }}
+      onclick={onNewTab}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 3.5v9M3.5 8h9" />
+      </svg>
+    </button>
     {#if overflowed}
       <div class="skr-tab-list-shell">
         <button
@@ -508,20 +797,19 @@ function finishScrollDrag(event: PointerEvent) {
             align="end"
             onClose={() => (listOpen = false)}
           >
-            {#each tabs as tab, index (tab.path)}
-              {@const title = titles[index]}
+            {#each entries as entry (entry.key)}
               <button
                 type="button"
                 role="menuitemradio"
-                aria-checked={tab.path === activePath}
+                aria-checked={entry.key === activeKey}
                 onclick={() => {
                   listOpen = false;
-                  onActivate(tab.path);
+                  onActivate(entry.path);
                 }}
               >
-                <span>{title?.displayTitle ?? tab.path}</span>
-                {#if title?.collisionSuffix !== undefined}
-                  <span class="skr-tab-suffix">{title.collisionSuffix}</span>
+                <span>{entry.label}</span>
+                {#if entry.suffix !== undefined}
+                  <span class="skr-tab-suffix">{entry.suffix}</span>
                 {/if}
               </button>
             {/each}

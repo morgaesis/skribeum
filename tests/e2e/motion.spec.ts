@@ -278,7 +278,7 @@ describe("packaged motion geometry", () => {
     await browser.setWindowSize(1280, 800);
     await browser.execute(() => {
       for (const key of Object.keys(localStorage)) {
-        if (key.startsWith("skribeum.workspace.v1.")) {
+        if (key.startsWith("skribeum.workspace.")) {
           localStorage.removeItem(key);
         }
       }
@@ -290,7 +290,7 @@ describe("packaged motion geometry", () => {
   after(async () => {
     await browser.execute(() => {
       for (const key of Object.keys(localStorage)) {
-        if (key.startsWith("skribeum.workspace.v1.")) {
+        if (key.startsWith("skribeum.workspace.")) {
           localStorage.removeItem(key);
         }
       }

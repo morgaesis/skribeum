@@ -17,7 +17,7 @@ let {
   mode: PickerMode;
   initialQuery?: string;
   onQueryChange: (query: string) => void;
-  onPick: (item: PickerItem) => void;
+  onPick: (item: PickerItem, intent?: { newTab?: boolean }) => void;
   onClose: () => void;
   restoreFocus?: boolean;
 } = $props();
@@ -83,9 +83,9 @@ function onInput(event: Event & { currentTarget: HTMLInputElement }) {
   onQueryChange(event.currentTarget.value);
 }
 
-function pickActive() {
+function pickActive(intent?: { newTab?: boolean }) {
   const item = items[active];
-  if (item !== undefined) onPick(item);
+  if (item !== undefined) onPick(item, intent);
 }
 
 // registry-exempt keydown: ARIA combobox pattern internal navigation
@@ -106,7 +106,9 @@ function onKeydown(event: KeyboardEvent) {
       active = Math.max(0, items.length - 1);
       break;
     case "Enter":
-      pickActive();
+      // Mod-Enter is the file mode's explicit new-tab action; plain Enter
+      // opens in place like every other default route.
+      pickActive({ newTab: event.ctrlKey || event.metaKey });
       break;
     default:
       return;
@@ -228,7 +230,8 @@ onDestroy(() => {
           data-action-kind={item.actionKind}
           data-command-id={item.commandId}
           aria-selected={index === active}
-          onclick={() => onPick(item)}
+          onclick={(event) =>
+            onPick(item, { newTab: event.ctrlKey || event.metaKey })}
           onmousemove={() => {
             active = index;
           }}

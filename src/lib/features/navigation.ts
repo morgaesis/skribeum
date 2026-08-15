@@ -598,6 +598,12 @@ export type NavigationMode = "browser" | "desktop";
 export type NoteNavigator = {
   start(fallback: NoteAddress | null): Promise<void>;
   open(address: NoteAddress): Promise<void>;
+  /**
+   * Points the current history entry at an address the shell already shows,
+   * without loading anything. Tab switches and renames change what the user
+   * is looking at without being navigations, and the address has to follow.
+   */
+  syncAddress(address: NoteAddress | null): void;
   reset(address: NoteAddress): Promise<void>;
   back(): boolean;
   forward(): boolean;
@@ -676,6 +682,11 @@ export function createNoteNavigator(options: {
       } else {
         history.push(address);
       }
+      options.changed?.(state());
+    },
+    syncAddress(address) {
+      if (address === null || sameAddress(history.current(), address)) return;
+      history.replace(address, null);
       options.changed?.(state());
     },
     async reset(address) {
@@ -801,7 +812,10 @@ export function cursorInsideWikilinkText(
 export type FollowWikilinkOptions = {
   context: WikilinkResolutionContext;
   currentPath: string | null;
-  navigate(address: NoteAddress): Promise<void> | void;
+  navigate(
+    address: NoteAddress,
+    intent?: { newTab?: boolean },
+  ): Promise<void> | void;
   unresolved(reason: string): void;
   /** Opens an external HTTP or HTTPS URL outside the note navigator. */
   openExternal?: (url: string) => Promise<void> | void;
@@ -889,10 +903,24 @@ export const wikilinkNavigationOptionsFacet = Facet.define<
   combine: (providers) => providers.at(-1) ?? null,
 });
 
+/**
+ * Calls the navigator, naming the new-tab intent only when one exists so a
+ * default follow stays the one-argument call every other route makes.
+ */
+function navigateWithIntent(
+  options: FollowWikilinkOptions,
+  address: NoteAddress,
+  intent: { newTab?: boolean },
+): void {
+  if (intent.newTab === true) void options.navigate(address, { newTab: true });
+  else void options.navigate(address);
+}
+
 /** Resolves and follows one wikilink target through the shared address model. */
 export function followWikilinkTarget(
   target: string,
   options: FollowWikilinkOptions,
+  intent: { newTab?: boolean } = {},
 ): boolean {
   const resolution = resolveWikilinkTarget(target, options.context);
   if (resolution.kind === "note") {
@@ -900,10 +928,12 @@ export function followWikilinkTarget(
       options.unresolved(STRINGS.wikilinkTargetNotNote);
       return true;
     }
-    void options.navigate(
+    navigateWithIntent(
+      options,
       resolution.fragment === undefined
         ? { path: resolution.path }
         : { path: resolution.path, fragment: resolution.fragment },
+      intent,
     );
     return true;
   }
@@ -911,10 +941,12 @@ export function followWikilinkTarget(
     if (options.currentPath === null) {
       return false;
     }
-    void options.navigate(
+    navigateWithIntent(
+      options,
       resolution.fragment === undefined
         ? { path: options.currentPath }
         : { path: options.currentPath, fragment: resolution.fragment },
+      intent,
     );
     return true;
   }
@@ -925,7 +957,7 @@ export function followWikilinkTarget(
     candidate !== undefined &&
     isNotePath(candidate.path)
   ) {
-    void options.navigate(candidate);
+    navigateWithIntent(options, candidate, intent);
   }
   return true;
 }
@@ -935,12 +967,13 @@ export function followWikilinkAt(
   view: EditorView,
   position: number,
   options: FollowWikilinkOptions,
+  intent: { newTab?: boolean } = {},
 ): boolean {
   const reference = wikilinkReferenceAt(view.state, position);
   if (reference === null) {
     return false;
   }
-  const followed = followWikilinkTarget(reference.target, options);
+  const followed = followWikilinkTarget(reference.target, options, intent);
   if (followed) {
     view.contentDOM.blur();
   }
@@ -952,6 +985,7 @@ export function followLinkAt(
   view: EditorView,
   position: number,
   options: FollowWikilinkOptions,
+  intent: { newTab?: boolean } = {},
 ): boolean {
   const external = externalLinkAt(view.state, position);
   if (external !== null && options.openExternal !== undefined) {
@@ -959,7 +993,7 @@ export function followLinkAt(
     view.contentDOM.blur();
     return true;
   }
-  return followWikilinkAt(view, position, options);
+  return followWikilinkAt(view, position, options, intent);
 }
 
 /** Finds a wikilink position from a decorated DOM descendant. */

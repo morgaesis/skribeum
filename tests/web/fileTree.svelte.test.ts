@@ -314,12 +314,11 @@ describe("designed file tree", () => {
     );
     await tick();
     const menu = document.querySelector<HTMLElement>('[role="menu"]');
-    menu?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
-    );
-    menu?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
-    );
+    for (let step = 0; step < 3; step += 1) {
+      menu?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    }
     menu?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
     );

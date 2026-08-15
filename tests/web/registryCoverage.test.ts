@@ -58,6 +58,7 @@ const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
   ["lib/PropertiesPanel.svelte", "ARIA textbox pattern internal editing"],
   ["lib/SettingsView.svelte", "ARIA dialog pattern internal dismissal"],
   ["lib/Statusline.svelte", "ARIA dialog pattern internal dismissal"],
+  ["lib/TabStrip.svelte", "ARIA tabs pattern internal roving focus"],
   ["lib/Sheet.svelte", "ARIA modal dialog focus trapping and dismissal"],
   ["lib/Dialog.svelte", "ARIA modal dialog focus trapping and dismissal"],
   [

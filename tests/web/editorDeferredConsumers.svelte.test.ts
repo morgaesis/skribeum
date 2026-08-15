@@ -397,9 +397,13 @@ describe("large-note editor consumers", () => {
         "other.md": "# Other title\n",
       } as Record<string, string>,
       focused: true,
-      onActivate: (_path: string) => {},
-      onClose: (_path: string) => {},
+      visible: true,
+      paneId: "pane-1",
+      onActivate: (_path: string | null) => {},
+      onClose: (_path: string | null) => {},
       onReorder: (_from: number, _to: number) => {},
+      onNewTab: () => {},
+      onAdopt: () => {},
     });
     const statusProps = reactiveState({
       path: "visible.md" as string | null,

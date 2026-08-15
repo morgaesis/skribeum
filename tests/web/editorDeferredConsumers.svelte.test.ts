@@ -577,6 +577,7 @@ describe("post-paint scheduler generation fence", () => {
     let nextHandle = 0;
     const frames = new Map<number, FrameRequestCallback>();
     const tasks = new Map<number, () => void>();
+    const fallbacks = new Map<number, () => void>();
     const clock = {
       requestFrame: (callback: FrameRequestCallback) => {
         nextHandle += 1;
@@ -591,6 +592,13 @@ describe("post-paint scheduler generation fence", () => {
       },
       cancelTask: (handle: ReturnType<typeof setTimeout>) =>
         tasks.delete(handle as number),
+      scheduleFallback: (callback: () => void) => {
+        nextHandle += 1;
+        fallbacks.set(nextHandle, callback);
+        return nextHandle as ReturnType<typeof setTimeout>;
+      },
+      cancelFallback: (handle: ReturnType<typeof setTimeout>) =>
+        fallbacks.delete(handle as number),
     };
     const scheduler = new PostPaintScheduler(clock);
     const observed: string[] = [];
@@ -616,5 +624,95 @@ describe("post-paint scheduler generation fence", () => {
       throw new Error("fresh task was not scheduled");
     freshTask();
     expect(observed).toEqual(["fresh"]);
+  });
+
+  it("runs scheduled work through the fallback timer when no frame ever fires", async () => {
+    let nextHandle = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    const tasks = new Map<number, () => void>();
+    const fallbacks = new Map<number, () => void>();
+    const clock = {
+      requestFrame: (callback: FrameRequestCallback) => {
+        nextHandle += 1;
+        frames.set(nextHandle, callback);
+        return nextHandle;
+      },
+      cancelFrame: (handle: number) => frames.delete(handle),
+      scheduleTask: (callback: () => void) => {
+        nextHandle += 1;
+        tasks.set(nextHandle, callback);
+        return nextHandle as ReturnType<typeof setTimeout>;
+      },
+      cancelTask: (handle: ReturnType<typeof setTimeout>) =>
+        tasks.delete(handle as number),
+      scheduleFallback: (callback: () => void) => {
+        nextHandle += 1;
+        fallbacks.set(nextHandle, callback);
+        return nextHandle as ReturnType<typeof setTimeout>;
+      },
+      cancelFallback: (handle: ReturnType<typeof setTimeout>) =>
+        fallbacks.delete(handle as number),
+    };
+    const scheduler = new PostPaintScheduler(clock);
+    const observed: string[] = [];
+    let settledResolved = false;
+    scheduler.schedule(() => observed.push("starved"));
+    const settled = scheduler.settled().then(() => {
+      settledResolved = true;
+    });
+
+    // The page never paints: no frame callback runs. The fallback must
+    // still drive the task so awaiting callers are not blocked on a paint.
+    const fallback = fallbacks.values().next().value;
+    if (fallback === undefined) throw new Error("fallback was not scheduled");
+    fallback();
+    expect(frames.size).toBe(0);
+    const task = tasks.values().next().value;
+    if (task === undefined) throw new Error("task was not scheduled");
+    task();
+    tasks.clear();
+    await settled;
+    expect(observed).toEqual(["starved"]);
+    expect(settledResolved).toBe(true);
+  });
+
+  it("cancels the fallback timer when the frame arrives first", () => {
+    let nextHandle = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    const tasks = new Map<number, () => void>();
+    const fallbacks = new Map<number, () => void>();
+    const clock = {
+      requestFrame: (callback: FrameRequestCallback) => {
+        nextHandle += 1;
+        frames.set(nextHandle, callback);
+        return nextHandle;
+      },
+      cancelFrame: (handle: number) => frames.delete(handle),
+      scheduleTask: (callback: () => void) => {
+        nextHandle += 1;
+        tasks.set(nextHandle, callback);
+        return nextHandle as ReturnType<typeof setTimeout>;
+      },
+      cancelTask: (handle: ReturnType<typeof setTimeout>) =>
+        tasks.delete(handle as number),
+      scheduleFallback: (callback: () => void) => {
+        nextHandle += 1;
+        fallbacks.set(nextHandle, callback);
+        return nextHandle as ReturnType<typeof setTimeout>;
+      },
+      cancelFallback: (handle: ReturnType<typeof setTimeout>) =>
+        fallbacks.delete(handle as number),
+    };
+    const scheduler = new PostPaintScheduler(clock);
+    const observed: string[] = [];
+    scheduler.schedule(() => observed.push("painted"));
+    const frame = frames.values().next().value;
+    if (frame === undefined) throw new Error("frame was not scheduled");
+    frame(0);
+    expect(fallbacks.size).toBe(0);
+    const task = tasks.values().next().value;
+    if (task === undefined) throw new Error("task was not scheduled");
+    task();
+    expect(observed).toEqual(["painted"]);
   });
 });

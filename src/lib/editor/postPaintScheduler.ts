@@ -3,19 +3,31 @@ export type PostPaintClock = {
   cancelFrame: (handle: number) => void;
   scheduleTask: (callback: () => void) => ReturnType<typeof setTimeout>;
   cancelTask: (handle: ReturnType<typeof setTimeout>) => void;
+  scheduleFallback: (callback: () => void) => ReturnType<typeof setTimeout>;
+  cancelFallback: (handle: ReturnType<typeof setTimeout>) => void;
 };
+
+/**
+ * A page that is not painting (a background tab, an occluded window) never
+ * delivers animation frames, so frame-gated work needs a timer bound or it
+ * blocks everything awaiting `settled()` until the next real paint.
+ */
+const FRAME_FALLBACK_DELAY_MS = 250;
 
 const browserClock: PostPaintClock = {
   requestFrame: (callback) => requestAnimationFrame(callback),
   cancelFrame: (handle) => cancelAnimationFrame(handle),
   scheduleTask: (callback) => setTimeout(callback, 0),
   cancelTask: (handle) => clearTimeout(handle),
+  scheduleFallback: (callback) => setTimeout(callback, FRAME_FALLBACK_DELAY_MS),
+  cancelFallback: (handle) => clearTimeout(handle),
 };
 
 /** Coalesces replaceable work into one task after the next browser paint. */
 export class PostPaintScheduler {
   private generation = 0;
   private frame: number | undefined;
+  private fallback: ReturnType<typeof setTimeout> | undefined;
   private taskHandle: ReturnType<typeof setTimeout> | undefined;
   private pending: (() => void) | undefined;
   private cycle: { promise: Promise<void>; resolve: () => void } | undefined;
@@ -24,7 +36,13 @@ export class PostPaintScheduler {
 
   schedule(task: () => void): void {
     this.pending = task;
-    if (this.frame !== undefined || this.taskHandle !== undefined) return;
+    if (
+      this.frame !== undefined ||
+      this.fallback !== undefined ||
+      this.taskHandle !== undefined
+    ) {
+      return;
+    }
     if (this.cycle === undefined) {
       let resolve = () => {};
       const promise = new Promise<void>((settled) => {
@@ -33,8 +51,7 @@ export class PostPaintScheduler {
       this.cycle = { promise, resolve };
     }
     const generation = this.generation;
-    this.frame = this.clock.requestFrame(() => {
-      this.frame = undefined;
+    const queueTask = () => {
       if (generation !== this.generation) return;
       this.taskHandle = this.clock.scheduleTask(() => {
         this.taskHandle = undefined;
@@ -47,6 +64,22 @@ export class PostPaintScheduler {
           this.finishCycleIfIdle();
         }
       });
+    };
+    this.frame = this.clock.requestFrame(() => {
+      this.frame = undefined;
+      if (this.fallback !== undefined) {
+        this.clock.cancelFallback(this.fallback);
+        this.fallback = undefined;
+      }
+      queueTask();
+    });
+    this.fallback = this.clock.scheduleFallback(() => {
+      this.fallback = undefined;
+      if (this.frame !== undefined) {
+        this.clock.cancelFrame(this.frame);
+        this.frame = undefined;
+      }
+      queueTask();
     });
   }
 
@@ -63,6 +96,10 @@ export class PostPaintScheduler {
       this.clock.cancelFrame(this.frame);
       this.frame = undefined;
     }
+    if (this.fallback !== undefined) {
+      this.clock.cancelFallback(this.fallback);
+      this.fallback = undefined;
+    }
     if (this.taskHandle !== undefined) {
       this.clock.cancelTask(this.taskHandle);
       this.taskHandle = undefined;
@@ -73,6 +110,7 @@ export class PostPaintScheduler {
   private finishCycleIfIdle(): void {
     if (
       this.frame !== undefined ||
+      this.fallback !== undefined ||
       this.taskHandle !== undefined ||
       this.pending !== undefined
     ) {

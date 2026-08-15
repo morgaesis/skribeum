@@ -53,6 +53,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Opening a note by URL in the browser demo no longer rebuilds the page
   shell, and opening a note after viewing a canvas works again instead of
   failing silently for the rest of the session.
+- Startup no longer stalls on the placeholder document when the window is
+  not painting: post-paint editor work now runs through a bounded timer
+  fallback when no animation frame arrives, so a vault opened in a
+  background tab or an occluded window loads its note and the navigation
+  queue keeps draining instead of blocking until the first visible paint.
 - Typing a space at the end of a rendered table cell no longer loses the
   space before the next character arrives: the cell keeps mid-typed edge
   whitespace while it owns the caret, so multi-word content can be typed

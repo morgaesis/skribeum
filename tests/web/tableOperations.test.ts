@@ -24,6 +24,7 @@ import {
   tableAlignments,
   tableCellRanges,
 } from "../../src/lib/features/tableOperations";
+import { TABLE_EDITING_NOTE_CONTENT } from "../e2e/scratchVault";
 
 const encoder = new TextEncoder();
 
@@ -390,6 +391,51 @@ describe("table block end over a partial row", () => {
     expect(
       extendedTableDocumentEnd(pipeFree, 0, source.indexOf("c |") + 1),
     ).toBe(source.length);
+  });
+
+  it("leaves a prose line that happens to contain a pipe outside the block", () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |\n\nPipe | in prose.";
+    const withPipe = Text.of(source.split("\n"));
+    const tableEnd = source.indexOf("\n\nPipe");
+    // The prose line carries a pipe and the block's column count, but not
+    // the header's outer pipes, so it is not a row of this block.
+    for (let end = tableEnd + 2; end <= source.length; end += 1) {
+      expect(extendedTableDocumentEnd(withPipe, 0, end)).toBeLessThanOrEqual(
+        end,
+      );
+    }
+  });
+
+  it("completes the last row when the table ends the document", () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |";
+    const trailing = Text.of(source.split("\n"));
+    for (let end = 1; end <= source.length; end += 1) {
+      expect(extendedTableDocumentEnd(trailing, 0, end)).toBe(source.length);
+    }
+  });
+
+  it("never reaches past the first table of the rendered-table fixture", () => {
+    // The end-to-end fixture, verbatim: a small table, a paragraph, then a
+    // large table. No reported end may resolve into that paragraph, and a
+    // reported end inside the table always resolves to the table's end.
+    const fixture = Text.of(TABLE_EDITING_NOTE_CONTENT.split("\n"));
+    const text = fixture.toString();
+    const from = text.indexOf("| Name");
+    const trueEnd = from + table.length;
+    const proseFrom = text.indexOf("Large table follows.");
+    expect(text.slice(trueEnd, proseFrom)).toBe("\n\n");
+    for (let end = 0; end <= text.length; end += 1) {
+      const resolved = extendedTableDocumentEnd(fixture, from, end);
+      // An end anywhere inside the table resolves to the table's end.
+      if (end > from && end <= trueEnd) {
+        expect(resolved).toBe(trueEnd);
+      }
+      // The block never reaches into the paragraph unless the reported
+      // end was already there.
+      if (resolved >= proseFrom) {
+        expect(end).toBeGreaterThanOrEqual(proseFrom);
+      }
+    }
   });
 });
 

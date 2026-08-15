@@ -431,11 +431,17 @@ export function tableCellRanges(text: string): TableCell[] {
  * is measured against the block text. An end that falls inside a row
  * would make that row parse as its own truncated line, so an edit aimed
  * at the row's end would land in the middle of the row's source instead.
- * Only a partial row is completed. A row carries at least one column
- * separator, with or without the outer pipes, so a line without one is
- * not a row and stays put rather than growing the block over prose.
+ * Only a partial row is completed, and a line counts as a row of this
+ * block only when it repeats the header's shape: the same column count
+ * and the same outer pipes. A prose line stays put even when it happens
+ * to contain a pipe, so completing a row never grows the block over the
+ * text that follows the table.
  */
-function completedRowEnd(sourceFromTable: string, end: number): number {
+function completedRowEnd(
+  sourceFromTable: string,
+  end: number,
+  header: ParsedLine | undefined,
+): number {
   const bounded = Math.max(0, Math.min(end, sourceFromTable.length));
   if (bounded === 0 || bounded === sourceFromTable.length) {
     return bounded;
@@ -446,8 +452,14 @@ function completedRowEnd(sourceFromTable: string, end: number): number {
   const lineStart = sourceFromTable.lastIndexOf("\n", bounded - 1) + 1;
   const lineEnd = sourceFromTable.indexOf("\n", bounded);
   const rowEnd = lineEnd < 0 ? sourceFromTable.length : lineEnd;
-  const row = sourceFromTable.slice(lineStart, rowEnd);
-  return row.includes("|") ? rowEnd : bounded;
+  const row = parseTableLines(sourceFromTable.slice(lineStart, rowEnd))[0];
+  const isRow =
+    header !== undefined &&
+    row !== undefined &&
+    row.cells.length === header.cells.length &&
+    row.leadingPipe === header.leadingPipe &&
+    row.trailingPipe === header.trailingPipe;
+  return isRow ? rowEnd : bounded;
 }
 
 /** Extends a parsed table through adjacent pipe rows the Markdown tree omits. */
@@ -455,13 +467,12 @@ export function extendedTableBlockEnd(
   sourceFromTable: string,
   parsedLength: number,
 ): number {
-  const blockEnd = completedRowEnd(sourceFromTable, parsedLength);
-  const columnCount = Math.max(
-    1,
-    ...tableCellRanges(sourceFromTable.slice(0, blockEnd))
-      .filter((cell) => cell.row === 0)
-      .map((cell) => cell.column + 1),
-  );
+  const headerEnd = sourceFromTable.indexOf("\n");
+  const header = parseTableLines(
+    headerEnd < 0 ? sourceFromTable : sourceFromTable.slice(0, headerEnd),
+  )[0];
+  const columnCount = Math.max(1, header?.cells.length ?? 1);
+  const blockEnd = completedRowEnd(sourceFromTable, parsedLength, header);
   let to = blockEnd;
   let lineStart = blockEnd;
   while (sourceFromTable[lineStart] === "\n") {

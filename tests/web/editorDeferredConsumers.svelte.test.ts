@@ -19,7 +19,7 @@ import type { LoadedNote } from "../../src/lib/ipc/vault";
 import * as vaultIpc from "../../src/lib/ipc/vault";
 import Statusline from "../../src/lib/Statusline.svelte";
 import TabStrip from "../../src/lib/TabStrip.svelte";
-import { reactiveState } from "./support/reactiveState.svelte";
+import { reactiveState } from "./helpers/reactiveState.svelte";
 
 type EditorExports = {
   flush: () => Promise<boolean>;

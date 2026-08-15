@@ -5,7 +5,7 @@ import FileTree from "../../src/lib/FileTree.svelte";
 import { createAppRegistry } from "../../src/lib/features";
 import type { TreeEntry } from "../../src/lib/ipc/bindings";
 import type { CommandContext } from "../../src/lib/registry";
-import { reactiveProps } from "./helpers/reactiveProps.svelte";
+import { reactiveState } from "./helpers/reactiveState.svelte";
 
 const ROW_HEIGHT = 28;
 
@@ -373,7 +373,7 @@ describe("designed file tree", () => {
 
   it("hands deletion focus to the next surviving tree row", async () => {
     const registry = createAppRegistry(undefined, true);
-    const props = reactiveProps({
+    const props = reactiveState({
       entries: [...entries],
       expandedPaths: ["Folder"],
       onOpenPath: () => {},

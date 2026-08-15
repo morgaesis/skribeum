@@ -643,6 +643,43 @@ describe("table editing through the registry", () => {
     ).toBe("0");
   });
 
+  it("keeps a mid-typed trailing space in the active cell across the document round trip", async () => {
+    const view = makeView(TABLE, 0, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    expect(focusRenderedTableCell(view, 0, 1, 0, "end")).toBe(true);
+    const nestedFor = () => {
+      const editor = view.dom.querySelector<HTMLElement>(
+        '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+      );
+      return editor === null ? null : EditorView.findFromDOM(editor);
+    };
+    const typeIntoCell = (text: string) => {
+      const nested = nestedFor();
+      expect(nested).not.toBeNull();
+      if (nested === null) return;
+      const head = nested.state.selection.main.head;
+      nested.dispatch({
+        changes: { from: head, insert: text },
+        selection: { anchor: head + text.length },
+        userEvent: "input.type",
+      });
+    };
+
+    // Each keystroke round-trips through the document, where a trailing
+    // space parses as column padding; the widget update between keystrokes
+    // must not strip it out of the nested editor.
+    typeIntoCell(" ");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    typeIntoCell("x");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(nestedFor()?.state.doc.toString()).toBe("c x");
+    // The document keeps the typed trailing space; it parses as padding.
+    expect(view.state.doc.toString()).toContain("| c x ");
+  });
+
   it("declines cell navigation outside a table", () => {
     makeView("plain text", 3);
     expect(runEditorCommand("table.cell.next")).toBe(false);

@@ -2288,6 +2288,18 @@ class TableWidget extends WidgetType {
           session?.tableFrom === this.layout.from &&
           session.row === layoutCell.row &&
           session.column === layoutCell.column;
+        // Edge whitespace the user is mid-typing exists in the nested view
+        // but parses as column padding in the document, so the document
+        // round trip reads back without it. While this cell owns the
+        // caret, a trim-equal difference must not rebuild the nested doc
+        // out from under the typed spaces; the next cell write re-emits
+        // the full typed content anyway.
+        if (
+          active &&
+          nested.state.doc.toString().trim() === layoutCell.source
+        ) {
+          continue;
+        }
         const anchor = Math.min(
           layoutCell.source.length,
           active ? session.anchor : nested.state.selection.main.anchor,

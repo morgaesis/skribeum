@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A headless list-move primitive: given a document, a list item and a
+  destination list and index, it returns the declared spans that relocate
+  the item and nothing else. The moved extent is the item's whole lines
+  including nested sublists, continuation paragraphs and indented code,
+  together with the blank line that separates it from its neighbour, so a
+  loose list stays loose and a tight one stays tight at both ends of the
+  move. Indentation and the marker character are rewritten only where the
+  destination list writes them differently, numbered items keep the numbers
+  the author gave them, and a file with no final newline still has none
+  afterwards. A move that cannot be written without changing a byte it was
+  not asked to touch is refused rather than approximated. A corpus of
+  board-shaped and list-shaped documents, covering CRLF, mixed and absent
+  terminators, tabs, every bullet marker, ordered lists, loose and tight
+  lists, continuations and nested sublists, asserts on the bytes the edit
+  path writes that every legal move relocates its extent and leaves the rest
+  of the file untouched, and that undoing a move restores the file exactly.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

@@ -3051,6 +3051,9 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .secondary-button {
+    /* A labelled button reads at the control tier wherever it appears, so
+       the same widget never renders at two sizes across the product. */
+    font-size: var(--skr-type-control);
     font-weight: 600;
   }
 

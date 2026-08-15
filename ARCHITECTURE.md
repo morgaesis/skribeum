@@ -145,7 +145,8 @@ byte offsets, the first fully visible line as a UTF-8 byte offset, its pixel
 offset from the viewport, and the properties-panel expansion state. Each pane
 retains at most 100 in-memory entries. Traversal constructs the editor state
 with that selection before paint, restores the content-anchored position
-without animation, resolves the properties panel to its recorded state, and
+without animation to the nearest position the scroller holds, which is a whole
+device pixel, resolves the properties panel to its recorded state, and
 keeps focus on the reading surface. The incoming editor fades over that
 complete frame with input and scrolling available throughout. A fresh note open stores no restoration,
 starts at the top with the form-factor panel default, and leaves its parked

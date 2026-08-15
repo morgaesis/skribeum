@@ -331,6 +331,72 @@ export type NoteViewState = {
   propertiesExpanded: boolean;
 };
 
+/** The vertical extent of one editor line block, in editor coordinates. */
+export type ScrollAnchorLine = {
+  from: number;
+  to: number;
+  top: number;
+};
+
+/** The measurements the reading-position rule reads from a laid-out editor. */
+export type ScrollAnchorGeometry = {
+  /** Editor-coordinate height of the viewport's top edge. */
+  viewportTop: number;
+  /** Character length of the document, so the last line is never advanced past. */
+  documentLength: number;
+  /** Physical pixels per CSS pixel, which webview zoom also changes. */
+  devicePixelRatio: number;
+  lineBlockAtHeight(height: number): ScrollAnchorLine;
+  lineBlockAt(position: number): ScrollAnchorLine;
+};
+
+/** The line a reading position is stored against, and its distance below the viewport edge. */
+export type ScrollAnchorPosition = {
+  line: ScrollAnchorLine;
+  offset: number;
+};
+
+/**
+ * Chooses the line a reading position is stored against: the first line the
+ * reader sees whole, and how far below the viewport's top edge it starts.
+ *
+ * The encoding names a line, so it steps by a whole line where the reader's
+ * position moves by a fraction of one: a viewport edge a hair above a line
+ * start and a hair below it are stored against different lines. Restoring is
+ * exact while the layout is unchanged, because the offset is the very
+ * distance the restore reproduces; a layout that changed in between, from
+ * webview zoom or from an image or font that finished loading, reproduces the
+ * position only as closely as the scroller can hold it. Comparisons of two
+ * stored positions therefore go through `readingViewportTop` rather than
+ * comparing anchors and offsets field by field.
+ */
+export function scrollAnchorForViewport(
+  geometry: ScrollAnchorGeometry,
+): ScrollAnchorPosition {
+  let line = geometry.lineBlockAtHeight(geometry.viewportTop);
+  const offset = line.top - geometry.viewportTop;
+  const halfPhysicalPixel = 0.5 / Math.max(1, geometry.devicePixelRatio);
+  const crossesRoundedPixelBoundary =
+    offset < 0 || (offset > 0 && offset < halfPhysicalPixel);
+  if (crossesRoundedPixelBoundary && line.to < geometry.documentLength) {
+    line = geometry.lineBlockAt(line.to + 1);
+  }
+  return { line, offset: line.top - geometry.viewportTop };
+}
+
+/**
+ * The viewport edge a stored reading position denotes, in the editor
+ * coordinates of the layout the anchor line was measured in. Two stored
+ * positions describe the same reading position when this agrees, whichever
+ * line each of them happens to be anchored to.
+ */
+export function readingViewportTop(
+  anchorLineTop: number,
+  scrollOffset: number,
+): number {
+  return anchorLineTop - scrollOffset;
+}
+
 export const NAVIGATION_HISTORY_LIMIT = 100;
 
 type HistoryEntry = { address: NoteAddress; viewState: NoteViewState | null };

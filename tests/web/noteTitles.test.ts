@@ -144,6 +144,83 @@ describe("note display titles", () => {
     ).toBe("indented-code");
   });
 
+  it.each<{ name: string; path: string; source: string; expected: string }>([
+    {
+      name: "file name only, no heading and no frontmatter",
+      path: "notes/plain.md",
+      source: "Just a paragraph, nothing else.",
+      expected: "plain",
+    },
+    {
+      name: "heading only, differs from the file name",
+      path: "notes/file-name.md",
+      source: "# A Totally Different Heading\nBody text.",
+      expected: "A Totally Different Heading",
+    },
+    {
+      name: "heading matches the file name",
+      path: "notes/matching-title.md",
+      source: "# matching-title\n",
+      expected: "matching-title",
+    },
+    {
+      name: "frontmatter title and heading both present and differ: frontmatter wins",
+      path: "notes/frontmatter-wins.md",
+      source: "---\ntitle: Frontmatter Wins\n---\n# Inline Heading\n",
+      expected: "Frontmatter Wins",
+    },
+    {
+      name: "frontmatter present, no title key, heading follows immediately: heading wins over file name",
+      path: "notes/heading-after-frontmatter.md",
+      source: "---\ntags:\n  - demo\n---\n# Heading After Frontmatter\n",
+      expected: "Heading After Frontmatter",
+    },
+    {
+      name: "frontmatter present with neither a title key nor a following heading: falls back to file name",
+      path: "notes/frontmatter-only.md",
+      source: "---\ntags:\n  - demo\n---\nJust a paragraph.",
+      expected: "frontmatter-only",
+    },
+    {
+      name: "setext H1 after frontmatter with no title key",
+      path: "notes/setext-after-frontmatter.md",
+      source: "---\ntags:\n  - demo\n---\nSetext Heading\n===\n",
+      expected: "Setext Heading",
+    },
+    {
+      name: "empty ATX heading: falls back to file name",
+      path: "notes/empty-heading.md",
+      source: "#   \nBody text.",
+      expected: "empty-heading",
+    },
+    {
+      name: "heading present but not on the first content line: falls back to file name",
+      path: "notes/heading-not-first.md",
+      source: "An intro paragraph.\n\n# Heading Not On Line One\n",
+      expected: "heading-not-first",
+    },
+    {
+      name: "heading not on the first content line after frontmatter (blank line separates): falls back to file name",
+      path: "notes/heading-not-first-after-frontmatter.md",
+      source: "---\ntags:\n  - demo\n---\n\n# Heading After A Blank Line\n",
+      expected: "heading-not-first-after-frontmatter",
+    },
+    {
+      name: "CRLF line endings: frontmatter title still resolves",
+      path: "notes/crlf-title.md",
+      source: "---\r\ntitle: CRLF Title\r\n---\r\n# Ignored Heading\r\n",
+      expected: "CRLF Title",
+    },
+    {
+      name: "CRLF line endings: heading after frontmatter with no title key resolves",
+      path: "notes/crlf-heading.md",
+      source: "---\r\ntags:\r\n  - demo\r\n---\r\n# CRLF Heading\r\n",
+      expected: "CRLF Heading",
+    },
+  ])("title precedence: $name", ({ path, source, expected }) => {
+    expect(resolveNoteTitle({ path, source }).displayTitle).toBe(expected);
+  });
+
   it("adds each file name only when titles collide in the presented group", () => {
     expect(
       resolveTitleCollisions([

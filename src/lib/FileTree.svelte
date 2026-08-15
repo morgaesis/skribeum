@@ -862,6 +862,23 @@ function runMenuCommand(id: string) {
   });
 }
 
+/**
+ * Runs a tree command directly against the focused row, bypassing the
+ * action menu: the `F2`/`Delete` accelerators every Obsidian and VS Code
+ * user reaches for first. Shares the same context shape `runMenuCommand`
+ * builds from the menu, so a rename or delete behaves identically and
+ * returns focus the same way whichever route triggered it.
+ */
+function runRowCommand(id: string, row: Row) {
+  if (registry === undefined || commandContext === undefined) return;
+  const restoreTreeFocus = restoreMenuTreeFocus(row.path);
+  registry.run(id, {
+    ...commandContext(),
+    treePath: row.path,
+    restoreTreeFocus,
+  });
+}
+
 function rowContextMenu(event: MouseEvent, row: Row) {
   event.preventDefault();
   openMenu(
@@ -889,8 +906,9 @@ function clearHold() {
 }
 
 // registry-exempt keydown: ARIA tree and menu roving navigation stay inside
-// their widgets. Every application action dispatched from the menu is a
-// registered command.
+// their widgets. Every application action dispatched from a row, whether
+// through the menu or through the F2/Delete accelerators below, is a
+// registered command run through the registry.
 function onKeydown(event: KeyboardEvent) {
   const row = rows[focusIndex];
   if (row === undefined) return;
@@ -934,6 +952,12 @@ function onKeydown(event: KeyboardEvent) {
         row,
         itemElements[focusIndex] ?? (event.currentTarget as HTMLElement),
       );
+      break;
+    case "F2":
+      runRowCommand("tree.entry.rename", row);
+      break;
+    case "Delete":
+      runRowCommand("tree.entry.delete", row);
       break;
     default:
       return;
@@ -1116,6 +1140,7 @@ function dropOn(destination: string | null) {
         <button
           type="button"
           class="skr-tree-actions"
+          tabindex={index === focusIndex ? 0 : -1}
           aria-label={`${STRINGS.rowActions}: ${row.label}`}
           aria-haspopup="menu"
           aria-expanded={menuPath === row.path}

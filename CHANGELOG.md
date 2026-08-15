@@ -14,6 +14,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   because the id lives in the note content. The browser demo resolves the id
   to the note and falls back to normal landing when nothing matches;
   `?note=<path>` URLs keep working.
+- Editor panes form a split tree: any pane splits up, down, left, or right,
+  splits nest, and dividers resize each split 1:1 with the pointer against a
+  20rem width and 12rem height floor per pane. `Mod-Alt-Arrow` moves focus to
+  the nearest pane in that direction by bounding box, `Move tab to pane
+  above/below/left/right` relocates the active tab the same way, and closing a
+  pane's last tab collapses it into its sibling. A tab dragged over a pane's
+  four edge zones creates a split there; the center zone joins that pane's
+  strip. Eight panes is the ceiling.
+- Every pane in a split carries its own tab strip, so each one is named and
+  closable, and a `+` control opens an empty tab that the next note fills in
+  place. Tab strips hold their widths after a close while the pointer stays
+  over them, so repeated clicks close successive tabs, and arrow keys move
+  between tabs per the ARIA tabs pattern.
 - Canvas boards are directly manipulable: double-click opens a card's note,
   single click selects it, cards drag 1:1 with the pointer and persist their
   position, a toolbar action adds an existing note as a card, and a per-card
@@ -22,6 +35,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Opening a note reuses the focused pane's active tab instead of adding one,
+  and switches to the note's existing tab when it is already open in any pane.
+  Four routes still open a new tab deliberately: mod-click or middle-click on
+  a link or tree row, `Open in new tab` in a tree row's menu, the strip's `+`
+  control, and `Mod-Enter` on a file in the command surface.
 - Reveal marker glyphs enter with a 120ms fade and a small slide inside their
   instantly reserved space, and leave mirroring the same motion; the reserved
   width still applies in one frame, so the caret is never dragged sideways.
@@ -62,6 +80,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   space before the next character arrives: the cell keeps mid-typed edge
   whitespace while it owns the caret, so multi-word content can be typed
   at any speed.
+- Closing every tab no longer leaves the editor showing a stale document: the
+  pane's empty state and every route out of it now agree, and the tab strip's
+  geometry effects no longer throw when the strip is removed mid-update.
+- The address bar follows the focused pane's active tab, including plain tab
+  switches and renames, without overwriting the note a `?note=<path>` address
+  asks for: reloading such a link opens that note and adds it to the focused
+  pane's strip, so every restored tab survives. A restored workspace decides
+  what opens only when the address names no note.
+- The workspace reserves the sidebar's width from the first paint, so the
+  editor area no longer jumps sideways when the vault finishes opening.
 
 ## [0.0.7] - 2026-08-05
 

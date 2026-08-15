@@ -940,9 +940,13 @@ describe("tab strip reorder", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
+        visible: true,
+        paneId: "pane-1",
         onActivate: () => {},
         onClose: () => {},
         onReorder: (from: number, to: number) => reordered.push([from, to]),
+        onNewTab: () => {},
+        onAdopt: () => {},
       },
     });
     flushSync();
@@ -1014,9 +1018,13 @@ describe("tab strip reorder", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
+        visible: true,
+        paneId: "pane-1",
         onActivate: () => {},
         onClose: () => {},
         onReorder: () => {},
+        onNewTab: () => {},
+        onAdopt: () => {},
       },
     });
     flushSync();
@@ -1079,9 +1087,13 @@ function tabStripProps(overrides: Partial<TabStripProps> = {}): TabStripProps {
     activePath: "note-1.md",
     titleSources: {},
     focused: true,
+    visible: true,
+    paneId: "pane-1",
     onActivate: () => {},
     onClose: () => {},
     onReorder: () => {},
+    onNewTab: () => {},
+    onAdopt: () => {},
     ...overrides,
   });
 }

@@ -52,7 +52,7 @@ let {
   expandedPaths?: readonly string[];
   onExpandedChange?: (paths: string[]) => void;
   onSelectionChange?: (path: string | null) => void;
-  onOpenPath: (path: string) => void;
+  onOpenPath: (path: string, options?: { newTab?: boolean }) => void;
   registry?: CommandRegistry;
   commandContext?: () => CommandContext;
   desktop?: boolean;
@@ -358,6 +358,7 @@ const menuCommands = $derived.by(() => {
         ]
       : menuRow.kind === "note"
         ? [
+            "tree.note.open-in-new-tab",
             "tree.entry.rename",
             "tree.entry.delete",
             "tree.note.copy-link",
@@ -778,7 +779,7 @@ async function playFolderReveal(
   });
 }
 
-function activate(row: Row) {
+function activate(row: Row, newTab = false) {
   if (row.kind === "directory") {
     toggleFolder(row);
   } else if (
@@ -786,7 +787,7 @@ function activate(row: Row) {
     row.path.toLowerCase().endsWith(".canvas")
   ) {
     onSelectionChange?.(row.path);
-    onOpenPath(row.path);
+    onOpenPath(row.path, { newTab });
   }
 }
 
@@ -1094,9 +1095,15 @@ function dropOn(destination: string | null) {
         style={`top: ${TREE_PADDING + index * rowHeight}px; height: ${rowHeight}px; padding-left: ${0.5 + row.depth}rem`}
         draggable={row.kind !== "file" || row.path.toLowerCase().endsWith(".canvas")}
         onfocus={() => (focusIndex = index)}
-        onclick={() => {
+        onclick={(event) => {
           void focusRow(index);
-          activate(row);
+          activate(row, event.ctrlKey || event.metaKey);
+        }}
+        onauxclick={(event) => {
+          if (event.button !== 1) return;
+          event.preventDefault();
+          void focusRow(index);
+          activate(row, true);
         }}
         oncontextmenu={(event) => rowContextMenu(event, row)}
         onpointerdown={(event) => beginHold(event, row)}

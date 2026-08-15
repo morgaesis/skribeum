@@ -175,7 +175,7 @@ describe("wikilink pointer navigation", () => {
   });
 
   it.each(["ctrlKey", "metaKey"] as const)(
-    "follows a %s click without changing the editor selection",
+    "opens a %s click in a new tab without changing the editor selection",
     (modifier) => {
       const navigate = vi.fn();
       const options = navigationOptions({ navigate });
@@ -187,9 +187,31 @@ describe("wikilink pointer navigation", () => {
 
       expect(event.defaultPrevented).toBe(true);
       expect(view.state.selection.eq(selection)).toBe(true);
-      expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
+      expect(navigate).toHaveBeenCalledWith(
+        { path: "Target note.md" },
+        { newTab: true },
+      );
     },
   );
+
+  it("opens a middle-click on a link in a new tab", () => {
+    const navigate = vi.fn();
+    const options = navigationOptions({ navigate });
+    const view = makePointerView("Before [[Target note]] after", 0, options);
+
+    const event = new MouseEvent("auxclick", {
+      bubbles: true,
+      cancelable: true,
+      button: 1,
+    });
+    wikilinkTarget(view).dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith(
+      { path: "Target note.md" },
+      { newTab: true },
+    );
+  });
 
   it("leaves a plain click in edit mode when the cursor is inside the link", () => {
     const navigate = vi.fn();

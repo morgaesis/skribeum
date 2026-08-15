@@ -17,7 +17,7 @@ let {
   mode: PickerMode;
   initialQuery?: string;
   onQueryChange: (query: string) => void;
-  onPick: (item: PickerItem) => void;
+  onPick: (item: PickerItem, intent?: { newTab?: boolean }) => void;
   onClose: () => void;
   restoreFocus?: boolean;
 } = $props();
@@ -83,9 +83,11 @@ function onInput(event: Event & { currentTarget: HTMLInputElement }) {
   onQueryChange(event.currentTarget.value);
 }
 
-function pickActive() {
+function pickActive(intent?: { newTab?: boolean }) {
   const item = items[active];
-  if (item !== undefined) onPick(item);
+  if (item !== undefined && item.unavailableReason === undefined) {
+    onPick(item, intent);
+  }
 }
 
 // registry-exempt keydown: ARIA combobox pattern internal navigation
@@ -106,7 +108,9 @@ function onKeydown(event: KeyboardEvent) {
       active = Math.max(0, items.length - 1);
       break;
     case "Enter":
-      pickActive();
+      // Mod-Enter is the file mode's explicit new-tab action; plain Enter
+      // opens in place like every other default route.
+      pickActive({ newTab: event.ctrlKey || event.metaKey });
       break;
     default:
       return;
@@ -228,7 +232,12 @@ onDestroy(() => {
           data-action-kind={item.actionKind}
           data-command-id={item.commandId}
           aria-selected={index === active}
-          onclick={() => onPick(item)}
+          aria-disabled={item.unavailableReason === undefined ? undefined : true}
+          class:command-surface-unavailable={item.unavailableReason !== undefined}
+          onclick={(event) => {
+            if (item.unavailableReason !== undefined) return;
+            onPick(item, { newTab: event.ctrlKey || event.metaKey });
+          }}
           onmousemove={() => {
             active = index;
           }}
@@ -248,7 +257,9 @@ onDestroy(() => {
               <kbd class="command-surface-chip skr-muted shrink-0 rounded border px-1">{item.prefixHint}</kbd>
             {/if}
           </span>
-          {#if item.detailSegments !== undefined}
+          {#if item.unavailableReason !== undefined}
+            <span class="command-surface-detail skr-muted block truncate">{item.unavailableReason}</span>
+          {:else if item.detailSegments !== undefined}
             <span class="command-surface-detail skr-muted block truncate">
               {#each item.detailSegments as segment, segmentIndex (segmentIndex)}
                 {#if segment.highlighted}<mark class="skr-match rounded">{segment.text}</mark>{:else}{segment.text}{/if}
@@ -265,6 +276,12 @@ onDestroy(() => {
 </div>
 
 <style>
+  /* An unavailable row stays listed so the capability is discoverable, and
+     reads as unavailable rather than as a row that silently does nothing. */
+  .command-surface-unavailable {
+    opacity: 0.55;
+  }
+
   .command-surface-backdrop {
     position: fixed;
     inset: 0;

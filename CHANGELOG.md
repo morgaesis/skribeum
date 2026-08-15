@@ -6,8 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-08-15
+
 ### Added
 
+- Markdown images render: `![alt](target)` resolves a vault file, a `data:`
+  URL, or an HTTPS URL, with the alt text as the accessible name, the prose
+  measure as the width ceiling, and a retryable failure state when a target
+  is missing. Image bytes never enter the document as markup, a vault file is
+  typed from an extension allowlist rather than from its own content, and
+  only HTTPS and already-typed data URLs resolve, so an SVG renders as a
+  picture and executes nothing.
+- Footnotes render: `[^label]` marks up as a reference and `[^label]: text`
+  as its definition, either half moves the caret to its counterpart, and a
+  run of definitions written without blank lines stays a run of definitions.
+- A standalone `---` renders as a thematic break. A leading `---` opens
+  frontmatter only when the line after it can belong to a mapping, so a
+  document may open with a rule.
 - Stable note permalinks: `Copy permalink` in the command palette writes an
   11-character id into the note's frontmatter on first use and copies
   `https://skribeum.app/?n=<id>`, a URL that survives file moves and renames
@@ -90,6 +105,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   what opens only when the address names no note.
 - The workspace reserves the sidebar's width from the first paint, so the
   editor area no longer jumps sideways when the vault finishes opening.
+- Structure commands on a rendered table no longer corrupt the note. A table
+  block end that stopped inside a row made that row parse as a truncated
+  line, so an edit aimed at the row's end landed inside the row's source; a
+  block end now completes the row it stops inside, and a line carrying no
+  column separator is still not a row, so a block never grows over prose.
+- Editing a rendered table cell no longer writes into the note around the
+  table. A cell's editable surface bound no caret keys, so keys it did not
+  claim resolved against the note's document instead of the cell: `End`
+  stopped at a wrap point in a cell wide enough to wrap, and `Control-End`
+  moved the caret out of the cell while the cell still held the editing
+  session, so the next character landed outside the table. A cell is one
+  field and now answers those keys against its own bounds.
+- An empty quote line ends its block instead of trapping what follows inside
+  it, dropping one nesting level per press, and text that already carries its
+  own `>` marker keeps that marker instead of gaining a second one.
+- The task status menu, link previews, and every other surface the editor
+  hosts paint where they are placed. The editor shell held a compositor hint
+  while idle, which made it the containing block for the fixed-position
+  surfaces inside it and offset each one by the pane's own origin; the hint
+  is now held only while a surface is moving.
+- A hover-summoned menu waits for the pointer to rest before opening and
+  stays open while the pointer travels toward it, so reaching an option no
+  longer requires beating the dismissal.
 
 ## [0.0.7] - 2026-08-05
 

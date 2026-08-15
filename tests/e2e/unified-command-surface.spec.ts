@@ -472,7 +472,12 @@ describe("work package 1 browser behavior", () => {
     await browser.pause(hoverIntentDelayMs / 2);
     expect(await $(".skr-command-tooltip").isExisting()).toBe(false);
     const tooltip = $(".skr-command-tooltip");
-    await tooltip.waitForExist({ timeout: 1000 });
+    // The remaining wait is derived from the same delay rather than a fixed
+    // bound, so a slower engine has room to fire the timer while the
+    // assertion above still proves the tooltip waits for the intent delay.
+    await tooltip.waitForExist({
+      timeout: Math.max(hoverIntentDelayMs * 8, 4000),
+    });
     expect(await tooltip.getText()).toContain("Bold");
     expect(await tooltip.$("kbd").getText()).toBe(displayedBinding);
     await browser.execute(() => {

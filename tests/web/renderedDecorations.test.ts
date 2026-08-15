@@ -723,6 +723,79 @@ describe("rendered decoration DOM", () => {
     expect(nestedView?.state.selection.main.head).toBe(3);
   });
 
+  // A rendered cell's editable surface is nested inside the note's. Every
+  // caret key the cell declines is resolved by the engine against the host
+  // document, which walks its own line boxes: `End` stops at a wrap point
+  // in a cell wide enough to wrap, and `Control-End` leaves the cell for
+  // the end of the note while the cell still holds the editing session,
+  // so the next thing typed lands outside the table. Engines disagree on
+  // all of it, so the cell has to claim these keys and answer them
+  // against its own bounds. Claiming is the property under test: an
+  // unclaimed key is one the engine decides.
+  describe("rendered cell caret keys", () => {
+    const source = "| ab | b |\n| --- | --- |\n| cdef | d |";
+    const pressInCell = (view: EditorView, key: string, init = {}) => {
+      const nested = view.dom.querySelector<HTMLElement>(
+        '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+      );
+      const nestedView =
+        nested === null ? null : EditorView.findFromDOM(nested);
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      nestedView?.contentDOM.dispatchEvent(event);
+      return { nestedView, claimed: event.defaultPrevented };
+    };
+
+    for (const [key, offset] of [
+      ["Home", 0],
+      ["End", 4],
+      ["PageUp", 0],
+      ["PageDown", 4],
+    ] as const) {
+      it(`answers ${key} against the cell's own bounds`, () => {
+        const view = mountedView(source, 0);
+        expect(focusRenderedTableCell(view, 0, 1, 0, 2)).toBe(true);
+        const { nestedView, claimed } = pressInCell(view, key);
+        expect(claimed).toBe(true);
+        expect(nestedView?.state.doc.toString()).toBe("cdef");
+        expect(nestedView?.state.selection.main.head).toBe(offset);
+        expect(view.state.doc.toString()).toBe(source);
+      });
+    }
+
+    it("keeps a document-edge key inside the cell", () => {
+      const view = mountedView(source, 0);
+      expect(focusRenderedTableCell(view, 0, 1, 0, 2)).toBe(true);
+      const { nestedView, claimed } = pressInCell(view, "End", {
+        ctrlKey: true,
+      });
+      expect(claimed).toBe(true);
+      expect(nestedView?.state.selection.main.head).toBe(4);
+      expect(focusedRenderedTableCell(view)).toMatchObject({
+        row: 1,
+        column: 0,
+        head: 4,
+      });
+      expect(view.state.doc.toString()).toBe(source);
+    });
+
+    it("extends the cell selection when shift holds", () => {
+      const view = mountedView(source, 0);
+      expect(focusRenderedTableCell(view, 0, 1, 0, 1)).toBe(true);
+      const { nestedView, claimed } = pressInCell(view, "End", {
+        shiftKey: true,
+      });
+      expect(claimed).toBe(true);
+      expect(nestedView?.state.selection.main.anchor).toBe(1);
+      expect(nestedView?.state.selection.main.head).toBe(4);
+      expect(view.dom.querySelector(".cm-skr-table-selected")).toBeNull();
+    });
+  });
+
   it("drops cell ownership when its rendered widget is evicted", () => {
     const source = "| a | b |\n| --- | --- |\n| c | d |";
     const view = mountedView(source, 0);

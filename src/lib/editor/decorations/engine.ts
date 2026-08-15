@@ -1697,6 +1697,36 @@ function dispatchTableWidgetCommand(
   );
 }
 
+/**
+ * The cell offset a document-edge or line-edge key addresses.
+ *
+ * A rendered cell is one field, not a line of prose: it declares
+ * `aria-multiline="false"` and holds a single logical line that wraps to
+ * whatever width its column has. Every key here therefore addresses the
+ * cell's own bounds. A key left to the engine is resolved against the
+ * host document instead, because the cell's editable surface is nested
+ * inside the note's: the engine walks its own line boxes, so `End` stops
+ * at a wrap point in a cell wide enough to wrap and `Control-End` leaves
+ * the cell entirely, landing the caret in the note while the cell still
+ * holds the editing session. Engines disagree on all of it, so the cell
+ * resolves these keys itself rather than inheriting one engine's answer.
+ */
+function cellCaretTarget(
+  nested: EditorView,
+  event: KeyboardEvent,
+): number | null {
+  switch (event.key) {
+    case "Home":
+    case "PageUp":
+      return 0;
+    case "End":
+    case "PageDown":
+      return nested.state.doc.length;
+    default:
+      return null;
+  }
+}
+
 function handleTableCellKey(event: KeyboardEvent, nested: EditorView): boolean {
   const owner = nestedTableCellParents.get(nested);
   if (owner === undefined) {
@@ -1726,6 +1756,16 @@ function handleTableCellKey(event: KeyboardEvent, nested: EditorView): boolean {
     event.stopPropagation();
     return true;
   };
+  const caretTarget = cellCaretTarget(nested, event);
+  if (caretTarget !== null) {
+    nested.dispatch({
+      selection: event.shiftKey
+        ? { anchor: selection.anchor, head: caretTarget }
+        : { anchor: caretTarget },
+      scrollIntoView: true,
+    });
+    return stop();
+  }
   if (
     event.shiftKey &&
     ((event.key === "ArrowLeft" && headAtStart) ||

@@ -136,38 +136,31 @@ export const HOVER_CONE_GRACE_MS = 300;
 /** How long a pointer outside the corridor may linger before the close runs. */
 const HOVER_LEAVE_GRACE_MS = 100;
 
-export type HoverIntentOptions = {
-  /** The control whose hovered rest summons the surface. */
+export type HoverCorridorOptions = {
+  /** The control the surface was summoned from. */
   anchor: HTMLElement;
   /** The surface itself, so travel into it cancels the pending close. */
   surface: HTMLElement;
   isOpen: () => boolean;
-  open: (point: ConePoint) => void;
   close: () => void;
-  /** Pointer rest before the surface appears; the theme delay by default. */
-  openDelay: () => number;
   grace?: number;
   ownerDocument?: Document;
 };
 
 /**
- * The hover contract every pointer-summoned menu makes: a surface appears
- * only after the pointer has rested on its anchor for the shared intent
- * delay, so a pass across the anchor shows nothing, and once open it survives
- * the travel from anchor to surface through the safe-triangle corridor above,
- * with a grace timeout as the fallback for a pointer that leaves it.
+ * The travel half of the hover contract: once a surface is open, it survives
+ * the journey from its anchor to itself through the safe-triangle corridor
+ * above, with a grace timeout as the fallback. Without it a surface dies in
+ * the gap between anchor and surface and the reader has to race it. A
+ * click-summoned surface that closes on hover-out wants this on its own; a
+ * hover-summoned one wants `attachHoverIntent`, which adds the rest delay.
  */
-export function attachHoverIntent(options: HoverIntentOptions): () => void {
+export function attachHoverCorridor(options: HoverCorridorOptions): () => void {
   const doc = options.ownerDocument ?? options.anchor.ownerDocument ?? document;
   const grace = options.grace ?? HOVER_CONE_GRACE_MS;
-  let openTimer: ReturnType<typeof setTimeout> | null = null;
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
   let leavePoint: ConePoint | null = null;
 
-  const cancelOpen = () => {
-    if (openTimer !== null) clearTimeout(openTimer);
-    openTimer = null;
-  };
   const cancelClose = () => {
     if (closeTimer !== null) clearTimeout(closeTimer);
     closeTimer = null;
@@ -182,30 +175,16 @@ export function attachHoverIntent(options: HoverIntentOptions): () => void {
     }, delay);
   };
 
-  const onAnchorEnter = (event: PointerEvent) => {
-    if (event.pointerType === "touch" || (event.buttons ?? 0) !== 0) return;
-    cancelClose();
-    if (options.isOpen()) return;
-    const point = { x: event.clientX, y: event.clientY };
-    cancelOpen();
-    openTimer = setTimeout(() => {
-      openTimer = null;
-      options.open(point);
-    }, options.openDelay());
-  };
+  const onAnchorEnter = () => cancelClose();
 
   const onAnchorLeave = (event: PointerEvent) => {
-    cancelOpen();
     if (!options.isOpen()) return;
     if (options.surface.contains(event.relatedTarget as Node | null)) return;
     leavePoint = { x: event.clientX, y: event.clientY };
     scheduleClose(grace);
   };
 
-  const onSurfaceEnter = () => {
-    cancelOpen();
-    cancelClose();
-  };
+  const onSurfaceEnter = () => cancelClose();
 
   const onSurfaceLeave = (event: PointerEvent) => {
     if (!options.isOpen()) return;
@@ -236,13 +215,57 @@ export function attachHoverIntent(options: HoverIntentOptions): () => void {
   doc.addEventListener("pointermove", onPointerMove, true);
 
   return () => {
-    cancelOpen();
     cancelClose();
     options.anchor.removeEventListener("pointerenter", onAnchorEnter);
     options.anchor.removeEventListener("pointerleave", onAnchorLeave);
     options.surface.removeEventListener("pointerenter", onSurfaceEnter);
     options.surface.removeEventListener("pointerleave", onSurfaceLeave);
     doc.removeEventListener("pointermove", onPointerMove, true);
+  };
+}
+
+export type HoverIntentOptions = HoverCorridorOptions & {
+  open: (point: ConePoint) => void;
+  /** Pointer rest before the surface appears; the theme delay by default. */
+  openDelay: () => number;
+};
+
+/**
+ * The full hover contract every pointer-summoned menu makes: a surface
+ * appears only after the pointer has rested on its anchor for the shared
+ * intent delay, so a pass across the anchor shows nothing, and once open it
+ * travels through the corridor above.
+ */
+export function attachHoverIntent(options: HoverIntentOptions): () => void {
+  const releaseCorridor = attachHoverCorridor(options);
+  let openTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const cancelOpen = () => {
+    if (openTimer !== null) clearTimeout(openTimer);
+    openTimer = null;
+  };
+
+  const onAnchorEnter = (event: PointerEvent) => {
+    if (event.pointerType === "touch" || (event.buttons ?? 0) !== 0) return;
+    if (options.isOpen()) return;
+    const point = { x: event.clientX, y: event.clientY };
+    cancelOpen();
+    openTimer = setTimeout(() => {
+      openTimer = null;
+      options.open(point);
+    }, options.openDelay());
+  };
+
+  options.anchor.addEventListener("pointerenter", onAnchorEnter);
+  options.anchor.addEventListener("pointerleave", cancelOpen);
+  options.surface.addEventListener("pointerenter", cancelOpen);
+
+  return () => {
+    cancelOpen();
+    options.anchor.removeEventListener("pointerenter", onAnchorEnter);
+    options.anchor.removeEventListener("pointerleave", cancelOpen);
+    options.surface.removeEventListener("pointerenter", cancelOpen);
+    releaseCorridor();
   };
 }
 

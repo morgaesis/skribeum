@@ -3953,14 +3953,7 @@ function buildViewDecorations(view: EditorView): DecorationSet {
   const wikilinks =
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
   const taskStatuses = state.facet(taskStatusConfiguration);
-  const activeReveal = findActiveReveal(
-    state.doc,
-    syntaxTree(state),
-    table,
-    selection,
-    wikilinks,
-    taskStatuses,
-  );
+  const activeReveal = activeRevealIn(state);
   const ranges =
     view.visibleRanges.length > 0
       ? view.visibleRanges.map((range) => ({ from: range.from, to: range.to }))
@@ -3993,14 +3986,7 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
     selection,
     wikilinks,
     taskStatuses,
-    activeReveal: findActiveReveal(
-      state.doc,
-      syntaxTree(state),
-      table,
-      selection,
-      wikilinks,
-      taskStatuses,
-    ),
+    activeReveal: activeRevealIn(state),
     explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
   });
 }
@@ -4053,16 +4039,28 @@ function defersDecorationRebuild(
   );
 }
 
+/**
+ * Resolving the reveal walks the syntax tree around the caret, and several
+ * consumers want the same answer for the same state: the inline plugin, the
+ * block field, the deferred reveal refresh, and the motion driver. The result
+ * is a pure function of the state, and a state is immutable, so it is
+ * computed once and read back by everyone else.
+ */
+const revealRegionCache = new WeakMap<EditorState, RevealRegion | null>();
+
 function activeRevealIn(state: EditorState): RevealRegion | null {
-  const table = state.facet(decorationTable);
-  return findActiveReveal(
+  const cached = revealRegionCache.get(state);
+  if (cached !== undefined) return cached;
+  const region = findActiveReveal(
     state.doc,
     syntaxTree(state),
-    table,
+    state.facet(decorationTable),
     revealSelection(state),
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
     state.facet(taskStatusConfiguration),
   );
+  revealRegionCache.set(state, region);
+  return region;
 }
 
 function mappedReveal(
@@ -4228,6 +4226,34 @@ function replacesWholeDocument(update: ViewUpdate): boolean {
 }
 
 /**
+ * Whether an update can have moved the reveal into a different construct.
+ * The motion follows the engine's own rebuilds: an update that only scrolled
+ * or remeasured cannot change what is revealed, and an input the engine
+ * defers has not rebuilt the DOM yet, so there is nothing new to animate
+ * until the deferred refresh lands. Both cases cost this plugin nothing,
+ * which is what keeps a keystroke in a large document off the syntax walk.
+ */
+function observesReveal(update: ViewUpdate): boolean {
+  if (update.transactions.some(refreshRequested)) return true;
+  if (
+    update.transactions.some((transaction) =>
+      defersDecorationRebuild(
+        transaction,
+        update.startState.field(blockEngineField, false)?.decorations,
+      ),
+    )
+  ) {
+    return false;
+  }
+  return (
+    update.docChanged ||
+    update.selectionSet ||
+    syntaxTree(update.state) !== syntaxTree(update.startState) ||
+    decorationInputsChanged(update.state, update.startState)
+  );
+}
+
+/**
  * The reveal's motion. The decoration engine decides what a reveal looks
  * like; this decides when it moves, which CSS cannot: CodeMirror builds a new
  * node for a range whose decoration class changed, so the revealed form is
@@ -4251,26 +4277,20 @@ class RevealMotion {
   }
 
   update(update: ViewUpdate): void {
-    // Resolving the reveal walks the syntax tree around the caret. Nothing
-    // else can move the reveal, so an update that only scrolled or only
-    // remeasured pays nothing for this plugin.
-    if (
-      !update.docChanged &&
-      !update.selectionSet &&
-      syntaxTree(update.state) === syntaxTree(update.startState) &&
-      !decorationInputsChanged(update.state, update.startState)
-    ) {
-      return;
+    // The remembered region is mapped on every change, including the ones
+    // this plugin does no other work for: an input burst the engine defers
+    // still moves the text, and the region has to still describe the same
+    // construct when the deferred refresh finally lands.
+    if (update.docChanged && this.previous !== null) {
+      this.previous = {
+        ...this.previous,
+        from: update.changes.mapPos(this.previous.from, -1),
+        to: update.changes.mapPos(this.previous.to, 1),
+      };
     }
+    if (!observesReveal(update)) return;
+    const previous = this.previous;
     const next = activeRevealIn(update.state);
-    const previous =
-      this.previous === null || !update.docChanged
-        ? this.previous
-        : {
-            ...this.previous,
-            from: update.changes.mapPos(this.previous.from, -1),
-            to: update.changes.mapPos(this.previous.to, 1),
-          };
     this.previous = next;
     if (
       (previous?.from === next?.from && previous?.to === next?.to) ||

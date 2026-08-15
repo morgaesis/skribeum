@@ -8,6 +8,7 @@
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import type { Extension } from "@codemirror/state";
 import { type EditorView, type KeyBinding, keymap } from "@codemirror/view";
+import { quoteEditing } from "../editor/quoteEditing";
 import { taskEditing } from "../editor/taskEditing";
 import type { CommandRegistry } from "./registry";
 import type { CommandContext } from "./types";
@@ -189,6 +190,7 @@ export function editorKeymap(
         ];
   return [
     taskEditing,
+    quoteEditing,
     keymap.of([
       ...bindings,
       ...persistentHistoryBindings,

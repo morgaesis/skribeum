@@ -243,6 +243,120 @@ const callouts: MarkdownConfig = {
   ],
 };
 
+/**
+ * A footnote label: at least one character, no whitespace and no closing
+ * bracket, so `[^1]`, `[^note-2]` and `[^a.b]` are labels while `[^ ]`,
+ * `[^]` and a bracket run spanning a line are not.
+ */
+const FOOTNOTE_REFERENCE = /^\[\^([^\]\s]+)\]/;
+/** The definition head `[^label]:` at the start of a leaf block. */
+const FOOTNOTE_DEFINITION = /^\[\^([^\]\s]+)\]:/;
+/** A reference never grows past this scan window. */
+const FOOTNOTE_SCAN_LIMIT = 256;
+
+class FootnoteDefinitionParser implements LeafBlockParser {
+  constructor(
+    private readonly headLength: number,
+    private readonly labelLength: number,
+  ) {}
+
+  nextLine(): boolean {
+    return false;
+  }
+
+  finish(cx: BlockContext, leaf: LeafBlock): boolean {
+    const labelFrom = leaf.start + 2;
+    const labelTo = labelFrom + this.labelLength;
+    cx.addLeafElement(
+      leaf,
+      cx.elt(
+        "FootnoteDefinition",
+        leaf.start,
+        leaf.start + leaf.content.length,
+        [
+          cx.elt("FootnoteDefinitionMark", leaf.start, labelFrom),
+          cx.elt("FootnoteLabel", labelFrom, labelTo),
+          cx.elt(
+            "FootnoteDefinitionMark",
+            labelTo,
+            leaf.start + this.headLength,
+          ),
+          ...cx.parser.parseInline(
+            leaf.content.slice(this.headLength),
+            leaf.start + this.headLength,
+          ),
+        ],
+      ),
+    );
+    return true;
+  }
+}
+
+/**
+ * Footnotes, which CommonMark and GFM both leave out: `[^label]` in prose
+ * is a reference and a leaf block opening with `[^label]:` is its
+ * definition. The reference parser runs before `Link` so the bracket run
+ * is claimed as one footnote rather than a link with a caret in it, and
+ * the definition parser runs before `LinkReference` so a definition line
+ * is never read as a link-reference definition.
+ */
+const footnotes: MarkdownConfig = {
+  defineNodes: [
+    "FootnoteReference",
+    "FootnoteMark",
+    "FootnoteLabel",
+    { name: "FootnoteDefinition", block: true },
+    "FootnoteDefinitionMark",
+  ],
+  parseInline: [
+    {
+      name: "FootnoteReference",
+      before: "Link",
+      parse(cx, next, pos) {
+        if (next !== CHAR_BRACKET_OPEN || cx.char(pos + 1) !== CHAR_CARET) {
+          return -1;
+        }
+        const window = cx.slice(
+          pos,
+          Math.min(cx.end, pos + FOOTNOTE_SCAN_LIMIT),
+        );
+        const match = FOOTNOTE_REFERENCE.exec(window);
+        if (match === null || match[1] === undefined) {
+          return -1;
+        }
+        const labelFrom = pos + 2;
+        const labelTo = labelFrom + match[1].length;
+        const end = pos + match[0].length;
+        return cx.addElement(
+          cx.elt("FootnoteReference", pos, end, [
+            cx.elt("FootnoteMark", pos, labelFrom),
+            cx.elt("FootnoteLabel", labelFrom, labelTo),
+            cx.elt("FootnoteMark", labelTo, end),
+          ]),
+        );
+      },
+    },
+  ],
+  parseBlock: [
+    {
+      name: "FootnoteDefinition",
+      leaf(_cx, leaf) {
+        const match = FOOTNOTE_DEFINITION.exec(leaf.content);
+        return match === null || match[1] === undefined
+          ? null
+          : new FootnoteDefinitionParser(match[0].length, match[1].length);
+      },
+      // A definition head starts its own block, so a run of definitions
+      // written without blank lines between them stays a run of
+      // definitions rather than folding into the first one's body.
+      endLeaf(_cx, line) {
+        return FOOTNOTE_DEFINITION.test(line.text.slice(line.pos));
+      },
+      before: "LinkReference",
+    },
+  ],
+};
+
 const taskPayloads: MarkdownConfig = {
   defineNodes: ["TaskDatePayload", "TaskLevelPayload"],
   parseInline: [
@@ -384,13 +498,31 @@ const boundedParagraphs: MarkdownConfig = {
 };
 
 /**
+ * The line that follows a document's opening `---` decides whether the
+ * block is frontmatter at all. A YAML mapping entry, a sequence entry, a
+ * comment, or an immediate closing delimiter opens frontmatter; anything
+ * else means the `---` was a thematic break that happens to sit on the
+ * first line, and the block parser leaves it to `HorizontalRule`.
+ */
+const FRONTMATTER_BODY_LINE = /^[ \t]*(?:#|-[ \t]|[^\s:#][^:]*:([ \t]|$))/;
+
+function opensFrontmatter(nextLine: string): boolean {
+  return (
+    nextLine === "---" ||
+    nextLine === "..." ||
+    FRONTMATTER_BODY_LINE.test(nextLine)
+  );
+}
+
+/**
  * The leading YAML frontmatter block as one opaque node, so `title: x`
  * lines followed by the closing `---` never read as a setext heading and
  * no inline construct is recognized inside the block. The block opens
- * with a line that is exactly `---` at document start and closes at the
- * next `---` or `...` line. The editor scan is bounded; an opener without
- * a nearby close becomes ordinary text instead of making every subsequent
- * edit reparse to the document end.
+ * with a line that is exactly `---` at document start, is followed by a
+ * line that can belong to a YAML mapping, and closes at the next `---` or
+ * `...` line. The editor scan is bounded; an opener without a nearby
+ * close yields a thematic break followed by ordinary text instead of
+ * making every subsequent edit reparse to the document end.
  */
 const frontmatterBlock: MarkdownConfig = {
   defineNodes: [{ name: "Frontmatter", block: true }],
@@ -399,7 +531,11 @@ const frontmatterBlock: MarkdownConfig = {
       name: "Frontmatter",
       before: "HorizontalRule",
       parse(cx, line) {
-        if (cx.lineStart !== 0 || line.text !== "---") {
+        if (
+          cx.lineStart !== 0 ||
+          line.text !== "---" ||
+          !opensFrontmatter(cx.peekLine())
+        ) {
           return false;
         }
         const lines = [line.text];
@@ -416,14 +552,22 @@ const frontmatterBlock: MarkdownConfig = {
           end = cx.lineStart + currentLine.length;
         }
         cx.nextLine();
-        cx.addElement(
-          cx.elt(
-            "Paragraph",
-            0,
-            end,
-            cx.parser.parseInline(lines.join("\n"), 0),
-          ),
-        );
+        // The opener was never closed, so it was not frontmatter. The
+        // delimiter keeps its thematic-break reading and the scanned body
+        // stays one bounded paragraph rather than reparsing to the end.
+        const openerLength = lines[0]?.length ?? 0;
+        const bodyStart = openerLength + 1;
+        cx.addElement(cx.elt("HorizontalRule", 0, openerLength));
+        if (end > bodyStart) {
+          cx.addElement(
+            cx.elt(
+              "Paragraph",
+              bodyStart,
+              end,
+              cx.parser.parseInline(lines.slice(1).join("\n"), bodyStart),
+            ),
+          );
+        }
         return true;
       },
     },
@@ -442,6 +586,7 @@ const obsidianMarkdownExtensionsWithoutTasks: MarkdownConfig[] = [
   tags,
   blockIds,
   callouts,
+  footnotes,
   taskPayloads,
   mathMarkdownExtension,
 ];

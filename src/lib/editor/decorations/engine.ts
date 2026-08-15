@@ -84,6 +84,12 @@ import { playFormEntrance, playGlyphEntrance, playGlyphExit } from "../motion";
 import { PostPaintScheduler } from "../postPaintScheduler";
 import { calloutIconSvg, parseCallout } from "./callouts";
 import {
+  type ImageSource,
+  imageFileName,
+  resolveImageSource,
+  TEXT_IMAGE_MEDIA_TYPE,
+} from "./images";
+import {
   DECORATION_TABLE,
   type DecorationRule,
   type Presentation,
@@ -2949,6 +2955,177 @@ class EmbedWidget extends WidgetType {
   }
 }
 
+/**
+ * A rendered Markdown image. Every source, remote or vault-local, reaches
+ * the document only as the `src` of an `<img>`: no image bytes are ever
+ * parsed into the DOM, so an SVG in a note renders in the user agent's
+ * secure static mode and carries no script, external reference, or
+ * interactivity. Vault bytes become a blob typed from the extension
+ * allowlist in `images.ts`, and the object URL is revoked with the widget.
+ *
+ * The frame follows the shared asynchronous-content rules: nothing appears
+ * for the grace period, a placeholder holds the space after it, and a
+ * target that fails or is absent swaps to the failure treatment in place
+ * rather than leaving a gap.
+ */
+class ImageWidget extends WidgetType {
+  private readonly cleanups = new WeakMap<HTMLElement, () => void>();
+
+  constructor(
+    readonly source: ImageSource,
+    readonly alt: string,
+    readonly title: string,
+    readonly context: WikilinkResolutionContext,
+  ) {
+    super();
+  }
+
+  override eq(other: ImageWidget): boolean {
+    return (
+      JSON.stringify(other.source) === JSON.stringify(this.source) &&
+      other.alt === this.alt &&
+      other.title === this.title &&
+      other.context.loadAsset === this.context.loadAsset &&
+      other.context.loadNote === this.context.loadNote
+    );
+  }
+
+  private accessibleName(): string {
+    if (this.alt.length > 0) {
+      return this.alt;
+    }
+    const target =
+      this.source.kind === "vault"
+        ? this.source.path
+        : this.source.kind === "missing"
+          ? this.source.target
+          : this.source.url;
+    return imageFileName(target);
+  }
+
+  /**
+   * Resolves the element source, minting a blob URL for vault bytes. A
+   * vector image is text, so the note loader supplies it where the byte
+   * loader is absent; a raster format has no text reading and reaches the
+   * failure state instead.
+   */
+  private async elementSource(): Promise<{
+    url: string;
+    revoke: boolean;
+  } | null> {
+    if (this.source.kind === "direct") {
+      return { url: this.source.url, revoke: false };
+    }
+    if (this.source.kind === "missing") {
+      return null;
+    }
+    const { path, mediaType } = this.source;
+    const body =
+      this.context.loadAsset !== undefined
+        ? await this.context.loadAsset(path)
+        : mediaType === TEXT_IMAGE_MEDIA_TYPE
+          ? await (this.context.loadNote?.(path) ?? Promise.resolve(null))
+          : null;
+    if (body === null) {
+      return null;
+    }
+    const blob = new Blob([body as BlobPart], { type: mediaType });
+    return { url: URL.createObjectURL(blob), revoke: true };
+  }
+
+  override toDOM(view: EditorView): HTMLElement {
+    const host = document.createElement("span");
+    host.className = "cm-skr-image cm-skr-reveal-motion cm-skr-reveal-rendered";
+    host.dataset.imageSource = this.source.kind;
+    const name = this.accessibleName();
+    const body = document.createElement("span");
+    body.className = "cm-skr-image-body";
+    host.append(body);
+
+    let objectUrl: string | null = null;
+    const releaseObjectUrl = () => {
+      if (objectUrl !== null) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+    };
+    let stopRequest = () => {};
+    const begin = () => {
+      stopRequest();
+      releaseObjectUrl();
+      body.className = "cm-skr-image-body skr-loading-region skr-loading-embed";
+      stopRequest = runAsyncContent<HTMLImageElement | null>({
+        host: body,
+        kind: "embed",
+        load: async () => {
+          const resolved = await this.elementSource();
+          if (resolved === null) {
+            return null;
+          }
+          if (resolved.revoke) {
+            objectUrl = resolved.url;
+          }
+          const element = document.createElement("img");
+          element.className = "cm-skr-image-frame";
+          element.alt = name;
+          if (this.title.length > 0) {
+            element.title = this.title;
+          }
+          element.decoding = "async";
+          element.src = resolved.url;
+          await element.decode();
+          return element;
+        },
+        unavailable: (element) => element === null,
+        onRetry: begin,
+        render: (element) => {
+          if (element === null) {
+            return;
+          }
+          body.className = "cm-skr-image-body";
+          body.replaceChildren(element);
+          view.requestMeasure();
+        },
+      });
+    };
+    begin();
+    this.cleanups.set(host, () => {
+      stopRequest();
+      releaseObjectUrl();
+    });
+    return host;
+  }
+
+  override destroy(dom: HTMLElement): void {
+    this.cleanups.get(dom)?.();
+    this.cleanups.delete(dom);
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/** A thematic break as the rule it stands for, not its source delimiter. */
+class ThematicBreakWidget extends WidgetType {
+  override eq(): boolean {
+    return true;
+  }
+
+  override toDOM(): HTMLElement {
+    const host = document.createElement("div");
+    host.className =
+      "cm-skr-thematic-break cm-skr-reveal-motion cm-skr-reveal-rendered";
+    host.setAttribute("role", "separator");
+    host.setAttribute("aria-label", STRINGS.thematicBreakLabel);
+    return host;
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
 class CalloutIconWidget extends WidgetType {
   constructor(readonly type: string) {
     super();
@@ -2977,7 +3154,8 @@ function isBlockWidgetRule(rule: DecorationRule): boolean {
     rule.presentation.place !== "before" &&
     (rule.presentation.widget === "math-block" ||
       rule.presentation.widget === "mermaid-diagram" ||
-      rule.presentation.widget === "table")
+      rule.presentation.widget === "table" ||
+      rule.presentation.widget === "thematic-break")
   );
 }
 
@@ -3327,6 +3505,38 @@ function dynamicAttributes(
       const date = source.slice(-10);
       return { "data-overdue": date < localIsoDate() ? "true" : "false" };
     }
+    case "inline-image":
+    case "reference-image": {
+      const parsed = imageParts(node, doc);
+      const source =
+        parsed === null ? null : resolveImageSource(parsed.target, wikilinks);
+      if (rule.dynamic === "reference-image") {
+        return source === null ? {} : null;
+      }
+      return source === null ? null : {};
+    }
+    case "footnote-reference": {
+      const label = footnoteLabel(node, doc);
+      return label === null
+        ? null
+        : {
+            "data-footnote": label,
+            "data-footnote-role": "reference",
+            role: "doc-noteref",
+            "aria-label": `${STRINGS.footnoteReferenceLabel} ${label}`,
+          };
+    }
+    case "footnote-definition": {
+      const label = footnoteLabel(node, doc);
+      return label === null
+        ? null
+        : {
+            "data-footnote": label,
+            "data-footnote-role": "definition",
+            role: "doc-backlink",
+            "aria-label": `${STRINGS.footnoteDefinitionLabel} ${label}`,
+          };
+    }
     case "tag-search": {
       const tag = doc.sliceString(node.from + 1, node.to);
       return {
@@ -3480,6 +3690,43 @@ function mermaidSource(node: SyntaxNode, doc: Text): string {
   return lines.join("\n").trim();
 }
 
+type ImageParts = { alt: string; target: string; title: string };
+
+/**
+ * The alt text, target and optional title of an inline image. The alt run
+ * is the source between the opening `![` and the `]` that closes it, which
+ * the tree gives as the first two link marks; a reference-style image has
+ * no URL child and produces null.
+ */
+function imageParts(node: SyntaxNode, doc: Text): ImageParts | null {
+  const url = node.getChild("URL");
+  if (url === null) {
+    return null;
+  }
+  const marks = node.getChildren("LinkMark");
+  const open = marks[0];
+  const close = marks[1];
+  const title = node.getChild("LinkTitle");
+  return {
+    alt:
+      open === undefined || close === undefined
+        ? ""
+        : doc.sliceString(open.to, close.from),
+    target: doc.sliceString(url.from, url.to),
+    title:
+      title === null
+        ? ""
+        : doc.sliceString(title.from, title.to).replace(/^["'(]|["')]$/gu, ""),
+  };
+}
+
+/** The label of a footnote reference or definition node. */
+function footnoteLabel(node: SyntaxNode, doc: Text): string | null {
+  const label =
+    node.name === "FootnoteLabel" ? node : node.getChild("FootnoteLabel");
+  return label === null ? null : doc.sliceString(label.from, label.to);
+}
+
 function widgetFor(
   widget: Extract<Presentation, { present: "widget" }>["widget"],
   node: SyntaxNode,
@@ -3563,6 +3810,31 @@ function widgetFor(
         attributes: { role: "group", "data-target": targetText },
       };
     }
+    case "image": {
+      const parsed = imageParts(node, doc);
+      const source =
+        parsed === null ? null : resolveImageSource(parsed.target, wikilinks);
+      if (parsed === null || source === null) {
+        throw new Error("image widget requires a resolvable target");
+      }
+      return {
+        widget: new ImageWidget(source, parsed.alt, parsed.title, wikilinks),
+        block: false,
+        attributes: {
+          "data-image-source": source.kind,
+          "data-image-target": parsed.target,
+        },
+      };
+    }
+    case "thematic-break":
+      return {
+        widget: new ThematicBreakWidget(),
+        block: true,
+        attributes: {
+          role: "separator",
+          "aria-label": STRINGS.thematicBreakLabel,
+        },
+      };
     case "code-copy":
       return {
         widget: new CodeCopyWidget(fencedCodeSource(node, doc)),
@@ -3875,7 +4147,8 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               });
               if (
                 presentation.widget === "embed" ||
-                presentation.widget === "table"
+                presentation.widget === "table" ||
+                presentation.widget === "image"
               ) {
                 // Complete replacements own their syntax subtrees. Descendant
                 // decorations overlap the atomic range and can displace the
@@ -5097,6 +5370,71 @@ const calloutPointerMapping = EditorView.domEventHandlers({
   },
 });
 
+/**
+ * The counterpart of a footnote node: a reference points at its
+ * definition, and a definition points back at the first reference that
+ * cites it. Returns the document position to travel to, or null when the
+ * note has no counterpart.
+ */
+function footnoteCounterpart(
+  state: EditorState,
+  label: string,
+  from: "reference" | "definition",
+): number | null {
+  const wanted =
+    from === "reference" ? "FootnoteDefinition" : "FootnoteReference";
+  let target: number | null = null;
+  syntaxTree(state).iterate({
+    enter(ref) {
+      if (target !== null || ref.name !== wanted) {
+        return undefined;
+      }
+      if (footnoteLabel(ref.node, state.doc) === label) {
+        target = ref.from;
+      }
+      return undefined;
+    },
+  });
+  return target;
+}
+
+/**
+ * A rendered footnote travels to its counterpart on activation, which is
+ * the navigation the construct exists for: a reference jumps to the note
+ * it cites, and the note's own marker returns to the citation. The caret
+ * lands on the counterpart, so the reveal model then shows that construct
+ * as source exactly as arriving by keyboard would.
+ */
+const footnotePointerNavigation = Prec.high(
+  EditorView.domEventHandlers({
+    mousedown(event, view) {
+      if (event.button !== 0 || !(event.target instanceof Element)) {
+        return false;
+      }
+      const element = event.target.closest<HTMLElement>("[data-footnote-role]");
+      const label = element?.dataset.footnote;
+      const role = element?.dataset.footnoteRole;
+      if (
+        element === null ||
+        element === undefined ||
+        label === undefined ||
+        (role !== "reference" && role !== "definition") ||
+        !view.dom.contains(element)
+      ) {
+        return false;
+      }
+      const anchor = footnoteCounterpart(view.state, label, role);
+      if (anchor === null) {
+        return false;
+      }
+      event.preventDefault();
+      view.focus();
+      view.dispatch({ selection: { anchor }, scrollIntoView: true });
+      return true;
+    },
+  }),
+);
+
 function syncTableSelection(view: EditorView): void {
   const selection = view.state.selection.main;
   for (const grid of view.dom.querySelectorAll<HTMLElement>(
@@ -5378,6 +5716,76 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-embed.cm-skr-embed-failed": {
     borderLeftColor: "var(--skr-danger)",
+  },
+  // An image occupies the reading column and never widens it: the frame
+  // scales down to the measure and keeps its intrinsic ratio, so the
+  // shared left edge holds and the page never scrolls sideways.
+  ".cm-skr-image": {
+    boxSizing: "border-box",
+    display: "inline-block",
+    maxWidth: "100%",
+    verticalAlign: "top",
+  },
+  ".cm-skr-image-body": {
+    display: "block",
+  },
+  ".cm-skr-image-frame": {
+    display: "block",
+    maxWidth: "100%",
+    height: "auto",
+    borderRadius: "var(--skr-radius-surface)",
+  },
+  // While the bytes are outstanding the frame holds the shared placeholder
+  // treatment, and a target that fails or is absent keeps that frame with
+  // a danger-tinted leading rule rather than leaving a gap in the prose.
+  ".cm-skr-image-body[data-loading-state='pending'], .cm-skr-image-body[data-loading-state='skeleton'], .cm-skr-image-body[data-loading-state='failure']":
+    {
+      display: "flex",
+      minWidth: "14rem",
+      flexDirection: "column",
+      alignItems: "flex-start",
+      gap: "0.5rem",
+      borderLeftWidth: "3px",
+      borderLeftStyle: "solid",
+      borderLeftColor: "var(--skr-accent)",
+      borderTopRightRadius: "var(--skr-radius-surface)",
+      borderBottomRightRadius: "var(--skr-radius-surface)",
+      backgroundColor: "var(--skr-surface-subtle)",
+    },
+  ".cm-skr-image-body[data-loading-state='failure']": {
+    borderLeftColor: "var(--skr-danger)",
+  },
+  // A thematic break is the rule it stands for. The line reserves the
+  // vertical rhythm and the rule sits on the shared left edge.
+  ".cm-skr-thematic-break": {
+    display: "block",
+    width: "100%",
+    height: "0px",
+    margin: "1rem 0",
+    borderTopWidth: "1px",
+    borderTopStyle: "solid",
+    borderTopColor: "var(--skr-border)",
+  },
+  ".cm-skr-footnote-ref": {
+    color: "var(--skr-link)",
+    cursor: "pointer",
+    fontSize: "0.78em",
+    fontWeight: "600",
+    verticalAlign: "super",
+    lineHeight: "0",
+  },
+  ".cm-line.cm-skr-footnote-definition": {
+    color: "var(--skr-text-muted)",
+    fontSize: "0.875em",
+  },
+  ".cm-skr-footnote-definition-label": {
+    color: "var(--skr-link)",
+    cursor: "pointer",
+    fontWeight: "600",
+  },
+  ".cm-skr-footnote-definition-label::after": {
+    content: "'.'",
+    color: "var(--skr-text-muted)",
   },
   ".cm-skr-embed-header": {
     display: "block",
@@ -5893,6 +6301,7 @@ export function decorationEngine(
     EditorView.atomicRanges.of(atomicDecorations),
     frontmatterCursorGuard,
     calloutPointerMapping,
+    footnotePointerNavigation,
     tableSessionPlugin,
     engineTheme,
   ];

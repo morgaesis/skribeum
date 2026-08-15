@@ -1,37 +1,45 @@
 0..0 line class="cm-skr-heading cm-skr-heading-1"
 0..2 hide node=HeaderMark
-40..41 hide node=LinkMark
-40..44 mark class="cm-skr-link"
-43..44 hide node=LinkMark
-77..78 hide node=LinkMark
-77..86 mark class="cm-skr-link"
-85..86 hide node=LinkMark
-118..119 hide node=LinkMark
-118..131 mark class="cm-skr-link"
-130..131 hide node=LinkMark
+40..42 hide node=FootnoteMark
+40..44 mark class="cm-skr-footnote-ref" aria-label="Footnote 1" data-footnote="1" data-footnote-role="reference" role="doc-noteref"
+43..44 hide node=FootnoteMark
+77..79 hide node=FootnoteMark
+77..86 mark class="cm-skr-footnote-ref" aria-label="Footnote harbor" data-footnote="harbor" data-footnote-role="reference" role="doc-noteref"
+85..86 hide node=FootnoteMark
+118..120 hide node=FootnoteMark
+118..122 mark class="cm-skr-footnote-ref" aria-label="Footnote 1" data-footnote="1" data-footnote-role="reference" role="doc-noteref"
+121..122 hide node=FootnoteMark
+122..124 hide node=FootnoteMark
+122..131 mark class="cm-skr-footnote-ref" aria-label="Footnote harbor" data-footnote="harbor" data-footnote-role="reference" role="doc-noteref"
+130..131 hide node=FootnoteMark
 180..181 hide node=LinkMark
 180..219 mark class="cm-skr-link"
 218..219 hide node=LinkMark
 275..275 line class="cm-skr-blockquote"
 275..276 mark class="cm-skr-quote-mark"
-318..319 hide node=LinkMark
-318..327 mark class="cm-skr-link"
-326..327 hide node=LinkMark
+318..320 hide node=FootnoteMark
+318..327 mark class="cm-skr-footnote-ref" aria-label="Footnote quoted" data-footnote="quoted" data-footnote-role="reference" role="doc-noteref"
+326..327 hide node=FootnoteMark
 329..329 line class="cm-skr-heading cm-skr-heading-2"
 329..332 hide node=HeaderMark
-345..346 hide node=LinkMark
-345..349 mark class="cm-skr-link"
-348..349 hide node=LinkMark
-398..399 hide node=LinkMark
-398..407 mark class="cm-skr-link"
-406..407 hide node=LinkMark
+345..345 line class="cm-skr-footnote-definition"
+345..347 hide node=FootnoteDefinitionMark
+347..348 mark class="cm-skr-footnote-definition-label" aria-label="Footnote definition 1" data-footnote="1" data-footnote-role="definition" role="doc-backlink"
+348..350 hide node=FootnoteDefinitionMark
+398..398 line class="cm-skr-footnote-definition"
+398..400 hide node=FootnoteDefinitionMark
+400..406 mark class="cm-skr-footnote-definition-label" aria-label="Footnote definition harbor" data-footnote="harbor" data-footnote-role="definition" role="doc-backlink"
+406..408 hide node=FootnoteDefinitionMark
+437..437 line class="cm-skr-footnote-definition"
 494..494 line class="cm-skr-code-block"
-555..556 hide node=LinkMark
-555..564 mark class="cm-skr-link"
-563..564 hide node=LinkMark
-619..620 hide node=LinkMark
-619..628 mark class="cm-skr-link"
-627..628 hide node=LinkMark
-704..705 hide node=LinkMark
-704..714 mark class="cm-skr-link"
-713..714 hide node=LinkMark
+555..555 line class="cm-skr-footnote-definition"
+555..557 hide node=FootnoteDefinitionMark
+557..563 mark class="cm-skr-footnote-definition-label" aria-label="Footnote definition quoted" data-footnote="quoted" data-footnote-role="definition" role="doc-backlink"
+563..565 hide node=FootnoteDefinitionMark
+619..619 line class="cm-skr-footnote-definition"
+619..621 hide node=FootnoteDefinitionMark
+621..627 mark class="cm-skr-footnote-definition-label" aria-label="Footnote definition orphan" data-footnote="orphan" data-footnote-role="definition" role="doc-backlink"
+627..629 hide node=FootnoteDefinitionMark
+704..706 hide node=FootnoteMark
+704..714 mark class="cm-skr-footnote-ref" aria-label="Footnote missing" data-footnote="missing" data-footnote-role="reference" role="doc-noteref"
+713..714 hide node=FootnoteMark

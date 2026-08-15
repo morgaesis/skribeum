@@ -2573,6 +2573,13 @@ function refreshLinkContext() {
               return null;
             }
           },
+          loadAsset: async (path: string) => {
+            try {
+              return await readVaultFile(activeVault, path);
+            } catch {
+              return null;
+            }
+          },
         }),
   };
 }

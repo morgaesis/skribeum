@@ -158,6 +158,7 @@ above. `-` means the row applies to every node of that name.
 | `Strikethrough` | `-` | `mark cm-skr-strikethrough` | never |
 | `StrikethroughMark` | `-` | `hide` | cursor-inside |
 | `Link` | `-` | `mark cm-skr-link` | never |
+| `Image` | `-` | `widget image` | cursor-inside |
 | `Image` | `-` | `mark cm-skr-link` | never |
 | `LinkMark` | `-` | `hide` | cursor-inside |
 | `URL` | `parent=Link,Image` | `hide` | cursor-inside |
@@ -194,11 +195,17 @@ above. `-` means the row applies to every node of that name.
 | `CalloutMark` | `ancestor=Blockquote` | `mark cm-skr-callout-mark` | never |
 | `CalloutMark` | `ancestor=Blockquote` | `widget callout-icon` | never |
 | `CalloutType` | `ancestor=Blockquote` | `mark cm-skr-callout-type` | never |
+| `FootnoteReference` | `revealScope=node` | `mark cm-skr-footnote-ref` | cursor-inside |
+| `FootnoteMark` | `-` | `hide` | cursor-inside |
+| `FootnoteDefinition` | `-` | `line cm-skr-footnote-definition` | never |
+| `FootnoteDefinitionMark` | `-` | `hide` | cursor-line |
+| `FootnoteLabel` | `parent=FootnoteDefinition` | `mark cm-skr-footnote-definition-label` | cursor-line |
+| `HorizontalRule` | `revealScope=node` | `widget thematic-break` | cursor-line |
 | `HashTag` | `-` | `mark cm-skr-tag` | never |
 | `BlockId` | `-` | `mark cm-skr-block-id` | never |
 | `Frontmatter` | `revealScope=node revealDescendants` | `line cm-skr-frontmatter` | cursor-inside |
 
-Context-dependent attributes come from nine documented engine builtins a row
+Context-dependent attributes come from thirteen documented engine builtins a row
 opts into: `markdown-link-preview` adds preview targets to local note links and
 external-link semantics to HTTP and HTTPS targets, `wikilink-resolution` stamps
 `data-resolved` from the vault tree (unresolved links style distinctly),
@@ -211,7 +218,68 @@ canonical type, accent, foldability and line-position attributes.
 language attribute. `tag-search` stamps rendered tags with their source text
 without the leading hash, link semantics and an accessible search label.
 `task-status` stamps the configured symbol, category and theme color token on
-the enclosing task.
+the enclosing task. `inline-image` limits the image replacement to a target
+this product renders, and `reference-image` limits the link presentation to
+every other image, so the two rows are mutually exclusive.
+`footnote-reference` and `footnote-definition` stamp the label, the travel
+direction and the document roles the two halves of a footnote carry.
+
+## Images
+
+An image target resolves to one of three sources. An `https` address and a
+`data` URL whose declared media type is an allowed image format are used as
+the element source verbatim. A vault-relative target whose extension names an
+allowed image format resolves against the vault index, which is also how
+attachment folders are honoured. Every other target, a cleartext `http`
+address and every other scheme among them, is not an image this product
+renders, and the construct keeps its link presentation instead. A target that
+names an image the vault does not contain still resolves to a source, so it
+reaches the failure state rather than disappearing into prose.
+
+Image bytes reach the page only as the source of an `img` element. Nothing
+parses them into the document, so a vector file loads in the user agent's
+secure static mode with scripts, external references and interactivity all
+disabled. Vault bytes become a blob whose media type comes from the extension
+allowlist rather than from the file's own content, and the object URL is
+revoked with the widget. A file whose extension is outside that allowlist has
+no rendered form at all.
+
+The frame follows the asynchronous-content rules the embeds use: nothing
+appears during the grace period, placeholder bars hold the space after it, and
+a target that fails, times out, or is absent swaps in place to the failure
+line and its retry control while keeping the frame. The alt text is the
+element's accessible name; an image written without alt text takes its file
+name instead, so no rendered graphic is unlabelled. The rendered image scales
+down to the reading column and never widens it.
+
+Where the shell supplies a byte loader, every allowed format renders from the
+vault. Without one, a vector file still renders because its contents are text
+and the note loader reads it, while a raster file reaches the failure state.
+
+## Footnotes
+
+A footnote reference is the label alone, raised, in the link color, with the
+brackets hidden until the caret enters the reference. A definition line is set
+in the muted secondary size with its head reduced to the label and a
+separating period; entering the line restores `[^label]: ` as source. A run of
+definitions written without blank lines between them stays a run of
+definitions rather than folding into the first one's body.
+
+Activating either half travels to the other: a reference moves the caret to
+its definition, and a definition's label moves the caret to the first
+reference that cites it. The caret landing on the counterpart reveals that
+construct exactly as arriving by keyboard would.
+
+## Thematic breaks
+
+A standalone `---`, `***` or `___` renders as the rule it stands for, and the
+delimiter returns as source while the caret is on that line. A document whose
+first line is `---` opens frontmatter only when the line after it can belong
+to a YAML mapping: a mapping entry, a sequence entry, a comment, or an
+immediate closing delimiter. Any other following line means the delimiter was
+a thematic break that happens to sit first, and it renders as one. An opener
+that is followed by mapping-shaped lines but never closed within the bounded
+scan also yields a thematic break, with the scanned body as one paragraph.
 
 Resolved note embeds and link previews mount a nested read-only editor with
 this same table and token set. Preview mode omits frontmatter and renders a
@@ -219,6 +287,21 @@ nested embed as its path header only. Both surfaces use the shared delayed
 skeleton runner; preview hover starts the vault read during its intent delay,
 then the preview controller owns placement, safe-triangle pointer travel, and
 Escape dismissal without moving focus.
+
+## Quote and callout line editing
+
+Enter on a line holding only quote markers leaves the block. One press drops
+the innermost level, so a single-level quote or callout ends immediately and a
+nested quote steps out one level at a time. Enter anywhere else in a quote
+continues it, and list and task continuation are unaffected. Content that
+follows a callout therefore belongs to the document rather than to the block
+the reader already left.
+
+Content that already carries its own quote marker keeps exactly that marker.
+Typing or pasting quoted text onto a line holding only markers replaces that
+line, because a markers-only line is the continuation the editor wrote rather
+than something the reader typed. The inserted text is never rewritten: the
+marker that survives is the one in the source the reader supplied.
 
 ## Task status configuration
 

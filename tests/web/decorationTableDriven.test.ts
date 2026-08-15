@@ -27,9 +27,9 @@ import {
 } from "../../src/lib/editor/decorations/table";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
 
-const HORIZONTAL_RULE_ROW: DecorationRule = {
-  node: "HorizontalRule",
-  presentation: { present: "mark", class: "cm-test-horizontal-rule" },
+const PARAGRAPH_ROW: DecorationRule = {
+  node: "Paragraph",
+  presentation: { present: "mark", class: "cm-test-paragraph" },
   reveal: "never",
 };
 
@@ -77,13 +77,13 @@ describe("data-driven decoration table", () => {
       const before = serializeDecorationSet(
         engineDecorations(view) ?? Decoration.none,
       );
-      expect(before).not.toContain("cm-test-horizontal-rule");
+      expect(before).not.toContain("cm-test-paragraph");
       // The committed table decorates the emphasis on the last line.
       expect(before).toContain("cm-skr-emphasis");
 
       view.dispatch({
         effects: compartment.reconfigure(
-          decorationTable.of([...DECORATION_TABLE, HORIZONTAL_RULE_ROW]),
+          decorationTable.of([...DECORATION_TABLE, PARAGRAPH_ROW]),
         ),
         annotations: decorationOrigin.of(true),
       });
@@ -91,10 +91,10 @@ describe("data-driven decoration table", () => {
       const after = serializeDecorationSet(
         engineDecorations(view) ?? Decoration.none,
       );
-      expect(after).toContain('mark class="cm-test-horizontal-rule"');
+      expect(after).toContain('mark class="cm-test-paragraph"');
       // The committed rows keep applying alongside the added one.
       expect(after).toContain("cm-skr-emphasis");
-      expect(view.state.doc.toString()).toContain("---");
+      expect(view.state.doc.toString()).toContain("before");
     } finally {
       view.destroy();
     }
@@ -103,14 +103,12 @@ describe("data-driven decoration table", () => {
   it("the added rule also renders into the DOM", () => {
     const compartment = new Compartment();
     const view = mountedView(
-      compartment.of(
-        decorationTable.of([...DECORATION_TABLE, HORIZONTAL_RULE_ROW]),
-      ),
+      compartment.of(decorationTable.of([...DECORATION_TABLE, PARAGRAPH_ROW])),
     );
     try {
       document.body.append(view.dom);
       expect(
-        view.contentDOM.querySelector(".cm-test-horizontal-rule"),
+        view.contentDOM.querySelector(".cm-test-paragraph"),
       ).not.toBeNull();
     } finally {
       view.destroy();

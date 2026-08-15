@@ -120,8 +120,16 @@
   --skr-border-strong: #7c8c81;
 }
 
+/* Palette overrides that name a mode carry that mode's own guard. An
+   explicit `data-theme` selects the mode outright, so those rules stand
+   unguarded; a `data-theme="system"` rule resolves against the OS and must
+   sit inside the matching `prefers-color-scheme` block, or its extra
+   attribute outranks the opposite mode's base rule and pins the app to one
+   appearance. The system halves of the light palettes live in the
+   `prefers-color-scheme: light` block below, mirroring the dark palettes'
+   own system halves. Swatch selectors are mode-independent: they paint a
+   palette specimen on top of whatever the app is showing. */
 :root[data-theme="light"][data-light-palette="studio"],
-:root[data-theme="system"][data-light-palette="studio"],
 .skr-palette-swatch[data-palette="studio"] {
   --skr-canvas: #f2f5f9;
   --skr-surface: #ffffff;
@@ -150,7 +158,6 @@
 }
 
 :root[data-theme="light"][data-light-palette="gazette"],
-:root[data-theme="system"][data-light-palette="gazette"],
 .skr-palette-swatch[data-palette="gazette"] {
   --skr-canvas: #ffffff;
   --skr-surface: #ffffff;
@@ -176,6 +183,62 @@
   --skr-warning-surface: #f9efd2;
   --skr-success: #1d7a3e;
   --skr-success-surface: #e0f3e5;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"][data-light-palette="studio"] {
+    --skr-canvas: #f2f5f9;
+    --skr-surface: #ffffff;
+    --skr-surface-subtle: #e7ecf3;
+    --skr-surface-raised: #ffffff;
+    --skr-code-surface: #edf1f7;
+    --skr-text: #182230;
+    --skr-text-muted: #51617a;
+    --skr-heading: #101a28;
+    --skr-heading-subtle: #3d4e66;
+    --skr-accent: #1d4fd8;
+    --skr-accent-subtle: #dfe9fc;
+    --skr-link: #1d4fd8;
+    --skr-border: #c9d3e0;
+    --skr-border-strong: #8595ac;
+    --skr-selection-surface: #cfe0f7;
+    --skr-selection-text: #182230;
+    --skr-caret: #c81e5b;
+    --skr-focus: #1d4fd8;
+    --skr-danger: #b02a37;
+    --skr-danger-surface: #fbe7e9;
+    --skr-warning: #805206;
+    --skr-warning-surface: #faf0d7;
+    --skr-success: #20713d;
+    --skr-success-surface: #e2f2e6;
+  }
+
+  :root[data-theme="system"][data-light-palette="gazette"] {
+    --skr-canvas: #ffffff;
+    --skr-surface: #ffffff;
+    --skr-surface-subtle: #f1f1f4;
+    --skr-surface-raised: #ffffff;
+    --skr-code-surface: #f4f3f7;
+    --skr-text: #131316;
+    --skr-text-muted: #565664;
+    --skr-heading: #000000;
+    --skr-heading-subtle: #454553;
+    --skr-accent: #5f24c4;
+    --skr-accent-subtle: #ebe2fb;
+    --skr-link: #5f24c4;
+    --skr-border: #d9d9e0;
+    --skr-border-strong: #8c8c9d;
+    --skr-selection-surface: #e3d7fa;
+    --skr-selection-text: #131316;
+    --skr-caret: #d10f56;
+    --skr-focus: #5f24c4;
+    --skr-danger: #c41f30;
+    --skr-danger-surface: #fce5e8;
+    --skr-warning: #7d5605;
+    --skr-warning-surface: #f9efd2;
+    --skr-success: #1d7a3e;
+    --skr-success-surface: #e0f3e5;
+  }
 }
 
 :root[data-theme="dark"] {

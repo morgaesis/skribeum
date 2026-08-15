@@ -6484,13 +6484,17 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    const systemToggle = $('[data-testid="settings-match-system"]');
+    // Each read re-queries: the settings surface re-renders as the document
+    // commits, which detaches any handle held across a poll and turns a
+    // "not settled yet" into a thrown stale-element error.
+    const systemToggleSelected = () =>
+      $('[data-testid="settings-match-system"]').isSelected();
     // The dialog's existence only means the container mounted; the controls
     // inside it commit the persisted document a moment later, so poll for
     // that committed state rather than asserting immediately on open.
     await browser.waitUntil(
       async () =>
-        (await systemToggle.isSelected()) &&
+        (await systemToggleSelected()) &&
         (await $('[data-testid="settings-palette-gazette"]').getAttribute(
           "aria-checked",
         )) === "true" &&
@@ -6533,7 +6537,7 @@ describe("skribeum core editing surfaces", () => {
         timeoutMsg: "system dark palette did not become active",
       },
     );
-    expect(await systemToggle.isSelected()).toBe(true);
+    expect(await systemToggleSelected()).toBe(true);
     expect(
       await browser.execute(() => document.documentElement.dataset.theme),
     ).toBe("system");
@@ -6542,7 +6546,7 @@ describe("skribeum core editing surfaces", () => {
       '[data-testid="settings-palette-graphite"]',
       "Graphite palette",
     );
-    await browser.waitUntil(async () => !(await systemToggle.isSelected()), {
+    await browser.waitUntil(async () => !(await systemToggleSelected()), {
       timeout: 5000,
       timeoutMsg: "system match toggle stayed enabled",
     });
@@ -6574,7 +6578,7 @@ describe("skribeum core editing surfaces", () => {
       '[data-testid="settings-palette-studio"]',
       "Studio palette",
     );
-    await systemToggle.click();
+    await $('[data-testid="settings-match-system"]').click();
     await browser.waitUntil(
       async () => {
         const stored = await persistedSettings();

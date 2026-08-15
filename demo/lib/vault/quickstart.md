@@ -21,11 +21,12 @@ Write here: **replace this prompt with an observation.**
 - Compare [[Features/inline-math|Inline math]] with [[Features/block-math|Block math]].
 - View [[Features/mermaid-diagram|Mermaid diagram]] for a rendered flow.
 - Inspect [[Features/frontmatter|Frontmatter]] and its properties.
-- Open `demo.canvas` from the file tree for a visual overview.
+- Open [[Features/showcase|Showcase]] for one note that combines most of the above.
+- Open `demo.canvas` from the file tree for a visual overview. This browser demo shows the canvas read-only; the desktop app allows moving and editing cards.
 
 ## 4. Use navigation tools
 
-Open [[Examples/Research/reading-notes|Reading notes]], then use document find for `question`. Check the outline to jump between its sections. Global search can locate terms across the whole vault, while document find stays within the open note.
+Open [[Examples/Research/literature-review|Literature review]], then use document find for `daylight`. Check the outline to jump between its nine sections. Global search can locate terms across the whole vault, while document find stays within the open note.
 
 ## 5. Make the demo yours
 

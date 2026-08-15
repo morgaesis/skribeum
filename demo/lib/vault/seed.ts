@@ -7,6 +7,7 @@ import personalGardenLog from "./Examples/Personal/garden-log.md?raw";
 import personalTravelPlan from "./Examples/Personal/travel-plan.md?raw";
 import personalWeeklyReview from "./Examples/Personal/weekly-review.md?raw";
 import researchInterviewNotes from "./Examples/Research/interview-notes.md?raw";
+import researchLiteratureReview from "./Examples/Research/literature-review.md?raw";
 import researchReadingNotes from "./Examples/Research/reading-notes.md?raw";
 import workDecisionLog from "./Examples/Work/decision-log.md?raw";
 import workMeetingNotes from "./Examples/Work/meeting-notes.md?raw";
@@ -18,6 +19,7 @@ import embeds from "./Features/embeds.md?raw";
 import frontmatter from "./Features/frontmatter.md?raw";
 import inlineMath from "./Features/inline-math.md?raw";
 import mermaidDiagram from "./Features/mermaid-diagram.md?raw";
+import showcase from "./Features/showcase.md?raw";
 import tables from "./Features/tables.md?raw";
 import tags from "./Features/tags.md?raw";
 import tasks from "./Features/tasks.md?raw";
@@ -57,6 +59,7 @@ export const DEMO_FILES: Readonly<Record<string, string>> = Object.freeze({
   "Examples/Personal/travel-plan.md": personalTravelPlan,
   "Examples/Personal/weekly-review.md": personalWeeklyReview,
   "Examples/Research/interview-notes.md": researchInterviewNotes,
+  "Examples/Research/literature-review.md": researchLiteratureReview,
   "Examples/Research/reading-notes.md": researchReadingNotes,
   "Examples/Work/decision-log.md": workDecisionLog,
   "Examples/Work/meeting-notes.md": workMeetingNotes,
@@ -68,6 +71,7 @@ export const DEMO_FILES: Readonly<Record<string, string>> = Object.freeze({
   "Features/frontmatter.md": frontmatter,
   "Features/inline-math.md": inlineMath,
   "Features/mermaid-diagram.md": mermaidDiagram,
+  "Features/showcase.md": showcase,
   "Features/tables.md": tables,
   "Features/tags.md": tags,
   "Features/tasks.md": tasks,

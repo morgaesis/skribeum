@@ -1992,6 +1992,7 @@ describe("skribeum shell", () => {
         { command: "tree.entry.rename", label: "Rename" },
         { command: "tree.entry.delete", label: "Delete" },
         { command: "tree.entry.move", label: "Move" },
+        { command: "tree.note.open-in-new-tab", label: "Open in new tab" },
         { command: "tree.note.copy-link", label: "Copy link" },
         { command: "tree.entry.reveal", label: "Reveal in file manager" },
         { command: "panel.sidebar.toggle", label: "Toggle sidebar" },

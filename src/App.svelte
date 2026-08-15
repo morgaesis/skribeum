@@ -213,6 +213,8 @@ import {
   SIDEBAR_DEFAULT_REM,
   SIDEBAR_MAX_REM,
   SIDEBAR_MIN_REM,
+  SPLIT_MIN_HEIGHT_REM,
+  SPLIT_MIN_REM,
   type SplitSide,
   saveWorkspaceState,
   splitWorkspaceLeaf,
@@ -298,6 +300,12 @@ let workspaceIdentity = $state<string | null>(null);
 let titleLoadGeneration = 0;
 let workspaceHost = $state<HTMLElement>();
 let splitDraggingNode = $state<WorkspaceSplit | null>(null);
+/**
+ * Each rendered pane's own box. A split halves the pane it acts on, so its
+ * current extent is what decides whether the pane the split would create
+ * can hold the minimum pane size.
+ */
+let paneExtents = $state(new Map<string, { width: number; height: number }>());
 /** The pane and edge a dragged tab is currently hovering, if any. */
 let splitDropZone = $state<{
   paneId: string;
@@ -669,6 +677,17 @@ function togglePanel(panel: "sidebar" | "outline", origin?: HTMLElement) {
 
 const workspacePanes = $derived(workspaceLeaves(workspace.layout));
 
+/**
+ * Editor inputs held at component level rather than written inline in the
+ * pane snippet. An expression written as a prop inside a snippet becomes a
+ * derived owned by that snippet's effect, and the editor reads these from
+ * its own debounced save long after a split has torn that effect down.
+ */
+const editorVault = $derived(note !== null ? vault : null);
+const editorPath = $derived(note !== null ? selectedPath : null);
+const documentSettings = $derived(settingsState.document);
+const documentTaskStatuses = $derived(settingsState.document.task_statuses);
+
 function focusedWorkspacePane(): WorkspaceLeaf {
   return (
     findWorkspaceLeaf(workspace.layout, workspace.focusedPaneId) ??
@@ -998,9 +1017,32 @@ function reorderWorkspaceTabs(from: number, to: number) {
   pane.tabs.splice(target, 0, tab);
 }
 
-/** True while the tree still has room for another pane. */
-function canSplitFurther(): boolean {
-  return workspaceLeaves(workspace.layout).length < MAX_LEAF_PANES;
+/**
+ * Why splitting one pane on one side is unavailable, or null when it is
+ * available. Two bounds exist and both are stated the same way: the hard
+ * leaf cap, and the geometry itself, because a tree whose panes cannot all
+ * hold the minimum pane size in the editor area would have to overflow it.
+ */
+function splitUnavailableReason(
+  paneId: string,
+  side: SplitSide,
+): string | null {
+  if (workspaceLeaves(workspace.layout).length >= MAX_LEAF_PANES) {
+    return STRINGS.splitPaneCapReached;
+  }
+  const extent = paneExtents.get(paneId);
+  if (extent === undefined) return null;
+  // A split halves the pane it acts on, so both halves clear the floor only
+  // when the pane already holds twice it along that axis.
+  const horizontal = side === "left" || side === "right";
+  const available = horizontal ? extent.width : extent.height;
+  const floor =
+    (horizontal ? SPLIT_MIN_REM : SPLIT_MIN_HEIGHT_REM) * rootFontSize();
+  return available + 1 < floor * 2 ? STRINGS.splitPaneTooSmall : null;
+}
+
+function rootFontSize(): number {
+  return Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
 }
 
 /**
@@ -1015,7 +1057,7 @@ async function splitPaneWithTab(
   path: string,
   sourcePaneId = paneId,
 ): Promise<void> {
-  if (narrowViewport || !canSplitFurther()) return;
+  if (narrowViewport || splitUnavailableReason(paneId, side) !== null) return;
   const source = findWorkspaceLeaf(workspace.layout, sourcePaneId);
   const target = findWorkspaceLeaf(workspace.layout, paneId);
   if (source === null || target === null) return;
@@ -1159,6 +1201,19 @@ async function moveTabIntoPane(
   await adoptFocusedPane(target.id);
 }
 
+/**
+ * Why moving the active tab in one direction is unavailable. With a pane
+ * already there it is a relocation; without one it falls back to a split
+ * and inherits the split's own bounds.
+ */
+function moveTabUnavailableReason(direction: SplitSide): string | null {
+  const source = focusedWorkspacePane();
+  if (source.activePath === null) return STRINGS.movePaneUnavailable;
+  return nearestPaneInDirection(source.id, direction) !== null
+    ? null
+    : splitUnavailableReason(source.id, direction);
+}
+
 async function moveTabToPaneDirection(direction: SplitSide) {
   const source = focusedWorkspacePane();
   const path = source.activePath;
@@ -1210,14 +1265,19 @@ function updateTabDropZone(event: DragEvent, paneId: string) {
   const origin = currentTabDrag();
   if (origin === null) return;
   const target = event.currentTarget as HTMLElement;
-  event.preventDefault();
   const side = dropZoneAt(
     target.getBoundingClientRect(),
     event.clientX,
     event.clientY,
   );
-  splitDropZone =
-    side !== "center" && !canSplitFurther() ? null : { paneId, side };
+  // An edge zone that cannot produce a pane does not activate: no overlay,
+  // and the drag keeps its no-drop cursor rather than promising a split.
+  if (side !== "center" && splitUnavailableReason(paneId, side) !== null) {
+    splitDropZone = null;
+    return;
+  }
+  event.preventDefault();
+  splitDropZone = { paneId, side };
 }
 
 async function dropTabOnPane(event: DragEvent, paneId: string) {
@@ -1888,6 +1948,27 @@ const actionCommands = $derived(
     .pointerCommands("action-menu")
     .filter((command) => !narrowViewport || !SPLIT_COMMAND_IDS.has(command.id)),
 );
+/**
+ * Why one pane command cannot run right now, keyed by command id. The
+ * action menu and the command surface both read it, so an unavailable
+ * command reads the same way wherever it is listed instead of running and
+ * doing nothing.
+ */
+const paneCommandUnavailability = $derived.by((): Map<string, string> => {
+  const reasons = new Map<string, string>();
+  if (narrowViewport) return reasons;
+  void workspace.layout;
+  void paneExtents;
+  const focused = workspace.focusedPaneId;
+  for (const side of ["up", "down", "left", "right"] as const) {
+    const split = splitUnavailableReason(focused, side);
+    if (split !== null) reasons.set(`pane.split-${side}`, split);
+    const move = moveTabUnavailableReason(side);
+    if (move !== null) reasons.set(`pane.move-tab-${side}`, move);
+  }
+  return reasons;
+});
+
 const vaultOpenCommand = registry.command("vault.open");
 const overflowCommands = $derived([
   {
@@ -2035,9 +2116,14 @@ const openWorkspacePaths = $derived(
 const parsedOverlayQuery = $derived(parsePickerQuery(overlayQuery));
 
 function visibleCommandItems(query: string): PickerItem[] {
-  return commandItems(registry, query, macPlatform).filter(
-    (item) => !narrowViewport || !SPLIT_COMMAND_IDS.has(item.value),
-  );
+  return commandItems(registry, query, macPlatform)
+    .filter((item) => !narrowViewport || !SPLIT_COMMAND_IDS.has(item.value))
+    .map((item) => {
+      const reason = paneCommandUnavailability.get(item.value);
+      return reason === undefined
+        ? item
+        : { ...item, unavailableReason: reason };
+    });
 }
 
 const overlayItems = $derived.by((): PickerItem[] => {
@@ -3570,6 +3656,42 @@ function pollEndToEndVault() {
   return timer;
 }
 
+$effect(() => {
+  // Re-observed whenever the tree changes shape; the observer itself covers
+  // window resizes, panel collapse, and divider drags.
+  void workspace.layout;
+  const host = workspaceHost;
+  if (host === undefined) return;
+  const measure = () => {
+    const next = new Map<string, { width: number; height: number }>();
+    for (const element of host.querySelectorAll<HTMLElement>(
+      "[data-pane-id]",
+    )) {
+      const id = element.dataset.paneId;
+      if (id === undefined) continue;
+      const bounds = element.getBoundingClientRect();
+      next.set(id, { width: bounds.width, height: bounds.height });
+    }
+    const unchanged =
+      next.size === paneExtents.size &&
+      [...next].every(([id, box]) => {
+        const previous = paneExtents.get(id);
+        return (
+          previous !== undefined &&
+          Math.abs(previous.width - box.width) < 0.5 &&
+          Math.abs(previous.height - box.height) < 0.5
+        );
+      });
+    if (!unchanged) paneExtents = next;
+  };
+  const observer = new ResizeObserver(measure);
+  for (const element of host.querySelectorAll<HTMLElement>("[data-pane-id]")) {
+    observer.observe(element);
+  }
+  measure();
+  return () => observer.disconnect();
+});
+
 onMount(() => {
   const stopVisualViewportCss = bindVisualViewportCss();
   const narrowQuery = window.matchMedia(
@@ -4131,7 +4253,7 @@ onMount(() => {
                     source={treeTitleSources[pane.activePath] ?? ""}
                     label={STRINGS.editorLabel}
                     context={{ ...(linkContext ?? EMPTY_WIKILINK_CONTEXT), currentPath: pane.activePath }}
-                    taskStatuses={settingsState.document.task_statuses}
+                    taskStatuses={documentTaskStatuses}
                   />
                 </div>
                 {/if}
@@ -4141,7 +4263,7 @@ onMount(() => {
                   {canvas}
                   previews={canvasPreviews}
                   {linkContext}
-                  taskStatuses={settingsState.document.task_statuses}
+                  taskStatuses={documentTaskStatuses}
                   onOpenNode={openPath}
                   onMoveNode={(nodeId, x, y) => void moveCanvasNode(nodeId, x, y)}
                   onRemoveNode={(nodeId) => void removeCanvasNode(nodeId)}
@@ -4190,21 +4312,22 @@ onMount(() => {
                   bind:this={editor}
                   doc={M0_FIXTURE}
                   {note}
-                  vault={note !== null ? vault : null}
-                  path={note !== null ? selectedPath : null}
+                  vault={editorVault}
+                  path={editorPath}
                   {linkContext}
                   {propertyTypes}
-                  taskStatuses={settingsState.document.task_statuses}
+                  taskStatuses={documentTaskStatuses}
                   {registry}
                   {commandContext}
-                  settings={settingsState.document}
+                  settings={documentSettings}
                   {sourceMode}
                   {historyViewState}
                   {onConflict}
                   {onWriteError}
                   onDocChanged={onEditorDocChanged}
                   onOutlineChanged={onEditorOutlineChanged}
-                  onDirtyChanged={(dirty) => onEditorDirtyChanged(pane.id, pane.activePath, dirty)}
+                  onDirtyChanged={(dirty) =>
+                    onEditorDirtyChanged(workspace.focusedPaneId, selectedPath, dirty)}
                   onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
                   onSaved={onEditorSaved}
                   onStatisticsChanged={(statistics) => (editorStatistics = statistics)}
@@ -4415,7 +4538,9 @@ onMount(() => {
         aria-pressed={command.id === TOGGLE_SOURCE_MODE_COMMAND
           ? sourceMode
           : undefined}
-        disabled={command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null}
+        disabled={(command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null) ||
+          paneCommandUnavailability.has(command.id)}
+        title={paneCommandUnavailability.get(command.id)}
         onclick={() => runActionCommand(command.id)}
       >
         <span class="skr-action-menu-label">

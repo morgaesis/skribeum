@@ -85,7 +85,9 @@ function onInput(event: Event & { currentTarget: HTMLInputElement }) {
 
 function pickActive(intent?: { newTab?: boolean }) {
   const item = items[active];
-  if (item !== undefined) onPick(item, intent);
+  if (item !== undefined && item.unavailableReason === undefined) {
+    onPick(item, intent);
+  }
 }
 
 // registry-exempt keydown: ARIA combobox pattern internal navigation
@@ -230,8 +232,12 @@ onDestroy(() => {
           data-action-kind={item.actionKind}
           data-command-id={item.commandId}
           aria-selected={index === active}
-          onclick={(event) =>
-            onPick(item, { newTab: event.ctrlKey || event.metaKey })}
+          aria-disabled={item.unavailableReason === undefined ? undefined : true}
+          class:command-surface-unavailable={item.unavailableReason !== undefined}
+          onclick={(event) => {
+            if (item.unavailableReason !== undefined) return;
+            onPick(item, { newTab: event.ctrlKey || event.metaKey });
+          }}
           onmousemove={() => {
             active = index;
           }}
@@ -251,7 +257,9 @@ onDestroy(() => {
               <kbd class="command-surface-chip skr-muted shrink-0 rounded border px-1">{item.prefixHint}</kbd>
             {/if}
           </span>
-          {#if item.detailSegments !== undefined}
+          {#if item.unavailableReason !== undefined}
+            <span class="command-surface-detail skr-muted block truncate">{item.unavailableReason}</span>
+          {:else if item.detailSegments !== undefined}
             <span class="command-surface-detail skr-muted block truncate">
               {#each item.detailSegments as segment, segmentIndex (segmentIndex)}
                 {#if segment.highlighted}<mark class="skr-match rounded">{segment.text}</mark>{:else}{segment.text}{/if}
@@ -268,6 +276,12 @@ onDestroy(() => {
 </div>
 
 <style>
+  /* An unavailable row stays listed so the capability is discoverable, and
+     reads as unavailable rather than as a row that silently does nothing. */
+  .command-surface-unavailable {
+    opacity: 0.55;
+  }
+
   .command-surface-backdrop {
     position: fixed;
     inset: 0;

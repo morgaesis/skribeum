@@ -26,7 +26,11 @@ export const EMPTY_TAB_KEY = "\u0000empty-tab";
 import { onDestroy, onMount, tick } from "svelte";
 import AnchoredMenu from "./AnchoredMenu.svelte";
 import { type CommandTooltipOptions, commandTooltip } from "./commandTooltip";
-import { enterMotionSurface, motionDurationMilliseconds } from "./motion";
+import {
+  enterMotionSurface,
+  exitMotionSurface,
+  motionDurationMilliseconds,
+} from "./motion";
 import { resolveTitleCollisions } from "./noteTitles";
 import { STRINGS } from "./strings";
 import type { WorkspaceTab } from "./workspaceState";
@@ -136,8 +140,18 @@ let rovingIndex = $state(0);
  */
 let heldWidths = $state<Map<string, number> | null>(null);
 let pointerOverStrip = false;
-let measuredWidths = new Map<string, number>();
-let previousEntryCount = 0;
+let previousEntryKeys: string[] = [];
+/**
+ * Tabs that have already left the open set, drawn for the length of the
+ * dismissal class in the slot they occupied. They are absolutely positioned
+ * ghosts, so they hold no layout slot and appear in no count or index: the
+ * strip's tabs, its roving focus and its reorder indices all see only the
+ * open tabs, and only the pixels linger.
+ */
+let exitingTabs = $state<
+  Array<{ id: number; label: string; left: number; width: number }>
+>([]);
+let nextExitId = 0;
 const tablistId = `skr-tablist-${nextTablistId++}`;
 
 function tabId(index: number): string {
@@ -360,39 +374,98 @@ function measureOverflowAndIndicator() {
 }
 
 /**
- * Captures the strip's geometry before each update so a close can hold the
- * widths it had rather than the ones the reflow already produced.
+ * The geometry and label each tab had immediately before the last update.
+ * A close reads its slot from here, because by the time the change is
+ * observable the tab's own element is already gone. It is captured from the
+ * rendered strip rather than from `entries`, which has already moved on.
  */
+let renderedSlots = new Map<
+  string,
+  { left: number; width: number; label: string }
+>();
+
 $effect.pre(() => {
-  void entries.length;
-  if (!(itemsElement instanceof HTMLElement)) return;
-  const measured = new Map<string, number>();
-  for (const [index, element] of tabElements.entries()) {
-    const key = entries[index]?.key;
-    if (key !== undefined && element instanceof HTMLElement) {
-      measured.set(key, element.offsetWidth);
-    }
+  void entries;
+  const items = itemsElement;
+  if (!(items instanceof HTMLElement)) return;
+  const captured = new Map<
+    string,
+    { left: number; width: number; label: string }
+  >();
+  for (const shell of items.querySelectorAll<HTMLElement>(".skr-tab-shell")) {
+    const key = shell.dataset.tabKey;
+    if (key === undefined || shell.offsetWidth <= 0) continue;
+    captured.set(key, {
+      left: shell.offsetLeft,
+      width: shell.offsetWidth,
+      label: shell.dataset.tabLabel ?? "",
+    });
   }
-  measuredWidths = measured;
+  if (captured.size > 0) renderedSlots = captured;
 });
 
 /**
- * Holds the surviving tabs at their pre-close widths while the pointer
- * stays over the strip. The tab is gone from state immediately; only the
- * geometry waits, so repeated clicks in one place close successive tabs.
+ * One pass over a change in the open set. A close holds the surviving tabs
+ * at their previous widths while the pointer rests over the strip, so the
+ * next tab's close control stays under it, and leaves a ghost of the closed
+ * tab in the slot it held so the tab is seen to leave. Nothing waits on
+ * either: the tab is gone from state in the same frame.
  */
 $effect(() => {
-  const count = entries.length;
-  const shrank = count < previousEntryCount;
-  previousEntryCount = count;
-  if (!shrank || !pointerOverStrip || count === 0) return;
-  const held = new Map<string, number>();
-  for (const entry of entries) {
-    const width = measuredWidths.get(entry.key);
-    if (width !== undefined && width > 0) held.set(entry.key, width);
+  const keys = entries.map((entry) => entry.key);
+  const previous = previousEntryKeys;
+  previousEntryKeys = keys;
+  const removed = previous.filter((key) => !keys.includes(key));
+
+  if (removed.length > 0) {
+    if (pointerOverStrip && keys.length > 0) {
+      const held = new Map<string, number>();
+      for (const key of keys) {
+        const width = renderedSlots.get(key)?.width;
+        if (width !== undefined && width > 0) held.set(key, width);
+      }
+      if (held.size === keys.length) heldWidths = held;
+    }
+    const ghosts = removed
+      .map((key) => {
+        const slot = renderedSlots.get(key);
+        return slot === undefined
+          ? null
+          : {
+              id: nextExitId++,
+              label: slot.label,
+              left: slot.left,
+              width: slot.width,
+            };
+      })
+      .filter((ghost): ghost is NonNullable<typeof ghost> => ghost !== null);
+    if (ghosts.length > 0) exitingTabs = [...exitingTabs, ...ghosts];
   }
-  if (held.size === count) heldWidths = held;
 });
+
+function releaseExitingTab(element: HTMLElement, id: number) {
+  // Attachments re-run whenever the block renders; the dismissal starts once.
+  if (element.dataset.dismissing !== undefined) return;
+  const remove = () => {
+    exitingTabs = exitingTabs.filter((ghost) => ghost.id !== id);
+  };
+  const duration = motionDurationMilliseconds(
+    "--skr-motion-state-duration",
+    element,
+  );
+  if (duration === 0) {
+    remove();
+    return;
+  }
+  // The ghost paints at full opacity in the slot its tab held and then
+  // leaves on the dismissal clock. The forced reflow commits that resting
+  // opacity as the transition's start value; without it the flip below
+  // lands in the same style recalculation and the tab would vanish rather
+  // than be seen to leave.
+  void element.offsetWidth;
+  element.dataset.dismissing = "true";
+  setTimeout(remove, duration);
+}
 
 /**
  * Releases the held widths when the pointer leaves, animating the one
@@ -413,7 +486,11 @@ function releaseHeldWidths() {
     );
     for (const [index, element] of tabElements.entries()) {
       const from = before[index];
-      if (!(element instanceof HTMLElement) || from === null || from === undefined)
+      if (
+        !(element instanceof HTMLElement) ||
+        from === null ||
+        from === undefined
+      )
         continue;
       const delta = from - element.offsetLeft;
       if (delta === 0 || duration === 0) continue;
@@ -669,6 +746,8 @@ function finishScrollDrag(event: PointerEvent) {
         class:skr-tab-dirty={entry.tab?.dirty === true}
         class:skr-tab-insertion={insertion === index && dragging !== index}
         class:skr-tab-dragging={dragging === index}
+        data-tab-key={entry.key}
+        data-tab-label={entry.label}
         style:flex={heldWidths?.get(entry.key) === undefined
           ? null
           : `0 0 ${heldWidths.get(entry.key)}px`}
@@ -754,6 +833,17 @@ function finishScrollDrag(event: PointerEvent) {
           </button>
         </span>
       </div>
+      {/each}
+      {#each exitingTabs as ghost (ghost.id)}
+        <span
+          class="skr-tab-exiting"
+          aria-hidden="true"
+          inert
+          style={`left: ${ghost.left}px; width: ${ghost.width}px`}
+          {@attach (element) => releaseExitingTab(element, ghost.id)}
+        >
+          <span class="skr-tab-label">{ghost.label}</span>
+        </span>
       {/each}
       <span
         bind:this={indicatorElement}

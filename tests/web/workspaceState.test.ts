@@ -137,8 +137,8 @@ describe("per-vault workspace state", () => {
       focusedPaneId: "pane-2",
       closedTabs: [{ path: "gone.md", viewState: null }],
     };
-    // The earlier document lives under its own key; loading finds it when no
-    // current document exists.
+    // One storage area per vault holds one session; the shape is versioned
+    // inside the document, so an earlier document is found and migrated.
     storage.values.set(
       `skribeum.workspace.v1.${loadWorkspaceKeySuffix("vault-legacy")}`,
       JSON.stringify(legacy),
@@ -393,6 +393,84 @@ describe("path reconciliation across the tree", () => {
       expect.objectContaining({ type: "leaf", tabs: [], activePath: null }),
     );
     expect(emptyPane("pane-1").tabs).toEqual([]);
+  });
+});
+
+describe("cross-version persistence", () => {
+  it("writes a flat pane projection an earlier version can still read", () => {
+    const storage = memoryStorage();
+    const state = defaultWorkspaceState();
+    state.layout = {
+      type: "split",
+      axis: "row",
+      ratio: 0.62,
+      children: [
+        leaf("pane-1", ["one.md", "two.md"]),
+        leaf("pane-2", ["three.md"]),
+      ],
+    };
+    state.focusedPaneId = "pane-2";
+    saveWorkspaceState("vault-a", state, storage);
+
+    const written = JSON.parse(
+      storage.values.get(
+        `skribeum.workspace.v1.${loadWorkspaceKeySuffix("vault-a")}`,
+      ) ?? "null",
+    ) as {
+      version: number;
+      layout: unknown;
+      panes: Array<{ tabs: Array<{ path: string }>; activePath: string }>;
+      splitRatio: number;
+      focusedPaneId: string;
+    };
+    expect(written.version).toBe(2);
+    expect(written.layout).toBeDefined();
+    // A plain two-pane row projects faithfully, ratio and all.
+    expect(
+      written.panes.map((pane) => pane.tabs.map((tab) => tab.path)),
+    ).toEqual([["one.md", "two.md"], ["three.md"]]);
+    expect(written.panes.map((pane) => pane.activePath)).toEqual([
+      "one.md",
+      "three.md",
+    ]);
+    expect(written.splitRatio).toBeCloseTo(0.62);
+    expect(written.focusedPaneId).toBe("pane-2");
+  });
+
+  it("flattens a deeper tree into the projection without dropping a tab", () => {
+    const storage = memoryStorage();
+    const state = defaultWorkspaceState();
+    state.layout = chain(4);
+    saveWorkspaceState("vault-b", state, storage);
+
+    const written = JSON.parse(
+      storage.values.get(
+        `skribeum.workspace.v1.${loadWorkspaceKeySuffix("vault-b")}`,
+      ) ?? "null",
+    ) as { panes: Array<{ tabs: Array<{ path: string }> }> };
+    expect(written.panes).toHaveLength(1);
+    expect(written.panes[0]?.tabs.map((tab) => tab.path)).toEqual([
+      "note-1.md",
+      "note-2.md",
+      "note-3.md",
+      "note-4.md",
+    ]);
+  });
+
+  it("prefers the tree over its own projection when reading back", () => {
+    const storage = memoryStorage();
+    const state = defaultWorkspaceState();
+    state.layout = chain(3);
+    state.focusedPaneId = "pane-3";
+    saveWorkspaceState("vault-c", state, storage);
+
+    const restored = loadWorkspaceState("vault-c", storage);
+    expect(workspaceLeaves(restored.layout).map((pane) => pane.id)).toEqual([
+      "pane-1",
+      "pane-2",
+      "pane-3",
+    ]);
+    expect(restored.focusedPaneId).toBe("pane-3");
   });
 });
 

@@ -661,6 +661,32 @@ select {
   content: "";
 }
 
+/* A closed tab's dismissal: a ghost drawn in the slot the tab held, out of
+   the layout flow so it occupies no slot and enters no count or index. */
+.skr-tab-exiting {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  padding: 0 0.25rem 0 0.5rem;
+  color: var(--skr-text-muted);
+  background: var(--skr-surface);
+  font-family: var(--skr-font-interface);
+  font-size: 13px;
+  opacity: 1;
+  pointer-events: none;
+  /* Declared at rest so the one attribute flip below always transitions. */
+  transition: opacity var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+.skr-tab-exiting[data-dismissing="true"] {
+  opacity: 0;
+}
+
 .skr-tab-label {
   min-width: 0;
   overflow: hidden;
@@ -849,16 +875,11 @@ select {
   overflow: hidden;
 }
 
-/* The pane floors: width holds the harder one because the prose measure
-   needs it, height a smaller one because a note scrolls but does not
-   reflow. They apply inside a split only; one pane always fills its area. */
-.skr-split .skr-editor-pane {
-  min-width: 20rem;
-}
-
-.skr-split-column > .skr-split-child .skr-editor-pane {
-  min-height: 12rem;
-}
+/* The pane floors are enforced where they are actually decided: a divider
+   drag stops at them, and a split that cannot honor them for the pane it
+   would create does not happen. They are deliberately not CSS minimums,
+   because a minimum a shrinking window cannot satisfy pushes panes past
+   the editor area's edge instead of shrinking them. */
 
 .skr-split-divider {
   position: relative;

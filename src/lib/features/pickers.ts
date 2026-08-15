@@ -32,6 +32,12 @@ export type PickerItem = {
   keybinding?: string;
   /** Prefix hint shown by discovery rows in bare file mode. */
   prefixHint?: ">" | "#";
+  /**
+   * Why this row cannot be invoked right now. A row carrying one is listed
+   * so the capability stays discoverable, shown as unavailable, and refuses
+   * to run.
+   */
+  unavailableReason?: string;
 };
 
 export type PickerMode = "file" | "command" | "tag" | "text";

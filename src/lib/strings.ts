@@ -65,6 +65,11 @@ export const STRINGS = {
   openNoteInNewTab: "Open note in new tab",
   emptyTabLabel: "New tab",
   paneDropZone: "Move tab into this pane",
+  splitPaneCapReached:
+    "The workspace already holds the maximum of 8 editor panes.",
+  splitPaneTooSmall:
+    "There is not enough room for another pane at the minimum pane size.",
+  movePaneUnavailable: "There is no editor pane in that direction.",
   loadingContent: "Loading content",
   couldNotLoad: "Couldn't load",
   retryAction: "Retry",

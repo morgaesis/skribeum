@@ -419,15 +419,55 @@ function migratedPaneArray(
   );
 }
 
-const STORAGE_PREFIX = "skribeum.workspace";
+/**
+ * The storage key names the per-vault storage area, not the document shape;
+ * the shape is versioned inside the document so one area holds one session
+ * and two application versions can never diverge into two of them.
+ */
+const STORAGE_KEY_PREFIX = "skribeum.workspace.v1";
 
-function vaultKey(vaultIdentity: string, version: number): string {
+function vaultKey(vaultIdentity: string): string {
   let hash = 2_166_136_261;
   for (const character of vaultIdentity.normalize("NFC")) {
     hash ^= character.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 16_777_619);
   }
-  return `${STORAGE_PREFIX}.v${version}.${(hash >>> 0).toString(16)}`;
+  return `${STORAGE_KEY_PREFIX}.${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * The flat pane list an earlier version reads. It travels alongside the tree
+ * so a downgrade finds its own shape and keeps every open note: a plain
+ * two-pane row projects faithfully, and any other tree flattens into one
+ * pane in the tree's own order, which is all the earlier shape can express.
+ */
+function legacyPaneProjection(state: VaultWorkspaceState): {
+  panes: unknown[];
+  splitRatio: number;
+} {
+  const asPane = (leaf: WorkspaceLeaf) => ({
+    id: leaf.id,
+    tabs: leaf.tabs.map((tab) => ({
+      path: tab.path,
+      viewState: tab.viewState,
+    })),
+    activePath: leaf.activePath,
+    history: leaf.history,
+    historyIndex: leaf.historyIndex,
+  });
+  const layout = state.layout;
+  if (
+    layout.type === "split" &&
+    layout.axis === "row" &&
+    layout.children[0].type === "leaf" &&
+    layout.children[1].type === "leaf"
+  ) {
+    return {
+      panes: [asPane(layout.children[0]), asPane(layout.children[1])],
+      splitRatio: layout.ratio,
+    };
+  }
+  return { panes: [asPane(flattenWorkspaceLayout(layout))], splitRatio: 0.5 };
 }
 
 export function loadWorkspaceState(
@@ -435,11 +475,7 @@ export function loadWorkspaceState(
   storage: Pick<Storage, "getItem"> = localStorage,
 ): VaultWorkspaceState {
   try {
-    // A document written by the earlier shape still restores: its own key
-    // is read when no current document exists, and the normalizer migrates.
-    const value =
-      storage.getItem(vaultKey(vaultIdentity, 2)) ??
-      storage.getItem(vaultKey(vaultIdentity, 1));
+    const value = storage.getItem(vaultKey(vaultIdentity));
     return value === null
       ? defaultWorkspaceState()
       : normalizeWorkspaceState(JSON.parse(value));
@@ -454,9 +490,10 @@ export function saveWorkspaceState(
   storage: Pick<Storage, "setItem"> = localStorage,
 ): void {
   try {
+    const normalized = normalizeWorkspaceState(state);
     storage.setItem(
-      vaultKey(vaultIdentity, 2),
-      JSON.stringify(normalizeWorkspaceState(state)),
+      vaultKey(vaultIdentity),
+      JSON.stringify({ ...normalized, ...legacyPaneProjection(normalized) }),
     );
   } catch {
     // A full or unavailable storage area must not interrupt editing.

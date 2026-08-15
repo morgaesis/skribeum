@@ -5214,7 +5214,7 @@ const engineTheme = EditorView.baseTheme({
     color: "var(--skr-text-muted)",
     backgroundColor: "var(--skr-surface-raised)",
     fontFamily: "var(--skr-font-interface)",
-    fontSize: "13px",
+    fontSize: "var(--skr-type-control)",
     fontWeight: "400",
   },
   ".cm-skr-link-preview-body": { padding: "0.75rem 1rem" },
@@ -5319,7 +5319,7 @@ const engineTheme = EditorView.baseTheme({
     padding: "0.35rem 0.5rem 0.15rem",
     color: "var(--skr-text-muted)",
     fontFamily: "var(--skr-font-interface)",
-    fontSize: "12px",
+    fontSize: "var(--skr-type-label)",
     fontWeight: "700",
     letterSpacing: "0.08em",
     lineHeight: "1.2",
@@ -5349,7 +5349,7 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-task-option-name": {
     overflow: "hidden",
-    fontSize: "0.82em",
+    fontSize: "0.8125em",
     lineHeight: "1.3",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
@@ -5393,7 +5393,10 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-inline-code": {
     fontFamily: "var(--skr-font-mono)",
-    fontSize: "0.9em",
+    // The code tier is one size: an inline span and a fenced block render
+    // the same concept and must measure the same, so both take 0.875em of
+    // their context rather than one taking a slightly larger ratio.
+    fontSize: "0.875em",
     fontWeight: "400",
     backgroundColor: "var(--skr-code-surface)",
     borderRadius: "var(--skr-radius-control)",

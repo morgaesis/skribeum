@@ -71,7 +71,7 @@ const rows = $derived([
     gap: 0.125rem 1rem;
     color: var(--skr-text);
     font-family: var(--skr-font-interface);
-    font-size: 13px;
+    font-size: var(--skr-type-control);
     grid-template-columns: max-content minmax(0, 1fr);
   }
 

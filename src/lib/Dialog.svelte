@@ -234,18 +234,21 @@ onDestroy(() => {
     background: var(--skr-surface-raised);
     box-shadow: var(--skr-shadow);
     outline: none;
+    /* The surface's own tier; the text field carries `font: inherit`. */
+    font-family: var(--skr-font-interface);
+    font-size: var(--skr-type-control);
   }
 
   .skr-dialog-title {
     margin: 0;
-    font-size: 1rem;
+    font-size: var(--skr-type-title);
     font-weight: 600;
   }
 
   .skr-dialog-message {
     margin: 0.5rem 0 0;
     color: var(--skr-text-muted);
-    font-size: 0.875rem;
+    font-size: var(--skr-type-label);
   }
 
   .skr-dialog-field {
@@ -276,7 +279,7 @@ onDestroy(() => {
   .skr-dialog-error {
     margin: 0.5rem 0 0;
     color: var(--skr-danger);
-    font-size: 0.8125rem;
+    font-size: var(--skr-type-label);
   }
 
   .skr-dialog-actions {

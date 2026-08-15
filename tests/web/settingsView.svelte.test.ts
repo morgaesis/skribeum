@@ -747,7 +747,10 @@ describe("settings surface", () => {
     if (checkRow === null) throw new Error("update check row is missing");
     expect(checkRow.closest("fieldset")?.nextElementSibling).toBe(row);
     const style = getComputedStyle(value);
-    expect(style.fontSize).toBe("12px");
+    // The readout is caption-tier text. jsdom does not resolve custom
+    // properties, so the token is what can be observed here; the pixel value
+    // behind it is held to 12px by the interface type scale suite.
+    expect(style.fontSize).toBe("var(--skr-type-label)");
     expect(style.textAlign).toBe("right");
     await unmount(component);
   });

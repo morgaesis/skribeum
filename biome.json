@@ -7,6 +7,7 @@
       "demo/**",
       "tests/**",
       "scripts/**",
+      "public/**/*.js",
       "*.ts",
       "*.js",
       "*.json",

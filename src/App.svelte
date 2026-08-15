@@ -3524,7 +3524,7 @@ onMount(() => {
     </div>
     <div class="skr-header-trailing">
       {#if note?.readOnly || contentView === VIEW_CANVAS}
-        <span class="skr-warning skr-read-only-badge rounded px-2 py-0.5 text-xs">
+        <span class="skr-type-label skr-warning skr-read-only-badge rounded px-2 py-0.5">
           {STRINGS.readOnlyBadge}
         </span>
       {/if}
@@ -3552,19 +3552,19 @@ onMount(() => {
   </header>
 
   {#if collisionGroups.length > 0}
-    <aside class="skr-warning border-b px-3 py-1 text-xs" role="alert">
+    <aside class="skr-type-label skr-warning border-b px-3 py-1" role="alert">
       {STRINGS.collisionBanner}
       {collisionGroups.map((group) => group.join(" / ")).join("; ")}
     </aside>
   {/if}
   {#if note?.readOnly}
-    <aside class="skr-warning border-b px-3 py-1 text-xs" role="alert">
+    <aside class="skr-type-label skr-warning border-b px-3 py-1" role="alert">
       {STRINGS.nonUtf8Banner}
     </aside>
   {/if}
   <Banners {banners} onDismiss={dismissBanner} />
   {#if errorText !== null}
-    <aside class="skr-error border-b px-3 py-1 text-xs" role="alert">
+    <aside class="skr-type-label skr-error border-b px-3 py-1" role="alert">
       {errorText}
     </aside>
   {/if}
@@ -3782,16 +3782,16 @@ onMount(() => {
                   onAddNode={() => void addCanvasNode()}
                 />
               {:else if contentView === VIEW_CANVAS && canvasError !== null}
-                <div class="skr-error m-4 rounded border p-3 text-sm" role="alert" data-testid="canvas-error">
+                <div class="skr-error m-4 rounded border p-3" role="alert" data-testid="canvas-error">
                   {canvasError}
                 </div>
               {:else if missingAddress !== null}
                 <div
-                  class="skr-error m-4 max-w-2xl rounded border p-4 text-sm"
+                  class="skr-error m-4 max-w-2xl rounded border p-4"
                   role="alert"
                   data-testid="note-not-found"
                 >
-                  <h2 class="m-0 text-base font-semibold">{STRINGS.noteNotFoundTitle}</h2>
+                  <h2 class="skr-type-title m-0 font-semibold">{STRINGS.noteNotFoundTitle}</h2>
                   <p class="my-2">{STRINGS.noteNotFoundPrefix}</p>
                   <p class="my-2 font-mono">{missingAddress.path}</p>
                   {#if navigationSurface === "browser"}

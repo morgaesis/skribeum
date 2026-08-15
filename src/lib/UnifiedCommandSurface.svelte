@@ -243,13 +243,13 @@ onDestroy(() => {
               {/if}
             </span>
             {#if item.keybinding !== undefined}
-              <kbd class="skr-muted shrink-0 rounded border px-1 text-xs">{item.keybinding}</kbd>
+              <kbd class="command-surface-chip skr-muted shrink-0 rounded border px-1">{item.keybinding}</kbd>
             {:else if item.prefixHint !== undefined}
-              <kbd class="skr-muted shrink-0 rounded border px-1 text-xs">{item.prefixHint}</kbd>
+              <kbd class="command-surface-chip skr-muted shrink-0 rounded border px-1">{item.prefixHint}</kbd>
             {/if}
           </span>
           {#if item.detailSegments !== undefined}
-            <span class="skr-muted block truncate text-xs">
+            <span class="command-surface-detail skr-muted block truncate">
               {#each item.detailSegments as segment, segmentIndex (segmentIndex)}
                 {#if segment.highlighted}<mark class="skr-match rounded">{segment.text}</mark>{:else}{segment.text}{/if}
               {/each}
@@ -259,7 +259,7 @@ onDestroy(() => {
       {/each}
     </ul>
     {#if items.length === 0}
-      <div class="skr-muted px-3 pb-2 text-sm" role="status">{STRINGS.noMatches}</div>
+      <div class="skr-muted px-3 pb-2" role="status">{STRINGS.noMatches}</div>
     {/if}
   </div>
 </div>
@@ -300,7 +300,7 @@ onDestroy(() => {
     padding: 0.5rem 0.75rem;
     background: var(--skr-surface-raised);
     color: var(--skr-text);
-    font-size: 0.875rem;
+    font-size: var(--skr-type-control);
     outline: none;
   }
 
@@ -323,7 +323,7 @@ onDestroy(() => {
     overflow-y: auto;
     padding: 0.25rem;
     list-style: none;
-    font-size: 0.875rem;
+    font-size: var(--skr-type-control);
   }
 
   .command-surface-results [role="option"] {
@@ -342,10 +342,19 @@ onDestroy(() => {
   .command-surface-group {
     padding: 0.5rem 0.5rem 0.25rem;
     color: var(--skr-text-muted);
-    font-size: 0.6875rem;
+    font-size: var(--skr-type-label);
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+  }
+
+  .command-surface-chip {
+    font-family: var(--skr-font-mono);
+    font-size: var(--skr-type-chip);
+  }
+
+  .command-surface-detail {
+    font-size: var(--skr-type-label);
   }
 
   @media (max-width: 60rem) {

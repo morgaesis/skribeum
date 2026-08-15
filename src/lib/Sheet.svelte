@@ -167,7 +167,7 @@ onDestroy(() => {
   }
 
   h2 {
-    font-size: 1rem;
+    font-size: var(--skr-type-title);
     margin: 0;
   }
 

@@ -5593,6 +5593,51 @@ describe("skribeum core editing surfaces", () => {
     }
   }
 
+  async function closeIfOpen(selector: string) {
+    const surface = $(selector);
+    if (!(await surface.isExisting())) return;
+    // Escape can dismiss one nested layer at a time (the settings dialog's
+    // own jump menu, for one), so press it until the surface itself is
+    // gone rather than assuming a single press clears it.
+    await browser.waitUntil(
+      async () => {
+        if (!(await surface.isExisting())) return true;
+        await browser.keys(Key.Escape);
+        return false;
+      },
+      { timeout: 5000, interval: 200 },
+    );
+  }
+
+  /** Restores `window.matchMedia` after a test patches it to simulate an OS
+   * colour-scheme change (see palette_selection_and_system_matching_round_trip_stored_fields). */
+  async function restoreNativeMatchMedia() {
+    await browser.execute(() => {
+      const testWindow = window as unknown as {
+        __skribeumColourSchemeQuery?: MediaQueryList;
+        __skribeumNativeMatchMedia?: typeof window.matchMedia;
+      };
+      if (testWindow.__skribeumNativeMatchMedia !== undefined) {
+        window.matchMedia = testWindow.__skribeumNativeMatchMedia;
+      }
+      delete testWindow.__skribeumColourSchemeQuery;
+      delete testWindow.__skribeumNativeMatchMedia;
+    });
+  }
+
+  // A test that throws mid-way leaves whatever it opened or patched behind:
+  // an open overlay or dialog blocks the next test's own surface from
+  // opening, and a patched window.matchMedia feeds it a fake colour-scheme
+  // query. Without this, one test's failure cascades into an unrelated
+  // failure on whatever runs next, in the same session. Each helper is a
+  // no-op when the test already cleaned up after itself.
+  afterEach(async () => {
+    await closeAnyOverlay();
+    await closeIfOpen('[data-testid="settings-view"]');
+    await closeIfOpen('[data-testid="dialog"]');
+    await restoreNativeMatchMedia();
+  });
+
   it("quick_switcher_opens_a_note_end_to_end", async () => {
     await browser.keys([modifierKey, "o"]);
     const input = await overlayInput();
@@ -6543,19 +6588,8 @@ describe("skribeum core editing surfaces", () => {
       },
     );
 
-    await browser.keys(Key.Escape);
-    await dialog.waitForExist({ reverse: true, timeout: 5000 });
-    await browser.execute(() => {
-      const testWindow = window as unknown as {
-        __skribeumColourSchemeQuery?: MediaQueryList;
-        __skribeumNativeMatchMedia?: typeof window.matchMedia;
-      };
-      if (testWindow.__skribeumNativeMatchMedia !== undefined) {
-        window.matchMedia = testWindow.__skribeumNativeMatchMedia;
-      }
-      delete testWindow.__skribeumColourSchemeQuery;
-      delete testWindow.__skribeumNativeMatchMedia;
-    });
+    await closeIfOpen('[data-testid="settings-view"]');
+    await restoreNativeMatchMedia();
     await persistSettings(original);
     await browser.refresh();
     await $('[role="tree"]').waitForExist({ timeout: 15000 });

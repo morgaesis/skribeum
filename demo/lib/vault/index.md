@@ -6,7 +6,7 @@ This index provides a stable starting point for browsing the sample vault.
 
 - [[about|About this vault]] explains the purpose and structure.
 - [[quickstart|Quickstart]] offers a guided editor tour.
-- `demo.canvas` presents a visual overview of connected project notes.
+- `demo.canvas` presents a visual overview of connected project notes. This browser demo shows the canvas read-only; the desktop app allows moving and editing cards.
 
 ## Feature notes
 
@@ -21,6 +21,7 @@ This index provides a stable starting point for browsing the sample vault.
 - [[Features/mermaid-diagram|Mermaid diagram]]
 - [[Features/frontmatter|Frontmatter]]
 - [[Features/code-blocks|Code blocks]]
+- [[Features/showcase|Showcase]]
 
 ## Working examples
 
@@ -34,6 +35,7 @@ This index provides a stable starting point for browsing the sample vault.
 
 - [[Examples/Research/reading-notes|Reading notes]]
 - [[Examples/Research/interview-notes|Interview notes]]
+- [[Examples/Research/literature-review|Literature review: shared workspace design]]
 
 ### Personal
 

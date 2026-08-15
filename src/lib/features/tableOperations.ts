@@ -431,8 +431,9 @@ export function tableCellRanges(text: string): TableCell[] {
  * is measured against the block text. An end that falls inside a row
  * would make that row parse as its own truncated line, so an edit aimed
  * at the row's end would land in the middle of the row's source instead.
- * Only a partial row is completed; an end that falls in a line which is
- * not a table row stays put rather than growing the block over prose.
+ * Only a partial row is completed. A row carries at least one column
+ * separator, with or without the outer pipes, so a line without one is
+ * not a row and stays put rather than growing the block over prose.
  */
 function completedRowEnd(sourceFromTable: string, end: number): number {
   const bounded = Math.max(0, Math.min(end, sourceFromTable.length));
@@ -445,8 +446,8 @@ function completedRowEnd(sourceFromTable: string, end: number): number {
   const lineStart = sourceFromTable.lastIndexOf("\n", bounded - 1) + 1;
   const lineEnd = sourceFromTable.indexOf("\n", bounded);
   const rowEnd = lineEnd < 0 ? sourceFromTable.length : lineEnd;
-  const row = sourceFromTable.slice(lineStart, rowEnd).trim();
-  return row.startsWith("|") ? rowEnd : bounded;
+  const row = sourceFromTable.slice(lineStart, rowEnd);
+  return row.includes("|") ? rowEnd : bounded;
 }
 
 /** Extends a parsed table through adjacent pipe rows the Markdown tree omits. */

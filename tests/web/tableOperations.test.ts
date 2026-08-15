@@ -383,6 +383,14 @@ describe("table block end over a partial row", () => {
     // rather than growing the block over prose.
     expect(extendedTableDocumentEnd(prose, 0, blockEnd + 4)).toBe(blockEnd + 4);
   });
+
+  it("completes a partial row in a table without outer pipes", () => {
+    const source = "a | b\n--- | ---\nc | d";
+    const pipeFree = Text.of(source.split("\n"));
+    expect(
+      extendedTableDocumentEnd(pipeFree, 0, source.indexOf("c |") + 1),
+    ).toBe(source.length);
+  });
 });
 
 /** Deterministic PRNG for the generated-table sweep. */

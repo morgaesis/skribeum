@@ -717,21 +717,62 @@ async function capturedHistoryState(): Promise<CapturedHistoryState | null> {
   );
 }
 
-async function waitForCapturedHistoryState(
+type RestoredHistoryState = {
+  state: CapturedHistoryState | null;
+  /** CSS pixels between the viewport and where the expected state puts it. */
+  drift: number | null;
+  /** The coarsest scroll position an engine holds, in CSS pixels. */
+  positionTolerance: number;
+};
+
+async function restoredHistoryState(
+  expected: CapturedHistoryState,
+): Promise<RestoredHistoryState> {
+  return browser.execute((wanted: CapturedHistoryState) => {
+    const probe = window as Window & {
+      __SKRIBEUM_E2E_HISTORY_STATE__?: () => CapturedHistoryState | null;
+      __SKRIBEUM_E2E_READING_DRIFT__?: (
+        state: CapturedHistoryState,
+      ) => number | null;
+    };
+    return {
+      state: probe.__SKRIBEUM_E2E_HISTORY_STATE__?.() ?? null,
+      drift: probe.__SKRIBEUM_E2E_READING_DRIFT__?.(wanted) ?? null,
+      positionTolerance: Math.max(1, 1 / window.devicePixelRatio),
+    };
+  }, expected);
+}
+
+/**
+ * Waits for a restored note to carry the caret and panel state it was stored
+ * with, and to sit where the stored reading position puts it.
+ *
+ * The reading position is compared as a distance rather than as an equal
+ * anchor and offset, because the stored anchor line and its sub-pixel offset
+ * are one of several encodings of one place. A scroller holds a position only
+ * to whole pixels, so restoring into a layout that has changed since the
+ * position was stored, as this test's webview zoom makes it, lands within half
+ * a pixel of the stored position rather than on it, and the line the position
+ * is then anchored to can be its neighbour. A pixel is the whole budget: a
+ * position restored to the wrong line misses by a line height.
+ */
+async function waitForRestoredHistoryState(
   expected: CapturedHistoryState,
   description: string,
 ): Promise<void> {
   let actual: CapturedHistoryState | null = null;
+  let restored: RestoredHistoryState | null = null;
   try {
     await browser.waitUntil(
       async () => {
-        actual = await capturedHistoryState();
+        restored = await restoredHistoryState(expected);
+        actual = restored.state;
         return (
           actual?.anchor === expected.anchor &&
           actual.head === expected.head &&
-          actual.scrollAnchor === expected.scrollAnchor &&
-          Math.abs(actual.scrollOffset - expected.scrollOffset) < 1 &&
-          actual.propertiesExpanded === expected.propertiesExpanded
+          actual.propertiesExpanded === expected.propertiesExpanded &&
+          restored.drift !== null &&
+          Math.abs(restored.drift) <= restored.positionTolerance
         );
       },
       { timeout: 5000, timeoutMsg: description },
@@ -748,7 +789,7 @@ async function waitForCapturedHistoryState(
       };
     });
     throw new Error(
-      `${description}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)} with ${JSON.stringify(geometry)}`,
+      `${description}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)} at ${JSON.stringify(restored)} with ${JSON.stringify(geometry)}`,
     );
   }
 }
@@ -3911,9 +3952,9 @@ describe("skribeum shell", () => {
     await back.click();
     if (savedState === null) throw new Error("source history state missing");
     try {
-      await waitForCapturedHistoryState(
+      await waitForRestoredHistoryState(
         savedState,
-        "history view state was not restored byte-exactly",
+        "history view state was not restored",
       );
     } catch (error) {
       await browser.keys([modifierKey, "0"]);
@@ -3985,9 +4026,9 @@ describe("skribeum shell", () => {
     await forward.waitForEnabled({ timeout: 15000 });
     await forward.click();
     if (targetState === null) throw new Error("target history state missing");
-    await waitForCapturedHistoryState(
+    await waitForRestoredHistoryState(
       targetState,
-      "forward history view state was not restored byte-exactly",
+      "forward history view state was not restored",
     );
     expect(await readingSurfaceFocusState()).toEqual({
       readingSurface: true,

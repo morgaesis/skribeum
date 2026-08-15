@@ -46,6 +46,8 @@ import {
   type FollowWikilinkOptions,
   followWikilinkTarget,
   type NoteViewState,
+  readingViewportTop,
+  scrollAnchorForViewport,
 } from "./features/navigation";
 import {
   countCharacters,
@@ -1048,12 +1050,13 @@ export function forgetTab(path: string): void {
 
 /** Captures byte-exact selection offsets and the current reading position. */
 export function captureHistoryState(): NoteViewState | null {
-  if (view === undefined) return null;
-  const content = view.state.doc.toString();
-  let selection = view.state.selection.main;
-  const tableCell = focusedRenderedTableCell(view);
+  const target = view;
+  if (target === undefined) return null;
+  const content = target.state.doc.toString();
+  let selection = target.state.selection.main;
+  const tableCell = focusedRenderedTableCell(target);
   if (tableCell !== null) {
-    const table = view.state.sliceDoc(tableCell.tableFrom, tableCell.tableTo);
+    const table = target.state.sliceDoc(tableCell.tableFrom, tableCell.tableTo);
     const cell = tableCellRanges(table).find(
       (candidate) =>
         candidate.row === tableCell.row &&
@@ -1069,23 +1072,44 @@ export function captureHistoryState(): NoteViewState | null {
   }
   const viewportTop = Math.max(
     0,
-    view.scrollDOM.scrollTop - view.documentPadding.top,
+    target.scrollDOM.scrollTop - target.documentPadding.top,
   );
-  let scrollLine = view.lineBlockAtHeight(viewportTop);
-  const lineOffset = scrollLine.top - viewportTop;
-  const halfPhysicalPixel = 0.5 / Math.max(1, window.devicePixelRatio);
-  const crossesRoundedPixelBoundary =
-    lineOffset < 0 || (lineOffset > 0 && lineOffset < halfPhysicalPixel);
-  if (crossesRoundedPixelBoundary && scrollLine.to < view.state.doc.length) {
-    scrollLine = view.lineBlockAt(scrollLine.to + 1);
-  }
+  const reading = scrollAnchorForViewport({
+    viewportTop,
+    documentLength: target.state.doc.length,
+    devicePixelRatio: window.devicePixelRatio,
+    lineBlockAtHeight: (height) => target.lineBlockAtHeight(height),
+    lineBlockAt: (position) => target.lineBlockAt(position),
+  });
   return {
     anchor: byteOffsetForCharacter(content, selection.anchor),
     head: byteOffsetForCharacter(content, selection.head),
-    scrollAnchor: byteOffsetForCharacter(content, scrollLine.from),
-    scrollOffset: scrollLine.top - viewportTop,
+    scrollAnchor: byteOffsetForCharacter(content, reading.line.from),
+    scrollOffset: reading.offset,
     propertiesExpanded,
   };
+}
+
+/**
+ * How far the viewport sits, in CSS pixels, from where a stored reading
+ * position puts it. A scroller holds a position only to whole device pixels,
+ * so a restored position is checked as a distance from the stored one rather
+ * than as an equal encoding of it.
+ */
+export function readingPositionDrift(state: NoteViewState): number | null {
+  const target = view;
+  if (target === undefined) return null;
+  const content = target.state.doc.toString();
+  const anchor = characterOffsetForByte(content, state.scrollAnchor);
+  if (anchor > target.state.doc.length) return null;
+  const viewportTop = Math.max(
+    0,
+    target.scrollDOM.scrollTop - target.documentPadding.top,
+  );
+  return (
+    viewportTop -
+    readingViewportTop(target.lineBlockAt(anchor).top, state.scrollOffset)
+  );
 }
 
 async function rereadAndReconcile(): Promise<void> {

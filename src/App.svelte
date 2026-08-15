@@ -3646,6 +3646,9 @@ function pollEndToEndVault() {
       const target = window as Window & {
         __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
         __SKRIBEUM_E2E_HISTORY_STATE__?: () => NoteViewState | null;
+        __SKRIBEUM_E2E_READING_DRIFT__?: (
+          state: NoteViewState,
+        ) => number | null;
         __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
         __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
         __SKRIBEUM_E2E_SET_LINE_END__?: (lineText: string) => number | null;
@@ -3660,6 +3663,8 @@ function pollEndToEndVault() {
         navigateToNote(notePath);
       target.__SKRIBEUM_E2E_HISTORY_STATE__ = () =>
         editor?.captureHistoryState() ?? null;
+      target.__SKRIBEUM_E2E_READING_DRIFT__ = (state) =>
+        editor?.readingPositionDrift(state) ?? null;
       target.__SKRIBEUM_E2E_CURRENT_PATH__ = () => selectedPath;
       target.__SKRIBEUM_E2E_SET_SELECTION__ = setEndToEndSelection;
       target.__SKRIBEUM_E2E_SET_LINE_END__ = setEndToEndSelectionAtLineEnd;
@@ -3738,6 +3743,7 @@ onMount(() => {
     __SKRIBEUM_DEBUG_PERF__?: boolean;
     __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
     __SKRIBEUM_E2E_HISTORY_STATE__?: () => NoteViewState | null;
+    __SKRIBEUM_E2E_READING_DRIFT__?: (state: NoteViewState) => number | null;
     __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
     __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
     __SKRIBEUM_E2E_SET_LINE_END__?: (lineText: string) => number | null;
@@ -3767,6 +3773,8 @@ onMount(() => {
     debugWindow.__SKRIBEUM_E2E_OPEN_NOTE__ = (path) => navigateToNote(path);
     debugWindow.__SKRIBEUM_E2E_HISTORY_STATE__ = () =>
       editor?.captureHistoryState() ?? null;
+    debugWindow.__SKRIBEUM_E2E_READING_DRIFT__ = (state) =>
+      editor?.readingPositionDrift(state) ?? null;
     debugWindow.__SKRIBEUM_E2E_CURRENT_PATH__ = () => selectedPath;
     debugWindow.__SKRIBEUM_E2E_SET_SELECTION__ = setEndToEndSelection;
     debugWindow.__SKRIBEUM_E2E_SET_LINE_END__ = setEndToEndSelectionAtLineEnd;
@@ -3938,6 +3946,7 @@ onMount(() => {
     delete debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__;
     delete debugWindow.__SKRIBEUM_E2E_OPEN_NOTE__;
     delete debugWindow.__SKRIBEUM_E2E_HISTORY_STATE__;
+    delete debugWindow.__SKRIBEUM_E2E_READING_DRIFT__;
     delete debugWindow.__SKRIBEUM_E2E_CURRENT_PATH__;
     delete debugWindow.__SKRIBEUM_E2E_SET_SELECTION__;
     delete debugWindow.__SKRIBEUM_E2E_SET_LINE_END__;

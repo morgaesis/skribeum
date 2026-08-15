@@ -88,6 +88,12 @@
   --skr-motion-distance: 0.25rem;
   --skr-hover-intent-delay: 450ms;
   --skr-loading-pulse-duration: 1.2s;
+  /* The caret blink and the loading pulse are the two continuous indicators
+     that sit outside the three one-shot motion classes. Both animate opacity
+     only and move nothing. */
+  --skr-caret-blink-cycle: 1.2s;
+  --skr-caret-blink-easing: ease-in-out;
+  --skr-caret-blink-resume: 350ms;
   --skr-preview-manuscript-surface: #fffdf8;
   --skr-preview-manuscript-text: #24352b;
   --skr-preview-manuscript-accent: #1e4d3b;

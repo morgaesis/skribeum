@@ -34,7 +34,11 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { tags } from "@lezer/highlight";
-import { attachMenuDismissal } from "../../anchoredMenu";
+import {
+  attachHoverIntent,
+  attachMenuDismissal,
+  pointInMenuCone,
+} from "../../anchoredMenu";
 import { externalHttpUrl } from "../../features/navigation";
 import {
   editTableCell,
@@ -76,6 +80,7 @@ import {
   obsidianMarkdownExtensionsFor,
   skribeumMarkdownParser,
 } from "../markdown/obsidian";
+import { playFormEntrance, playGlyphEntrance, playGlyphExit } from "../motion";
 import { PostPaintScheduler } from "../postPaintScheduler";
 import { calloutIconSvg, parseCallout } from "./callouts";
 import {
@@ -568,6 +573,14 @@ export function openTaskStatusMenuAtMarker(
   return true;
 }
 
+/**
+ * Per-control listener cleanups. A task control attaches window- and
+ * document-level listeners for its hover corridor, so a widget the view
+ * recycles has to release them or every rebuilt checkbox leaves a live
+ * pointer listener behind.
+ */
+const taskControlCleanups = new WeakMap<HTMLElement, () => void>();
+
 class TaskCheckboxWidget extends WidgetType {
   constructor(
     readonly status: TaskStatus,
@@ -591,7 +604,8 @@ class TaskCheckboxWidget extends WidgetType {
     nextTaskPaletteId += 1;
     const paletteId = `cm-skr-task-palette-${nextTaskPaletteId}`;
     const host = document.createElement("span");
-    host.className = "cm-skr-task-control";
+    host.className =
+      "cm-skr-task-control cm-skr-reveal-motion cm-skr-reveal-rendered";
     host.style.setProperty(
       "--skr-task-color",
       `var(${this.status.color_token})`,
@@ -689,10 +703,17 @@ class TaskCheckboxWidget extends WidgetType {
         Math.max(checkboxBounds.left, viewport.left + inset),
         maximumLeft,
       )}px`;
-      const spaceAbove = paletteAnchor.y - fingerGap - viewport.top;
+      // The corridor above the press point, already discounting the inset the
+      // menu must keep clear of the viewport edge, so a menu that "fits" can
+      // never land flush against the top of the screen.
+      const spaceAbove = paletteAnchor.y - fingerGap - (viewport.top + inset);
       if (spaceAbove >= bounds.height) {
         palette.dataset.motionSurface = "anchored-bottom";
-        palette.style.top = `${paletteAnchor.y - fingerGap - bounds.height}px`;
+        palette.style.top = `${Math.max(
+          viewport.top + inset,
+          paletteAnchor.y - fingerGap - bounds.height,
+        )}px`;
+        palette.style.maxHeight = `${Math.max(0, spaceAbove)}px`;
       } else {
         palette.dataset.motionSurface = "anchored-top";
         const top = paletteAnchor.y + fingerGap;
@@ -977,14 +998,16 @@ class TaskCheckboxWidget extends WidgetType {
       if (keyboard || deliberateOpen) {
         queueMicrotask(() => palette.focus());
       }
-      if (deliberateOpen) {
-        removeOutsidePress?.();
-        removeOutsidePress = attachMenuDismissal(palette, {
-          onDismiss: () => closePalette(true),
-          ignore: [box],
-          escape: false,
-        });
-      }
+      // Every open mode gets the shared dismissal guarantees, not only the
+      // deliberate one: a menu summoned by hover or by the keyboard is just
+      // as capable of outliving the window that owns it. Only the focus
+      // return differs, because only a menu that took focus can give it back.
+      removeOutsidePress?.();
+      removeOutsidePress = attachMenuDismissal(palette, {
+        onDismiss: () => closePalette(keyboardOperable),
+        ignore: [box],
+        escape: false,
+      });
     };
 
     const advance = () => {
@@ -1178,23 +1201,44 @@ class TaskCheckboxWidget extends WidgetType {
         event.preventDefault();
         event.stopPropagation();
         closePalette(true);
+      } else if (event.key === "Tab") {
+        // Tab leaves the menu, and the control it came from is where focus
+        // belongs; without this the browser resolves the next tab stop from
+        // the menu surface and drops focus into the note body instead.
+        event.preventDefault();
+        event.stopPropagation();
+        closePalette(true);
       }
     });
-    host.addEventListener("pointerenter", (event) => {
-      if (event.pointerType !== "touch" && (event.buttons ?? 0) === 0) {
-        openPalette("hover", { x: event.clientX, y: event.clientY });
-      }
-    });
-    host.addEventListener("pointerleave", () => {
-      if (
-        press === null &&
-        !deliberateOpen &&
-        pendingDateStatus === null &&
-        !host.contains(document.activeElement)
-      ) {
-        closePalette(false);
-      }
-    });
+    // Hover is an intent, not a trigger: the menu waits out the shared
+    // pointer-rest delay so a pass across a task line shows nothing, and once
+    // open it survives the travel from the 1em checkbox to the menu through
+    // the shared safe-triangle corridor. Without the corridor the menu dies
+    // in the gap and the reader has to race it.
+    taskControlCleanups.set(
+      host,
+      attachHoverIntent({
+        anchor: box,
+        surface: palette,
+        isOpen: () => !palette.hidden,
+        openDelay: () =>
+          hoverIntentDelay(view.dom.ownerDocument.documentElement),
+        open: (point) => {
+          if (press !== null) return;
+          openPalette("hover", point);
+        },
+        close: () => {
+          if (
+            press === null &&
+            !deliberateOpen &&
+            pendingDateStatus === null &&
+            !host.contains(document.activeElement)
+          ) {
+            closePalette(false);
+          }
+        },
+      }),
+    );
     host.addEventListener("focusout", () => {
       queueMicrotask(() => {
         if (!deliberateOpen && !host.contains(document.activeElement)) {
@@ -1204,6 +1248,11 @@ class TaskCheckboxWidget extends WidgetType {
     });
     host.append(box, palette);
     return host;
+  }
+
+  override destroy(dom: HTMLElement): void {
+    taskControlCleanups.get(dom)?.();
+    taskControlCleanups.delete(dom);
   }
 
   override ignoreEvent(): boolean {
@@ -1227,9 +1276,9 @@ class MathWidget extends WidgetType {
 
   override toDOM(): HTMLElement {
     const host = document.createElement(this.displayMode ? "div" : "span");
-    host.className = this.displayMode
-      ? "cm-skr-math cm-skr-math-block"
-      : "cm-skr-math cm-skr-math-inline";
+    host.className = `cm-skr-math cm-skr-reveal-motion cm-skr-reveal-rendered ${
+      this.displayMode ? "cm-skr-math-block" : "cm-skr-math-inline"
+    }`;
     host.setAttribute("role", "img");
     host.setAttribute(
       "aria-label",
@@ -1258,7 +1307,8 @@ class MermaidWidget extends WidgetType {
   override toDOM(view: EditorView): HTMLElement {
     nextMermaidId += 1;
     const host = document.createElement("div");
-    host.className = "cm-skr-mermaid";
+    host.className =
+      "cm-skr-mermaid cm-skr-reveal-motion cm-skr-reveal-rendered";
     host.setAttribute("role", "img");
     host.setAttribute("aria-label", STRINGS.mermaidDiagramLabel);
     host.textContent = STRINGS.mermaidLoading;
@@ -3661,8 +3711,11 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 activeReveal.to <= ref.to &&
                 line.from >= activeReveal.from &&
                 line.to <= activeReveal.to;
+              // Any line-scope rule the caret can turn into source carries
+              // the motion class, so a block that swaps whole lines between
+              // its rendered and source forms has a node to animate.
               if (
-                rule.dynamic === "rich-callout" &&
+                (rule.dynamic === "rich-callout" || rule.reveal !== "never") &&
                 line.to > line.from &&
                 !nestedActiveLine
               ) {
@@ -3679,7 +3732,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                     to: line.to,
                     decoration: Decoration.mark({
                       class: motionClass,
-                      skr: `motion ${revealedNow ? "source" : "rendered"}=callout`,
+                      skr: `motion ${revealedNow ? "source" : "rendered"}=${rule.node}`,
                     }),
                   });
                 }
@@ -3729,13 +3782,6 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             });
             continue;
           }
-          // A revealed rule emits nothing, so the source shows through. The
-          // exception is a cursor-line reveal, which still emits a marker
-          // carrying its active state so the transition has something to
-          // animate between.
-          if (revealedNow && rule.reveal !== "cursor-line") {
-            continue;
-          }
           if (presentation.present === "hide") {
             let hideFrom = ref.from;
             let hideTo = ref.to;
@@ -3746,21 +3792,35 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 hideFrom -= 1;
               }
             }
-            if (rule.reveal === "cursor-line") {
-              const className = revealedNow
-                ? "cm-skr-reveal-marker cm-skr-reveal-marker-active"
-                : "cm-skr-reveal-marker";
+            // Every revealed marker carries the marker class, whatever
+            // brought it back. The glyph is the thing the reader watches
+            // arrive, so it is the thing that needs a node of its own to
+            // animate; a construct whose marks came back as bare document
+            // text had nothing to animate and popped into place.
+            if (revealedNow) {
               built.push({
                 from: hideFrom,
                 to: hideTo,
                 decoration: Decoration.mark({
-                  class: className,
-                  skr: `${revealedNow ? "reveal" : "hide"} node=${rule.node}`,
+                  class: "cm-skr-reveal-marker cm-skr-reveal-marker-active",
+                  skr: `reveal node=${rule.node}`,
                 }),
               });
               continue;
             }
-            if (revealedNow) {
+            // A line-scope marker keeps its node while hidden, reserving no
+            // width, so the line's geometry is settled before the caret ever
+            // arrives. An inside-scope marker is replaced outright: its
+            // characters must stay out of the caret's path.
+            if (rule.reveal === "cursor-line") {
+              built.push({
+                from: hideFrom,
+                to: hideTo,
+                decoration: Decoration.mark({
+                  class: "cm-skr-reveal-marker",
+                  skr: `hide node=${rule.node}`,
+                }),
+              });
               continue;
             }
             built.push({
@@ -3769,6 +3829,18 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               decoration: Decoration.replace({
                 atomic: true,
                 skr: `hide node=${rule.node}`,
+              }),
+            });
+          } else if (revealedNow) {
+            // A revealed mark or widget emits no presentation of its own, so
+            // the source shows through. It still carries the motion class, so
+            // the form that just arrived can be animated in place.
+            built.push({
+              from: ref.from,
+              to: ref.to,
+              decoration: Decoration.mark({
+                class: "cm-skr-reveal-motion cm-skr-reveal-source",
+                skr: `motion source=${rule.node}`,
               }),
             });
           } else if (presentation.present === "widget") {
@@ -3812,9 +3884,14 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               }
             }
           } else {
-            const motionClass = ["Link", "Image", "Wikilink"].includes(
-              rule.node,
-            )
+            // Any rule the caret can turn into source carries the motion
+            // class in both forms, so whichever form arrives has a node to
+            // animate. A rule the caret never changes carries none: an
+            // element that never swaps has nothing to animate between.
+            const swaps =
+              rule.reveal !== "never" ||
+              ["Link", "Image", "Wikilink"].includes(rule.node);
+            const motionClass = swaps
               ? `cm-skr-reveal-motion ${
                   activeRevealOwns(node)
                     ? "cm-skr-reveal-source"
@@ -4140,6 +4217,149 @@ function deferredUpdateNeedsImmediateRebuild(update: ViewUpdate): boolean {
   return decorationInputsChanged(update.state, update.startState);
 }
 
+/** Whether a change rewrote the whole document rather than edited it. */
+function replacesWholeDocument(update: ViewUpdate): boolean {
+  if (!update.docChanged) return false;
+  let replaced = false;
+  update.changes.iterChangedRanges((fromA, toA) => {
+    if (fromA === 0 && toA === update.startState.doc.length) replaced = true;
+  });
+  return replaced;
+}
+
+/**
+ * The reveal's motion. The decoration engine decides what a reveal looks
+ * like; this decides when it moves, which CSS cannot: CodeMirror builds a new
+ * node for a range whose decoration class changed, so the revealed form is
+ * always a fresh node already in its final state and no transition between
+ * the two forms can run. Watching the reveal region instead of watching
+ * elements is what keeps the motion honest — a node rebuilt for any other
+ * reason (a keystroke inside a revealed construct, a scroll bringing a
+ * heading into view, a note arriving) is not a reveal and must not animate.
+ */
+class RevealMotion {
+  private previous: RevealRegion | null;
+  private pending: {
+    previous: RevealRegion | null;
+    next: RevealRegion | null;
+  } | null = null;
+
+  constructor(view: EditorView) {
+    // The first observation is the view as it already is. A note opens with
+    // its caret wherever it was left, and that is a state, not an act.
+    this.previous = activeRevealIn(view.state);
+  }
+
+  update(update: ViewUpdate): void {
+    // Resolving the reveal walks the syntax tree around the caret. Nothing
+    // else can move the reveal, so an update that only scrolled or only
+    // remeasured pays nothing for this plugin.
+    if (
+      !update.docChanged &&
+      !update.selectionSet &&
+      syntaxTree(update.state) === syntaxTree(update.startState) &&
+      !decorationInputsChanged(update.state, update.startState)
+    ) {
+      return;
+    }
+    const next = activeRevealIn(update.state);
+    const previous =
+      this.previous === null || !update.docChanged
+        ? this.previous
+        : {
+            ...this.previous,
+            from: update.changes.mapPos(this.previous.from, -1),
+            to: update.changes.mapPos(this.previous.to, 1),
+          };
+    this.previous = next;
+    if (
+      (previous?.from === next?.from && previous?.to === next?.to) ||
+      replacesWholeDocument(update)
+    ) {
+      return;
+    }
+    this.pending = { previous, next };
+  }
+
+  /**
+   * Runs once the view has written this update out. A plugin sees an update
+   * before the DOM exists, and the next animation frame is already one paint
+   * too late: the revealed node would show at full strength for a frame and
+   * only then start fading in.
+   */
+  flush(view: EditorView): void {
+    const pending = this.pending;
+    this.pending = null;
+    if (pending === null) return;
+    this.play(view, pending.previous, pending.next);
+  }
+
+  private within(
+    view: EditorView,
+    element: HTMLElement,
+    region: RevealRegion,
+  ): boolean {
+    try {
+      const position = view.posAtDOM(element);
+      return position >= region.from && position <= region.to;
+    } catch {
+      return false;
+    }
+  }
+
+  private play(
+    view: EditorView,
+    previous: RevealRegion | null,
+    next: RevealRegion | null,
+  ): void {
+    if (next !== null) {
+      for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+        ".cm-skr-reveal-marker-active",
+      )) {
+        if (this.within(view, element, next)) playGlyphEntrance(element);
+      }
+      for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+        ".cm-skr-reveal-source",
+      )) {
+        // A construct whose markers are arriving has already said what
+        // changed. Fading the whole form as well would multiply the two
+        // opacities and darken the text that never changed at all.
+        if (
+          element.querySelector(".cm-skr-reveal-marker-active") !== null ||
+          !this.within(view, element, next)
+        ) {
+          continue;
+        }
+        playFormEntrance(element);
+      }
+    }
+    if (previous === null) return;
+    // The construct the caret just left: its markers are hidden again and its
+    // rendered form is back, both as nodes built in this same frame.
+    for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+      ".cm-skr-reveal-marker:not(.cm-skr-reveal-marker-active)",
+    )) {
+      if (this.within(view, element, previous)) playGlyphExit(element);
+    }
+    for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+      ".cm-skr-reveal-rendered",
+    )) {
+      if (this.within(view, element, previous)) playFormEntrance(element);
+    }
+  }
+}
+
+const revealMotionPlugin = ViewPlugin.fromClass(RevealMotion);
+
+/**
+ * The reveal's motion runs from an update listener rather than from the
+ * plugin's own update, because a plugin is told about an update before the
+ * view has written it to the DOM: the node to animate does not exist yet.
+ */
+const revealMotionDriver = EditorView.updateListener.of((update) => {
+  update.view.plugin(revealMotionPlugin)?.flush(update.view);
+});
+
 const enginePlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
@@ -4251,45 +4471,6 @@ type PreloadedNote = {
   status: "pending" | "settled";
   source: Promise<string | null>;
 };
-
-function triangleArea(
-  a: PreviewPoint,
-  b: PreviewPoint,
-  c: PreviewPoint,
-): number {
-  return Math.abs(
-    (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y)) / 2,
-  );
-}
-
-/** Tests the safe-triangle corridor from a departed link to its preview. */
-export function pointInPreviewCone(
-  point: PreviewPoint,
-  origin: PreviewPoint,
-  panel: Pick<DOMRect, "left" | "right" | "top" | "bottom">,
-): boolean {
-  let first: PreviewPoint;
-  let second: PreviewPoint;
-  if (origin.x <= panel.left) {
-    first = { x: panel.left, y: panel.top - 12 };
-    second = { x: panel.left, y: panel.bottom + 12 };
-  } else if (origin.x >= panel.right) {
-    first = { x: panel.right, y: panel.top - 12 };
-    second = { x: panel.right, y: panel.bottom + 12 };
-  } else if (origin.y <= panel.top) {
-    first = { x: panel.left - 12, y: panel.top };
-    second = { x: panel.right + 12, y: panel.top };
-  } else {
-    first = { x: panel.left - 12, y: panel.bottom };
-    second = { x: panel.right + 12, y: panel.bottom };
-  }
-  const whole = triangleArea(origin, first, second);
-  const parts =
-    triangleArea(point, first, second) +
-    triangleArea(origin, point, second) +
-    triangleArea(origin, first, point);
-  return Math.abs(parts - whole) < 0.75;
-}
 
 class LinkPreviewController {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -4622,7 +4803,7 @@ class LinkPreviewController {
       return;
     }
     if (
-      pointInPreviewCone(
+      pointInMenuCone(
         { x: event.clientX, y: event.clientY },
         this.leavePoint,
         this.panel.getBoundingClientRect(),
@@ -5125,8 +5306,11 @@ const engineTheme = EditorView.baseTheme({
     verticalAlign: "bottom",
     whiteSpace: "pre",
   },
+  // The revealed marker takes its natural width: the space was reserved in
+  // the frame the caret arrived, with no transition on any geometry, so the
+  // text around it has already settled by the time the glyph animates.
   ".cm-skr-reveal-marker-active": {
-    maxWidth: "7ch",
+    maxWidth: "none",
     opacity: "1",
   },
   ".cm-skr-emphasis": { fontStyle: "italic" },
@@ -5682,6 +5866,8 @@ export function decorationEngine(
     explicitTableSourceField,
     blockEngineField,
     enginePlugin,
+    revealMotionPlugin,
+    revealMotionDriver,
     linkPreviewPlugin,
     linkPreviewKeys,
     EditorView.atomicRanges.of(atomicDecorations),

@@ -34,6 +34,7 @@ import {
   propertyInsertion,
 } from "./editor/frontmatter";
 import { showInvisibleCharacters } from "./editor/invisibles";
+import { caretMotion } from "./editor/motion";
 import { NoteSession } from "./editor/noteSession";
 import { PostPaintScheduler } from "./editor/postPaintScheduler";
 import {
@@ -558,6 +559,7 @@ function stateFor(
         ? []
         : [wikilinkPointerNavigation(wikilinkNavigationOptions)]),
       editorAppearance,
+      caretMotion(),
       settingsCompartment.of(settingsExtensions(settings, sourceMode)),
       sourceRevealFocusCompartment.of(
         sourceRevealFocusMode(view?.hasFocus ?? false),

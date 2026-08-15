@@ -1140,6 +1140,76 @@ html body .settings-dialog {
   border-left-color: var(--skr-caret);
 }
 
+/* The caret blink is one of the two continuous indicators outside the motion
+   classes: opacity only, moving nothing. Each edge of the cycle eases over
+   roughly 100ms and the bar holds solid between them, so the caret reads as a
+   presence rather than a strobe. The stops are the cycle's own fractions:
+   500ms solid, 100ms out, 500ms clear, 100ms back in. */
+@keyframes skr-caret-blink {
+  0%,
+  41.67% {
+    opacity: 1;
+  }
+
+  50%,
+  91.67% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes skr-caret-blink-instant {
+  0%,
+  49.99% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* The editor library draws the caret and animates the cursor layer with its
+   own hard-edged blink, restarting it through an inline animation-name that a
+   plain author rule cannot outrank; a running animation also outranks every
+   normal declaration, so holding the caret solid needs the same weight. The
+   name is the only declaration that has to carry it. */
+.cm-editor.cm-focused > .cm-scroller > .cm-cursorLayer {
+  animation-duration: var(--skr-caret-blink-cycle);
+  animation-iteration-count: infinite;
+  animation-timing-function: var(--skr-caret-blink-easing);
+  /* biome-ignore lint/complexity/noImportantStyles: outranks the editor library's inline animation-name */
+  animation-name: skr-caret-blink !important;
+}
+
+/* Solid while the hand is working. Dropping this class restarts the blink
+   from its first keyframe, which is the visible one. */
+.cm-editor.cm-skr-caret-solid > .cm-scroller > .cm-cursorLayer {
+  /* biome-ignore lint/complexity/noImportantStyles: only an important rule outranks a running animation */
+  animation-name: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-editor.cm-focused > .cm-scroller > .cm-cursorLayer {
+    animation-timing-function: step-end;
+    /* biome-ignore lint/complexity/noImportantStyles: outranks the eased blink above, itself important */
+    animation-name: skr-caret-blink-instant !important;
+  }
+}
+
+:root[data-animations="false"]
+  .cm-editor.cm-focused
+  > .cm-scroller
+  > .cm-cursorLayer {
+  animation-timing-function: step-end;
+  /* biome-ignore lint/complexity/noImportantStyles: outranks the eased blink above, itself important */
+  animation-name: skr-caret-blink-instant !important;
+}
+
 .cm-content ::selection,
 .cm-editor .cm-selectionBackground,
 .cm-editor.cm-focused .cm-selectionBackground {
@@ -1158,25 +1228,22 @@ html body .settings-dialog {
 }
 
 /* The marker's reserved width applies with the instant list (no transition
-   ever targets it); only opacity and a compositor translate animate here.
-   The glyph enters with the surface clock and leaves with the state clock,
-   the exit mirroring the entrance transform instead of a bare fade. */
+   ever targets it); only opacity and a compositor translate ever animate
+   here. The two states below are the resting values the glyph animates
+   between: the entrance and the exit themselves are played on the node the
+   view has just built, because a decoration class change replaces that node
+   and a CSS transition would have no starting value to run from. The glyph
+   enters on the surface clock and leaves on the state clock, the exit
+   mirroring the entrance travel rather than a bare fade. */
 .cm-skr-reveal-marker {
   display: inline-block;
   opacity: 0;
   transform: translateX(var(--skr-motion-distance));
-  transition:
-    opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing),
-    transform var(--skr-motion-state-duration) var(--skr-motion-state-easing);
 }
 
 .cm-skr-reveal-marker-active {
   opacity: 1;
   transform: translateX(0);
-  transition:
-    opacity var(--skr-motion-surface-duration) var(--skr-motion-surface-easing),
-    transform var(--skr-motion-surface-duration)
-    var(--skr-motion-surface-easing);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1260,13 +1327,19 @@ html body .settings-dialog {
   transition-duration: 0ms;
 }
 
+/* No `will-change` here. A transform hint makes its element the containing
+   block for every fixed-position descendant, and a surface that carries the
+   hint while idle reparents the menus and popovers rendered inside it: the
+   editor pane is a permanently mounted surface, so a menu placed in viewport
+   coordinates painted at the pane's origin instead. The hint is applied by
+   `enterMotionSurface` and `exitMotionSurface` for the length of the motion
+   and released when the surface settles. */
 [data-motion-surface] {
   opacity: 0;
   transition:
     opacity var(--skr-motion-surface-duration) var(--skr-motion-surface-easing),
     transform var(--skr-motion-surface-duration)
     var(--skr-motion-surface-easing);
-  will-change: opacity, transform;
 }
 
 [data-motion-surface="centered"] {

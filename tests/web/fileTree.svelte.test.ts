@@ -425,4 +425,190 @@ describe("designed file tree", () => {
 
     await unmount(component);
   });
+
+  it("renames the focused row directly on F2, without opening the action menu", async () => {
+    const renamed: string[] = [];
+    const registry = createAppRegistry(undefined, true);
+    const context = commandContext({
+      renameTreeEntry: async (path) => {
+        renamed.push(path);
+      },
+    });
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        onOpenPath: () => {},
+        registry,
+        commandContext: () => context,
+        desktop: true,
+      },
+    });
+    flushSync();
+
+    const row = document.querySelector<HTMLElement>('[data-path="plain.md"]');
+    row?.focus();
+    row?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "F2", bubbles: true }),
+    );
+    await tick();
+
+    expect(renamed).toEqual(["plain.md"]);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+
+    await unmount(component);
+  });
+
+  it("deletes the focused row directly on Delete, without opening the action menu", async () => {
+    const registry = createAppRegistry(undefined, true);
+    const props = reactiveState({
+      entries: [...entries],
+      expandedPaths: ["Folder"],
+      onOpenPath: () => {},
+      desktop: true,
+      registry,
+      commandContext: undefined as (() => CommandContext) | undefined,
+    });
+    const context = commandContext({
+      deleteTreeEntry: async (path, restoreFocus) => {
+        const confirmed = await showConfirmDialog({
+          title: "Delete",
+          message: "Delete this entry?",
+          confirmLabel: "Delete",
+          destructive: true,
+        });
+        if (!confirmed) return;
+        props.entries = props.entries.filter((entry) => entry.path !== path);
+        await tick();
+        restoreFocus?.();
+      },
+    });
+    props.commandContext = () => context;
+    const component = mount(FileTree, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const removed = document.querySelector<HTMLElement>(
+      '[data-path="Folder/one.md"]',
+    );
+    removed?.focus();
+    removed?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true }),
+    );
+    await tick();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    document
+      .querySelector<HTMLButtonElement>('[data-testid="dialog-confirm"]')
+      ?.click();
+    await tick();
+    await tick();
+    await tick();
+
+    expect(document.querySelector('[data-path="Folder/one.md"]')).toBeNull();
+    expect(document.activeElement?.getAttribute("data-path")).toBe(
+      "Folder/two.md",
+    );
+
+    await unmount(component);
+  });
+
+  it("does nothing on F2 or Delete when the tree has no rows to focus", async () => {
+    const renameCalls: string[] = [];
+    const deleteCalls: string[] = [];
+    const registry = createAppRegistry(undefined, true);
+    const context = commandContext({
+      renameTreeEntry: async (path) => {
+        renameCalls.push(path);
+      },
+      deleteTreeEntry: async (path) => {
+        deleteCalls.push(path);
+      },
+    });
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries: [],
+        onOpenPath: () => {},
+        registry,
+        commandContext: () => context,
+        desktop: true,
+      },
+    });
+    flushSync();
+
+    const tree = document.querySelector<HTMLUListElement>('[role="tree"]');
+    tree?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "F2", bubbles: true }),
+    );
+    tree?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true }),
+    );
+    await tick();
+
+    expect(renameCalls).toEqual([]);
+    expect(deleteCalls).toEqual([]);
+
+    await unmount(component);
+  });
+
+  it("keeps the row action button inside the roving tabindex, not an always-present tab stop", async () => {
+    const registry = createAppRegistry(undefined, true);
+    const context = commandContext();
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        onOpenPath: () => {},
+        registry,
+        commandContext: () => context,
+        desktop: true,
+      },
+    });
+    flushSync();
+
+    const rowsList = treeItems();
+    const actionButtons = rowsList.map((row) =>
+      row.querySelector<HTMLButtonElement>(".skr-tree-actions"),
+    );
+    // Exactly one row is the roving tab stop, and its action button is the
+    // only action button reachable by Tab; every other row's button is
+    // pulled out of the tab order the same way the tab strip's own
+    // per-tab close button tracks its tab's active state.
+    expect(rowsList.filter((row) => row.tabIndex === 0)).toHaveLength(1);
+    expect(
+      actionButtons.filter((button) => button?.tabIndex === 0),
+    ).toHaveLength(1);
+    const focusedRow = rowsList.find((row) => row.tabIndex === 0);
+    const focusedButton =
+      focusedRow?.querySelector<HTMLButtonElement>(".skr-tree-actions");
+    expect(focusedButton?.tabIndex).toBe(0);
+
+    const second = document.querySelector<HTMLElement>(
+      '[data-path="Folder/two.md"]',
+    );
+    second?.focus();
+    second?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    await tick();
+
+    const rowsAfter = treeItems();
+    expect(rowsAfter.filter((row) => row.tabIndex === 0)).toHaveLength(1);
+    const buttonsAfter = rowsAfter.map((row) =>
+      row.querySelector<HTMLButtonElement>(".skr-tree-actions"),
+    );
+    expect(
+      buttonsAfter.filter((button) => button?.tabIndex === 0),
+    ).toHaveLength(1);
+    const newFocusedRow = rowsAfter.find((row) => row.tabIndex === 0);
+    expect(newFocusedRow?.getAttribute("data-path")).toBe(
+      document.activeElement?.getAttribute("data-path"),
+    );
+
+    await unmount(component);
+  });
 });

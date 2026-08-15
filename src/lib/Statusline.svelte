@@ -288,7 +288,7 @@ function surfaceEnter(node: HTMLElement) {
     background: var(--skr-surface);
     color: var(--skr-text-muted);
     font-family: var(--skr-font-interface);
-    font-size: 12px;
+    font-size: var(--skr-type-label);
   }
 
   .skr-statusline-leading,
@@ -381,13 +381,13 @@ function surfaceEnter(node: HTMLElement) {
   .skr-statusline-failure-heading {
     margin: 0 0 0.25rem;
     color: var(--skr-text-muted);
-    font-size: 12px;
+    font-size: var(--skr-type-label);
   }
 
   .skr-statusline-failure-message {
     overflow-wrap: anywhere;
     margin: 0;
     color: var(--skr-text);
-    font-size: 13px;
+    font-size: var(--skr-type-control);
   }
 </style>

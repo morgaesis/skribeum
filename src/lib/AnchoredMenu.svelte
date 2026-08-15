@@ -152,7 +152,7 @@ onMount(() => {
     box-shadow: var(--skr-shadow);
     color: var(--skr-text);
     font-family: var(--skr-font-interface);
-    font-size: 13px;
+    font-size: var(--skr-type-control);
   }
 
   .skr-anchored-menu :global(button) {

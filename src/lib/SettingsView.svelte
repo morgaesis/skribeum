@@ -2280,6 +2280,11 @@ function onKeydown(event: KeyboardEvent) {
     color: var(--skr-text);
     display: flex;
     flex-direction: column;
+    /* The surface's own tier. Controls that carry `font: inherit` (the
+       search field, the text controls, the jump-menu rows) resolve their
+       size from here rather than from the browser's dialog font. */
+    font-family: var(--skr-font-interface);
+    font-size: var(--skr-type-control);
     height: min(85vh, 48rem);
     max-height: calc(100vh - 2rem);
     outline: none;
@@ -2314,7 +2319,8 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .settings-header-primary .icon-button {
-    font-size: 1.125rem;
+    /* Icon glyphs are 1rem everywhere in the shell. */
+    font-size: 1rem;
     height: 2.75rem;
     padding: 0;
     width: 2.75rem;
@@ -2325,14 +2331,15 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .settings-header h2 {
-    font-size: 1rem;
+    font-size: var(--skr-type-title);
+    font-weight: 600;
     margin: 0;
   }
 
   .setting-copy p,
   .setting-copy > span:last-child {
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     line-height: 1.4;
     margin: 0.2rem 0 0;
   }
@@ -2342,7 +2349,7 @@ function onKeydown(event: KeyboardEvent) {
   .update-status {
     border-left: 3px solid var(--skr-warning);
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     margin: 0.75rem 1rem 0;
     padding-left: 0.6rem;
   }
@@ -2369,7 +2376,7 @@ function onKeydown(event: KeyboardEvent) {
   .setting-inline-error {
     color: var(--skr-danger);
     display: block;
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     margin-top: 0.35rem;
   }
 
@@ -2389,7 +2396,7 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .setting-label {
-    font-size: 0.8125rem;
+    font-size: var(--skr-type-control);
     font-weight: 600;
   }
 
@@ -2444,7 +2451,7 @@ function onKeydown(event: KeyboardEvent) {
     border-radius: var(--skr-radius-control);
     display: flex;
     flex: 0 0 2.75rem;
-    font-size: 1.25rem;
+    font-size: 1rem;
     height: 2.75rem;
     justify-content: center;
     padding: 0;
@@ -2483,7 +2490,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .settings-jump-heading {
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     font-weight: 600;
     padding: 0 0 0.5rem 0.5rem;
   }
@@ -2521,7 +2528,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .settings-content h3 {
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     font-weight: 700;
     letter-spacing: 0.08em;
     margin: 0 0 0.25rem;
@@ -2551,7 +2558,7 @@ function onKeydown(event: KeyboardEvent) {
   .segmented button {
     border: 0;
     border-right: 1px solid var(--skr-border);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-control);
     padding: 0.4rem 0.55rem;
     white-space: nowrap;
   }
@@ -2741,7 +2748,7 @@ function onKeydown(event: KeyboardEvent) {
     box-sizing: border-box;
     color: var(--skr-text);
     font-family: var(--skr-font-interface);
-    font-size: 0.8125rem;
+    font-size: var(--skr-type-control);
     min-height: 1.75rem;
     padding: 0.25rem 0.4rem;
     text-align: center;
@@ -2776,7 +2783,7 @@ function onKeydown(event: KeyboardEvent) {
 
   output {
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     text-align: right;
     white-space: nowrap;
   }
@@ -2896,7 +2903,7 @@ function onKeydown(event: KeyboardEvent) {
   .task-status-editor summary {
     color: var(--skr-link);
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: var(--skr-type-control);
     width: fit-content;
   }
 
@@ -2935,7 +2942,7 @@ function onKeydown(event: KeyboardEvent) {
   .task-status-header {
     background: var(--skr-surface-subtle);
     color: var(--skr-text-muted);
-    font-size: 0.7rem;
+    font-size: var(--skr-type-label);
     font-weight: 600;
   }
 
@@ -3039,7 +3046,7 @@ function onKeydown(event: KeyboardEvent) {
   .icon-button,
   .secondary-button {
     border-radius: var(--skr-radius-control);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     padding: 0.4rem 0.6rem;
   }
 
@@ -3049,13 +3056,13 @@ function onKeydown(event: KeyboardEvent) {
 
   a {
     color: var(--skr-link);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
   }
 
   .settings-footer {
     border-top: 1px solid var(--skr-border);
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     gap: 1rem;
     padding: 0.65rem 1.125rem;
   }

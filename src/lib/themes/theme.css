@@ -57,6 +57,18 @@
   --skr-radius-control: 0.25rem;
   --skr-radius-surface: 0.375rem;
   --skr-radius-dialog: 0.75rem;
+  /* The section 2.3 interface type scale: four values, nothing else. Chips
+     (kbd chips and the source-mode chip, always in the mono face); section
+     labels, descriptions, statusline and tooltip text; controls, rows,
+     inputs, menu items and field labels; window-scale titles (dialog and
+     sheet headings). Chrome sizes are fixed so the editor's adjustable
+     prose size never moves the shell, and mode-independent, so they live
+     here once rather than per palette. Editor content keeps its own em
+     scale off `--skr-editor-font-size` and never consumes these. */
+  --skr-type-chip: 11px;
+  --skr-type-label: 12px;
+  --skr-type-control: 13px;
+  --skr-type-title: 16px;
   --skr-font-prose:
     "Charter", "Sitka Text", Cambria, "Palatino Linotype", "Noto Serif",
     "Liberation Serif", Georgia, serif;

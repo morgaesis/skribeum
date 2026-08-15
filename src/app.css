@@ -24,6 +24,11 @@ body {
   background: var(--skr-canvas);
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
+  /* The shell's default tier, so chrome text that names no size of its own
+     lands on the control size instead of the browser's 16px document
+     default. The editor sets its own size on `.cm-editor`, and every
+     em-relative value inside the reading surface resolves against that. */
+  font-size: var(--skr-type-control);
 }
 
 * {
@@ -153,7 +158,7 @@ select {
   overflow: hidden;
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   font-weight: 600;
   opacity: 1;
   text-overflow: ellipsis;
@@ -227,7 +232,7 @@ select {
   padding-inline: 0.5rem;
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   font-weight: 600;
 }
 
@@ -329,7 +334,7 @@ select {
   padding: 0;
   list-style: none;
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
 }
 
 .skr-tree-spacer {
@@ -434,7 +439,7 @@ select {
 }
 
 .skr-tree-note-icon {
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   line-height: 1;
 }
 
@@ -498,7 +503,7 @@ select {
   padding: 0.375rem 0.5rem;
   background-color: transparent;
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   text-align: left;
   cursor: pointer;
 }
@@ -606,7 +611,7 @@ select {
   color: var(--skr-text-muted);
   background: transparent;
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   text-align: left;
 }
 
@@ -845,7 +850,7 @@ select {
   background: var(--skr-surface-subtle);
   color: var(--skr-text-muted);
   font-family: var(--skr-font-mono);
-  font-size: 11px;
+  font-size: var(--skr-type-chip);
   line-height: 1;
 }
 
@@ -868,7 +873,7 @@ select {
   margin: 0;
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
-  font-size: 1rem;
+  font-size: var(--skr-type-title);
   font-weight: 600;
 }
 
@@ -889,7 +894,7 @@ select {
   color: var(--skr-text);
   background: transparent;
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   text-align: start;
   overflow-wrap: anywhere;
   cursor: pointer;
@@ -905,7 +910,7 @@ select {
   margin: 0;
   color: var(--skr-text-muted);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
 }
 
 .skr-startup-error {
@@ -944,7 +949,7 @@ select {
      control must set the interface token explicitly (design system
      section 2.3: interface controls and palette rows, 13px fixed). */
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   text-align: start;
   cursor: pointer;
 }
@@ -976,8 +981,8 @@ select {
   border-radius: var(--skr-radius-control);
   padding: 0.125rem 0.25rem;
   color: var(--skr-text-muted);
-  font-family: var(--skr-font-interface);
-  font-size: 0.75rem;
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-chip);
 }
 
 html body .settings-backdrop {
@@ -1028,7 +1033,7 @@ html body .settings-dialog {
   padding: 0.5rem 0.875rem;
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   font-weight: 600;
   cursor: pointer;
   transition:
@@ -1087,6 +1092,18 @@ html body .settings-dialog {
 
 .skr-panel-heading {
   border-color: var(--skr-border);
+  font-size: var(--skr-type-label);
+}
+
+/* The interface type scale reached from markup, for elements whose component
+   has no style block of its own. The control tier needs no class: it is the
+   shell's inherited default. */
+.skr-type-label {
+  font-size: var(--skr-type-label);
+}
+
+.skr-type-title {
+  font-size: var(--skr-type-title);
 }
 
 .skr-match {
@@ -1206,7 +1223,7 @@ html body .settings-dialog {
 .skr-loading-failure-message {
   color: var(--skr-text-muted);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
 }
 
 .skr-loading-retry {
@@ -1216,7 +1233,7 @@ html body .settings-dialog {
   color: var(--skr-link);
   background: transparent;
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1454,7 +1471,7 @@ html body .settings-dialog {
   background: var(--skr-surface-raised);
   box-shadow: var(--skr-shadow);
   font-family: var(--skr-font-interface);
-  font-size: 12px;
+  font-size: var(--skr-type-label);
   line-height: 1.2;
   pointer-events: none;
 }
@@ -1465,7 +1482,7 @@ html body .settings-dialog {
   padding: 0.125rem 0.25rem;
   background: var(--skr-surface-subtle);
   font-family: var(--skr-font-mono);
-  font-size: 11px;
+  font-size: var(--skr-type-chip);
 }
 
 /* The note-info sheet body (the narrow-viewport "Note statistics" route). */

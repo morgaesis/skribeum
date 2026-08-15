@@ -596,7 +596,7 @@ export function focus() {
     border-bottom: 1px solid var(--skr-border);
     color: var(--skr-text-muted);
     background: var(--skr-surface-subtle);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     text-overflow: ellipsis;
     white-space: nowrap;
   }

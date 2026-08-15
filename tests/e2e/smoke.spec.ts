@@ -210,6 +210,36 @@ async function waitForEditorArrival(): Promise<void> {
   );
 }
 
+/**
+ * Summons a task status menu the way a resting pointer does. The checkbox
+ * itself owns the hover, and the menu waits out the shared pointer-rest
+ * delay before it appears, so a pass across a task line shows nothing.
+ */
+async function hoverTaskCheckbox() {
+  await browser.execute(() => {
+    const box = document.querySelector<HTMLElement>(".cm-skr-task-checkbox");
+    if (box === null) throw new Error("task checkbox missing");
+    const bounds = box.getBoundingClientRect();
+    box.dispatchEvent(
+      new PointerEvent("pointerenter", {
+        bubbles: true,
+        clientX: bounds.left + bounds.width / 2,
+        clientY: bounds.top + bounds.height / 2,
+        pointerType: "mouse",
+      }),
+    );
+  });
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        () =>
+          document.querySelector<HTMLElement>(".cm-skr-task-palette")
+            ?.hidden === false,
+      ),
+    { timeout: 5000, timeoutMsg: "task status menu did not open on hover" },
+  );
+}
+
 async function openNoteFromTree(name: string) {
   const row = $(`[role="treeitem"][data-path="${name}"]`);
   await row.waitForExist({ timeout: 15000 });
@@ -3401,15 +3431,39 @@ describe("skribeum shell", () => {
 
     await dismissBannersForPath();
     mkdirSync(screenshotDirectory, { recursive: true });
+    const caretColors: string[] = [];
     for (const theme of ["light", "dark"] as const) {
       await clearEditorSelection();
       await applyVisualTheme(theme);
-      const caretColor = await browser.execute(() => {
-        const content = document.querySelector<HTMLElement>(".cm-content");
-        return content === null ? "" : getComputedStyle(content).caretColor;
+      // The editor draws its own caret, so the property a reader sees is the
+      // rendered bar rather than the content element's `caret-color`, which
+      // the drawn caret deliberately makes transparent.
+      const caret = await browser.execute(() => {
+        const cursor = document.querySelector<HTMLElement>(".cm-cursor");
+        const style = cursor === null ? null : getComputedStyle(cursor);
+        return {
+          drawn: cursor !== null,
+          displayed: style !== null && style.display !== "none",
+          focused:
+            document
+              .querySelector(".cm-editor")
+              ?.classList.contains("cm-focused") ?? false,
+          width: style?.borderLeftWidth ?? "",
+          color: style?.borderLeftColor ?? "",
+          token: getComputedStyle(document.documentElement)
+            .getPropertyValue("--skr-caret")
+            .trim(),
+        };
       });
-      expect(caretColor).not.toBe("");
-      expect(caretColor).not.toBe("rgba(0, 0, 0, 0)");
+      expect(caret.drawn).toBe(true);
+      // A caret paints exactly while the editor holds focus, which is the
+      // invariant worth pinning: this window does not always own focus.
+      expect(caret.displayed).toBe(caret.focused);
+      expect(caret.width).toBe("2px");
+      expect(caret.color).not.toBe("");
+      expect(caret.color).not.toBe("rgba(0, 0, 0, 0)");
+      expect(caret.token).not.toBe("");
+      caretColors.push(caret.color);
       await dismissBannersForPath();
       await browser.saveScreenshot(
         path.join(screenshotDirectory, `after-editor-${theme}.png`),
@@ -3461,6 +3515,11 @@ describe("skribeum shell", () => {
         path.join(screenshotDirectory, `after-toolbar-${theme}.png`),
       );
     }
+
+    // The caret is a themed token, not a fixed colour: the two palettes must
+    // not resolve it to the same bar.
+    expect(caretColors).toHaveLength(2);
+    expect(caretColors[0]).not.toBe(caretColors[1]);
 
     expect(noteOnDisk(VISUAL_NOTE_NAME)).toBe(originalBytes);
     await browser.execute((theme: string) => {
@@ -4278,13 +4337,10 @@ describe("skribeum shell", () => {
           opacity: style.opacity,
           reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
           transform: style.transform,
-          transitionDurations: style.transitionDuration
-            .split(",")
-            .map((duration) =>
-              duration.trim().endsWith("ms")
-                ? Number.parseFloat(duration)
-                : Number.parseFloat(duration) * 1000,
-            ),
+          // The glyph is played rather than transitioned, because the view
+          // rebuilds the node whenever its decoration class changes and a
+          // transition would have no starting value to run from.
+          settled: marker.getAnimations().length === 0,
         };
       });
 
@@ -4326,18 +4382,17 @@ describe("skribeum shell", () => {
         timeoutMsg: "heading marker did not reveal on cursor entry",
       },
     );
+    await browser.waitUntil(
+      async () => (await headingMarkerState())?.settled === true,
+      {
+        timeout: 10000,
+        timeoutMsg: "heading marker did not settle after revealing",
+      },
+    );
     const revealed = await headingMarkerState();
+    // Settled active glyph: fully opaque and translated home.
     expect(revealed?.opacity).toBe("1");
-    if (revealed?.reducedMotion) {
-      expect(
-        revealed.transitionDurations.every((duration) => duration === 0),
-      ).toBe(true);
-    } else {
-      // Settled active glyph: translated home, having entered on the
-      // surface clock (opacity and transform both 120ms).
-      expect(revealed?.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
-      expect(revealed?.transitionDurations).toEqual([120, 120]);
-    }
+    expect(revealed?.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
     const followingPositionAfter = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -4367,20 +4422,12 @@ describe("skribeum shell", () => {
     await checkbox.waitForExist({ timeout: 15000 });
     expect(await checkbox.getAttribute("aria-label")).toBe("Todo");
 
+    await hoverTaskCheckbox();
     const hoverState = await browser.execute(() => {
       const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
       if (host === null) {
         return null;
       }
-      const bounds = host.getBoundingClientRect();
-      host.dispatchEvent(
-        new PointerEvent("pointerenter", {
-          bubbles: true,
-          clientX: bounds.left + bounds.width / 2,
-          clientY: bounds.top + bounds.height / 2,
-          pointerType: "mouse",
-        }),
-      );
       const liveCheckbox = host.querySelector<HTMLElement>(
         ".cm-skr-task-checkbox",
       );
@@ -4390,11 +4437,12 @@ describe("skribeum shell", () => {
         hidden: listbox?.hidden,
         optionCount: listbox?.querySelectorAll('[role="option"]').length,
       };
-      host.dispatchEvent(
+      const bounds = liveCheckbox?.getBoundingClientRect();
+      liveCheckbox?.dispatchEvent(
         new PointerEvent("pointerleave", {
           bubbles: true,
-          clientX: bounds.right + 1,
-          clientY: bounds.bottom + 1,
+          clientX: (bounds?.right ?? 0) + 1,
+          clientY: (bounds?.bottom ?? 0) + 1,
           pointerType: "mouse",
         }),
       );
@@ -4833,9 +4881,9 @@ describe("skribeum shell", () => {
     await openNoteFromTree(TASK_TRACKS_NOTE_NAME);
     await $(".cm-skr-task-checkbox").waitForExist({ timeout: 15000 });
 
+    await hoverTaskCheckbox();
     const groupedMenu = await browser.execute(() => {
       const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
-      host?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
       return {
         headings: [
           ...document.querySelectorAll<HTMLElement>(

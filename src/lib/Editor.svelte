@@ -34,6 +34,7 @@ import {
   propertyInsertion,
 } from "./editor/frontmatter";
 import { showInvisibleCharacters } from "./editor/invisibles";
+import { caretMotion } from "./editor/motion";
 import { NoteSession } from "./editor/noteSession";
 import { PostPaintScheduler } from "./editor/postPaintScheduler";
 import {
@@ -332,9 +333,17 @@ function renderingExtensions(
   content: string | Parameters<typeof noteRenderingExtensions>[0],
   statuses: readonly TaskStatus[],
 ): Extension[] {
-  return sourceMode
+  const presentation = sourceMode
     ? noteSourceExtensions(content, statuses)
     : noteRenderingExtensions(content, undefined, statuses);
+  // A drawn caret measures its own position on every selection change, and a
+  // pathological line makes that measurement cost more than the keystroke
+  // that caused it. Presentation is already all-or-nothing for such a
+  // document, and the caret belongs on the same side of that line: a
+  // document that renders as plain text keeps the platform's own caret.
+  return presentation.length === 0
+    ? presentation
+    : [...presentation, caretMotion()];
 }
 
 function refreshFrontmatter() {

@@ -549,8 +549,14 @@ pub fn run() {
 
     // The updater is compiled out of the end-to-end build so tests never
     // reach the network; release builds carry it.
+    // The updater's install step leaves the new version on disk and the old
+    // one running, so applying it needs a relaunch. Both are compiled out of
+    // the end-to-end build together: a suite that can restart the application
+    // under test can end its own session.
     #[cfg(not(feature = "webdriver"))]
-    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
 
     // The embedded WebDriver server used by the end-to-end suite. Compiled in
     // only when the `webdriver` feature is enabled, so release artifacts never

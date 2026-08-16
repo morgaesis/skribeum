@@ -93,6 +93,8 @@ import {
 import {
   checkForUpdate,
   hasDesktopRuntime,
+  installUpdate,
+  restartToApply,
   type UpdateState,
 } from "./lib/features/updates";
 import { M0_FIXTURE } from "./lib/fixture";
@@ -449,6 +451,43 @@ function checkSelectedUpdateChannel() {
       generation === updateCheckGeneration &&
       settingsState.document.update_channel === channel
     ) {
+      updateState = state;
+    }
+  });
+}
+
+/** Downloads and installs an update already reported as available. */
+function installSelectedUpdate() {
+  const generation = updateCheckGeneration;
+  void installUpdate((state) => {
+    if (generation === updateCheckGeneration) {
+      updateState = state;
+    }
+  });
+}
+
+/**
+ * Restarts into an update already installed and waiting. Confirms with the
+ * person first (the restart closes the window) and flushes unsaved work
+ * through the same path any other window-closing action uses, so an
+ * install can never silently drop an edit.
+ */
+async function restartForUpdate() {
+  if (updateState.kind !== "ready") return;
+  const version = updateState.version;
+  const confirmed = await showConfirmDialog({
+    title: STRINGS.updateRestartConfirmTitle,
+    message: `${STRINGS.updateRestartConfirmMessage} ${version}.`,
+    confirmLabel: STRINGS.updateRestart,
+  });
+  if (!confirmed) return;
+  if ((await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
+  const generation = updateCheckGeneration;
+  void restartToApply((state) => {
+    if (generation === updateCheckGeneration) {
       updateState = state;
     }
   });
@@ -4633,6 +4672,8 @@ onMount(() => {
     {settingsFilePath}
     {updateState}
     onCheckUpdate={checkSelectedUpdateChannel}
+    onInstallUpdate={installSelectedUpdate}
+    onRestartUpdate={restartForUpdate}
     {targetSetting}
   />
 {/if}

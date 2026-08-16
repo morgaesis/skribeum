@@ -6,8 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The Updates settings section can now act on what it reports: an available
+  update offers an "Install update" button showing its release notes inline,
+  a running download shows progress that reads honestly whether or not the
+  server reports a download size, and an installed update offers "Restart to
+  apply", which confirms first and saves any unsaved work through the same
+  path any other window-closing action uses before restarting.
+
 ### Changed
 
+- An update failure now reports something a person can act on instead of a
+  raw error object: a signature or authentication failure is called out as a
+  security concern rather than reading like an ordinary network hiccup, and
+  it is announced assertively rather than as routine status text.
 - Every pane draws its tab strip, whatever it holds, and the new-tab control
   sits against the last tab rather than at the strip's far edge. Once the
   tabs are longer than the strip it pins to the trailing edge, ahead of the
@@ -24,7 +37,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A hovered tab's fill takes the control radius the rest of the product's row
   and chip fills take, and arrives on the same 50ms clock as the close
   control it reveals, so the whole affordance lands as one act.
-
 ## [0.0.8] - 2026-08-15
 
 ### Added

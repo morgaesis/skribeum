@@ -106,8 +106,8 @@ let {
 let dragging = $state<number | null>(null);
 let insertion = $state<number | null>(null);
 let listOpen = $state(false);
-let itemsElement = $state<HTMLDivElement>();
-let listButtonElement = $state<HTMLButtonElement>();
+let itemsElement = $state<HTMLDivElement | null>();
+let listButtonElement = $state<HTMLButtonElement | null>();
 let overflowed = $state(false);
 let scrollPointer = $state<number | null>(null);
 let scrollOriginX = 0;
@@ -115,8 +115,8 @@ let scrollOriginLeft = 0;
 // The dragged tab's width, measured once when its drag starts; the gap the
 // passed-over tabs open is exactly the slot the tab will land in.
 let dragWidth = 0;
-let tabElements = $state<Array<HTMLElement | undefined>>([]);
-let indicatorElement = $state<HTMLElement>();
+let tabElements = $state<Array<HTMLElement | null | undefined>>([]);
+let indicatorElement = $state<HTMLElement | null>();
 // Plain (non-reactive) bookkeeping: the choreography effect below both
 // reads and writes these, and making them `$state` would make its own
 // writes re-trigger itself mid-flush, stomping the entrance markers it had

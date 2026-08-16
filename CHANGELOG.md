@@ -9,9 +9,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Every pane draws its tab strip, whatever it holds, and the new-tab control
-  sits against the last tab inside the run of tabs rather than at the strip's
-  far edge, so it stays there as tabs open, close, and scroll. The all-tabs
-  list still appears only when tabs are hidden by overflow.
+  sits against the last tab rather than at the strip's far edge. Once the
+  tabs are longer than the strip it pins to the trailing edge, ahead of the
+  all-tabs list, so no scroll position can carry it off screen. The all-tabs
+  list still appears only when tabs are hidden by overflow, and neither
+  control moves on the transient widths a strip crosses while it settles.
 - A tab strip that changes shape travels to it: tabs widen or narrow to their
   new slots on the panel clock, an opened tab expands into place, a closed
   tab's slot collapses behind it while its pixels fade, and the active-tab

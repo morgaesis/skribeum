@@ -397,7 +397,6 @@ describe("large-note editor consumers", () => {
         "other.md": "# Other title\n",
       } as Record<string, string>,
       focused: true,
-      visible: true,
       paneId: "pane-1",
       onActivate: (_path: string | null) => {},
       onClose: (_path: string | null) => {},

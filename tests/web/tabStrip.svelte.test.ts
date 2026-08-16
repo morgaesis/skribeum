@@ -80,7 +80,6 @@ describe("tab strip", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
-        visible: true,
         paneId: "pane-1",
         onActivate: () => {},
         onClose: () => {},
@@ -120,7 +119,6 @@ describe("tab strip", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
-        visible: true,
         paneId: "pane-1",
         onActivate: () => {},
         onClose: () => {},
@@ -156,7 +154,6 @@ describe("tab strip", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
-        visible: true,
         paneId: "pane-1",
         onActivate: (path: string | null) => activated.push(path ?? ""),
         onClose: (path: string | null) => closed.push(path ?? ""),
@@ -193,7 +190,6 @@ describe("tab strip", () => {
         activePath: "note-1.md",
         titleSources: { "note-2.md": "# Authored title\n" },
         focused: true,
-        visible: true,
         paneId: "pane-1",
         onActivate: (path: string | null) => activated.push(path ?? ""),
         onClose: (path: string | null) => closed.push(path ?? ""),
@@ -216,6 +212,62 @@ describe("tab strip", () => {
     await unmount(component);
   });
 
+  it("pins the new-tab control out of the scrolling run once tabs overflow", async () => {
+    const component = mount(TabStrip, {
+      target: document.body,
+      props: {
+        tabs: tabs(8),
+        activePath: "note-1.md",
+        titleSources: {},
+        focused: true,
+        paneId: "pane-1",
+        onActivate: () => {},
+        onClose: () => {},
+        onReorder: () => {},
+        onNewTab: () => {},
+        onAdopt: () => {},
+      },
+    });
+    flushSync();
+    const strip = document.querySelector<HTMLElement>(".skr-tab-strip");
+    const items = document.querySelector<HTMLElement>(".skr-tab-items");
+    expect(strip).not.toBeNull();
+    expect(items).not.toBeNull();
+    if (strip === null || items === null) return;
+
+    // While the tabs fit, the control travels with them.
+    expect(
+      document.querySelector(".skr-tab-new")?.closest(".skr-tab-items"),
+    ).toBe(items);
+
+    Object.defineProperties(items, {
+      clientWidth: { configurable: true, value: 640 },
+      scrollWidth: { configurable: true, value: 832 },
+    });
+    window.dispatchEvent(new Event("resize"));
+    await tick();
+
+    // Once they do not, it leaves the scrolling run entirely, so no scroll
+    // offset can carry it off the strip, and sits between the tabs and the
+    // all-tabs list at the trailing edge.
+    const newTab = document.querySelector<HTMLElement>(".skr-tab-new");
+    expect(newTab).not.toBeNull();
+    if (newTab === null) return;
+    expect(newTab.closest(".skr-tab-items")).toBeNull();
+    expect(newTab.parentElement).toBe(strip);
+    const order = [...strip.children];
+    expect(order.indexOf(items)).toBeLessThan(order.indexOf(newTab));
+    const listShell = document.querySelector<HTMLElement>(
+      ".skr-tab-list-shell",
+    );
+    expect(listShell).not.toBeNull();
+    expect(order.indexOf(newTab)).toBeLessThan(
+      order.indexOf(listShell as HTMLElement),
+    );
+
+    await unmount(component);
+  });
+
   it("reports drag reorder positions and lists every overflowed tab", async () => {
     const reordered: Array<[number, number]> = [];
     const activated: string[] = [];
@@ -226,7 +278,6 @@ describe("tab strip", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
-        visible: true,
         paneId: "pane-1",
         onActivate: (path: string | null) => activated.push(path ?? ""),
         onClose: () => {},
@@ -283,7 +334,6 @@ describe("tab strip", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
-        visible: true,
         paneId: "pane-1",
         onActivate: () => {},
         onClose: () => {},
@@ -330,7 +380,6 @@ describe("tab strip teardown and pointer-held geometry", () => {
       activePath: "note-1.md" as string | null,
       titleSources: {} as Record<string, string>,
       focused: true,
-      visible: true,
       onActivate: () => {},
       onClose: () => {},
       onReorder: () => {},
@@ -340,11 +389,13 @@ describe("tab strip teardown and pointer-held geometry", () => {
     const component = mount(TabStrip, { target: document.body, props });
     flushSync();
 
-    // The shell drops to one tab and hides the strip in the same update, the
-    // sequence that used to dereference a `bind:this` reset to null.
+    // The pane drops to one tab and then closes, taking the strip with it
+    // in the same update: the sequence that used to dereference a
+    // `bind:this` reset to null.
     props.tabs = tabs(1);
     props.activePath = "note-1.md";
-    props.visible = false;
+    flushSync();
+    void unmount(component);
     flushSync();
     await tick();
     await tick();
@@ -352,7 +403,6 @@ describe("tab strip teardown and pointer-held geometry", () => {
     expect(errors).toEqual([]);
     expect(document.querySelector(".skr-tab-strip")).toBeNull();
     window.removeEventListener("error", onError);
-    await unmount(component);
   });
 
   it("holds tab widths after a close while the pointer stays over the strip", async () => {
@@ -362,7 +412,6 @@ describe("tab strip teardown and pointer-held geometry", () => {
       activePath: "note-1.md" as string | null,
       titleSources: {} as Record<string, string>,
       focused: true,
-      visible: true,
       onActivate: () => {},
       onClose: () => {},
       onReorder: () => {},
@@ -433,7 +482,6 @@ describe("tab strip teardown and pointer-held geometry", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
-        visible: true,
         onActivate: () => {},
         onClose: () => {},
         onReorder: () => {},
@@ -481,7 +529,6 @@ describe("tab strip teardown and pointer-held geometry", () => {
         emptyTab: true,
         titleSources: {},
         focused: true,
-        visible: true,
         onActivate: () => {},
         onClose: () => {},
         onReorder: () => {},
@@ -530,7 +577,6 @@ describe("tab strip teardown and pointer-held geometry", () => {
       activePath: "note-1.md" as string | null,
       titleSources: {} as Record<string, string>,
       focused: true,
-      visible: true,
       onActivate: () => {},
       onClose: () => {},
       onReorder: () => {},
@@ -606,7 +652,6 @@ describe("tab strip teardown and pointer-held geometry", () => {
       activePath: "note-1.md" as string | null,
       titleSources: {} as Record<string, string>,
       focused: true,
-      visible: true,
       onActivate: () => {},
       onClose: () => {},
       onReorder: () => {},
@@ -652,6 +697,68 @@ describe("tab strip teardown and pointer-held geometry", () => {
     await unmount(component);
   });
 
+  it("reads overflow from the shape the strip lands in, not the one it crosses", async () => {
+    document.documentElement.style.setProperty(
+      "--skr-motion-panel-duration",
+      "80ms",
+    );
+    const natural = () =>
+      480 / document.querySelectorAll(".skr-tab-shell").length;
+    const props = reactiveState({
+      paneId: "pane-1",
+      tabs: tabs(4) as WorkspaceTab[],
+      activePath: "note-1.md" as string | null,
+      titleSources: {} as Record<string, string>,
+      focused: true,
+      onActivate: () => {},
+      onClose: () => {},
+      onReorder: () => {},
+      onNewTab: () => {},
+      onAdopt: () => {},
+    });
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+    stubStripLayout(natural);
+    const items = document.querySelector<HTMLElement>(".skr-tab-items");
+    expect(items).not.toBeNull();
+    if (items === null) return;
+    // The tabs a settle holds on the way through are wider than the strip;
+    // the shape it lands in fits. Any measurement taken inside the travel
+    // window sees the wider one, which is the browser's own transient.
+    Object.defineProperty(items, "clientWidth", {
+      configurable: true,
+      value: 500,
+    });
+    let travellingUntil = 0;
+    Object.defineProperty(items, "scrollWidth", {
+      configurable: true,
+      get: () => (performance.now() < travellingUntil ? 1000 : 400),
+    });
+    props.activePath = "note-2.md";
+    flushSync();
+    await tick();
+
+    travellingUntil = performance.now() + 80;
+    props.tabs = tabs(4).slice(1);
+    flushSync();
+    for (let step = 0; step < 12; step += 1) {
+      // Neither the all-tabs list nor the pinned new-tab control may appear
+      // over an overflow that only ever existed mid-travel.
+      expect(document.querySelector(".skr-tab-list")).toBeNull();
+      expect(
+        document.querySelector(".skr-tab-new")?.closest(".skr-tab-items"),
+      ).toBe(items);
+      await tick();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    expect(document.querySelector(".skr-tab-list")).toBeNull();
+
+    document.documentElement.style.removeProperty(
+      "--skr-motion-panel-duration",
+    );
+    await unmount(component);
+  });
+
   it("collapses the gap a closed tab leaves over the same settle", async () => {
     document.documentElement.style.setProperty(
       "--skr-motion-panel-duration",
@@ -663,7 +770,6 @@ describe("tab strip teardown and pointer-held geometry", () => {
       activePath: "note-1.md" as string | null,
       titleSources: {} as Record<string, string>,
       focused: true,
-      visible: true,
       onActivate: () => {},
       onClose: () => {},
       onReorder: () => {},
@@ -720,7 +826,6 @@ describe("tab strip teardown and pointer-held geometry", () => {
       activePath: "note-1.md" as string | null,
       titleSources: {} as Record<string, string>,
       focused: true,
-      visible: true,
       onActivate: () => {},
       onClose: () => {},
       onReorder: () => {},
@@ -782,7 +887,6 @@ describe("tab strip teardown and pointer-held geometry", () => {
       activePath: "note-1.md" as string | null,
       titleSources: {} as Record<string, string>,
       focused: true,
-      visible: true,
       onActivate: () => {},
       onClose: () => {},
       onReorder: () => {},

@@ -639,18 +639,6 @@ select {
   background: var(--skr-accent);
 }
 
-/* While a tab drags, the tabs it passes over reflow to open its landing
-   gap on the panel clock, a compositor-only translate; the dragged tab
-   itself follows the pointer natively with no animation at all. */
-.skr-tab-items-reordering .skr-tab-shell {
-  transition: transform var(--skr-motion-panel-duration)
-    var(--skr-motion-panel-easing);
-}
-
-.skr-tab-items-reordering .skr-tab-dragging {
-  transition: none;
-}
-
 .skr-tab-insertion::before {
   position: absolute;
   top: 0.25rem;
@@ -678,9 +666,6 @@ select {
   font-size: var(--skr-type-control);
   opacity: 1;
   pointer-events: none;
-  /* Declared at rest so the one attribute flip below always transitions. */
-  transition: opacity var(--skr-motion-state-duration)
-    var(--skr-motion-state-easing);
 }
 
 .skr-tab-exiting[data-dismissing="true"] {

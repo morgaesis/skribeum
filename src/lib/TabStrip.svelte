@@ -72,7 +72,6 @@ let {
   activePath,
   titleSources,
   focused,
-  visible,
   emptyTab = false,
   closeTooltip = { title: STRINGS.closeTab },
   onActivate,
@@ -86,13 +85,6 @@ let {
   activePath: string | null;
   titleSources: Readonly<Record<string, string>>;
   focused: boolean;
-  /**
-   * Every pane draws its strip, whatever it holds: the strip is where the
-   * open set, the close controls and the new-tab control live, so a pane
-   * that hides it until a second note arrives moves its own chrome under
-   * the hand that just used it.
-   */
-  visible: boolean;
   emptyTab?: boolean;
   closeTooltip?: CommandTooltipOptions;
   onActivate: (path: string | null) => void;
@@ -129,6 +121,12 @@ let indicatorTraveling = false;
 let indicatorTrackFrame: number | null = null;
 let settleGeneration = 0;
 let settleTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * True from the moment a settle takes hold of the strip's widths until it
+ * lets go of them, which is wider than the interval it animates over: the
+ * widths it starts from are pinned before the clock starts.
+ */
+let settleActive = false;
 let mounted = true;
 /**
  * The tab that owns the strip's single tab stop. It follows the active tab
@@ -203,6 +201,7 @@ function cancelSettle(): void {
     clearTimeout(settleTimer);
     settleTimer = null;
   }
+  settleActive = false;
   settling = false;
   settleGaps = null;
 }
@@ -327,6 +326,12 @@ function reorderOffset(index: number): number {
 
 function measureOverflow() {
   if (!mounted) return;
+  // A settle holds the tabs at widths on the way to the shape the strip is
+  // settling into, and those widths can be wider than the strip even when
+  // the shape it is heading for fits. Measuring them would move the
+  // new-tab control and raise the all-tabs list over an overflow that is
+  // about to be gone, so the measurement waits for the strip to land.
+  if (settleActive) return;
   const element = itemsElement;
   overflowed =
     element instanceof HTMLElement &&
@@ -447,6 +452,7 @@ async function settleStrip(
   );
   if (duration === 0) return;
   const generation = ++settleGeneration;
+  settleActive = true;
   await tick();
   if (!mounted || generation !== settleGeneration) return;
   const targets = new Map<string, number>();
@@ -457,7 +463,10 @@ async function settleStrip(
     targets.set(entry.key, element.offsetWidth);
     start.set(entry.key, from.get(entry.key) ?? 0);
   }
-  if (targets.size === 0) return;
+  if (targets.size === 0) {
+    settleActive = false;
+    return;
+  }
   // The strip is put back where it was, without a clock, so the widths the
   // transition below starts from are the ones the user last saw.
   settling = false;
@@ -474,13 +483,18 @@ async function settleStrip(
   settleTimer = setTimeout(() => {
     settleTimer = null;
     if (!mounted || generation !== settleGeneration) return;
+    settleActive = false;
     settling = false;
     pinnedWidths = null;
-    // Whatever the settle managed to render — a main thread busy enough to
-    // eat the whole interval renders none of it — the strip has one resting
-    // invariant, and it is restored here: the bar is on its tab.
+    // The strip has landed, so it is read once at rest: whatever the settle
+    // managed to render — a main thread busy enough to eat the whole
+    // interval renders none of it — the bar belongs on its tab, and whether
+    // the tabs overflow is a question about this shape, not the one they
+    // travelled through.
     void tick().then(() => {
-      if (mounted && !indicatorTraveling) syncActiveIndicatorGeometry();
+      if (!mounted) return;
+      measureOverflow();
+      if (!indicatorTraveling) syncActiveIndicatorGeometry();
     });
   }, duration);
 }
@@ -865,227 +879,232 @@ function finishScrollDrag(event: PointerEvent) {
 }
 </script>
 
-{#if visible}
-  <div
-    class="skr-tab-strip"
-    data-pane-strip={paneId}
-    role="presentation"
-    onpointerenter={() => (pointerOverStrip = true)}
-    onpointerleave={releaseHeldWidths}
+<!-- The new-tab control is the end of the open set, so it sits against the
+     last tab and travels with the run of tabs. Once that run is longer than
+     the strip, it pins to the strip's own trailing edge instead: the state
+     where a person most needs it is the one where a control inside the
+     scrolling run would be scrolled off the screen. -->
+{#snippet newTab()}
+  <button
+    type="button"
+    class="skr-tab-new"
+    data-command-id="tab.new-empty"
+    aria-label={STRINGS.newTab}
+    use:commandTooltip={{ title: STRINGS.newTab }}
+    onclick={onNewTab}
   >
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 3.5v9M3.5 8h9" />
+    </svg>
+  </button>
+{/snippet}
+
+<div
+  class="skr-tab-strip"
+  data-pane-strip={paneId}
+  role="presentation"
+  onpointerenter={() => (pointerOverStrip = true)}
+  onpointerleave={releaseHeldWidths}
+>
+  <div
+    class="skr-tab-items"
+    class:skr-tab-items-scrolling={scrollPointer !== null}
+    class:skr-tab-items-reordering={dragging !== null}
+    class:skr-tab-items-settling={settling}
+    role="presentation"
+    bind:this={itemsElement}
+    onwheel={scrollWithWheel}
+    onpointerdown={beginScrollDrag}
+    onpointermove={updateScrollDrag}
+    onpointerup={finishScrollDrag}
+    onpointercancel={finishScrollDrag}
+    onkeydown={onTabKeydown}
+    ondragover={(event) => acceptForeignDragOver(event, entries.length)}
+    ondragleave={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        insertion = null;
+      }
+    }}
+    ondrop={(event) => acceptForeignDrop(event, entries.length)}
+  >
+    <!-- The tablist owns the tabs explicitly because each visible tab also
+         needs an independently focusable close control. Keeping that
+         control outside the tablist's owned children preserves both the
+         ARIA tab pattern and the close command's keyboard route. -->
     <div
-      class="skr-tab-items"
-      class:skr-tab-items-scrolling={scrollPointer !== null}
-      class:skr-tab-items-reordering={dragging !== null}
-      class:skr-tab-items-settling={settling}
+      class="skr-tablist"
+      role="tablist"
+      aria-label={STRINGS.openTabs}
+      aria-owns={entries.map((_, index) => tabId(index)).join(" ")}
+    ></div>
+    {#each entries as entry, index (entry.key)}
+    <div
+      bind:this={tabElements[index]}
+      class="skr-tab-shell"
       role="presentation"
-      bind:this={itemsElement}
-      onwheel={scrollWithWheel}
-      onpointerdown={beginScrollDrag}
-      onpointermove={updateScrollDrag}
-      onpointerup={finishScrollDrag}
-      onpointercancel={finishScrollDrag}
-      onkeydown={onTabKeydown}
-      ondragover={(event) => acceptForeignDragOver(event, entries.length)}
-      ondragleave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          insertion = null;
+      class:skr-tab-focused={focused && entry.key === activeKey}
+      class:skr-tab-active={entry.key === activeKey}
+      class:skr-tab-dirty={entry.tab?.dirty === true}
+      class:skr-tab-insertion={insertion === index && dragging !== index}
+      class:skr-tab-dragging={dragging === index}
+      data-tab-key={entry.key}
+      data-tab-label={entry.label}
+      style:flex={pinnedWidths?.get(entry.key) === undefined
+        ? null
+        : `0 0 ${pinnedWidths.get(entry.key)}px`}
+      style:margin-inline-start={settleGaps?.get(entry.key) === undefined
+        ? null
+        : `${settleGaps.get(entry.key)?.start}px`}
+      style:margin-inline-end={settleGaps?.get(entry.key) === undefined
+        ? null
+        : `${settleGaps.get(entry.key)?.end}px`}
+      style:transform={dragging !== null && dragging !== index
+        ? `translateX(${reorderOffset(index)}px)`
+        : null}
+      draggable={entry.path !== null}
+      onmousedown={(event) => closeWithMiddleButton(event, entry.path)}
+      ondragstart={(event) => {
+        if (entry.path === null) {
+          event.preventDefault();
+          return;
         }
+        dragging = index;
+        dragWidth = event.currentTarget.offsetWidth;
+        setTabDrag({ path: entry.path, paneId });
+        event.dataTransfer?.setData("application/x-skribeum-tab", entry.path);
+        if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = "move";
       }}
-      ondrop={(event) => acceptForeignDrop(event, entries.length)}
+      ondragover={(event) => {
+        if (dragging === null) {
+          acceptForeignDragOver(event, index);
+          return;
+        }
+        event.preventDefault();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        insertion = event.clientX < bounds.left + bounds.width / 2 ? index : index + 1;
+      }}
+      ondrop={(event) => {
+        if (dragging === null) {
+          acceptForeignDrop(event, index);
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        finishReorder();
+      }}
+      ondragend={finishReorder}
     >
-      <!-- The tablist owns the tabs explicitly because each visible tab also
-           needs an independently focusable close control. Keeping that
-           control outside the tablist's owned children preserves both the
-           ARIA tab pattern and the close command's keyboard route. -->
-      <div
-        class="skr-tablist"
-        role="tablist"
-        aria-label={STRINGS.openTabs}
-        aria-owns={entries.map((_, index) => tabId(index)).join(" ")}
-      ></div>
-      {#each entries as entry, index (entry.key)}
-      <div
-        bind:this={tabElements[index]}
-        class="skr-tab-shell"
-        role="presentation"
-        class:skr-tab-focused={focused && entry.key === activeKey}
-        class:skr-tab-active={entry.key === activeKey}
-        class:skr-tab-dirty={entry.tab?.dirty === true}
-        class:skr-tab-insertion={insertion === index && dragging !== index}
-        class:skr-tab-dragging={dragging === index}
-        data-tab-key={entry.key}
-        data-tab-label={entry.label}
-        style:flex={pinnedWidths?.get(entry.key) === undefined
-          ? null
-          : `0 0 ${pinnedWidths.get(entry.key)}px`}
-        style:margin-inline-start={settleGaps?.get(entry.key) === undefined
-          ? null
-          : `${settleGaps.get(entry.key)?.start}px`}
-        style:margin-inline-end={settleGaps?.get(entry.key) === undefined
-          ? null
-          : `${settleGaps.get(entry.key)?.end}px`}
-        style:transform={dragging !== null && dragging !== index
-          ? `translateX(${reorderOffset(index)}px)`
-          : null}
-        draggable={entry.path !== null}
-        onmousedown={(event) => closeWithMiddleButton(event, entry.path)}
-        ondragstart={(event) => {
-          if (entry.path === null) {
-            event.preventDefault();
-            return;
-          }
-          dragging = index;
-          dragWidth = event.currentTarget.offsetWidth;
-          setTabDrag({ path: entry.path, paneId });
-          event.dataTransfer?.setData("application/x-skribeum-tab", entry.path);
-          if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = "move";
-        }}
-        ondragover={(event) => {
-          if (dragging === null) {
-            acceptForeignDragOver(event, index);
-            return;
-          }
-          event.preventDefault();
-          const bounds = event.currentTarget.getBoundingClientRect();
-          insertion = event.clientX < bounds.left + bounds.width / 2 ? index : index + 1;
-        }}
-        ondrop={(event) => {
-          if (dragging === null) {
-            acceptForeignDrop(event, index);
-            return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          finishReorder();
-        }}
-        ondragend={finishReorder}
-      >
-        <button
-          type="button"
-          class="skr-tab"
-          role="tab"
-          id={tabId(index)}
-          aria-selected={entry.key === activeKey}
-          aria-label={
-            entry.tab?.dirty === true
-              ? `${entry.label}, ${STRINGS.unsavedNote}`
-              : undefined
-          }
-          data-dirty={entry.tab?.dirty === true ? "true" : undefined}
-          data-empty-tab={entry.path === null ? "true" : undefined}
-          tabindex={index === rovingIndex ? 0 : -1}
-          onclick={() => onActivate(entry.path)}
-        >
-          <span class="skr-tab-label">{entry.label}</span>
-          {#if entry.suffix !== undefined}
-            <span class="skr-tab-suffix">{entry.suffix}</span>
-          {/if}
-        </button>
-        <span class="skr-tab-status">
-          {#if entry.tab?.dirty === true}
-            <span
-              class="skr-tab-unsaved"
-              aria-label={STRINGS.unsavedNote}
-            ></span>
-          {/if}
-          <button
-            type="button"
-            class="skr-tab-close"
-            class:skr-tab-close-dirty={entry.tab?.dirty === true}
-            data-command-id="tab.close"
-            aria-label={STRINGS.closeTab}
-            tabindex={index === rovingIndex ? 0 : -1}
-            use:commandTooltip={closeTooltip}
-            onpointerdown={keepPointerFocus}
-            onmousedown={keepPointerFocus}
-            onclick={(event) => closeFromButton(event, entry.path)}
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="m4.5 4.5 7 7m0-7-7 7" />
-            </svg>
-          </button>
-        </span>
-      </div>
-      {/each}
-      {#each exitingTabs as ghost (ghost.id)}
-        <span
-          class="skr-tab-exiting"
-          aria-hidden="true"
-          inert
-          style={`left: ${ghost.left}px; width: ${ghost.width}px`}
-          {@attach (element) => releaseExitingTab(element, ghost.id)}
-        >
-          <span class="skr-tab-label">{ghost.label}</span>
-        </span>
-      {/each}
-      <!-- The new-tab control travels with the tabs rather than sitting at
-           the strip's far edge: it is the end of the open set, so it stays
-           against the last tab as tabs open, close, and scroll. -->
       <button
         type="button"
-        class="skr-tab-new"
-        data-command-id="tab.new-empty"
-        aria-label={STRINGS.newTab}
-        use:commandTooltip={{ title: STRINGS.newTab }}
-        onclick={onNewTab}
+        class="skr-tab"
+        role="tab"
+        id={tabId(index)}
+        aria-selected={entry.key === activeKey}
+        aria-label={
+          entry.tab?.dirty === true
+            ? `${entry.label}, ${STRINGS.unsavedNote}`
+            : undefined
+        }
+        data-dirty={entry.tab?.dirty === true ? "true" : undefined}
+        data-empty-tab={entry.path === null ? "true" : undefined}
+        tabindex={index === rovingIndex ? 0 : -1}
+        onclick={() => onActivate(entry.path)}
       >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M8 3.5v9M3.5 8h9" />
-        </svg>
+        <span class="skr-tab-label">{entry.label}</span>
+        {#if entry.suffix !== undefined}
+          <span class="skr-tab-suffix">{entry.suffix}</span>
+        {/if}
       </button>
-      <span
-        bind:this={indicatorElement}
-        class="skr-tab-active-indicator"
-        class:skr-tab-active-indicator-focused={focused}
-        aria-hidden="true"
-      ></span>
-    </div>
-    {#if overflowed}
-      <div class="skr-tab-list-shell">
+      <span class="skr-tab-status">
+        {#if entry.tab?.dirty === true}
+          <span
+            class="skr-tab-unsaved"
+            aria-label={STRINGS.unsavedNote}
+          ></span>
+        {/if}
         <button
-          bind:this={listButtonElement}
           type="button"
-          class="skr-tab-list"
-          aria-label={STRINGS.allTabs}
-          aria-haspopup="menu"
-          aria-expanded={listOpen}
-          use:commandTooltip={{ title: STRINGS.allTabs }}
-          onclick={() => (listOpen = !listOpen)}
+          class="skr-tab-close"
+          class:skr-tab-close-dirty={entry.tab?.dirty === true}
+          data-command-id="tab.close"
+          aria-label={STRINGS.closeTab}
+          tabindex={index === rovingIndex ? 0 : -1}
+          use:commandTooltip={closeTooltip}
+          onpointerdown={keepPointerFocus}
+          onmousedown={keepPointerFocus}
+          onclick={(event) => closeFromButton(event, entry.path)}
         >
           <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M3 4h10M3 8h10M3 12h10" />
+            <path d="m4.5 4.5 7 7m0-7-7 7" />
           </svg>
         </button>
-        {#if listOpen && listButtonElement !== undefined}
-          <AnchoredMenu
-            anchor={listButtonElement}
-            label={STRINGS.allTabs}
-            align="end"
-            onClose={() => (listOpen = false)}
-          >
-            {#each entries as entry (entry.key)}
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={entry.key === activeKey}
-                onclick={() => {
-                  listOpen = false;
-                  onActivate(entry.path);
-                }}
-              >
-                <span>{entry.label}</span>
-                {#if entry.suffix !== undefined}
-                  <span class="skr-tab-suffix">{entry.suffix}</span>
-                {/if}
-              </button>
-            {/each}
-          </AnchoredMenu>
-        {/if}
-      </div>
-    {/if}
+      </span>
+    </div>
+    {/each}
+    {#each exitingTabs as ghost (ghost.id)}
+      <span
+        class="skr-tab-exiting"
+        aria-hidden="true"
+        inert
+        style={`left: ${ghost.left}px; width: ${ghost.width}px`}
+        {@attach (element) => releaseExitingTab(element, ghost.id)}
+      >
+        <span class="skr-tab-label">{ghost.label}</span>
+      </span>
+    {/each}
+    {#if !overflowed}{@render newTab()}{/if}
+    <span
+      bind:this={indicatorElement}
+      class="skr-tab-active-indicator"
+      class:skr-tab-active-indicator-focused={focused}
+      aria-hidden="true"
+    ></span>
   </div>
-{/if}
+  {#if overflowed}
+    {@render newTab()}
+    <div class="skr-tab-list-shell">
+      <button
+        bind:this={listButtonElement}
+        type="button"
+        class="skr-tab-list"
+        aria-label={STRINGS.allTabs}
+        aria-haspopup="menu"
+        aria-expanded={listOpen}
+        use:commandTooltip={{ title: STRINGS.allTabs }}
+        onclick={() => (listOpen = !listOpen)}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3 4h10M3 8h10M3 12h10" />
+        </svg>
+      </button>
+      {#if listOpen && listButtonElement !== undefined}
+        <AnchoredMenu
+          anchor={listButtonElement}
+          label={STRINGS.allTabs}
+          align="end"
+          onClose={() => (listOpen = false)}
+        >
+          {#each entries as entry (entry.key)}
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={entry.key === activeKey}
+              onclick={() => {
+                listOpen = false;
+                onActivate(entry.path);
+              }}
+            >
+              <span>{entry.label}</span>
+              {#if entry.suffix !== undefined}
+                <span class="skr-tab-suffix">{entry.suffix}</span>
+              {/if}
+            </button>
+          {/each}
+        </AnchoredMenu>
+      {/if}
+    </div>
+  {/if}
+</div>
 
 <style>
 /* The strip owns its own motion and its own hover shape, so the cascade

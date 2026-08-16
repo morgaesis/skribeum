@@ -198,6 +198,8 @@ let {
   settingsFilePath = null,
   updateState = { kind: "idle" } as UpdateState,
   onCheckUpdate = () => {},
+  onInstallUpdate = () => {},
+  onRestartUpdate = () => {},
   targetSetting = null,
 }: {
   settings: SettingsState;
@@ -210,6 +212,8 @@ let {
   settingsFilePath?: string | null;
   updateState?: UpdateState;
   onCheckUpdate?: () => void;
+  onInstallUpdate?: () => void;
+  onRestartUpdate?: () => void;
   targetSetting?: string | null;
 } = $props();
 
@@ -2153,9 +2157,65 @@ function onKeydown(event: KeyboardEvent) {
                     <span class="setting-label">{STRINGS.settingsCheckUpdates}</span>
                     <p>{checkUpdatesDescription}</p>
                     {#if updateState.kind !== "idle"}
-                      <p class="update-status" role="status">
+                      <p
+                        class="update-status"
+                        class:update-status-security={updateState.kind ===
+                          "failed" && updateState.security}
+                        role={updateState.kind === "failed" &&
+                        updateState.security
+                          ? "alert"
+                          : "status"}
+                      >
                         {describeUpdateState(updateState)}
                       </p>
+                    {/if}
+                    {#if updateState.kind === "available"}
+                      {#if updateState.notes.trim() !== ""}
+                        <details class="update-notes">
+                          <summary>{STRINGS.updateNotesSummary}</summary>
+                          <p>{updateState.notes}</p>
+                        </details>
+                      {/if}
+                      <button
+                        type="button"
+                        class="skr-btn-primary update-action"
+                        data-btn-role="primary"
+                        data-testid="settings-install-update"
+                        disabled={!desktopAvailable}
+                        onclick={onInstallUpdate}
+                        >{STRINGS.updateInstall}</button
+                      >
+                    {:else if updateState.kind === "downloading"}
+                      <div
+                        class="update-progress"
+                        role="progressbar"
+                        aria-label={describeUpdateState(updateState)}
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow={updateState.percent ?? undefined}
+                      >
+                        {#if updateState.percent === null}
+                          <div
+                            class="skr-skeleton-bar"
+                            style="width: 100%; height: 100%; border-radius: 0;"
+                          ></div>
+                        {:else}
+                          <div
+                            class="update-progress-fill"
+                            style={`width: ${updateState.percent}%`}
+                          ></div>
+                        {/if}
+                      </div>
+                    {:else if updateState.kind === "ready"}
+                      <button
+                        type="button"
+                        class="skr-btn-primary update-action"
+                        data-btn-role="primary"
+                        data-testid="settings-restart-update"
+                        disabled={!desktopAvailable}
+                        onclick={onRestartUpdate}
+                        >{STRINGS.updateRestart}</button
+                      >
                     {/if}
                   </div>
                   <button
@@ -2362,6 +2422,49 @@ function onKeydown(event: KeyboardEvent) {
   .settings-error {
     border-left-color: var(--skr-danger);
     color: var(--skr-danger);
+  }
+
+  .setting-copy .update-status.update-status-security {
+    /* Out-specifies the `.setting-copy p` color rule above on purpose: a
+       security failure must read as danger-colored, not the ordinary muted
+       status text every other update state uses. */
+    border-left-color: var(--skr-danger);
+    color: var(--skr-danger);
+  }
+
+  .update-action {
+    margin-top: 0.6rem;
+  }
+
+  .update-notes {
+    margin: 0.6rem 1rem 0;
+  }
+
+  .update-notes summary {
+    color: var(--skr-link);
+    cursor: pointer;
+    font-size: var(--skr-type-label);
+  }
+
+  .update-notes p {
+    color: var(--skr-text-muted);
+    font-size: var(--skr-type-label);
+    margin: 0.4rem 0 0;
+    white-space: pre-wrap;
+  }
+
+  .update-progress {
+    background: var(--skr-surface-subtle);
+    border-radius: var(--skr-radius-control);
+    height: 0.375rem;
+    margin: 0.75rem 1rem 0;
+    overflow: hidden;
+    width: 12rem;
+  }
+
+  .update-progress-fill {
+    background: var(--skr-accent);
+    height: 100%;
   }
 
   .settings-file-status {

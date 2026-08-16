@@ -1297,6 +1297,105 @@ describe("tab strip active-tab indicator", () => {
     await unmount(component);
   });
 
+  it("settles tab widths and the gap a close leaves on one panel clock", async () => {
+    const props = tabStripProps();
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+    const items = document.querySelector<HTMLElement>(".skr-tab-items");
+    const shell = document.querySelector<HTMLElement>(".skr-tab-shell");
+    expect(items).not.toBeNull();
+    expect(shell).not.toBeNull();
+    if (items === null || shell === null) return;
+
+    // A resting strip animates nothing about its own geometry: a tab that
+    // carried a width transition at rest would drag every layout pass.
+    expect(transitionOf(shell)).not.toContain("flex-basis");
+
+    items.classList.add("skr-tab-items-settling");
+    const settling = transitionOf(shell);
+    expect(settling).toContain(
+      "flex-basis var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
+    );
+    expect(settling).toContain(
+      "margin var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
+    );
+    items.classList.remove("skr-tab-items-settling");
+
+    await unmount(component);
+  });
+
+  it("leaves a closed tab's slot the way a tab arrives in one, reversed", async () => {
+    const props = tabStripProps();
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+    stubTabGeometry(120);
+    props.activePath = "note-2.md";
+    flushSync();
+    await tick();
+
+    props.tabs = props.tabs.filter((tab) => tab.path !== "note-3.md");
+    flushSync();
+    await tick();
+    const ghost = document.querySelector<HTMLElement>(".skr-tab-exiting");
+    expect(ghost).not.toBeNull();
+    if (ghost === null) return;
+
+    // The pixels the closed tab held collapse and fade together, on the
+    // clock the rest of the strip settles on, so the tab is seen to leave
+    // rather than blinking out of a slot that never moved.
+    const exit = transitionOf(ghost);
+    expect(exit).toContain(
+      "opacity var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
+    );
+    expect(exit).toContain(
+      "width var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
+    );
+    expect(ghost.style.width).toBe("0px");
+    expect(getComputedStyle(ghost).opacity).toBe("0");
+
+    await unmount(component);
+  });
+});
+
+describe("tab strip hover affordance", () => {
+  it("gives a hovered tab the product's control radius, filled on the state clock", async () => {
+    const props = tabStripProps();
+    const component = mount(TabStrip, { target: document.body, props });
+    flushSync();
+    const shell = document.querySelector<HTMLElement>(".skr-tab-shell");
+    expect(shell).not.toBeNull();
+    if (shell === null) return;
+
+    // The hover fill is a rounded chip rather than a full-height rectangle,
+    // and it takes its corner from the product's control radius, the same
+    // one the file tree's row fills take, rather than a radius of its own.
+    const radius = getComputedStyle(shell).borderRadius;
+    expect(radius).toBe("var(--skr-radius-control)");
+    const resolved = getComputedStyle(document.documentElement)
+      .getPropertyValue("--skr-radius-control")
+      .trim();
+    expect(resolved).not.toBe("");
+    expect(Number.parseFloat(resolved)).toBeGreaterThan(0);
+    expect(loadedDeclarations(".skr-tab-shell:hover", "background")).toEqual([
+      "var(--skr-surface-subtle)",
+    ]);
+
+    // The fill arrives on the same clock as the close control it reveals,
+    // so the whole affordance lands as one act instead of the fill
+    // appearing in a frame and the control catching up after it.
+    expect(transitionOf(shell)).toContain(
+      "background-color var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
+    );
+    const close = document.querySelector<HTMLElement>(".skr-tab-close");
+    expect(close).not.toBeNull();
+    if (close === null) return;
+    expect(transitionOf(close)).toContain(
+      "opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
+    );
+
+    await unmount(component);
+  });
+
   it("crossfades a dirty dot into the close affordance in a fixed hit box", () => {
     const closed = vi.fn();
     const props = tabStripProps({

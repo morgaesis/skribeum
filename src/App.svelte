@@ -4251,7 +4251,7 @@ onMount(() => {
               activePath={pane.activePath}
               titleSources={treeTitleSources}
               focused={pane.id === workspace.focusedPaneId}
-              visible={pane.tabs.length > 1 || workspacePanes.length > 1 || pane.emptyTab === true}
+              visible={true}
               emptyTab={pane.emptyTab === true}
               closeTooltip={tooltipForCommand("tab.close", STRINGS.closeTab)}
               onActivate={(path) => {

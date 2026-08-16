@@ -39,9 +39,6 @@ import type { WorkspaceTab } from "./workspaceState";
 // clock, matching the reorder reflow's own clock below.
 const ACTIVE_INDICATOR_TRAVEL_TRANSITION =
   "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)";
-// The strip's own reflow after held widths release: the same panel clock,
-// on the same compositor-only property.
-const REORDER_REFLOW_TRANSITION = ACTIVE_INDICATOR_TRAVEL_TRANSITION;
 let nextTablistId = 0;
 
 function transformOffset(element: HTMLElement): number {
@@ -90,8 +87,10 @@ let {
   titleSources: Readonly<Record<string, string>>;
   focused: boolean;
   /**
-   * A pane's strip is present once it holds a second note, and while any
-   * split is open so every pane keeps its own close control.
+   * Every pane draws its strip, whatever it holds: the strip is where the
+   * open set, the close controls and the new-tab control live, so a pane
+   * that hides it until a second note arrives moves its own chrome under
+   * the hand that just used it.
    */
   visible: boolean;
   emptyTab?: boolean;
@@ -127,6 +126,9 @@ let indicatorMotionGeneration = 0;
 let indicatorMotionFrame: number | null = null;
 let indicatorMotionTimer: ReturnType<typeof setTimeout> | null = null;
 let indicatorTraveling = false;
+let indicatorTrackFrame: number | null = null;
+let settleGeneration = 0;
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
 let mounted = true;
 /**
  * The tab that owns the strip's single tab stop. It follows the active tab
@@ -134,11 +136,23 @@ let mounted = true;
  */
 let rovingIndex = $state(0);
 /**
- * Tab widths held after a close while the pointer is still over the strip,
- * so the next tab's close control lands under the pointer exactly as it
- * does in a browser. Released, with a compositor-only reflow, on exit.
+ * The width every tab is pinned to, keyed by tab. It carries both of the
+ * strip's width states: the widths held after a close while the pointer is
+ * still over the strip, so the next tab's close control lands under the
+ * pointer exactly as it does in a browser, and the from and to widths of a
+ * settle, the one relayout below that travels rather than jumps.
  */
-let heldWidths = $state<Map<string, number> | null>(null);
+let pinnedWidths = $state<Map<string, number> | null>(null);
+/**
+ * The gap a closed tab leaves, carried as a margin on the tab that follows
+ * it so a settle starts from the layout the strip actually had and closes
+ * the gap over the same interval the widths travel in.
+ */
+let settleGaps = $state<Map<string, { start: number; end: number }> | null>(
+  null,
+);
+/** True while a settle is in flight, which is what puts it on the clock. */
+let settling = $state(false);
 let pointerOverStrip = false;
 let previousEntryKeys: string[] = [];
 /**
@@ -169,9 +183,35 @@ function cancelIndicatorCallbacks(): void {
   }
 }
 
+/**
+ * Stops the settle's frame-by-frame tracking. It is deliberately not part
+ * of the travel's own teardown above: the choreography effect re-runs for
+ * ordinary reasons while a settle is in flight, and cancelling tracking
+ * there would strand the bar wherever that re-run happened to find it.
+ */
+function cancelIndicatorTracking(): void {
+  if (indicatorTrackFrame !== null) {
+    cancelAnimationFrame(indicatorTrackFrame);
+    indicatorTrackFrame = null;
+  }
+}
+
+/** Drops an in-flight settle without disturbing the widths it left behind. */
+function cancelSettle(): void {
+  settleGeneration += 1;
+  if (settleTimer !== null) {
+    clearTimeout(settleTimer);
+    settleTimer = null;
+  }
+  settling = false;
+  settleGaps = null;
+}
+
 onDestroy(() => {
   mounted = false;
   indicatorMotionGeneration += 1;
+  cancelSettle();
+  cancelIndicatorTracking();
   cancelIndicatorCallbacks();
 });
 
@@ -349,6 +389,131 @@ function syncActiveIndicatorGeometry() {
   indicatorRestLeft = left;
 }
 
+/**
+ * Holds the active-tab indicator against its own tab for the length of a
+ * settle. The tabs travel as layout, so the bar reads their rendered
+ * geometry frame by frame instead of running a second animation beside
+ * them: bar and tab are one motion, and the bar cannot arrive early. A
+ * selection travel already owns the bar while it runs, so this yields to it.
+ *
+ * Tracking runs for the settle's own length and then for as long as the tab
+ * is still moving: a transition's clock starts at the first frame the
+ * browser renders it, so on a busy main thread it outlives a deadline
+ * measured from the moment the strip was told to travel, and a bar that
+ * stopped following at that deadline would be left behind. A hard ceiling
+ * keeps the frame loop bounded whatever the strip is doing.
+ */
+function trackActiveIndicator(duration: number): void {
+  cancelIndicatorTracking();
+  const started = performance.now();
+  const deadline = started + duration;
+  const ceiling = started + duration * 5;
+  let previousGeometry = "";
+  const step = () => {
+    indicatorTrackFrame = null;
+    if (!mounted) return;
+    if (!indicatorTraveling) syncActiveIndicatorGeometry();
+    const element = indicatorElement;
+    const geometry =
+      element instanceof HTMLElement
+        ? `${element.style.left}/${element.style.width}`
+        : "";
+    const moving = geometry !== previousGeometry;
+    previousGeometry = geometry;
+    const now = performance.now();
+    if (now < deadline || (moving && now < ceiling)) {
+      indicatorTrackFrame = requestAnimationFrame(step);
+    }
+  };
+  indicatorTrackFrame = requestAnimationFrame(step);
+}
+
+/**
+ * One strip relayout, run as a single motion on the panel clock: every tab
+ * travels from the width it last rendered to the width the new open set
+ * gives it, an arriving tab expands from nothing and the gap a leaving tab
+ * left collapses over the same interval, and the indicator tracks its tab
+ * throughout. Nothing waits on it: the open set changed before it started.
+ */
+async function settleStrip(
+  from: ReadonlyMap<string, number>,
+  gaps: ReadonlyMap<string, { start: number; end: number }>,
+): Promise<void> {
+  const items = itemsElement;
+  if (!mounted || !(items instanceof HTMLElement)) return;
+  const duration = motionDurationMilliseconds(
+    "--skr-motion-panel-duration",
+    items,
+  );
+  if (duration === 0) return;
+  const generation = ++settleGeneration;
+  await tick();
+  if (!mounted || generation !== settleGeneration) return;
+  const targets = new Map<string, number>();
+  const start = new Map<string, number>();
+  for (const [index, entry] of entries.entries()) {
+    const element = tabElements[index];
+    if (!(element instanceof HTMLElement) || element.offsetWidth <= 0) continue;
+    targets.set(entry.key, element.offsetWidth);
+    start.set(entry.key, from.get(entry.key) ?? 0);
+  }
+  if (targets.size === 0) return;
+  // The strip is put back where it was, without a clock, so the widths the
+  // transition below starts from are the ones the user last saw.
+  settling = false;
+  pinnedWidths = start;
+  settleGaps = gaps.size === 0 ? null : new Map(gaps);
+  await tick();
+  if (!mounted || generation !== settleGeneration) return;
+  void items.offsetWidth;
+  settling = true;
+  pinnedWidths = targets;
+  settleGaps = null;
+  trackActiveIndicator(duration);
+  if (settleTimer !== null) clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => {
+    settleTimer = null;
+    if (!mounted || generation !== settleGeneration) return;
+    settling = false;
+    pinnedWidths = null;
+    // Whatever the settle managed to render — a main thread busy enough to
+    // eat the whole interval renders none of it — the strip has one resting
+    // invariant, and it is restored here: the bar is on its tab.
+    void tick().then(() => {
+      if (mounted && !indicatorTraveling) syncActiveIndicatorGeometry();
+    });
+  }, duration);
+}
+
+/**
+ * The gap each closed tab leaves, charged to the tab that followed it so
+ * the settle starts from the pre-close layout. A tab closed at the end
+ * charges its gap to the last survivor's trailing edge instead.
+ */
+function settleGapsFor(
+  previous: readonly string[],
+  keys: readonly string[],
+  slots: ReadonlyMap<string, { left: number; width: number; label: string }>,
+): Map<string, { start: number; end: number }> {
+  const gaps = new Map<string, { start: number; end: number }>();
+  const charge = (key: string, edge: "start" | "end", width: number) => {
+    const gap = gaps.get(key) ?? { start: 0, end: 0 };
+    gap[edge] += width;
+    gaps.set(key, gap);
+  };
+  const surviving = keys.filter((key) => previous.includes(key));
+  const last = surviving.at(-1);
+  for (const [index, key] of previous.entries()) {
+    if (keys.includes(key)) continue;
+    const width = slots.get(key)?.width;
+    if (width === undefined || width <= 0) continue;
+    const next = previous.slice(index + 1).find((other) => keys.includes(other));
+    if (next !== undefined) charge(next, "start", width);
+    else if (last !== undefined) charge(last, "end", width);
+  }
+  return gaps;
+}
+
 /** Brings the active tab into view when the strip scrolls horizontally. */
 function revealActiveTab() {
   const items = itemsElement;
@@ -408,27 +573,46 @@ $effect.pre(() => {
  * One pass over a change in the open set. A close holds the surviving tabs
  * at their previous widths while the pointer rests over the strip, so the
  * next tab's close control stays under it, and leaves a ghost of the closed
- * tab in the slot it held so the tab is seen to leave. Nothing waits on
- * either: the tab is gone from state in the same frame.
+ * tab in the slot it held so the tab is seen to leave. Every other change
+ * settles: the strip travels to its new shape on the panel clock instead of
+ * arriving in one frame. Nothing waits on either: the tab is gone from
+ * state in the same frame.
  */
 $effect(() => {
   const keys = entries.map((entry) => entry.key);
   const previous = previousEntryKeys;
   previousEntryKeys = keys;
   const removed = previous.filter((key) => !keys.includes(key));
+  const added = keys.filter((key) => !previous.includes(key));
+  if (removed.length === 0 && added.length === 0) return;
+  const slots = renderedSlots;
+  let holding = false;
 
   if (removed.length > 0) {
     if (pointerOverStrip && keys.length > 0) {
       const held = new Map<string, number>();
       for (const key of keys) {
-        const width = renderedSlots.get(key)?.width;
+        const width = slots.get(key)?.width;
         if (width !== undefined && width > 0) held.set(key, width);
       }
-      if (held.size === keys.length) heldWidths = held;
+      if (held.size === keys.length) {
+        // The pointer is resting on the strip, so the surviving tabs keep
+        // the widths they had and the gap closes in the same frame: the
+        // next tab's close control has to land under the pointer, not
+        // arrive under it at the end of an animation. The indicator jumps
+        // with them, once those widths are on the page, because a bar that
+        // measured the strip before it was held sits on no tab at all.
+        cancelSettle();
+        pinnedWidths = held;
+        holding = true;
+        void tick().then(() => {
+          if (mounted && !indicatorTraveling) syncActiveIndicatorGeometry();
+        });
+      }
     }
     const ghosts = removed
       .map((key) => {
-        const slot = renderedSlots.get(key);
+        const slot = slots.get(key);
         return slot === undefined
           ? null
           : {
@@ -441,6 +625,13 @@ $effect(() => {
       .filter((ghost): ghost is NonNullable<typeof ghost> => ghost !== null);
     if (ghosts.length > 0) exitingTabs = [...exitingTabs, ...ghosts];
   }
+
+  // A strip with no rendered geometry behind it (its first render) has
+  // nothing to travel from and arrives in place.
+  if (holding || slots.size === 0) return;
+  const from = new Map<string, number>();
+  for (const [key, slot] of slots) from.set(key, slot.width);
+  void settleStrip(from, settleGapsFor(previous, keys, slots));
 });
 
 function releaseExitingTab(element: HTMLElement, id: number) {
@@ -450,60 +641,36 @@ function releaseExitingTab(element: HTMLElement, id: number) {
     exitingTabs = exitingTabs.filter((ghost) => ghost.id !== id);
   };
   const duration = motionDurationMilliseconds(
-    "--skr-motion-state-duration",
+    "--skr-motion-panel-duration",
     element,
   );
   if (duration === 0) {
     remove();
     return;
   }
-  // The ghost paints at full opacity in the slot its tab held and then
-  // leaves on the dismissal clock. The forced reflow commits that resting
-  // opacity as the transition's start value; without it the flip below
-  // lands in the same style recalculation and the tab would vanish rather
-  // than be seen to leave.
+  // The ghost paints at full width and opacity in the slot its tab held and
+  // then leaves the way a tab arrives, in reverse: its slot collapses to
+  // nothing while it fades, on the clock the rest of the strip settles on.
+  // The forced reflow commits that resting state as the transition's start
+  // value; without it the flip below lands in the same style recalculation
+  // and the tab would vanish rather than be seen to leave.
   void element.offsetWidth;
   element.dataset.dismissing = "true";
+  element.style.width = "0px";
   setTimeout(remove, duration);
 }
 
 /**
- * Releases the held widths when the pointer leaves, animating the one
- * reflow on the panel clock with a compositor-only transform.
+ * Releases the held widths when the pointer leaves. The strip settles from
+ * the widths it was holding to the ones the open set gives it, so the tabs
+ * expand and travel as one motion with the indicator riding along.
  */
 function releaseHeldWidths() {
   pointerOverStrip = false;
-  if (heldWidths === null) return;
-  const before = tabElements.map((element) =>
-    element instanceof HTMLElement ? element.offsetLeft : null,
-  );
-  heldWidths = null;
-  void tick().then(() => {
-    if (!mounted) return;
-    const duration = motionDurationMilliseconds(
-      "--skr-motion-panel-duration",
-      itemsElement ?? document.documentElement,
-    );
-    for (const [index, element] of tabElements.entries()) {
-      const from = before[index];
-      if (
-        !(element instanceof HTMLElement) ||
-        from === null ||
-        from === undefined
-      )
-        continue;
-      const delta = from - element.offsetLeft;
-      if (delta === 0 || duration === 0) continue;
-      element.style.transition = "none";
-      element.style.transform = `translateX(${delta}px)`;
-      void element.offsetWidth;
-      element.style.transition = REORDER_REFLOW_TRANSITION;
-      element.style.transform = "";
-      setTimeout(() => {
-        element.style.transition = "";
-      }, duration);
-    }
-  });
+  const held = pinnedWidths;
+  if (held === null || settling) return;
+  pinnedWidths = null;
+  void settleStrip(held, new Map());
 }
 
 // registry-exempt keydown: the ARIA tabs pattern's own roving focus. Every
@@ -710,6 +877,7 @@ function finishScrollDrag(event: PointerEvent) {
       class="skr-tab-items"
       class:skr-tab-items-scrolling={scrollPointer !== null}
       class:skr-tab-items-reordering={dragging !== null}
+      class:skr-tab-items-settling={settling}
       role="presentation"
       bind:this={itemsElement}
       onwheel={scrollWithWheel}
@@ -748,9 +916,15 @@ function finishScrollDrag(event: PointerEvent) {
         class:skr-tab-dragging={dragging === index}
         data-tab-key={entry.key}
         data-tab-label={entry.label}
-        style:flex={heldWidths?.get(entry.key) === undefined
+        style:flex={pinnedWidths?.get(entry.key) === undefined
           ? null
-          : `0 0 ${heldWidths.get(entry.key)}px`}
+          : `0 0 ${pinnedWidths.get(entry.key)}px`}
+        style:margin-inline-start={settleGaps?.get(entry.key) === undefined
+          ? null
+          : `${settleGaps.get(entry.key)?.start}px`}
+        style:margin-inline-end={settleGaps?.get(entry.key) === undefined
+          ? null
+          : `${settleGaps.get(entry.key)?.end}px`}
         style:transform={dragging !== null && dragging !== index
           ? `translateX(${reorderOffset(index)}px)`
           : null}
@@ -845,6 +1019,21 @@ function finishScrollDrag(event: PointerEvent) {
           <span class="skr-tab-label">{ghost.label}</span>
         </span>
       {/each}
+      <!-- The new-tab control travels with the tabs rather than sitting at
+           the strip's far edge: it is the end of the open set, so it stays
+           against the last tab as tabs open, close, and scroll. -->
+      <button
+        type="button"
+        class="skr-tab-new"
+        data-command-id="tab.new-empty"
+        aria-label={STRINGS.newTab}
+        use:commandTooltip={{ title: STRINGS.newTab }}
+        onclick={onNewTab}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 3.5v9M3.5 8h9" />
+        </svg>
+      </button>
       <span
         bind:this={indicatorElement}
         class="skr-tab-active-indicator"
@@ -852,18 +1041,6 @@ function finishScrollDrag(event: PointerEvent) {
         aria-hidden="true"
       ></span>
     </div>
-    <button
-      type="button"
-      class="skr-tab-new"
-      data-command-id="tab.new-empty"
-      aria-label={STRINGS.newTab}
-      use:commandTooltip={{ title: STRINGS.newTab }}
-      onclick={onNewTab}
-    >
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M8 3.5v9M3.5 8h9" />
-      </svg>
-    </button>
     {#if overflowed}
       <div class="skr-tab-list-shell">
         <button
@@ -909,3 +1086,62 @@ function finishScrollDrag(event: PointerEvent) {
     {/if}
   </div>
 {/if}
+
+<style>
+/* The strip owns its own motion and its own hover shape, so the cascade
+   here is self-contained: every transition a tab can run is declared in
+   this block, in the order the states can occur. */
+
+.skr-tab-shell {
+  /* The hover fill takes the control radius, the same one the file tree's
+     row fills take, so a pointer resting on a tab lands on a soft chip
+     rather than a full-height rectangle. It rests here rather than on the
+     hover state so the shape is the tab's, not the pointer's. */
+  border-radius: var(--skr-radius-control);
+  /* The fill arrives on the dismissal clock, the same one the close
+     control inside it fades on: the whole hover affordance is one act. */
+  transition: background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+/* While a tab drags, the tabs it passes over reflow to open its landing
+   gap on the panel clock, a compositor-only translate; the dragged tab
+   itself follows the pointer natively with no animation at all. */
+.skr-tab-items-reordering .skr-tab-shell {
+  transition: transform var(--skr-motion-panel-duration)
+    var(--skr-motion-panel-easing);
+}
+
+.skr-tab-items-reordering .skr-tab-dragging {
+  transition: none;
+}
+
+/* One settle: the widths the tabs travel between and the gap a closed tab
+   leaves, both on the panel clock, which is the class that governs a
+   chrome dimension. */
+.skr-tab-items-settling .skr-tab-shell {
+  transition:
+    flex-basis var(--skr-motion-panel-duration) var(--skr-motion-panel-easing),
+    margin var(--skr-motion-panel-duration) var(--skr-motion-panel-easing),
+    background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+/* A closed tab leaves the way a tab arrives, reversed: its slot collapses
+   to nothing while it fades, on the clock the strip settles on. */
+.skr-tab-exiting {
+  transition:
+    opacity var(--skr-motion-panel-duration) var(--skr-motion-panel-easing),
+    width var(--skr-motion-panel-duration) var(--skr-motion-panel-easing);
+}
+
+/* The new-tab control sits in the scrolling run of tabs, so it holds its
+   own size there instead of flexing with them, and its hover fill takes the
+   same corner and clock as the tab it sits against. */
+.skr-tab-new {
+  flex: none;
+  border-radius: var(--skr-radius-control);
+  transition: background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+</style>

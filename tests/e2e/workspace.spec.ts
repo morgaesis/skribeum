@@ -699,14 +699,16 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await expandTreeFolder();
     await openTreePath(TREE_FIRST_NOTE_NAME);
     // Open in place is the default: a second tree open replaces the active
-    // tab rather than adding one, so the strip stays absent at one note.
+    // tab rather than adding one, so the strip that is always drawn still
+    // holds exactly the one tab.
     await openTreePath(TREE_SECOND_NOTE_NAME);
     await browser.waitUntil(
-      async () => (await $$('[role="tab"]').length) === 0,
+      async () => (await $$('[role="tab"]').length) === 1,
       {
         timeoutMsg: "a plain tree open added a tab instead of reusing one",
       },
     );
+    expect(await $$(".skr-tab-strip")).toHaveLength(1);
 
     // Mod-click is one of the explicit new-tab routes.
     await browser.execute(

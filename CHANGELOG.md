@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Every pane draws its tab strip, whatever it holds, and the new-tab control
+  sits against the last tab inside the run of tabs rather than at the strip's
+  far edge, so it stays there as tabs open, close, and scroll. The all-tabs
+  list still appears only when tabs are hidden by overflow.
+- A tab strip that changes shape travels to it: tabs widen or narrow to their
+  new slots on the panel clock, an opened tab expands into place, a closed
+  tab's slot collapses behind it while its pixels fade, and the active-tab
+  indicator reads its own tab's geometry frame by frame so the bar and the
+  tab it belongs to are one motion instead of a jump beside a slide. A tab
+  closed under a resting pointer still hands its slot over in the same frame,
+  so the next tab's close control lands under the pointer.
+- A hovered tab's fill takes the control radius the rest of the product's row
+  and chip fills take, and arrives on the same 50ms clock as the close
+  control it reveals, so the whole affordance lands as one act.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

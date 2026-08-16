@@ -1,7 +1,14 @@
 // Item building for the unified command surface. Prefix parsing selects one
 // result builder, so unrelated result kinds never enter the same ranked list.
 
-import { fuzzyMatch, segmentByPositions, type TextSegment } from "../fuzzy";
+import {
+  fuzzyMatch,
+  matchTags,
+  segmentByPositions,
+  type TagCandidate,
+  type TextSegment,
+  tagQueryText,
+} from "../fuzzy";
 import { byteRangesToCharRanges, type SearchResult } from "../ipc/services";
 import { resolveTitleCollisions } from "../noteTitles";
 import type { CommandRegistry } from "../registry";
@@ -32,6 +39,23 @@ export type PickerItem = {
   keybinding?: string;
   /** Prefix hint shown by discovery rows in bare file mode. */
   prefixHint?: ">" | "#";
+  /** Trailing muted text stating the row's size, such as a note count. */
+  meta?: string;
+  /**
+   * Rows offering a lower-confidence answer read in the muted text colour,
+   * so the boundary the group heading draws is legible without one.
+   */
+  tone?: "muted";
+  /**
+   * The row's spoken name, when the rendered text alone does not carry the
+   * group it belongs to or the size it promises.
+   */
+  accessibleName?: string;
+  /**
+   * A line that states something about the list rather than offering an
+   * action. It never takes selection and cannot be invoked.
+   */
+  informational?: boolean;
   /**
    * Why this row cannot be invoked right now. A row carrying one is listed
    * so the capability stays discoverable, shown as unavailable, and refuses
@@ -196,28 +220,131 @@ export function fileItems(
   return items;
 }
 
+/**
+ * Rows the answer band renders before it starts stating a count instead.
+ * Everything past the first screen of a filtered list is scanned rather than
+ * read, and the answer to a truncated list is to type another character.
+ */
+const TAG_PRIMARY_LIMIT = 25;
+/** Tags listed under `Most used` when nothing has been typed. */
+const TAG_MOST_USED_LIMIT = 20;
+/** Tags listed under `Recent` when nothing has been typed. */
+const TAG_RECENT_LIMIT = 5;
+
+function tagRow(
+  entry: TagCandidate,
+  group: string,
+  highlight: readonly [number, number] | null,
+  near: boolean,
+): PickerItem {
+  const positions: number[] = [];
+  if (highlight !== null) {
+    // Segments run over `#tag`, one character wider than the tag text.
+    for (let index = highlight[0]; index < highlight[1]; index += 1) {
+      positions.push(index + 1);
+    }
+  }
+  return {
+    id: `tag:${entry.tag}`,
+    value: entry.tag,
+    kind: "tag",
+    group,
+    titleSegments: segmentByPositions(`#${entry.tag}`, positions),
+    meta: STRINGS.tagNoteCount(entry.noteCount),
+    accessibleName: STRINGS.tagRowName(entry.tag, entry.noteCount, near),
+    ...(near ? { tone: "muted" as const } : {}),
+  };
+}
+
+function informationalRow(id: string, text: string): PickerItem {
+  return {
+    id,
+    value: "",
+    kind: "tag",
+    informational: true,
+    titleSegments: plainSegments(text),
+  };
+}
+
+function textSearchRow(query: string): PickerItem {
+  return {
+    id: `text-search:${query}`,
+    value: query,
+    kind: "file",
+    titleSegments: plainSegments(
+      `${STRINGS.commandSurfaceSearchTextPrefix}${query}`,
+    ),
+  };
+}
+
+/**
+ * Tag-mode results. Matching is prefix-anchored at path-segment boundaries,
+ * so a parent query answers with its descendants, and results are placed in
+ * bands rather than blended into one score: a number mixing structural
+ * relevance with lexical similarity produces an order nobody can explain.
+ *
+ * With nothing typed there is no relevance signal, so the list falls back to
+ * the two orderings that still carry information, recency and frequency.
+ */
 export function tagItems(
-  tags: readonly { tag: string; noteCount: number; occurrenceCount: number }[],
+  tags: readonly TagCandidate[],
   query: string,
+  recentTags: readonly string[] = [],
 ): PickerItem[] {
-  return tags
-    .map((entry) => ({ entry, match: fuzzyMatch(query, entry.tag) }))
-    .filter(({ match }) => match !== null)
-    .sort(
-      (a, b) =>
-        (b.match?.score ?? 0) - (a.match?.score ?? 0) ||
-        a.entry.tag.localeCompare(b.entry.tag),
-    )
-    .map(({ entry, match }) => ({
-      id: `tag:${entry.tag}`,
-      value: entry.tag,
-      kind: "tag",
-      group: STRINGS.commandSurfaceTags,
-      titleSegments: segmentByPositions(
-        `#${entry.tag}`,
-        (match?.positions ?? []).map((position) => position + 1),
+  const effectiveQuery = tagQueryText(query);
+  if (tags.length === 0) {
+    return [informationalRow("tag-empty-vault", STRINGS.tagsEmptyVault)];
+  }
+  if (effectiveQuery.length === 0) {
+    const byName = new Map(
+      tags.map((entry) => [entry.tag.toLowerCase(), entry]),
+    );
+    const recent = recentTags
+      .map((tag) => byName.get(tagQueryText(tag)))
+      .filter((entry): entry is TagCandidate => entry !== undefined)
+      .slice(0, TAG_RECENT_LIMIT);
+    const listed = new Set(recent.map((entry) => entry.tag));
+    const mostUsed = matchTags(tags, "", {
+      limit: TAG_MOST_USED_LIMIT + listed.size,
+    })
+      .primary.map(({ entry }) => entry)
+      .filter((entry) => !listed.has(entry.tag))
+      .slice(0, TAG_MOST_USED_LIMIT);
+    return [
+      ...recent.map((entry) =>
+        tagRow(entry, STRINGS.commandSurfaceRecent, null, false),
       ),
-    }));
+      ...mostUsed.map((entry) =>
+        tagRow(entry, STRINGS.commandSurfaceMostUsed, null, false),
+      ),
+    ];
+  }
+  const { primary, primaryCount, near } = matchTags(tags, query, {
+    limit: TAG_PRIMARY_LIMIT,
+  });
+  const items: PickerItem[] = primary.map(({ entry, highlight }) =>
+    tagRow(entry, STRINGS.commandSurfaceTags, highlight, false),
+  );
+  if (primaryCount > TAG_PRIMARY_LIMIT) {
+    items.push(
+      informationalRow(
+        "tag-more",
+        STRINGS.tagMoreMatches(primaryCount - TAG_PRIMARY_LIMIT),
+      ),
+    );
+  }
+  items.push(
+    ...near.map(({ entry, highlight }) =>
+      tagRow(entry, STRINGS.commandSurfaceNearMatches, highlight, true),
+    ),
+  );
+  if (items.length === 0) {
+    items.push(
+      informationalRow("tag-no-match", STRINGS.tagNoMatches(effectiveQuery)),
+    );
+  }
+  items.push(textSearchRow(effectiveQuery));
+  return items;
 }
 
 /**
@@ -243,11 +370,14 @@ export function appendBareDiscoveryItems(
       group: STRINGS.commandSurfaceCommands,
       prefixHint: ">" as const,
     })),
-    ...tags.slice(0, 3).map((item) => ({
-      ...item,
-      group: STRINGS.commandSurfaceTags,
-      prefixHint: "#" as const,
-    })),
+    ...tags
+      .filter((item) => item.kind === "tag" && item.informational !== true)
+      .slice(0, 3)
+      .map((item) => ({
+        ...item,
+        group: STRINGS.commandSurfaceTags,
+        prefixHint: "#" as const,
+      })),
     ...(textSearch === undefined
       ? []
       : [(({ group: _group, ...item }) => item)(textSearch)]),

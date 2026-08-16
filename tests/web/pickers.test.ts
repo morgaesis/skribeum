@@ -138,14 +138,16 @@ describe("unified command surface modes", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it("builds only tag rows in tag mode", () => {
+  it("builds tag rows and the note-text fallback in tag mode", () => {
     const items = tagItems(
       [{ tag: "project/work", noteCount: 2, occurrenceCount: 4 }],
       "work",
     );
     expect(items.map((item) => [item.kind, item.value])).toEqual([
       ["tag", "project/work"],
+      ["file", "work"],
     ]);
+    expect(items.at(-1)?.id).toBe("text-search:work");
   });
 
   it("appends bounded discovery groups to a non-empty bare query", () => {

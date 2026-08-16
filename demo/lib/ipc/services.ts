@@ -157,18 +157,21 @@ export async function searchQuery(
   searchNoteBodies = true,
   caseSensitive = false,
 ): Promise<SearchResult[]> {
-  const exactTag = query.match(/^#([^\s#]+)$/u)?.[1];
-  if (exactTag !== undefined && limit > 0) {
-    const normalized = exactTag.toLocaleLowerCase();
+  const taggedWith = query.match(/^#([^\s#]+)$/u)?.[1];
+  if (taggedWith !== undefined && limit > 0) {
+    const normalized = taggedWith.toLocaleLowerCase();
     const results: SearchResult[] = [];
     for (const entry of await vaultTree(handle)) {
       if (entry.kind !== "note") {
         continue;
       }
       const text = (await readNote(handle, entry.path)).text;
-      const matches = tagUses(text).filter(
-        (use) => use.tag.toLocaleLowerCase() === normalized,
-      );
+      // A tag is a path and a query for it includes everything below it,
+      // anchored at a segment boundary.
+      const matches = tagUses(text).filter((use) => {
+        const tag = use.tag.toLocaleLowerCase();
+        return tag === normalized || tag.startsWith(`${normalized}/`);
+      });
       if (matches.length === 0) {
         continue;
       }

@@ -384,7 +384,32 @@ describe("slash menu", () => {
 });
 
 describe("tag affordances", () => {
-  it("ranks fuzzy matches before recency and empty queries by recency and frequency", () => {
+  it("offers the typed tag itself and commits it on Enter", () => {
+    tagCatalog = [
+      { tag: "features", noteCount: 9, occurrenceCount: 9 },
+      { tag: "feature/ui", noteCount: 5, occurrenceCount: 5 },
+      { tag: "feature", noteCount: 3, occurrenceCount: 3 },
+      { tag: "feature/api", noteCount: 2, occurrenceCount: 2 },
+    ];
+    const view = makeView("", 0);
+
+    typeText(view, "#feature");
+
+    const options = [
+      ...(view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]') ?? []),
+    ];
+    expect(options[0]?.textContent).toBe("#feature");
+    expect(
+      view.dom.querySelector('.cm-skr-tag-menu [aria-selected="true"]')
+        ?.textContent,
+    ).toBe("#feature");
+
+    pressEditorKey(view, "Enter");
+
+    expect(view.state.doc.toString()).toBe("#feature");
+  });
+
+  it("ranks by band, then session recency, then how many notes use the tag", () => {
     const catalog = [
       { tag: "rare", noteCount: 1, occurrenceCount: 1 },
       { tag: "notes", noteCount: 4, occurrenceCount: 4 },
@@ -393,30 +418,39 @@ describe("tag affordances", () => {
       { tag: "alpha", noteCount: 3, occurrenceCount: 10 },
     ];
 
+    // Nothing typed: recency first, then the tags most notes use. A tag
+    // written a hundred times in three notes does not outrank a tag written
+    // once in each of four.
     expect(
       filteredTagCompletions(catalog, ["rare"], "").map((item) => item.tag),
-    ).toEqual(["rare", "notes", "occurrence", "alpha", "beta"]);
+    ).toEqual(["rare", "notes", "alpha", "beta", "occurrence"]);
 
-    const fuzzyFirst = filteredTagCompletions(
-      [
-        { tag: "alpha", noteCount: 20, occurrenceCount: 40 },
-        { tag: "aardvark", noteCount: 1, occurrenceCount: 1 },
-        { tag: "missing", noteCount: 100, occurrenceCount: 100 },
-      ],
-      ["alpha"],
-      "aa",
-    );
-    expect(fuzzyFirst.map((item) => item.tag)).toEqual(["aardvark", "alpha"]);
+    // Only characters that actually start the tag or one of its path
+    // segments count, so "aa" no longer reaches "alpha" by skipping.
+    expect(
+      filteredTagCompletions(
+        [
+          { tag: "alpha", noteCount: 20, occurrenceCount: 40 },
+          { tag: "aardvark", noteCount: 1, occurrenceCount: 1 },
+          { tag: "missing", noteCount: 100, occurrenceCount: 100 },
+        ],
+        ["alpha"],
+        "aa",
+      ).map((item) => item.tag),
+    ).toEqual(["aardvark"]);
+
+    // The tag the reader typed is present and leads, ahead of the deeper
+    // path that merely carries it as a segment.
     expect(
       filteredTagCompletions(
         [
           { tag: "ced", noteCount: 1, occurrenceCount: 1 },
-          { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 1 },
+          { tag: "project/cedar-room", noteCount: 9, occurrenceCount: 9 },
         ],
         [],
         "ced",
       ).map((item) => item.tag),
-    ).toEqual(["project/cedar-room"]);
+    ).toEqual(["ced", "project/cedar-room"]);
   });
 
   it("filters while typing and exposes a keyboard-operated listbox", () => {
@@ -427,7 +461,7 @@ describe("tag affordances", () => {
     ];
     const view = makeView("", 0);
 
-    typeText(view, "#pa");
+    typeText(view, "#p");
 
     expect(tagCompletionOpen(view.state)).toBe(true);
     const listbox = view.dom.querySelector('[role="listbox"]');
@@ -489,8 +523,10 @@ describe("tag affordances", () => {
       }),
     );
 
+    // The refreshed catalog contributes an exact match, so the row one below
+    // it is the one the arrow key lands on and the one Enter commits.
     expect(view.dom.querySelector('[aria-selected="true"]')?.textContent).toBe(
-      "#context/outdoors",
+      "#project/cedar-room",
     );
     view.contentDOM.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -501,7 +537,7 @@ describe("tag affordances", () => {
         cancelable: true,
       }),
     );
-    expect(view.state.doc.toString()).toBe("#context/outdoors");
+    expect(view.state.doc.toString()).toBe("#project/cedar-room");
   });
 
   it("leaves Enter to normal editing when no completion matches", () => {
@@ -525,13 +561,101 @@ describe("tag affordances", () => {
   });
 
   it("bounds the rendered completion candidates", () => {
-    const catalog = Array.from({ length: 150 }, (_, index) => ({
+    tagCatalog = Array.from({ length: 150 }, (_, index) => ({
       tag: `tag-${index.toString().padStart(3, "0")}`,
       noteCount: 1,
       occurrenceCount: 1,
     }));
+    const view = makeView("", 0);
 
-    expect(filteredTagCompletions(catalog, [], "")).toHaveLength(100);
+    typeText(view, "#tag");
+
+    // A caret-anchored menu whose tail cannot be read is a menu whose tail
+    // should not be built.
+    expect(
+      view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]'),
+    ).toHaveLength(8);
+  });
+
+  it("keeps the last row selected when Down is pressed on it", () => {
+    tagCatalog = [
+      { tag: "tag/one", noteCount: 3, occurrenceCount: 3 },
+      { tag: "tag/two", noteCount: 2, occurrenceCount: 2 },
+    ];
+    const view = makeView("", 0);
+    typeText(view, "#tag");
+
+    for (let press = 0; press < 5; press += 1) {
+      view.contentDOM.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          code: "ArrowDown",
+          keyCode: 40,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+    expect(view.dom.querySelector('[aria-selected="true"]')?.textContent).toBe(
+      "#tag/two",
+    );
+  });
+
+  it("keeps the menu on a wildcard and reopens it when one is deleted", () => {
+    tagCatalog = [
+      { tag: "feature", noteCount: 3, occurrenceCount: 3 },
+      { tag: "feature/ui", noteCount: 2, occurrenceCount: 2 },
+    ];
+    const view = makeView("", 0);
+
+    typeText(view, "#feature");
+    const withoutStar = [
+      ...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]'),
+    ].map((option) => option.textContent);
+
+    typeText(view, "*");
+
+    expect(tagCompletionOpen(view.state)).toBe(true);
+    expect(
+      [...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]')].map(
+        (option) => option.textContent,
+      ),
+    ).toEqual(withoutStar);
+
+    // A character a tag cannot contain closes the menu; deleting it back out
+    // reopens it rather than requiring the hash to be retyped.
+    typeText(view, ".");
+    expect(tagCompletionOpen(view.state)).toBe(false);
+    const head = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: head - 1, to: head },
+      selection: { anchor: head - 1 },
+      userEvent: "delete.backward",
+    });
+
+    expect(tagCompletionOpen(view.state)).toBe(true);
+    expect(
+      [...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]')].map(
+        (option) => option.textContent,
+      ),
+    ).toEqual(withoutStar);
+  });
+
+  it("never offers a tag that is only a typo away", () => {
+    tagCatalog = [
+      { tag: "feature", noteCount: 9, occurrenceCount: 9 },
+      { tag: "feature/long-document", noteCount: 1, occurrenceCount: 1 },
+    ];
+    const view = makeView("", 0);
+
+    typeText(view, "#featrue");
+
+    expect(
+      [...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]')].map(
+        (option) => option.textContent,
+      ),
+    ).toEqual([]);
   });
 
   it("removes the trigger and query when dismissed with Escape", () => {

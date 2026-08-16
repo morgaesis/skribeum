@@ -6,6 +6,42 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Tag search matches by prefix at path-segment boundaries and groups its
+  results in bands: the tag itself, then everything below it in the path,
+  then tags a path segment of which starts with the query, then near matches
+  under their own heading. Near matches are tags containing what was typed or
+  a bounded edit distance from it, capped at five rows, drawn muted, never
+  preselected, and never offered while authoring. Every row states how many
+  notes use the tag and orders by it. `*` is removed from a tag query wherever
+  it appears, so `#feat`, `#feat*` and `#*feat` are one query with one result
+  list, and typing one no longer empties the results or closes the completion
+  menu.
+- A tag query returns the notes below it in the path: `#work` lists notes
+  tagged `work/meetings` and not notes tagged `workshop`, and each row's note
+  count covers the same set the row produces.
+- Tag mode ends with a row that re-runs the query as a note-text search, and
+  its empty states name what to do next: how to make the vault's first tag,
+  or which query found nothing after the wildcards were removed.
+
+### Fixed
+
+- The inline tag completion menu offers the tag that was typed. It had
+  removed the exact match from its own results, so finishing a tag the vault
+  already holds showed "No matches", and pressing Enter committed a
+  neighbouring tag into the note.
+- The tag catalog holds every tag in the vault. It had been cut to the
+  thousand most-used, so a rarely written tag existed for no surface and
+  nothing said so.
+- A tag written with a decomposed accent is indexed and searchable. The
+  editor rendered, offered and accepted the whole word while the indexer
+  stopped at the combining mark, which the syntax specification already
+  counts as part of the letter it belongs to.
+- The tag completion menu stops at the ends of its list instead of wrapping
+  around, matching the command surface, and reopens when a character that
+  ended the query is deleted instead of requiring the hash to be retyped.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

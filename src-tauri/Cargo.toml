@@ -36,7 +36,7 @@ tauri-plugin-process = "2.3.1"
 # Tauri itself already resolves transitively (see Cargo.lock), so declaring
 # it directly adds no new supply-chain surface.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61.3", features = [
+windows = { version = "0.62.2", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_UI_Shell",

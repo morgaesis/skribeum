@@ -330,6 +330,7 @@ function loadedNote(text: string): LoadedNote {
     bytes,
     text,
     readOnly: false,
+    persistence: "note",
   };
 }
 

@@ -1,5 +1,8 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { describe, expect, it } from "vitest";
+// The tree's row presentation lives in the shell stylesheet, so the
+// assertions below can read resolved style rather than class names.
+import "../../src/app.css";
 import { showConfirmDialog, showPromptDialog } from "../../src/lib/dialogs";
 import FileTree from "../../src/lib/FileTree.svelte";
 import { createAppRegistry } from "../../src/lib/features";
@@ -180,6 +183,42 @@ describe("designed file tree", () => {
     expect(plain?.textContent).toContain("Reading title");
     expect(plain?.textContent).not.toContain("plain.md");
     expect(manual?.textContent).toContain("manual.pdf");
+
+    await unmount(component);
+  });
+
+  it("opens a row that is not a note, on the same footing as a note", async () => {
+    const opened: string[] = [];
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        selectedPath: "manual.pdf",
+        onOpenPath: (path: string) => opened.push(path),
+      },
+    });
+    flushSync();
+
+    const note = document.querySelector<HTMLElement>('[data-path="plain.md"]');
+    const manual = document.querySelector<HTMLElement>(
+      '[data-path="manual.pdf"]',
+    );
+    // Nothing marks the row as unreachable, and it resolves to the same
+    // colour and pointer affordance as the notes beside it.
+    expect(manual?.getAttribute("aria-disabled")).toBeNull();
+    expect(manual?.getAttribute("aria-selected")).toBe("true");
+    expect(getComputedStyle(manual as HTMLElement).color).toBe(
+      getComputedStyle(note as HTMLElement).color,
+    );
+    expect(getComputedStyle(manual as HTMLElement).cursor).toBe(
+      getComputedStyle(note as HTMLElement).cursor,
+    );
+    expect(manual?.draggable).toBe(note?.draggable);
+
+    manual?.click();
+    await tick();
+    expect(opened).toEqual(["manual.pdf"]);
 
     await unmount(component);
   });

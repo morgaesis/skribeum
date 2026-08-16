@@ -6,6 +6,44 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Every file a vault holds opens. A file that is not a note opens as an
+  editable buffer, saved back through the same byte-faithful machinery notes
+  use: line endings, a byte-order mark, trailing whitespace, and a missing
+  final newline all survive an edit unchanged, and the base is verified
+  against the file immediately before the write, so a file that moved
+  underneath the editor reports a conflict instead of being overwritten.
+- Common formats get syntax highlighting, chosen from the file extension and
+  never from the file's contents: YAML, JSON, TOML, shell, and the rest of
+  the bundled language set, plus a small table of extensionless names such as
+  `Dockerfile` and shell startup files. A path naming no known language opens
+  as plain text and is still fully editable.
+- Image files open in a viewer: PNG, JPEG, GIF, WebP, SVG, and the other
+  formats the image extension allowlist names. Bytes reach an image element
+  and nothing else and are typed from the extension, so a vector image loads
+  in the user agent's secure static mode with scripts, event handlers, and
+  external references all disabled.
+- The browser demo vault ships a `.gitignore`, a YAML pipeline file, and a
+  PDF, so the non-note surfaces are visible without opening a local folder.
+
+### Changed
+
+- The file tree opens every row it shows. A file that is neither a note nor a
+  canvas is no longer drawn muted and inert, and the unified command surface
+  reaches every indexed file rather than notes and canvases alone.
+- A file that is neither an image nor valid UTF-8 opens read-only with the
+  non-UTF-8 notice, the same treatment a non-UTF-8 note gets, so no editing
+  pass can write a lossy re-encoding over a binary file.
+- Markdown services stay with Markdown documents. The outline, frontmatter
+  and the properties panel, source mode, and title resolution from a leading
+  heading apply to notes only, so a YAML document's leading `---` is not
+  folded away as frontmatter and a script's leading `#` is not read as a
+  heading.
+- A chosen local folder in the browser demo loads every file it contains, and
+  its tree shows dot-prefixed names, matching what the desktop application
+  indexes.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

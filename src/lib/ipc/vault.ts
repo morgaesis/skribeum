@@ -9,6 +9,7 @@ import type {
   EditHistoryAction as EditorHistoryAction,
   EditHistorySnapshot as EditorHistorySnapshot,
 } from "../editor/durableHistory";
+import { isNotePath } from "../noteTitles";
 import {
   type AppError,
   type ByteRangeReplace,
@@ -22,6 +23,15 @@ import {
   type WriteResult,
 } from "./bindings";
 
+/**
+ * Which vault write path a loaded document saves through. `note` is the
+ * change-set path with its projection-hash conflict check; `file` is the
+ * whole-document replace the vault offers for everything else, where the
+ * base bytes the editor holds are re-checked against disk immediately
+ * before the write instead.
+ */
+export type DocumentPersistence = "note" | "file";
+
 export type LoadedNote = {
   meta: NoteContent;
   bytes: Uint8Array;
@@ -29,6 +39,8 @@ export type LoadedNote = {
   text: string;
   /** True when the note must never be written (non-UTF-8). */
   readOnly: boolean;
+  /** The write path this document saves through. */
+  persistence: DocumentPersistence;
   /**
    * A crash-journal delta recovered for this note before it was opened:
    * applying it to `bytes` reproduces the pre-crash buffer. The editor
@@ -36,6 +48,46 @@ export type LoadedNote = {
    */
   recoveredChangeSet?: ByteRangeReplace[];
 };
+
+/** Whether `bytes` decode as UTF-8 without replacement. */
+function isUtf8(bytes: Uint8Array): boolean {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Presents any indexed file's bytes as a loaded document, applying the
+ * same encoding rule notes get: a file that is not valid UTF-8 opens
+ * read-only with unmappable bytes replaced, so no editing pass can ever
+ * write a lossy re-encoding back over it.
+ */
+export function loadedVaultFile(bytes: Uint8Array): LoadedNote {
+  const utf8 = isUtf8(bytes);
+  const hasBom =
+    bytes.length >= 3 &&
+    bytes[0] === 0xef &&
+    bytes[1] === 0xbb &&
+    bytes[2] === 0xbf;
+  return {
+    meta: {
+      encoding: !utf8 ? "non-utf8" : hasBom ? "utf8-bom" : "utf8",
+      // The file write path verifies the base bytes against disk itself,
+      // so no projection hash crosses the bridge for these documents.
+      projection_hash: "",
+      byte_length: bytes.byteLength,
+    },
+    bytes,
+    text: new TextDecoder("utf-8", { fatal: false }).decode(
+      hasBom ? bytes.subarray(3) : bytes,
+    ),
+    readOnly: !utf8,
+    persistence: "file",
+  };
+}
 
 export class IpcError extends Error {
   readonly app: AppError;
@@ -202,7 +254,23 @@ export async function readNote(
     bytes,
     text,
     readOnly: meta.encoding === "non-utf8",
+    persistence: "note",
   };
+}
+
+/**
+ * Opens any indexed file as an editable document. A Markdown-family note
+ * takes the note read path with its session base and projection hash;
+ * every other file is read as raw bytes and presented through the same
+ * encoding rule, so the vault holds no path the editor refuses to open.
+ */
+export async function readVaultDocument(
+  handle: VaultHandle,
+  relPath: string,
+): Promise<LoadedNote> {
+  return isNotePath(relPath)
+    ? readNote(handle, relPath)
+    : loadedVaultFile(await readVaultFile(handle, relPath));
 }
 
 /** Reads one indexed note's filesystem creation and modification times. */

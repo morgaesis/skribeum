@@ -14,6 +14,7 @@ import {
   currentWikilinkContext,
   focusedRenderedTableCell,
 } from "./lib/editor/decorations/engine";
+import { imageMediaType } from "./lib/editor/decorations/images";
 import {
   DEFAULT_OBSIDIAN_APP_CONFIG,
   EMPTY_WIKILINK_CONTEXT,
@@ -21,6 +22,7 @@ import {
   parseObsidianAppConfig,
   type WikilinkResolutionContext,
 } from "./lib/editor/decorations/wikilinks";
+import { vaultDocumentKind } from "./lib/editor/documentKinds";
 import {
   type FrontmatterValueType,
   parseObsidianTypes,
@@ -125,9 +127,9 @@ import {
   type LoadedNote,
   noteCreate,
   openVaultResult,
-  readNote,
   readNoteStat,
   readVaultConfigFile,
+  readVaultDocument,
   readVaultFile,
   vaultTree,
   watchSubscribe,
@@ -135,7 +137,7 @@ import {
 } from "./lib/ipc/vault";
 import type { PaneSwitchKind } from "./lib/motion";
 import NoteInfo from "./lib/NoteInfo.svelte";
-import { isNotePath, resolveNoteTitle } from "./lib/noteTitles";
+import { isNotePath, noteFileName, resolveNoteTitle } from "./lib/noteTitles";
 import OutlinePanel from "./lib/OutlinePanel.svelte";
 import PanelDivider from "./lib/PanelDivider.svelte";
 import {
@@ -153,6 +155,7 @@ import {
   parseCanvas,
   serializeCanvas,
 } from "./lib/rendering/canvas";
+import ImageView from "./lib/rendering/ImageView.svelte";
 import ReadOnlyNote from "./lib/rendering/ReadOnlyNote.svelte";
 import { NARROW_BREAKPOINT_REM } from "./lib/responsive";
 import SettingsView from "./lib/SettingsView.svelte";
@@ -286,6 +289,16 @@ let canvas = $state<CanvasDocument | null>(null);
 let canvasPreviews = $state<Record<string, string>>({});
 let canvasError = $state<string | null>(null);
 let canvasViewer = $state<ReturnType<typeof CanvasView> | undefined>();
+/**
+ * The open image: its exact vault bytes and the media type its extension
+ * grants. The bytes are never inspected to decide what the file is.
+ */
+let imageDocument = $state<{
+  path: string;
+  bytes: Uint8Array;
+  mediaType: string;
+} | null>(null);
+let imageError = $state<string | null>(null);
 const contentRequests = new ContentRequestGate();
 let missingAddress = $state<NoteAddress | null>(null);
 let navigationState = $state<NavigationState>({
@@ -460,13 +473,10 @@ function notePathsOf(entries: TreeEntry[]): string[] {
     .map((entry) => entry.path);
 }
 
+/** Every openable path: the vault holds no file the surface cannot reach. */
 function commandSurfacePathsOf(entries: TreeEntry[]): string[] {
   return entries
-    .filter(
-      (entry) =>
-        entry.kind === "note" ||
-        entry.path.toLocaleLowerCase().endsWith(".canvas"),
-    )
+    .filter((entry) => entry.kind !== "directory")
     .map((entry) => entry.path);
 }
 
@@ -1622,9 +1632,10 @@ async function createTreeFolder(parent: string) {
 /**
  * Validates a rename target before it is applied. A note (an entry the
  * vault scans as `EntryKind::Note`, matching `NOTE_EXTENSIONS` in
- * noteTitles.ts) must keep one of those extensions, or the renamed file
- * becomes an opaque `EntryKind::File` row the tree can no longer select or
- * open. Folders and other file kinds carry no such restriction.
+ * noteTitles.ts) must keep one of those extensions: every other file still
+ * opens and edits, but only a note is indexed for search, resolves as a
+ * wikilink target, and carries the change-set write path. Folders and
+ * other file kinds carry no such restriction.
  */
 function validateTreeRename(
   requiresNoteExtension: boolean,
@@ -1672,7 +1683,7 @@ async function renameTreeEntry(path: string, restoreFocus?: () => void) {
     void loadTreeTitles(activeVault, tree);
     refreshLinkContext();
     if (affectsActive && selectedPath !== null) {
-      await openNote(selectedPath, activeViewState);
+      await reopenPath(selectedPath, activeViewState);
       // The renamed note keeps its place in the pane, so the address has to
       // follow it: without this the query parameter still names the old path.
       navigation?.syncAddress({ path: selectedPath });
@@ -1750,7 +1761,7 @@ async function moveTreeEntry(path: string, destination: string | null) {
     void loadTreeTitles(activeVault, tree);
     refreshLinkContext();
     if (affectsActive && selectedPath !== null) {
-      await openNote(selectedPath, activeViewState);
+      await reopenPath(selectedPath, activeViewState);
     }
   } catch (error) {
     errorText = describeError(STRINGS.treeOperationFailed, error);
@@ -1877,7 +1888,9 @@ function commandContext(): CommandContext {
     openNoteStatistics,
     addProperty: () => editor?.startAddProperty(),
     toggleSourceMode: () => {
-      if (note === null) {
+      // Source mode reveals a note's raw Markdown; a document that is
+      // never rendered as Markdown has no other presentation to reveal.
+      if (note === null || selectedPath === null || !isNotePath(selectedPath)) {
         return false;
       }
       sourceMode = !sourceMode;
@@ -1993,11 +2006,18 @@ function noteOpensWithHeading(source: string): boolean {
   );
 }
 
+// A note's title can come from its own content; every other document is
+// named by its file, because nothing in a YAML document or a PNG is a title
+// this application is entitled to read as one.
 const shellTitle = $derived(
-  note !== null && selectedPath !== null
-    ? resolveNoteTitle({ path: selectedPath, source: currentNoteSource })
-        .displayTitle
-    : STRINGS.appTitle,
+  imageDocument !== null
+    ? noteFileName(imageDocument.path)
+    : note === null || selectedPath === null
+      ? STRINGS.appTitle
+      : isNotePath(selectedPath)
+        ? resolveNoteTitle({ path: selectedPath, source: currentNoteSource })
+            .displayTitle
+        : noteFileName(selectedPath),
 );
 const shellTitleVisible = $derived(note === null || noteTitleVisible);
 
@@ -2401,7 +2421,10 @@ function copyOutlineHeading(heading: string) {
 function onEditorDocChanged(source: string, path: string | null) {
   if (path === selectedPath) {
     currentNoteSource = source;
-    if (path !== null)
+    // Only a note has a display title derived from its content. Recording a
+    // configuration file's text here would let its first comment line
+    // relabel its own tree row and tab.
+    if (path !== null && isNotePath(path))
       treeTitleSources = { ...treeTitleSources, [path]: source };
   }
 }
@@ -2732,6 +2755,8 @@ async function openVaultAtPath(
       contentView = null;
       canvas = null;
       canvasError = null;
+      imageDocument = null;
+      imageError = null;
       obsidianConfig = config.config;
       propertyTypes = config.types;
       setTagCatalog(nextTags);
@@ -3072,7 +3097,7 @@ async function openNote(
     : undefined;
   delete debugWindow.__SKRIBEUM_DEBUG_NOTE_OPEN_MS__;
   try {
-    const loaded = await readNote(currentVault, path);
+    const loaded = await readVaultDocument(currentVault, path);
     if (
       !activeVaultMatches(currentVault, vaultGeneration) ||
       !contentRequests.isCurrent(request)
@@ -3097,7 +3122,10 @@ async function openNote(
       // that first paint from ever showing an intermediate state.
       editor.preparePaneSwitch(switchKind);
     }
-    noteTitleVisible = !noteOpensWithHeading(loaded.text);
+    // A leading `#` is a heading only in Markdown; in a shell script or a
+    // configuration file it is a comment, so those documents keep the
+    // shell title showing their file name.
+    noteTitleVisible = !isNotePath(path) || !noteOpensWithHeading(loaded.text);
     currentNoteSource = loaded.text;
     sourceMode = false;
     note = loaded;
@@ -3108,6 +3136,8 @@ async function openNote(
     contentView = null;
     canvas = null;
     canvasError = null;
+    imageDocument = null;
+    imageError = null;
     selectedPath = path;
     void refreshNoteTimes(currentVault, path);
     const pane = focusedWorkspacePane();
@@ -3139,6 +3169,8 @@ async function openNote(
       contentView = null;
       canvas = null;
       canvasError = null;
+      imageDocument = null;
+      imageError = null;
       selectedPath = null;
       missingAddress = { path };
       return false;
@@ -3339,6 +3371,8 @@ async function openCanvas(path: string) {
     canvas = parsed;
     canvasPreviews = Object.fromEntries(previews);
     canvasError = null;
+    imageDocument = null;
+    imageError = null;
     contentView = VIEW_CANVAS;
     selectedPath = path;
     outlineOpen = false;
@@ -3354,9 +3388,57 @@ async function openCanvas(path: string) {
     canvas = null;
     canvasPreviews = {};
     canvasError = `${STRINGS.canvasParseFailed}: ${String(error)}`;
+    imageDocument = null;
+    imageError = null;
     contentView = VIEW_CANVAS;
     selectedPath = path;
   }
+}
+
+/**
+ * Opens an image file in the viewer. The media type comes from the path's
+ * extension, never from the file's contents, and the viewer hands the bytes
+ * to an image element and to nothing else.
+ */
+async function openImage(path: string) {
+  const currentVault = vault;
+  const mediaType = imageMediaType(path);
+  if (currentVault === null || mediaType === null) {
+    return;
+  }
+  const request = contentRequests.next();
+  errorText = null;
+  if ((await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
+  let bytes: Uint8Array | null = null;
+  let failure: unknown = null;
+  try {
+    bytes = await readVaultFile(currentVault, path);
+  } catch (error) {
+    failure = error;
+  }
+  if (vault !== currentVault || !contentRequests.isCurrent(request)) {
+    return;
+  }
+  note = null;
+  currentNoteSource = "";
+  sourceMode = false;
+  canvas = null;
+  canvasPreviews = {};
+  canvasError = null;
+  contentView = null;
+  missingAddress = null;
+  outlineOpen = false;
+  selectedPath = path;
+  if (bytes === null) {
+    imageDocument = null;
+    imageError = describeError(STRINGS.fileOpenFailed, failure);
+    return;
+  }
+  imageDocument = { path, bytes, mediaType };
+  imageError = null;
 }
 
 /**
@@ -3495,12 +3577,30 @@ async function addCanvasNode() {
   }
 }
 
+/** Re-opens a path on the surface its kind belongs to. */
+async function reopenPath(
+  path: string,
+  restoration: NoteViewState | null = null,
+): Promise<void> {
+  const kind = vaultDocumentKind(path);
+  if (kind === "canvas") {
+    await openCanvas(path);
+  } else if (kind === "image") {
+    await openImage(path);
+  } else {
+    await openNote(path, restoration);
+  }
+}
+
 function openPath(path: string, options?: { newTab?: boolean }) {
   if (activeSheet === "file-tree") {
     closeSheet();
   }
-  if (path.toLowerCase().endsWith(".canvas")) {
+  const kind = vaultDocumentKind(path);
+  if (kind === "canvas") {
     void openCanvas(path);
+  } else if (kind === "image") {
+    void openImage(path);
   } else {
     void navigateToNote(
       path,
@@ -3524,7 +3624,7 @@ async function reviewPath(path: string, bannerId: number) {
     const currentVault = vault;
     const request = contentRequests.next();
     try {
-      const loaded = await readNote(currentVault, path);
+      const loaded = await readVaultDocument(currentVault, path);
       if (
         vault !== currentVault ||
         selectedPath !== path ||
@@ -4067,7 +4167,7 @@ onMount(() => {
       {/if}
     </div>
     <div class="skr-header-trailing">
-      {#if note?.readOnly || contentView === VIEW_CANVAS}
+      {#if note?.readOnly || contentView === VIEW_CANVAS || imageDocument !== null}
         <span class="skr-type-label skr-warning skr-read-only-badge rounded px-2 py-0.5">
           {STRINGS.readOnlyBadge}
         </span>
@@ -4278,14 +4378,20 @@ onMount(() => {
             >
               {#if pane.id !== workspace.focusedPaneId}
                 {#if pane.activePath !== null}
-                <div class="skr-unfocused-note">
-                  <ReadOnlyNote
-                    source={treeTitleSources[pane.activePath] ?? ""}
-                    label={STRINGS.editorLabel}
-                    context={{ ...(linkContext ?? EMPTY_WIKILINK_CONTEXT), currentPath: pane.activePath }}
-                    taskStatuses={documentTaskStatuses}
-                  />
-                </div>
+                  {#if isNotePath(pane.activePath)}
+                    <div class="skr-unfocused-note">
+                      <ReadOnlyNote
+                        source={treeTitleSources[pane.activePath] ?? ""}
+                        label={STRINGS.editorLabel}
+                        context={{ ...(linkContext ?? EMPTY_WIKILINK_CONTEXT), currentPath: pane.activePath }}
+                        taskStatuses={documentTaskStatuses}
+                      />
+                    </div>
+                  {:else}
+                    <!-- A document with no reading presentation names itself
+                         until its pane takes focus and its editor arrives. -->
+                    <p class="skr-unfocused-file">{noteFileName(pane.activePath)}</p>
+                  {/if}
                 {/if}
               {:else if contentView === VIEW_CANVAS && canvas !== null}
                 <CanvasView
@@ -4302,6 +4408,16 @@ onMount(() => {
               {:else if contentView === VIEW_CANVAS && canvasError !== null}
                 <div class="skr-error m-4 rounded border p-3" role="alert" data-testid="canvas-error">
                   {canvasError}
+                </div>
+              {:else if imageDocument !== null}
+                <ImageView
+                  bytes={imageDocument.bytes}
+                  mediaType={imageDocument.mediaType}
+                  fileName={noteFileName(imageDocument.path)}
+                />
+              {:else if imageError !== null}
+                <div class="skr-error m-4 rounded border p-3" role="alert" data-testid="image-error">
+                  {imageError}
                 </div>
               {:else if missingAddress !== null}
                 <div

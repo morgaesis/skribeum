@@ -33,7 +33,7 @@ export const STRINGS = {
   treeFolderPrompt: "Folder name",
   treeDeleteConfirm: "Delete this vault entry? This cannot be undone.",
   treeRenameInvalidExtension:
-    "Notes must end in .md, .markdown, or .txt, or the tree can no longer open them.",
+    "Notes must end in .md, .markdown, or .txt, or they leave search and stop resolving as link targets.",
   treeOperationFailed: "Changing the vault entry failed",
   cancelAction: "Cancel",
   confirmAction: "Confirm",

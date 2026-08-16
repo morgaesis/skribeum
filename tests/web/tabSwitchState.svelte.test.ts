@@ -27,6 +27,7 @@ function loadedNote(text: string, hash: string): LoadedNote {
     bytes: encoder.encode(text),
     text,
     readOnly: false,
+    persistence: "note",
   };
 }
 

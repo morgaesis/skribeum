@@ -16,6 +16,7 @@ import {
   openVault,
   openVaultResult,
   readNote,
+  readVaultDocument,
   readVaultFile,
   resetDemoVault,
   selectLocalDirectory,
@@ -156,6 +157,75 @@ describe("browser demo IPC", () => {
     expect(JSON.parse(new TextDecoder().decode(canvas))).toHaveProperty(
       "nodes",
     );
+  });
+
+  it("indexes and opens files that are not notes", async () => {
+    const handle = await openVault("demo");
+    const tree = await vaultTree(handle);
+
+    // A dot-prefixed name is ordinary vault content, and the tree shows it.
+    expect(tree).toContainEqual({
+      path: ".gitignore",
+      kind: "file",
+      hidden: true,
+    });
+    expect(tree).toContainEqual({
+      path: "Features/deploy.yml",
+      kind: "file",
+      hidden: false,
+    });
+    // The excluded configuration directory stays out of the index.
+    expect(tree.some((entry) => entry.path.startsWith(".obsidian"))).toBe(
+      false,
+    );
+
+    const ignore = await readVaultDocument(handle, ".gitignore");
+    expect(ignore.readOnly).toBe(false);
+    expect(ignore.persistence).toBe("file");
+    expect(ignore.text).toContain("drafts/*.tmp");
+
+    const pipeline = await readVaultDocument(handle, "Features/deploy.yml");
+    expect(pipeline.readOnly).toBe(false);
+    expect(pipeline.text).toContain("targets:");
+  });
+
+  it("keeps a binary file intact and never opens it as editable text", async () => {
+    const handle = await openVault("demo");
+    const path = "Examples/Work/printed-handout.pdf";
+    const raw = await readVaultFile(handle, path);
+    const document = await readVaultDocument(handle, path);
+
+    // The seeding pipeline delivered the file's own bytes, not a UTF-8
+    // re-encoding of them: a PDF opens with its signature intact.
+    expect([...raw.subarray(0, 5)]).toEqual([0x25, 0x50, 0x44, 0x46, 0x2d]);
+    expect(raw.some((byte) => byte > 0x7f)).toBe(true);
+    expect(document.readOnly).toBe(true);
+    expect(document.meta.encoding).toBe("non-utf8");
+  });
+
+  it("collects every file from a local folder, not only its notes", async () => {
+    const ignoreFile = new MockFileHandle(
+      ".gitignore",
+      new TextEncoder().encode("public/\n"),
+    );
+    const noteFile = new MockFileHandle(
+      "note.md",
+      new TextEncoder().encode("# Local"),
+    );
+    const directory = new MockDirectoryHandle(
+      "Writing",
+      [ignoreFile, noteFile],
+      "granted",
+    );
+    const handle = await openVault(await useLocalDirectory(directory));
+
+    expect(await vaultTree(handle)).toContainEqual({
+      path: ".gitignore",
+      kind: "file",
+      hidden: true,
+    });
+    const loaded = await readVaultDocument(handle, ".gitignore");
+    expect(loaded.text).toBe("public/\n");
   });
 
   it("creates a new note without overwriting an existing path", async () => {

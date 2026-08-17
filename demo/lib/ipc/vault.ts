@@ -74,8 +74,20 @@ type DemoWindow = Window & {
 };
 
 const LOCAL_FOLDER_VAULT = "skribeum-local-folder";
+/** Largest file the in-memory browser vault holds from a chosen folder. */
+const BROWSER_FILE_BYTE_LIMIT = 32 * 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+/** Whether `bytes` decode as UTF-8 without replacement. */
+function isUtf8(bytes: Uint8Array): boolean {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function seededFiles(): Map<string, Uint8Array> {
   const files = new Map(
@@ -228,7 +240,10 @@ async function collectDirectory(
   for await (const entry of directory.values()) {
     const path = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
     if (entry.kind === "directory") {
-      if (entry.name.startsWith(".") && path !== ".obsidian") {
+      // `.obsidian` is collected for its configuration files and excluded
+      // from the tree by `isIndexedPath`; every other excluded directory
+      // is never descended into at all.
+      if (EXCLUDED_DIRECTORIES.has(entry.name) && path !== ".obsidian") {
         continue;
       }
       skipped += await collectDirectory(
@@ -241,15 +256,26 @@ async function collectDirectory(
       continue;
     }
     const markdown = isNotePath(path);
-    const config =
-      path === ".obsidian/app.json" || path === ".obsidian/types.json";
-    if (!markdown && !config) {
+    // Inside the excluded configuration directory only the two files the
+    // editor honors are read; the rest of it is another application's state.
+    if (
+      path.startsWith(".obsidian/") &&
+      path !== ".obsidian/app.json" &&
+      path !== ".obsidian/types.json"
+    ) {
       continue;
     }
     let bytes: Uint8Array;
     try {
       bytes = await fileBytes(entry);
     } catch {
+      skipped += 1;
+      continue;
+    }
+    // The browser vault lives entirely in memory, so a file past the cap
+    // is reported as skipped rather than read. The desktop application
+    // reads from disk and has no such limit.
+    if (bytes.byteLength > BROWSER_FILE_BYTE_LIMIT) {
       skipped += 1;
       continue;
     }
@@ -365,6 +391,32 @@ async function projectionHash(bytes: Uint8Array): Promise<string> {
   ).join("");
 }
 
+/** Directories the vault index never descends into, mirroring the shell. */
+const EXCLUDED_DIRECTORIES = new Set([
+  ".git",
+  ".obsidian",
+  ".skribeum",
+  ".stfolder",
+  ".stversions",
+  ".tmp.drivedownload",
+]);
+
+/** File names the vault index never records, mirroring the shell. */
+const EXCLUDED_FILES = new Set([".stignore", "4913"]);
+
+/**
+ * Whether a vault-relative path is inside the indexed surface. A dot-prefixed
+ * name is ordinary vault content: `.gitignore` is a file the vault holds and
+ * therefore a file the tree shows.
+ */
+function isIndexedPath(segments: readonly string[]): boolean {
+  return segments.every((segment, index) =>
+    index === segments.length - 1
+      ? !EXCLUDED_FILES.has(segment) && !segment.includes(".sync-conflict-")
+      : !EXCLUDED_DIRECTORIES.has(segment),
+  );
+}
+
 function indexedTree(vault: DemoVault): TreeEntry[] {
   const entries = new Map<string, TreeEntry>();
   for (const directory of vault.directories) {
@@ -376,7 +428,7 @@ function indexedTree(vault: DemoVault): TreeEntry[] {
   }
   for (const path of vault.files.keys()) {
     const segments = path.split("/");
-    if (segments.some((segment) => segment.startsWith("."))) {
+    if (!isIndexedPath(segments)) {
       continue;
     }
     for (let index = 1; index < segments.length; index += 1) {
@@ -384,13 +436,13 @@ function indexedTree(vault: DemoVault): TreeEntry[] {
       entries.set(directory, {
         path: directory,
         kind: "directory",
-        hidden: false,
+        hidden: (segments[index - 1] ?? "").startsWith("."),
       });
     }
     entries.set(path, {
       path,
       kind: isNotePath(path) ? "note" : "file",
-      hidden: false,
+      hidden: (segments.at(-1) ?? "").startsWith("."),
     });
   }
   return [...entries.values()].sort((left, right) =>
@@ -540,14 +592,10 @@ export async function noteWrite(
   expectedProjectionHash: string,
 ): Promise<WriteResult> {
   const vault = vaultFor(handle);
-  if (vault.readOnlyPaths.has(relPath)) {
-    return fail(
-      "note/non-utf8-read-only",
-      "This note is not valid UTF-8 and cannot be edited in the browser demo.",
-      relPath,
-    );
-  }
   const current = cachedFileBytes(vault, relPath);
+  if (vault.readOnlyPaths.has(relPath) || !isUtf8(current)) {
+    return fail("note/non-utf8-read-only", STRINGS.demoNoteReadOnly, relPath);
+  }
   const currentProjectionHash = await projectionHash(current);
   if (currentProjectionHash !== expectedProjectionHash) {
     return {
@@ -712,9 +760,6 @@ export async function readNote(
   relPath: string,
 ): Promise<LoadedNote> {
   const vault = vaultFor(handle);
-  if (!isNotePath(relPath)) {
-    return fail("note/not-markdown", STRINGS.demoNoteNotMarkdown, relPath);
-  }
   const bytes = cachedFileBytes(vault, relPath).slice();
   await waitForTestGate(relPath);
   const hasBom =
@@ -722,7 +767,9 @@ export async function readNote(
     bytes[0] === 0xef &&
     bytes[1] === 0xbb &&
     bytes[2] === 0xbf;
-  const readOnly = vault.readOnlyPaths.has(relPath);
+  // What a file is named decides how it is presented; what its bytes are
+  // decides whether it may be written. This mirrors the native `classify`.
+  const readOnly = vault.readOnlyPaths.has(relPath) || !isUtf8(bytes);
   return {
     meta: {
       encoding: readOnly ? "non-utf8" : hasBom ? "utf8-bom" : "utf8",

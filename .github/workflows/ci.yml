@@ -23,6 +23,17 @@ env:
     libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
     libayatana-appindicator3-dev libssl-dev patchelf
 
+  # Every job restores the cargo cache; only a run on the default branch
+  # writes it. A cache written from a pull request is scoped to that pull
+  # request's merge ref, which no other run can read, and it holds the same
+  # bytes as the default-branch entry under the same key, because the action
+  # strips the workspace crates before saving and keeps only third-party
+  # dependencies. Those unreadable duplicates are what carry the repository
+  # past its cache quota, and eviction is by least recent access, so they
+  # displace the default-branch entries every pull request restores from.
+  # See docs/ci.md.
+  RUST_CACHE_SAVE: ${{ github.ref == 'refs/heads/main' }}
+
 jobs:
   release-metadata:
     name: release metadata
@@ -82,6 +93,8 @@ jobs:
         run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ env.RUST_CACHE_SAVE }}
 
       - run: cargo fmt --all --check
 
@@ -143,6 +156,8 @@ jobs:
         run: rustup toolchain install 1.95 --profile minimal
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ env.RUST_CACHE_SAVE }}
 
       # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml so the build runs on
       # the minimum supported version declared in Cargo.toml.
@@ -212,6 +227,8 @@ jobs:
         run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ env.RUST_CACHE_SAVE }}
 
       # The webdriver feature compiles the embedded WebDriver server into the
       # debug binary; the @wdio/tauri-service embedded provider connects to it

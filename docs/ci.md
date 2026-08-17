@@ -28,18 +28,19 @@ Sizes and step durations, measured across runs of this workflow:
 | `msrv`, Linux x64 | 0.7-0.9 GB | 20-30 s | 13-15 s |
 
 The save column is the cost when the entry is rewritten. An exact key match
-skips the save entirely and costs 0 s, which is the common case: over 56
-measured restores there were no misses, 35 exact matches and 21 prefix
-matches. A prefix match happens when `Cargo.lock`, a `Cargo.toml`, the
-toolchain file or the cargo configuration changed, since those inputs are
-hashed into the key.
+skips the save entirely and costs 0 s, and it is the common case: across 56
+measured restores there were 35 exact matches and 21 prefix matches. A prefix
+match happens when `Cargo.lock`, a `Cargo.toml`, the toolchain file or the
+cargo configuration changed, since those inputs are hashed into the key. A
+restore that finds nothing at all means the entry has been evicted, which is a
+quota problem rather than a key problem.
 
 What the restore buys, measured as the sum of the cargo steps in a job:
 
 | Job | Exact match | Prefix match | Cold |
 | --- | --- | --- | --- |
 | `rust`, Linux x64 | 48-64 s | 159 s | — |
-| `rust`, Windows x64 | 132-164 s | 238-269 s | — |
+| `rust`, Windows x64 | 132-164 s | 238-269 s | 558 s |
 | `rust`, macOS arm64 | 55-106 s | 134-185 s | — |
 | `rust`, Linux arm64 | — | — | 400 s |
 | `e2e` debug build, Linux x64 | 21-28 s | 34-44 s | — |
@@ -66,9 +67,10 @@ third of that being such duplicates.
 
 Exceeding the quota is what makes the cache stop paying: eviction takes the
 least recently accessed entry, and the entries a pull request restores from
-are the default-branch ones. Evicting one costs every subsequent pull request
-a cold compile, which the table above prices at several minutes; the only
-thing the restriction costs is that a pull request which itself changes
+are the default-branch ones. Losing the Windows `rust` entry, 1.2 GB that
+restores in 38-80 s, turns that job's 132-164 s of cargo work into 558 s, and
+every pull request pays it until a run on `main` writes the entry again. The
+only thing the restriction costs is that a pull request which itself changes
 `Cargo.lock` re-resolves that change on each push instead of once, worth about
 90 s on the `rust` job.
 
@@ -155,8 +157,8 @@ Windows entries at a Linux image, it runs those legs in that image, where
 `runner.os` reports `Linux`: the steps guarded by `runner.os == 'Linux'` run
 on all three legs, and a leg labelled macOS or Windows can report success
 having exercised nothing platform-specific. Without such a map it skips those
-legs outright. Either way the platforms that a Linux-only pull request does
-not cover are the platforms `act` cannot cover either.
+legs outright. Either way `act` covers Linux and nothing else, and a green
+result from it says nothing about macOS or Windows.
 
 Its runner image is not GitHub's. It is 1.7 GB, carries less preinstalled
 tooling, and resolves 216 apt packages where a hosted runner resolves 189, so

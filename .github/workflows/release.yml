@@ -173,7 +173,14 @@ jobs:
         if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      # No cargo cache here on purpose. A run triggered by a tag can restore
+      # only entries written for the same tag or for the default branch, and
+      # the default branch holds nothing this job could use: its cache keys
+      # carry the CI job identifier, and the closest CI equivalent runs
+      # `cargo check`, whose metadata a build cannot link. Every build leg
+      # therefore starts cold, and a cache written here would be readable
+      # only by a re-run of this same tag while consuming a repository cache
+      # quota that the pull-request path depends on. See docs/ci.md.
 
       - name: Install cargo-auditable
         if: runner.os == 'Linux'

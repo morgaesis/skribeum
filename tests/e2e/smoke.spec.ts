@@ -1560,11 +1560,15 @@ async function pressEditorHistoryShortcut(
 
 /**
  * Waits for a [data-motion-surface] element's entrance transition to reach
- * its settled state (see enterMotionSurface in src/lib/motion.ts) before an
- * axe scan runs against it. axe's color-contrast rule reads the actually
+ * its settled state (see enterMotionSurface in src/lib/motion.ts).
+ *
+ * An axe scan needs it because the color-contrast rule reads the actually
  * rendered opacity: a scan mid-fade can see text still translucent against
  * its background and report a violation that clears on its own well
- * before a human ever perceives it.
+ * before a human ever perceives it. A click needs it because an anchored
+ * surface travels while it arrives, so a row's position at the moment
+ * WebDriver resolves it is not its position at the moment the click is
+ * dispatched.
  */
 async function waitForMotionSurfaceEntered(selector: string): Promise<void> {
   await browser.waitUntil(
@@ -2922,10 +2926,15 @@ describe("skribeum shell", () => {
         timeout: 10000,
       });
     };
+    // A surface is displayed as soon as it is rendered, which is while its
+    // entrance is still travelling, so the row's position when WebDriver
+    // resolves it is not its position when the click is dispatched. The
+    // fact to wait on is the entrance having settled, not more time.
     const runCommand = async (query: string, id: string) => {
       await browser.keys([modifierKey, "p"]);
       const surface = $('[data-testid="unified-command-surface"]');
       await surface.waitForDisplayed({ timeout: 10000 });
+      await waitForMotionSurfaceEntered(".command-surface-dialog");
       await surface.$('[role="combobox"]').addValue(query);
       const command = surface.$(`[role="option"][data-command-id="${id}"]`);
       await command.waitForDisplayed({ timeout: 10000 });
@@ -2936,6 +2945,7 @@ describe("skribeum shell", () => {
       await $('button[aria-label="More actions"]').click();
       const menu = $('nav[aria-label="More actions"]');
       await menu.waitForDisplayed({ timeout: 10000 });
+      await waitForMotionSurfaceEntered('[data-testid="anchored-menu"]');
       const command = menu.$(`button[data-command-id="${id}"]`);
       await command.waitForDisplayed({ timeout: 10000 });
       await command.click();
@@ -2945,6 +2955,7 @@ describe("skribeum shell", () => {
       {
         id: "table.row.insert-above",
         query: "table insert row above",
+        shape: { rows: 4, columns: 2 },
         table: [
           "| Name  | Score |",
           "| :--- | ---: |",
@@ -2956,6 +2967,7 @@ describe("skribeum shell", () => {
       {
         id: "table.row.insert-below",
         query: "table insert row below",
+        shape: { rows: 4, columns: 2 },
         table: [
           "| Name  | Score |",
           "| :--- | ---: |",
@@ -2967,6 +2979,7 @@ describe("skribeum shell", () => {
       {
         id: "table.column.insert-before",
         query: "table insert column left",
+        shape: { rows: 3, columns: 3 },
         table: [
           "| | Name  | Score |",
           "| --- | :--- | ---: |",
@@ -2977,6 +2990,7 @@ describe("skribeum shell", () => {
       {
         id: "table.column.insert-after",
         query: "table insert column right",
+        shape: { rows: 3, columns: 3 },
         table: [
           "| Name  | | Score |",
           "| :--- | --- | ---: |",
@@ -2987,6 +3001,7 @@ describe("skribeum shell", () => {
       {
         id: "table.row.delete",
         query: "table delete row",
+        shape: { rows: 2, columns: 2 },
         table: ["| Name  | Score |", "| :--- | ---: |", "| Ada | 10 |"].join(
           "\n",
         ),
@@ -2994,15 +3009,47 @@ describe("skribeum shell", () => {
       {
         id: "table.column.delete",
         query: "table delete column",
+        shape: { rows: 3, columns: 1 },
         table: ["| Score |", "| ---: |", "| keep  |", "| 10 |"].join("\n"),
       },
     ] as const;
 
     try {
+      // Two facts, in order: the command reached the note, read from the
+      // rendered table's own shape, and the note reached the disk. They are
+      // asserted separately because they fail for unrelated reasons and are
+      // indistinguishable from the file alone — a command that never ran and
+      // a save that never landed both leave the file exactly as it was.
+      const waitForFirstGridShape = async (
+        shape: { rows: number; columns: number },
+        message: string,
+      ) => {
+        const readShape = async () => {
+          const grid = (await $$(".cm-skr-table-grid"))[0];
+          return grid === undefined
+            ? "no rendered table"
+            : `${await grid.getAttribute("aria-rowcount")}x${await grid.getAttribute("aria-colcount")}`;
+        };
+        const wanted = `${shape.rows}x${shape.columns}`;
+        try {
+          await browser.waitUntil(async () => (await readShape()) === wanted, {
+            timeout: 10000,
+          });
+        } catch {
+          throw new Error(
+            `${message}; the rendered table is ${await readShape()}, expected ${wanted}`,
+          );
+        }
+      };
+
       for (const entry of cases) {
         await resetAndOpen();
         await focusBodyCell();
         await runCommand(entry.query, entry.id);
+        await waitForFirstGridShape(
+          entry.shape,
+          `${entry.id} from the command palette did not change the note`,
+        );
         const expected = original.replace(firstTable, entry.table);
         await browser.keys([modifierKey, "s"]);
         await waitForDisk(TABLE_EDITING_NOTE_NAME, expected);
@@ -3014,6 +3061,10 @@ describe("skribeum shell", () => {
         await resetAndOpen();
         await focusBodyCell();
         await runPointerCommand(entry.id);
+        await waitForFirstGridShape(
+          entry.shape,
+          `${entry.id} from the overflow menu did not change the note`,
+        );
         const expected = original.replace(firstTable, entry.table);
         await browser.keys([modifierKey, "s"]);
         await waitForDisk(TABLE_EDITING_NOTE_NAME, expected);

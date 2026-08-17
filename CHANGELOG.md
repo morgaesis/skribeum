@@ -6,6 +6,174 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A headless list-move primitive: given a document, a list item and a
+  destination list and index, it returns the declared spans that relocate
+  the item and nothing else. The moved extent is the item's whole lines
+  including nested sublists, continuation paragraphs and indented code,
+  together with the blank line that separates it from its neighbour, so a
+  loose list stays loose and a tight one stays tight at both ends of the
+  move. Indentation and the marker character are rewritten only where the
+  destination list writes them differently, numbered items keep the numbers
+  the author gave them, and a file with no final newline still has none
+  afterwards. A move that cannot be written without changing a byte it was
+  not asked to touch is refused rather than approximated. A corpus of
+  board-shaped and list-shaped documents, covering CRLF, mixed and absent
+  terminators, tabs, every bullet marker, ordered lists, loose and tight
+  lists, continuations and nested sublists, asserts on the bytes the edit
+  path writes that every legal move relocates its extent and leaves the rest
+  of the file untouched, and that undoing a move restores the file exactly.
+- The Updates settings section can now act on what it reports: an available
+  update offers an "Install update" button showing its release notes inline,
+  a running download shows progress that reads honestly whether or not the
+  server reports a download size, and an installed update offers "Restart to
+  apply", which confirms first and saves any unsaved work through the same
+  path any other window-closing action uses before restarting.
+
+### Changed
+
+- An update failure now reports something a person can act on instead of a
+  raw error object: a signature or authentication failure is called out as a
+  security concern rather than reading like an ordinary network hiccup, and
+  it is announced assertively rather than as routine status text.
+
+### Fixed
+
+- Opening a note that lives inside a collapsed folder no longer stops the
+  application. The file tree measured a row the same update had released,
+  and the resulting error, thrown from inside a reactive effect, halted every
+  surface with no message and no recovery. The workspace it left behind was
+  saved, so the next visit reproduced it; a stored workspace now reconciles a
+  selected note with the folders on the way to it, so a record like that
+  heals when it is read.
+- A failure inside one panel of the shell now takes down only that panel,
+  which reports the failure in place and offers to rebuild itself, while the
+  rest of the workspace keeps rendering and responding.
+
+## [0.0.8] - 2026-08-15
+
+### Added
+
+- Markdown images render: `![alt](target)` resolves a vault file, a `data:`
+  URL, or an HTTPS URL, with the alt text as the accessible name, the prose
+  measure as the width ceiling, and a retryable failure state when a target
+  is missing. Image bytes never enter the document as markup, a vault file is
+  typed from an extension allowlist rather than from its own content, and
+  only HTTPS and already-typed data URLs resolve, so an SVG renders as a
+  picture and executes nothing.
+- Footnotes render: `[^label]` marks up as a reference and `[^label]: text`
+  as its definition, either half moves the caret to its counterpart, and a
+  run of definitions written without blank lines stays a run of definitions.
+- A standalone `---` renders as a thematic break. A leading `---` opens
+  frontmatter only when the line after it can belong to a mapping, so a
+  document may open with a rule.
+- Stable note permalinks: `Copy permalink` in the command palette writes an
+  11-character id into the note's frontmatter on first use and copies
+  `https://skribeum.app/?n=<id>`, a URL that survives file moves and renames
+  because the id lives in the note content. The browser demo resolves the id
+  to the note and falls back to normal landing when nothing matches;
+  `?note=<path>` URLs keep working.
+- Editor panes form a split tree: any pane splits up, down, left, or right,
+  splits nest, and dividers resize each split 1:1 with the pointer against a
+  20rem width and 12rem height floor per pane. `Mod-Alt-Arrow` moves focus to
+  the nearest pane in that direction by bounding box, `Move tab to pane
+  above/below/left/right` relocates the active tab the same way, and closing a
+  pane's last tab collapses it into its sibling. A tab dragged over a pane's
+  four edge zones creates a split there; the center zone joins that pane's
+  strip. Eight panes is the ceiling.
+- Every pane in a split carries its own tab strip, so each one is named and
+  closable, and a `+` control opens an empty tab that the next note fills in
+  place. Tab strips hold their widths after a close while the pointer stays
+  over them, so repeated clicks close successive tabs, and arrow keys move
+  between tabs per the ARIA tabs pattern.
+- Canvas boards are directly manipulable: double-click opens a card's note,
+  single click selects it, cards drag 1:1 with the pointer and persist their
+  position, a toolbar action adds an existing note as a card, and a per-card
+  control removes it from the board without touching the note file. Canvas
+  changes write through a whole-document atomic file path in the vault.
+
+### Changed
+
+- Opening a note reuses the focused pane's active tab instead of adding one,
+  and switches to the note's existing tab when it is already open in any pane.
+  Four routes still open a new tab deliberately: mod-click or middle-click on
+  a link or tree row, `Open in new tab` in a tree row's menu, the strip's `+`
+  control, and `Mod-Enter` on a file in the command surface.
+- Reveal marker glyphs enter with a 120ms fade and a small slide inside their
+  instantly reserved space, and leave mirroring the same motion; the reserved
+  width still applies in one frame, so the caret is never dragged sideways.
+- The file tree's open-note highlight and the tab strip's active-tab
+  indicator travel to the newly active row or tab instead of reappearing,
+  entering in place when no previous position is on screen.
+- Switching tabs keeps each tab's live editor state: undo history, caret, and
+  scroll position restore instantly, the pane crossfades instead of
+  rebuilding, and the first note after startup transitions in place rather
+  than remounting the editor.
+- Menus share one anchored placement and dismissal engine: outside-press,
+  Escape, and window-blur dismissal, viewport-aware flipping from the
+  invoking control, arrow-key navigation, interface typography, and hover
+  highlights, covering the all-tabs list, the wide-viewport overflow menu,
+  the file tree's row menu, and the task status control, which now tracks
+  its checkbox while the editor scrolls.
+- Canvas wheel input stays on the board: an unmodified wheel or two-finger
+  scroll pans, ctrl-wheel and trackpad pinch zoom anchored at the pointer,
+  and keyboard and toolbar zoom anchor at the viewport center.
+
+### Fixed
+
+- Canvas cards no longer draw their path label, title, and content on top of
+  each other; content clips with a bottom fade.
+- Notes with frontmatter no longer show an oversized gap between the
+  properties panel and the first block, and ArrowUp from the first visible
+  line keeps the caret out of the hidden frontmatter text instead of
+  stranding it at the top of the document.
+- Opening a note by URL in the browser demo no longer rebuilds the page
+  shell, and opening a note after viewing a canvas works again instead of
+  failing silently for the rest of the session.
+- Startup no longer stalls on the placeholder document when the window is
+  not painting: post-paint editor work now runs through a bounded timer
+  fallback when no animation frame arrives, so a vault opened in a
+  background tab or an occluded window loads its note and the navigation
+  queue keeps draining instead of blocking until the first visible paint.
+- Typing a space at the end of a rendered table cell no longer loses the
+  space before the next character arrives: the cell keeps mid-typed edge
+  whitespace while it owns the caret, so multi-word content can be typed
+  at any speed.
+- Closing every tab no longer leaves the editor showing a stale document: the
+  pane's empty state and every route out of it now agree, and the tab strip's
+  geometry effects no longer throw when the strip is removed mid-update.
+- The address bar follows the focused pane's active tab, including plain tab
+  switches and renames, without overwriting the note a `?note=<path>` address
+  asks for: reloading such a link opens that note and adds it to the focused
+  pane's strip, so every restored tab survives. A restored workspace decides
+  what opens only when the address names no note.
+- The workspace reserves the sidebar's width from the first paint, so the
+  editor area no longer jumps sideways when the vault finishes opening.
+- Structure commands on a rendered table no longer corrupt the note. A table
+  block end that stopped inside a row made that row parse as a truncated
+  line, so an edit aimed at the row's end landed inside the row's source; a
+  block end now completes the row it stops inside, and a line carrying no
+  column separator is still not a row, so a block never grows over prose.
+- Editing a rendered table cell no longer writes into the note around the
+  table. A cell's editable surface bound no caret keys, so keys it did not
+  claim resolved against the note's document instead of the cell: `End`
+  stopped at a wrap point in a cell wide enough to wrap, and `Control-End`
+  moved the caret out of the cell while the cell still held the editing
+  session, so the next character landed outside the table. A cell is one
+  field and now answers those keys against its own bounds.
+- An empty quote line ends its block instead of trapping what follows inside
+  it, dropping one nesting level per press, and text that already carries its
+  own `>` marker keeps that marker instead of gaining a second one.
+- The task status menu, link previews, and every other surface the editor
+  hosts paint where they are placed. The editor shell held a compositor hint
+  while idle, which made it the containing block for the fixed-position
+  surfaces inside it and offset each one by the pane's own origin; the hint
+  is now held only while a surface is moving.
+- A hover-summoned menu waits for the pointer to rest before opening and
+  stays open while the pointer travels toward it, so reaching an option no
+  longer requires beating the dismissal.
+
 ## [0.0.7] - 2026-08-05
 
 ### Added

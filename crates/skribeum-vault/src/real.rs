@@ -183,6 +183,35 @@ impl FileSystem for RealFs {
         std::fs::create_dir_all(path).map_err(|e| map_io(&e))
     }
 
+    fn create_private_dir_all(&self, path: &Path) -> Result<(), FsError> {
+        std::fs::create_dir_all(path).map_err(|e| map_io(&e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| map_io(&e))?;
+        }
+        Ok(())
+    }
+
+    fn write_private_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).map_err(|e| map_io(&e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| map_io(&e))?;
+        }
+        file.write_all(bytes).map_err(|e| map_io(&e))
+    }
+
     fn metadata(&self, path: &Path) -> Result<FileMetadata, FsError> {
         let meta = std::fs::metadata(path).map_err(|e| map_io(&e))?;
         let mtime = meta

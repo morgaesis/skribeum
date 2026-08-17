@@ -180,8 +180,30 @@ export function noteIcon(source: string): string | null {
   return [...value].length === 1 ? value : null;
 }
 
+/**
+ * Returns the document's content, with any leading frontmatter block
+ * removed. A frontmatter block's own first line is always the opening
+ * `---` fence, which would otherwise mask a heading that follows it.
+ */
+function contentAfterFrontmatter(normalizedSource: string): string {
+  const frontmatter = parseFrontmatter(normalizedSource);
+  if (frontmatter === null) return normalizedSource;
+  // `frontmatter.to` ends on the closing fence line itself; the content
+  // resumes one character later, past that line's newline (or is empty
+  // when the fence is the document's last line).
+  return normalizedSource.slice(frontmatter.to + 1);
+}
+
+/**
+ * Reads the display title from the note's first content line: the
+ * document's literal first line, or, when the document opens with a
+ * frontmatter block, the first line that follows it. Only that one line is
+ * ever consulted, so a heading further down the note is never picked up.
+ */
 function firstLineH1(source: string): string | null {
-  const [first = "", second = ""] = source.split(/\r?\n/u, 2);
+  const normalizedSource = source.replaceAll("\r\n", "\n");
+  const body = contentAfterFrontmatter(normalizedSource);
+  const [first = "", second = ""] = body.split("\n", 2);
   const atx = /^ {0,3}#(?:[\t ]+|$)(.*)$/u.exec(first);
   if (atx !== null) {
     const title = (atx[1] ?? "").replace(/[\t ]+#+[\t ]*$/u, "").trim();

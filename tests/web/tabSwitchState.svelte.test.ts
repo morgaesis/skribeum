@@ -13,7 +13,7 @@ import { flushSync, mount, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import Editor from "../../src/lib/Editor.svelte";
 import type { LoadedNote } from "../../src/lib/ipc/vault";
-import { reactiveState } from "./support/reactiveState.svelte";
+import { reactiveState } from "./helpers/reactiveState.svelte";
 
 const encoder = new TextEncoder();
 

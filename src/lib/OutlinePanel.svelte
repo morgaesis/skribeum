@@ -20,7 +20,7 @@ let {
 
 let collapsed = $state<Set<number>>(new Set());
 let focusIndex = $state(0);
-let itemElements: HTMLElement[] = [];
+let itemElements: Array<HTMLElement | null | undefined> = [];
 
 const rows = $derived.by((): FlatOutlineRow[] =>
   flattenOutline(entries, collapsed),
@@ -97,12 +97,12 @@ function onKeydown(event: KeyboardEvent) {
 }
 </script>
 
-<div class="flex h-full flex-col overflow-hidden text-sm">
-  <h2 class="skr-panel-heading m-0 border-b px-2 py-1 text-xs font-semibold uppercase tracking-wide">
+<div class="flex h-full flex-col overflow-hidden">
+  <h2 class="skr-panel-heading m-0 border-b px-2 py-1 font-semibold uppercase tracking-wide">
     {STRINGS.outlineLabel}
   </h2>
   {#if rows.length === 0}
-    <p class="skr-muted m-0 px-2 py-1 text-xs">{STRINGS.outlineEmpty}</p>
+    <p class="skr-type-label skr-muted m-0 px-2 py-1">{STRINGS.outlineEmpty}</p>
   {:else}
     <ul
       class="m-0 list-none overflow-y-auto p-1"
@@ -165,7 +165,7 @@ function onKeydown(event: KeyboardEvent) {
     padding: 0;
     background: transparent;
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     line-height: 1;
     opacity: 0;
     transition: opacity var(--skr-motion-state-duration)

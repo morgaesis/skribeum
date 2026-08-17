@@ -100,6 +100,23 @@ export function runAsyncContent<T>(
     },
     kind === "embed" ? EMBED_TIMEOUT_MS : PREVIEW_TIMEOUT_MS,
   );
+  let geometryFrame: number | null = null;
+  let previousMinHeight: string | null = null;
+  const restoreGeometry = () => {
+    if (previousMinHeight === null) return;
+    host.style.minHeight = previousMinHeight;
+    previousMinHeight = null;
+  };
+  const reserveGeometryThroughRender = () => {
+    const height = host.getBoundingClientRect().height;
+    if (!(height > 0)) return;
+    previousMinHeight = host.style.minHeight;
+    host.style.minHeight = `${height}px`;
+    geometryFrame = requestAnimationFrame(() => {
+      geometryFrame = null;
+      restoreGeometry();
+    });
+  };
 
   void options.load().then(
     (value) => {
@@ -111,6 +128,7 @@ export function runAsyncContent<T>(
         renderAsyncFailure(host, kind, options.onRetry);
         return;
       }
+      reserveGeometryThroughRender();
       host.dataset.loadingState = "content";
       host.removeAttribute("role");
       host.removeAttribute("aria-label");
@@ -130,5 +148,7 @@ export function runAsyncContent<T>(
     active = false;
     if (skeletonTimer !== null) clearTimeout(skeletonTimer);
     clearTimeout(timeoutTimer);
+    if (geometryFrame !== null) cancelAnimationFrame(geometryFrame);
+    restoreGeometry();
   };
 }

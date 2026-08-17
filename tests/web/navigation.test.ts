@@ -27,6 +27,10 @@ import {
   noteAddressFromUrl,
   noteFragmentPosition,
   openExternalLink,
+  readingViewportTop,
+  type ScrollAnchorGeometry,
+  type ScrollAnchorLine,
+  scrollAnchorForViewport,
   urlForNoteAddress,
 } from "../../src/lib/features/navigation";
 import { commandItems } from "../../src/lib/features/pickers";
@@ -175,7 +179,7 @@ describe("wikilink pointer navigation", () => {
   });
 
   it.each(["ctrlKey", "metaKey"] as const)(
-    "follows a %s click without changing the editor selection",
+    "opens a %s click in a new tab without changing the editor selection",
     (modifier) => {
       const navigate = vi.fn();
       const options = navigationOptions({ navigate });
@@ -187,9 +191,31 @@ describe("wikilink pointer navigation", () => {
 
       expect(event.defaultPrevented).toBe(true);
       expect(view.state.selection.eq(selection)).toBe(true);
-      expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
+      expect(navigate).toHaveBeenCalledWith(
+        { path: "Target note.md" },
+        { newTab: true },
+      );
     },
   );
+
+  it("opens a middle-click on a link in a new tab", () => {
+    const navigate = vi.fn();
+    const options = navigationOptions({ navigate });
+    const view = makePointerView("Before [[Target note]] after", 0, options);
+
+    const event = new MouseEvent("auxclick", {
+      bubbles: true,
+      cancelable: true,
+      button: 1,
+    });
+    wikilinkTarget(view).dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith(
+      { path: "Target note.md" },
+      { newTab: true },
+    );
+  });
 
   it("leaves a plain click in edit mode when the cursor is inside the link", () => {
     const navigate = vi.fn();
@@ -607,5 +633,173 @@ describe("note addressing and desktop history", () => {
     );
     navigator.dispose();
     window.history.replaceState({}, "", "/");
+  });
+});
+
+describe("stored reading positions", () => {
+  // A laid-out editor as a webview reports one: the line height and the
+  // content padding both come out of a rem-based type scale, so line tops and
+  // the scroll positions that show them are fractional. Zoom scales the
+  // layout and the device pixel together.
+  type Layout = {
+    lineHeight: number;
+    paddingTop: number;
+    devicePixelRatio: number;
+  };
+
+  const DEFAULT_ZOOM: Layout = {
+    lineHeight: 27.1875,
+    paddingTop: 37.05,
+    devicePixelRatio: 1,
+  };
+  const LARGER_ZOOM: Layout = {
+    lineHeight: 27.1875 * 1.25,
+    paddingTop: 37.05 * 1.25,
+    devicePixelRatio: 1.25,
+  };
+  const LINE_LENGTH = 33;
+  const LINE_COUNT = 84;
+  const DOCUMENT_LENGTH = LINE_COUNT * LINE_LENGTH - 1;
+
+  function lineBlock(layout: Layout, index: number): ScrollAnchorLine {
+    const clamped = Math.min(Math.max(index, 0), LINE_COUNT - 1);
+    const from = clamped * LINE_LENGTH;
+    return {
+      from,
+      to: from + LINE_LENGTH - 1,
+      top: clamped * layout.lineHeight,
+    };
+  }
+
+  function geometryAt(layout: Layout, scrollTop: number): ScrollAnchorGeometry {
+    return {
+      viewportTop: Math.max(0, scrollTop - layout.paddingTop),
+      documentLength: DOCUMENT_LENGTH,
+      devicePixelRatio: layout.devicePixelRatio,
+      lineBlockAtHeight: (height) =>
+        lineBlock(layout, Math.floor(height / layout.lineHeight)),
+      lineBlockAt: (position) =>
+        lineBlock(layout, Math.floor(position / LINE_LENGTH)),
+    };
+  }
+
+  /**
+   * A scroll position as the scroller can hold it. Chromium engines round an
+   * assigned `scrollTop` to whole device pixels; WebKit keeps the fraction,
+   * which is why the same restoration is exact on one engine and off by up to
+   * half a device pixel on another.
+   */
+  function heldScrollTop(layout: Layout, scrollTop: number): number {
+    return (
+      Math.round(scrollTop * layout.devicePixelRatio) / layout.devicePixelRatio
+    );
+  }
+
+  /** Scrolls so the stored anchor line sits its stored distance below the edge. */
+  function restore(
+    layout: Layout,
+    state: { scrollAnchor: number; scrollOffset: number },
+  ): number {
+    const line = lineBlock(
+      layout,
+      Math.floor(state.scrollAnchor / LINE_LENGTH),
+    );
+    return heldScrollTop(
+      layout,
+      line.top - state.scrollOffset + layout.paddingTop,
+    );
+  }
+
+  function capture(
+    layout: Layout,
+    scrollTop: number,
+  ): { scrollAnchor: number; scrollOffset: number } {
+    const position = scrollAnchorForViewport(geometryAt(layout, scrollTop));
+    return {
+      scrollAnchor: position.line.from,
+      scrollOffset: position.offset,
+    };
+  }
+
+  function denotedViewportTop(
+    layout: Layout,
+    state: { scrollAnchor: number; scrollOffset: number },
+  ): number {
+    return readingViewportTop(
+      lineBlock(layout, Math.floor(state.scrollAnchor / LINE_LENGTH)).top,
+      state.scrollOffset,
+    );
+  }
+
+  it("restores exactly while the layout is unchanged", () => {
+    for (let scrollTop = 0; scrollTop < 1600; scrollTop += 0.5) {
+      const held = heldScrollTop(DEFAULT_ZOOM, scrollTop);
+      const stored = capture(DEFAULT_ZOOM, held);
+      const restored = capture(DEFAULT_ZOOM, restore(DEFAULT_ZOOM, stored));
+      expect({ scrollTop, ...restored }).toEqual({ scrollTop, ...stored });
+    }
+  });
+
+  it("stores the same position against either adjacent line across zoom", () => {
+    // Captured while the note was zoomed in, restored after the zoom was
+    // reset: the layout the stored distance was measured in is gone, so the
+    // scroller rounds to the nearest device pixel and lands a hundredth of a
+    // pixel into the anchor line rather than a fraction of a pixel above it.
+    // The stored line stops being the first line seen whole and its neighbour
+    // takes over, which reads as a whole line of difference in the stored
+    // fields and as no difference at all to the reader.
+    const stored = capture(LARGER_ZOOM, 1847.2);
+    expect(stored.scrollAnchor).toBe(53 * LINE_LENGTH);
+    expect(stored.scrollOffset).toBeCloseTo(0.284375, 6);
+
+    const restoredScrollTop = restore(DEFAULT_ZOOM, stored);
+    expect(restoredScrollTop).toBe(1478);
+    const restored = capture(DEFAULT_ZOOM, restoredScrollTop);
+    expect(restored.scrollAnchor).toBe(54 * LINE_LENGTH);
+    // A line height less the hundredth of a pixel the anchor line is clipped
+    // by: the stored fields differ by a whole line, the reader by nothing.
+    expect(restored.scrollOffset).toBeCloseTo(27.175, 6);
+
+    // Both records describe one place, within the finest position the
+    // scroller can hold.
+    const drift =
+      denotedViewportTop(DEFAULT_ZOOM, restored) -
+      denotedViewportTop(DEFAULT_ZOOM, stored);
+    expect(Math.abs(drift)).toBeLessThanOrEqual(
+      1 / DEFAULT_ZOOM.devicePixelRatio,
+    );
+  });
+
+  it("keeps the reader within a device pixel across every zoom change", () => {
+    for (let scrollTop = 0; scrollTop < 1900; scrollTop += 0.125) {
+      const stored = capture(
+        LARGER_ZOOM,
+        heldScrollTop(LARGER_ZOOM, scrollTop),
+      );
+      const restoredScrollTop = restore(DEFAULT_ZOOM, stored);
+      // A distance measured in the zoomed layout can put the position above
+      // the start of the document once the zoom is reset, and the scroller
+      // stops at the top; positions it cannot reach are not positions it can
+      // be held to.
+      if (restoredScrollTop < DEFAULT_ZOOM.paddingTop) continue;
+      const restored = capture(DEFAULT_ZOOM, restoredScrollTop);
+      const drift =
+        denotedViewportTop(DEFAULT_ZOOM, restored) -
+        denotedViewportTop(DEFAULT_ZOOM, stored);
+      expect({ scrollTop, within: Math.abs(drift) <= 1 }).toEqual({
+        scrollTop,
+        within: true,
+      });
+    }
+  });
+
+  it("anchors to the first line the reader sees whole", () => {
+    const { lineHeight, paddingTop } = DEFAULT_ZOOM;
+    const stored = capture(
+      DEFAULT_ZOOM,
+      2 * lineHeight + lineHeight / 2 + paddingTop,
+    );
+    expect(stored.scrollAnchor).toBe(3 * LINE_LENGTH);
+    expect(stored.scrollOffset).toBeCloseTo(lineHeight / 2, 6);
   });
 });

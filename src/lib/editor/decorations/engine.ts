@@ -34,6 +34,11 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { tags } from "@lezer/highlight";
+import {
+  attachHoverIntent,
+  attachMenuDismissal,
+  pointInMenuCone,
+} from "../../anchoredMenu";
 import { externalHttpUrl } from "../../features/navigation";
 import {
   editTableCell,
@@ -75,7 +80,15 @@ import {
   obsidianMarkdownExtensionsFor,
   skribeumMarkdownParser,
 } from "../markdown/obsidian";
+import { playFormEntrance, playGlyphEntrance, playGlyphExit } from "../motion";
+import { PostPaintScheduler } from "../postPaintScheduler";
 import { calloutIconSvg, parseCallout } from "./callouts";
+import {
+  type ImageSource,
+  imageFileName,
+  resolveImageSource,
+  TEXT_IMAGE_MEDIA_TYPE,
+} from "./images";
 import {
   DECORATION_TABLE,
   type DecorationRule,
@@ -566,6 +579,14 @@ export function openTaskStatusMenuAtMarker(
   return true;
 }
 
+/**
+ * Per-control listener cleanups. A task control attaches window- and
+ * document-level listeners for its hover corridor, so a widget the view
+ * recycles has to release them or every rebuilt checkbox leaves a live
+ * pointer listener behind.
+ */
+const taskControlCleanups = new WeakMap<HTMLElement, () => void>();
+
 class TaskCheckboxWidget extends WidgetType {
   constructor(
     readonly status: TaskStatus,
@@ -589,7 +610,8 @@ class TaskCheckboxWidget extends WidgetType {
     nextTaskPaletteId += 1;
     const paletteId = `cm-skr-task-palette-${nextTaskPaletteId}`;
     const host = document.createElement("span");
-    host.className = "cm-skr-task-control";
+    host.className =
+      "cm-skr-task-control cm-skr-reveal-motion cm-skr-reveal-rendered";
     host.style.setProperty(
       "--skr-task-color",
       `var(${this.status.color_token})`,
@@ -627,7 +649,9 @@ class TaskCheckboxWidget extends WidgetType {
     let expandedReference = taskStatusTrack(this.status) === "reference";
     let pendingDateStatus: TaskStatus | null = null;
     let paletteAnchor: { x: number; y: number } | null = null;
+    let openMode: "hold" | "hover" | "keyboard" | "tap" | null = null;
     let stopObservingViewport: (() => void) | null = null;
+    let stopObservingScroll: (() => void) | null = null;
     let deliberateOpen = false;
     let removeOutsidePress: (() => void) | null = null;
     let press: {
@@ -668,6 +692,15 @@ class TaskCheckboxWidget extends WidgetType {
       palette.style.maxHeight = `${Math.max(0, viewport.height - 2 * inset)}px`;
       const bounds = palette.getBoundingClientRect();
       const checkboxBounds = box.getBoundingClientRect();
+      // A tap, keyboard, or hover open tracks the checkbox itself, so the
+      // editor scrolling underneath an open menu (a wheel scroll, a
+      // scroll-into-view after a command-palette invocation) cannot leave
+      // it floating over its old position. Only the held-gesture anchor
+      // stays pinned to the point the finger pressed, matching the
+      // instant-open exception of design section 5.1.
+      if (openMode !== "hold") {
+        paletteAnchor = { x: paletteAnchor.x, y: checkboxBounds.bottom };
+      }
       const maximumLeft = Math.max(
         viewport.left + inset,
         viewport.right - bounds.width - inset,
@@ -676,10 +709,17 @@ class TaskCheckboxWidget extends WidgetType {
         Math.max(checkboxBounds.left, viewport.left + inset),
         maximumLeft,
       )}px`;
-      const spaceAbove = paletteAnchor.y - fingerGap - viewport.top;
+      // The corridor above the press point, already discounting the inset the
+      // menu must keep clear of the viewport edge, so a menu that "fits" can
+      // never land flush against the top of the screen.
+      const spaceAbove = paletteAnchor.y - fingerGap - (viewport.top + inset);
       if (spaceAbove >= bounds.height) {
         palette.dataset.motionSurface = "anchored-bottom";
-        palette.style.top = `${paletteAnchor.y - fingerGap - bounds.height}px`;
+        palette.style.top = `${Math.max(
+          viewport.top + inset,
+          paletteAnchor.y - fingerGap - bounds.height,
+        )}px`;
+        palette.style.maxHeight = `${Math.max(0, spaceAbove)}px`;
       } else {
         palette.dataset.motionSurface = "anchored-top";
         const top = paletteAnchor.y + fingerGap;
@@ -700,8 +740,11 @@ class TaskCheckboxWidget extends WidgetType {
       options = [];
       pendingDateStatus = null;
       paletteAnchor = null;
+      openMode = null;
       stopObservingViewport?.();
       stopObservingViewport = null;
+      stopObservingScroll?.();
+      stopObservingScroll = null;
       removeOutsidePress?.();
       removeOutsidePress = null;
       deliberateOpen = false;
@@ -905,6 +948,7 @@ class TaskCheckboxWidget extends WidgetType {
       anchor?: { x: number; y: number },
     ) => {
       closeGeneration += 1;
+      openMode = mode;
       delete palette.dataset.motionExiting;
       if (mode === "hold") {
         palette.dataset.motionInstant = "true";
@@ -946,20 +990,30 @@ class TaskCheckboxWidget extends WidgetType {
         positionPalette,
         view.dom.ownerDocument.defaultView ?? window,
       );
+      // The visual viewport only moves for the browser chrome and the
+      // on-screen keyboard; the note's own scroll container is a second,
+      // independent scroll that can carry the checkbox out from under a
+      // menu positioned in viewport coordinates. Tracking it here is what
+      // keeps the menu anchored to its checkbox instead of the last place
+      // that checkbox happened to be when the menu opened.
+      stopObservingScroll?.();
+      const scroller = view.scrollDOM;
+      scroller.addEventListener("scroll", positionPalette, { passive: true });
+      stopObservingScroll = () =>
+        scroller.removeEventListener("scroll", positionPalette);
       if (keyboard || deliberateOpen) {
         queueMicrotask(() => palette.focus());
       }
-      if (deliberateOpen) {
-        const ownerDocument = view.dom.ownerDocument;
-        const outsidePress = (event: PointerEvent) => {
-          if (event.target instanceof Node && !host.contains(event.target)) {
-            closePalette(true);
-          }
-        };
-        ownerDocument.addEventListener("pointerdown", outsidePress, true);
-        removeOutsidePress = () =>
-          ownerDocument.removeEventListener("pointerdown", outsidePress, true);
-      }
+      // Every open mode gets the shared dismissal guarantees, not only the
+      // deliberate one: a menu summoned by hover or by the keyboard is just
+      // as capable of outliving the window that owns it. Only the focus
+      // return differs, because only a menu that took focus can give it back.
+      removeOutsidePress?.();
+      removeOutsidePress = attachMenuDismissal(palette, {
+        onDismiss: () => closePalette(keyboardOperable),
+        ignore: [box],
+        escape: false,
+      });
     };
 
     const advance = () => {
@@ -1153,23 +1207,44 @@ class TaskCheckboxWidget extends WidgetType {
         event.preventDefault();
         event.stopPropagation();
         closePalette(true);
+      } else if (event.key === "Tab") {
+        // Tab leaves the menu, and the control it came from is where focus
+        // belongs; without this the browser resolves the next tab stop from
+        // the menu surface and drops focus into the note body instead.
+        event.preventDefault();
+        event.stopPropagation();
+        closePalette(true);
       }
     });
-    host.addEventListener("pointerenter", (event) => {
-      if (event.pointerType !== "touch" && (event.buttons ?? 0) === 0) {
-        openPalette("hover", { x: event.clientX, y: event.clientY });
-      }
-    });
-    host.addEventListener("pointerleave", () => {
-      if (
-        press === null &&
-        !deliberateOpen &&
-        pendingDateStatus === null &&
-        !host.contains(document.activeElement)
-      ) {
-        closePalette(false);
-      }
-    });
+    // Hover is an intent, not a trigger: the menu waits out the shared
+    // pointer-rest delay so a pass across a task line shows nothing, and once
+    // open it survives the travel from the 1em checkbox to the menu through
+    // the shared safe-triangle corridor. Without the corridor the menu dies
+    // in the gap and the reader has to race it.
+    taskControlCleanups.set(
+      host,
+      attachHoverIntent({
+        anchor: box,
+        surface: palette,
+        isOpen: () => !palette.hidden,
+        openDelay: () =>
+          hoverIntentDelay(view.dom.ownerDocument.documentElement),
+        open: (point) => {
+          if (press !== null) return;
+          openPalette("hover", point);
+        },
+        close: () => {
+          if (
+            press === null &&
+            !deliberateOpen &&
+            pendingDateStatus === null &&
+            !host.contains(document.activeElement)
+          ) {
+            closePalette(false);
+          }
+        },
+      }),
+    );
     host.addEventListener("focusout", () => {
       queueMicrotask(() => {
         if (!deliberateOpen && !host.contains(document.activeElement)) {
@@ -1179,6 +1254,11 @@ class TaskCheckboxWidget extends WidgetType {
     });
     host.append(box, palette);
     return host;
+  }
+
+  override destroy(dom: HTMLElement): void {
+    taskControlCleanups.get(dom)?.();
+    taskControlCleanups.delete(dom);
   }
 
   override ignoreEvent(): boolean {
@@ -1202,9 +1282,9 @@ class MathWidget extends WidgetType {
 
   override toDOM(): HTMLElement {
     const host = document.createElement(this.displayMode ? "div" : "span");
-    host.className = this.displayMode
-      ? "cm-skr-math cm-skr-math-block"
-      : "cm-skr-math cm-skr-math-inline";
+    host.className = `cm-skr-math cm-skr-reveal-motion cm-skr-reveal-rendered ${
+      this.displayMode ? "cm-skr-math-block" : "cm-skr-math-inline"
+    }`;
     host.setAttribute("role", "img");
     host.setAttribute(
       "aria-label",
@@ -1233,7 +1313,8 @@ class MermaidWidget extends WidgetType {
   override toDOM(view: EditorView): HTMLElement {
     nextMermaidId += 1;
     const host = document.createElement("div");
-    host.className = "cm-skr-mermaid";
+    host.className =
+      "cm-skr-mermaid cm-skr-reveal-motion cm-skr-reveal-rendered";
     host.setAttribute("role", "img");
     host.setAttribute("aria-label", STRINGS.mermaidDiagramLabel);
     host.textContent = STRINGS.mermaidLoading;
@@ -1622,6 +1703,36 @@ function dispatchTableWidgetCommand(
   );
 }
 
+/**
+ * The cell offset a document-edge or line-edge key addresses.
+ *
+ * A rendered cell is one field, not a line of prose: it declares
+ * `aria-multiline="false"` and holds a single logical line that wraps to
+ * whatever width its column has. Every key here therefore addresses the
+ * cell's own bounds. A key left to the engine is resolved against the
+ * host document instead, because the cell's editable surface is nested
+ * inside the note's: the engine walks its own line boxes, so `End` stops
+ * at a wrap point in a cell wide enough to wrap and `Control-End` leaves
+ * the cell entirely, landing the caret in the note while the cell still
+ * holds the editing session. Engines disagree on all of it, so the cell
+ * resolves these keys itself rather than inheriting one engine's answer.
+ */
+function cellCaretTarget(
+  nested: EditorView,
+  event: KeyboardEvent,
+): number | null {
+  switch (event.key) {
+    case "Home":
+    case "PageUp":
+      return 0;
+    case "End":
+    case "PageDown":
+      return nested.state.doc.length;
+    default:
+      return null;
+  }
+}
+
 function handleTableCellKey(event: KeyboardEvent, nested: EditorView): boolean {
   const owner = nestedTableCellParents.get(nested);
   if (owner === undefined) {
@@ -1651,6 +1762,16 @@ function handleTableCellKey(event: KeyboardEvent, nested: EditorView): boolean {
     event.stopPropagation();
     return true;
   };
+  const caretTarget = cellCaretTarget(nested, event);
+  if (caretTarget !== null) {
+    nested.dispatch({
+      selection: event.shiftKey
+        ? { anchor: selection.anchor, head: caretTarget }
+        : { anchor: caretTarget },
+      scrollIntoView: true,
+    });
+    return stop();
+  }
   if (
     event.shiftKey &&
     ((event.key === "ArrowLeft" && headAtStart) ||
@@ -2263,6 +2384,18 @@ class TableWidget extends WidgetType {
           session?.tableFrom === this.layout.from &&
           session.row === layoutCell.row &&
           session.column === layoutCell.column;
+        // Edge whitespace the user is mid-typing exists in the nested view
+        // but parses as column padding in the document, so the document
+        // round trip reads back without it. While this cell owns the
+        // caret, a trim-equal difference must not rebuild the nested doc
+        // out from under the typed spaces; the next cell write re-emits
+        // the full typed content anyway.
+        if (
+          active &&
+          nested.state.doc.toString().trim() === layoutCell.source
+        ) {
+          continue;
+        }
         const anchor = Math.min(
           layoutCell.source.length,
           active ? session.anchor : nested.state.selection.main.anchor,
@@ -2410,43 +2543,67 @@ function headingTitle(source: string, node: SyntaxNode): string {
   return (text.split("\n", 1)[0] ?? "").trim();
 }
 
-function embeddedSection(source: string, fragment: string): string | null {
-  if (fragment.length === 0) {
-    return source;
-  }
-  const wanted = fragment.trim().toLocaleLowerCase();
+type ParsedEmbedSource = {
+  source: string;
+  headings: Array<{ from: number; to: number; level: number; title: string }>;
+};
+
+function parseEmbedSource(source: string): ParsedEmbedSource {
   const tree = skribeumMarkdownParser.parse(source);
-  let match: SyntaxNode | null = null;
+  const headings: ParsedEmbedSource["headings"] = [];
   tree.iterate({
     enter(ref) {
-      if (
-        match === null &&
-        headingLevel(ref.name) !== null &&
-        headingTitle(source, ref.node).toLocaleLowerCase() === wanted
-      ) {
-        match = ref.node;
-      }
-      return match === null ? undefined : false;
-    },
-  });
-  if (match === null) {
-    return null;
-  }
-  const heading = match as SyntaxNode;
-  const level = headingLevel(heading.name) ?? 6;
-  let end = source.length;
-  tree.iterate({
-    from: heading.to,
-    enter(ref) {
-      const candidate = headingLevel(ref.name);
-      if (ref.from >= heading.to && candidate !== null && candidate <= level) {
-        end = ref.from;
-        return false;
+      const level = headingLevel(ref.name);
+      if (level !== null) {
+        headings.push({
+          from: ref.from,
+          to: ref.to,
+          level,
+          title: headingTitle(source, ref.node).toLocaleLowerCase(),
+        });
       }
       return undefined;
     },
   });
-  return source.slice(heading.from, end).replace(/\n+$/u, "");
+  return { source, headings };
+}
+
+function extractedEmbedSection(
+  parsed: ParsedEmbedSource,
+  fragment: string,
+): string | null {
+  if (fragment.length === 0) return parsed.source;
+  const wanted = fragment.trim().toLocaleLowerCase();
+  const index = parsed.headings.findIndex(
+    (heading) => heading.title === wanted,
+  );
+  if (index === -1) {
+    return null;
+  }
+  const heading = parsed.headings[index];
+  if (heading === undefined) return null;
+  const next = parsed.headings
+    .slice(index + 1)
+    .find((candidate) => candidate.level <= heading.level);
+  const end = next?.from ?? parsed.source.length;
+  return parsed.source.slice(heading.from, end).replace(/\n+$/u, "");
+}
+
+function embeddedSection(source: string, fragment: string): string | null {
+  return fragment.length === 0
+    ? source
+    : extractedEmbedSection(parseEmbedSource(source), fragment);
+}
+
+function selfEmbedSectionKey(fragment: string): string {
+  return `embed\u0000${fragment.trim().toLocaleLowerCase()}`;
+}
+
+function selectedSelfEmbed(
+  parsed: ParsedEmbedSource,
+  fragment: string,
+): string | null {
+  return extractedEmbedSection(parsed, fragment);
 }
 
 function previewSource(source: string): string {
@@ -2494,13 +2651,14 @@ function nestedMarkdownView(
 function renderLinkedNote(
   host: HTMLElement,
   target: string,
-  rootSource: string,
+  rootSource: string | (() => Promise<string>),
   context: WikilinkResolutionContext,
   label: string,
   taskStatuses: readonly TaskStatus[],
   onRendered: () => void,
   kind: AsyncContentKind = "embed",
   preload?: PreloadedNote,
+  selectedSelfEmbedSource?: () => Promise<string | null>,
 ): () => void {
   const [, fragment = ""] = target.split("#", 2);
   const resolution = resolveWikilinkTarget(target, context);
@@ -2546,26 +2704,34 @@ function renderLinkedNote(
       kind,
       load: () =>
         preload?.source ??
-        (resolution.kind === "self"
-          ? Promise.resolve(rootSource)
-          : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null))),
+        (selectedSelfEmbedSource === undefined
+          ? resolution.kind === "self"
+            ? typeof rootSource === "string"
+              ? Promise.resolve(rootSource)
+              : rootSource()
+            : (context.loadNote?.(resolvedPath) ?? Promise.resolve(null))
+          : selectedSelfEmbedSource()),
       ...(kind === "preview" && preload?.status === "pending"
         ? { skeletonDelayMs: 0 }
         : {}),
-      unavailable: (source) => source === null,
+      unavailable: (source) =>
+        source === null && selectedSelfEmbedSource === undefined,
       ...(kind === "embed" ? { onRetry: begin } : {}),
       render: (source) => {
-        if (
-          destroyed ||
-          source === null ||
-          (!host.isConnected && !document.body.contains(host))
-        ) {
+        if (destroyed || (!host.isConnected && !document.body.contains(host))) {
           return;
         }
-        const selected = embeddedSection(
-          kind === "preview" ? previewSource(source) : source,
-          fragment,
-        );
+        if (source === null) {
+          notice(STRINGS.embedSectionUnavailable);
+          return;
+        }
+        const selected =
+          selectedSelfEmbedSource === undefined
+            ? embeddedSection(
+                kind === "preview" ? previewSource(source) : source,
+                fragment,
+              )
+            : source;
         if (selected === null) {
           notice(STRINGS.embedSectionUnavailable);
           return;
@@ -2609,12 +2775,93 @@ function renderLinkedNote(
   };
 }
 
+type DeferredRootSourceLease = {
+  select: (target: string) => Promise<string | null>;
+  release: () => void;
+};
+
+/**
+ * One editor-document generation may mount several self-embed widgets. They
+ * all read the same root `Text`, so defer and materialize it once for that
+ * generation. A different `Text` is a different CodeMirror document
+ * generation; releasing its last widget fences any unpainted stale work.
+ */
+class DeferredRootSource {
+  private references = 0;
+  private pending: Promise<string> | null = null;
+  private parsed: Promise<ParsedEmbedSource> | null = null;
+  private readonly sections = new Map<string, Promise<string | null>>();
+  private readonly scheduler = new PostPaintScheduler();
+
+  constructor(private readonly document: Text) {}
+
+  acquire(): DeferredRootSourceLease {
+    this.references += 1;
+    let released = false;
+    return {
+      select: (target) => this.select(target),
+      release: () => {
+        if (released) return;
+        released = true;
+        this.references -= 1;
+        if (this.references === 0) {
+          this.scheduler.fence();
+          this.pending = null;
+          this.parsed = null;
+          this.sections.clear();
+        }
+      },
+    };
+  }
+
+  private load(): Promise<string> {
+    if (this.pending === null) {
+      this.pending = new Promise<string>((resolve) => {
+        this.scheduler.schedule(() => resolve(this.document.toString()));
+      });
+    }
+    return this.pending;
+  }
+
+  private select(target: string): Promise<string | null> {
+    const [, fragment = ""] = target.split("#", 2);
+    if (fragment.length === 0) return this.load();
+    const key = selfEmbedSectionKey(fragment);
+    let selected = this.sections.get(key);
+    if (selected === undefined) {
+      if (this.parsed === null) {
+        this.parsed = this.load().then(parseEmbedSource);
+      }
+      selected = this.parsed.then((parsed) =>
+        selectedSelfEmbed(parsed, fragment),
+      );
+      this.sections.set(key, selected);
+    }
+    return selected;
+  }
+}
+
+const deferredRootSources = new WeakMap<Text, DeferredRootSource>();
+
+function deferredRootSource(document: Text): DeferredRootSourceLease {
+  let source = deferredRootSources.get(document);
+  if (source === undefined) {
+    source = new DeferredRootSource(document);
+    deferredRootSources.set(document, source);
+  }
+  return source.acquire();
+}
+
 class EmbedWidget extends WidgetType {
   private readonly cleanups = new WeakMap<HTMLElement, () => void>();
+  private readonly rootSources = new WeakMap<
+    HTMLElement,
+    DeferredRootSourceLease
+  >();
 
   constructor(
     readonly target: string,
-    readonly rootSource: string,
+    readonly rootDocument: Text | null,
     readonly context: WikilinkResolutionContext,
     readonly taskStatuses: readonly TaskStatus[],
   ) {
@@ -2624,7 +2871,7 @@ class EmbedWidget extends WidgetType {
   override eq(other: EmbedWidget): boolean {
     return (
       other.target === this.target &&
-      other.rootSource === this.rootSource &&
+      other.rootDocument === this.rootDocument &&
       other.context === this.context &&
       JSON.stringify(other.taskStatuses) === JSON.stringify(this.taskStatuses)
     );
@@ -2712,17 +2959,25 @@ class EmbedWidget extends WidgetType {
     const body = document.createElement("span");
     body.className = "cm-skr-embed-body";
     host.append(body);
+    const source =
+      this.rootDocument === null ? null : deferredRootSource(this.rootDocument);
+    if (source !== null) this.rootSources.set(host, source);
+    const selectedSelfEmbedSource =
+      source === null ? undefined : () => source.select(this.target);
 
     this.cleanups.set(
       host,
       renderLinkedNote(
         body,
         this.target,
-        this.rootSource,
+        "",
         this.context,
         `${STRINGS.embedLabel}: ${sourceName}`,
         this.taskStatuses,
         () => view.requestMeasure(),
+        "embed",
+        undefined,
+        selectedSelfEmbedSource,
       ),
     );
     return host;
@@ -2731,6 +2986,179 @@ class EmbedWidget extends WidgetType {
   override destroy(dom: HTMLElement): void {
     this.cleanups.get(dom)?.();
     this.cleanups.delete(dom);
+    this.rootSources.get(dom)?.release();
+    this.rootSources.delete(dom);
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/**
+ * A rendered Markdown image. Every source, remote or vault-local, reaches
+ * the document only as the `src` of an `<img>`: no image bytes are ever
+ * parsed into the DOM, so an SVG in a note renders in the user agent's
+ * secure static mode and carries no script, external reference, or
+ * interactivity. Vault bytes become a blob typed from the extension
+ * allowlist in `images.ts`, and the object URL is revoked with the widget.
+ *
+ * The frame follows the shared asynchronous-content rules: nothing appears
+ * for the grace period, a placeholder holds the space after it, and a
+ * target that fails or is absent swaps to the failure treatment in place
+ * rather than leaving a gap.
+ */
+class ImageWidget extends WidgetType {
+  private readonly cleanups = new WeakMap<HTMLElement, () => void>();
+
+  constructor(
+    readonly source: ImageSource,
+    readonly alt: string,
+    readonly title: string,
+    readonly context: WikilinkResolutionContext,
+  ) {
+    super();
+  }
+
+  override eq(other: ImageWidget): boolean {
+    return (
+      JSON.stringify(other.source) === JSON.stringify(this.source) &&
+      other.alt === this.alt &&
+      other.title === this.title &&
+      other.context.loadAsset === this.context.loadAsset &&
+      other.context.loadNote === this.context.loadNote
+    );
+  }
+
+  private accessibleName(): string {
+    if (this.alt.length > 0) {
+      return this.alt;
+    }
+    const target =
+      this.source.kind === "vault"
+        ? this.source.path
+        : this.source.kind === "missing"
+          ? this.source.target
+          : this.source.url;
+    return imageFileName(target);
+  }
+
+  /**
+   * Resolves the element source, minting a blob URL for vault bytes. A
+   * vector image is text, so the note loader supplies it where the byte
+   * loader is absent; a raster format has no text reading and reaches the
+   * failure state instead.
+   */
+  private async elementSource(): Promise<{
+    url: string;
+    revoke: boolean;
+  } | null> {
+    if (this.source.kind === "direct") {
+      return { url: this.source.url, revoke: false };
+    }
+    if (this.source.kind === "missing") {
+      return null;
+    }
+    const { path, mediaType } = this.source;
+    const body =
+      this.context.loadAsset !== undefined
+        ? await this.context.loadAsset(path)
+        : mediaType === TEXT_IMAGE_MEDIA_TYPE
+          ? await (this.context.loadNote?.(path) ?? Promise.resolve(null))
+          : null;
+    if (body === null) {
+      return null;
+    }
+    const blob = new Blob([body as BlobPart], { type: mediaType });
+    return { url: URL.createObjectURL(blob), revoke: true };
+  }
+
+  override toDOM(view: EditorView): HTMLElement {
+    const host = document.createElement("span");
+    host.className = "cm-skr-image cm-skr-reveal-motion cm-skr-reveal-rendered";
+    host.dataset.imageSource = this.source.kind;
+    const name = this.accessibleName();
+    const body = document.createElement("span");
+    body.className = "cm-skr-image-body";
+    host.append(body);
+
+    let objectUrl: string | null = null;
+    const releaseObjectUrl = () => {
+      if (objectUrl !== null) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+    };
+    let stopRequest = () => {};
+    const begin = () => {
+      stopRequest();
+      releaseObjectUrl();
+      body.className = "cm-skr-image-body skr-loading-region skr-loading-embed";
+      stopRequest = runAsyncContent<HTMLImageElement | null>({
+        host: body,
+        kind: "embed",
+        load: async () => {
+          const resolved = await this.elementSource();
+          if (resolved === null) {
+            return null;
+          }
+          if (resolved.revoke) {
+            objectUrl = resolved.url;
+          }
+          const element = document.createElement("img");
+          element.className = "cm-skr-image-frame";
+          element.alt = name;
+          if (this.title.length > 0) {
+            element.title = this.title;
+          }
+          element.decoding = "async";
+          element.src = resolved.url;
+          await element.decode();
+          return element;
+        },
+        unavailable: (element) => element === null,
+        onRetry: begin,
+        render: (element) => {
+          if (element === null) {
+            return;
+          }
+          body.className = "cm-skr-image-body";
+          body.replaceChildren(element);
+          view.requestMeasure();
+        },
+      });
+    };
+    begin();
+    this.cleanups.set(host, () => {
+      stopRequest();
+      releaseObjectUrl();
+    });
+    return host;
+  }
+
+  override destroy(dom: HTMLElement): void {
+    this.cleanups.get(dom)?.();
+    this.cleanups.delete(dom);
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/** A thematic break as the rule it stands for, not its source delimiter. */
+class ThematicBreakWidget extends WidgetType {
+  override eq(): boolean {
+    return true;
+  }
+
+  override toDOM(): HTMLElement {
+    const host = document.createElement("div");
+    host.className =
+      "cm-skr-thematic-break cm-skr-reveal-motion cm-skr-reveal-rendered";
+    host.setAttribute("role", "separator");
+    host.setAttribute("aria-label", STRINGS.thematicBreakLabel);
+    return host;
   }
 
   override ignoreEvent(): boolean {
@@ -2766,7 +3194,8 @@ function isBlockWidgetRule(rule: DecorationRule): boolean {
     rule.presentation.place !== "before" &&
     (rule.presentation.widget === "math-block" ||
       rule.presentation.widget === "mermaid-diagram" ||
-      rule.presentation.widget === "table")
+      rule.presentation.widget === "table" ||
+      rule.presentation.widget === "thematic-break")
   );
 }
 
@@ -3116,6 +3545,38 @@ function dynamicAttributes(
       const date = source.slice(-10);
       return { "data-overdue": date < localIsoDate() ? "true" : "false" };
     }
+    case "inline-image":
+    case "reference-image": {
+      const parsed = imageParts(node, doc);
+      const source =
+        parsed === null ? null : resolveImageSource(parsed.target, wikilinks);
+      if (rule.dynamic === "reference-image") {
+        return source === null ? {} : null;
+      }
+      return source === null ? null : {};
+    }
+    case "footnote-reference": {
+      const label = footnoteLabel(node, doc);
+      return label === null
+        ? null
+        : {
+            "data-footnote": label,
+            "data-footnote-role": "reference",
+            role: "doc-noteref",
+            "aria-label": `${STRINGS.footnoteReferenceLabel} ${label}`,
+          };
+    }
+    case "footnote-definition": {
+      const label = footnoteLabel(node, doc);
+      return label === null
+        ? null
+        : {
+            "data-footnote": label,
+            "data-footnote-role": "definition",
+            role: "doc-backlink",
+            "aria-label": `${STRINGS.footnoteDefinitionLabel} ${label}`,
+          };
+    }
     case "tag-search": {
       const tag = doc.sliceString(node.from + 1, node.to);
       return {
@@ -3269,6 +3730,43 @@ function mermaidSource(node: SyntaxNode, doc: Text): string {
   return lines.join("\n").trim();
 }
 
+type ImageParts = { alt: string; target: string; title: string };
+
+/**
+ * The alt text, target and optional title of an inline image. The alt run
+ * is the source between the opening `![` and the `]` that closes it, which
+ * the tree gives as the first two link marks; a reference-style image has
+ * no URL child and produces null.
+ */
+function imageParts(node: SyntaxNode, doc: Text): ImageParts | null {
+  const url = node.getChild("URL");
+  if (url === null) {
+    return null;
+  }
+  const marks = node.getChildren("LinkMark");
+  const open = marks[0];
+  const close = marks[1];
+  const title = node.getChild("LinkTitle");
+  return {
+    alt:
+      open === undefined || close === undefined
+        ? ""
+        : doc.sliceString(open.to, close.from),
+    target: doc.sliceString(url.from, url.to),
+    title:
+      title === null
+        ? ""
+        : doc.sliceString(title.from, title.to).replace(/^["'(]|["')]$/gu, ""),
+  };
+}
+
+/** The label of a footnote reference or definition node. */
+function footnoteLabel(node: SyntaxNode, doc: Text): string | null {
+  const label =
+    node.name === "FootnoteLabel" ? node : node.getChild("FootnoteLabel");
+  return label === null ? null : doc.sliceString(label.from, label.to);
+}
+
 function widgetFor(
   widget: Extract<Presentation, { present: "widget" }>["widget"],
   node: SyntaxNode,
@@ -3342,7 +3840,9 @@ function widgetFor(
       return {
         widget: new EmbedWidget(
           targetText,
-          doc.toString(),
+          resolveWikilinkTarget(targetText, wikilinks).kind === "self"
+            ? doc
+            : null,
           wikilinks,
           taskStatuses,
         ),
@@ -3350,6 +3850,31 @@ function widgetFor(
         attributes: { role: "group", "data-target": targetText },
       };
     }
+    case "image": {
+      const parsed = imageParts(node, doc);
+      const source =
+        parsed === null ? null : resolveImageSource(parsed.target, wikilinks);
+      if (parsed === null || source === null) {
+        throw new Error("image widget requires a resolvable target");
+      }
+      return {
+        widget: new ImageWidget(source, parsed.alt, parsed.title, wikilinks),
+        block: false,
+        attributes: {
+          "data-image-source": source.kind,
+          "data-image-target": parsed.target,
+        },
+      };
+    }
+    case "thematic-break":
+      return {
+        widget: new ThematicBreakWidget(),
+        block: true,
+        attributes: {
+          role: "separator",
+          "aria-label": STRINGS.thematicBreakLabel,
+        },
+      };
     case "code-copy":
       return {
         widget: new CodeCopyWidget(fencedCodeSource(node, doc)),
@@ -3498,8 +4023,11 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 activeReveal.to <= ref.to &&
                 line.from >= activeReveal.from &&
                 line.to <= activeReveal.to;
+              // Any line-scope rule the caret can turn into source carries
+              // the motion class, so a block that swaps whole lines between
+              // its rendered and source forms has a node to animate.
               if (
-                rule.dynamic === "rich-callout" &&
+                (rule.dynamic === "rich-callout" || rule.reveal !== "never") &&
                 line.to > line.from &&
                 !nestedActiveLine
               ) {
@@ -3516,7 +4044,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                     to: line.to,
                     decoration: Decoration.mark({
                       class: motionClass,
-                      skr: `motion ${revealedNow ? "source" : "rendered"}=callout`,
+                      skr: `motion ${revealedNow ? "source" : "rendered"}=${rule.node}`,
                     }),
                   });
                 }
@@ -3566,13 +4094,6 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             });
             continue;
           }
-          // A revealed rule emits nothing, so the source shows through. The
-          // exception is a cursor-line reveal, which still emits a marker
-          // carrying its active state so the transition has something to
-          // animate between.
-          if (revealedNow && rule.reveal !== "cursor-line") {
-            continue;
-          }
           if (presentation.present === "hide") {
             let hideFrom = ref.from;
             let hideTo = ref.to;
@@ -3583,21 +4104,35 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 hideFrom -= 1;
               }
             }
-            if (rule.reveal === "cursor-line") {
-              const className = revealedNow
-                ? "cm-skr-reveal-marker cm-skr-reveal-marker-active"
-                : "cm-skr-reveal-marker";
+            // Every revealed marker carries the marker class, whatever
+            // brought it back. The glyph is the thing the reader watches
+            // arrive, so it is the thing that needs a node of its own to
+            // animate; a construct whose marks came back as bare document
+            // text had nothing to animate and popped into place.
+            if (revealedNow) {
               built.push({
                 from: hideFrom,
                 to: hideTo,
                 decoration: Decoration.mark({
-                  class: className,
-                  skr: `${revealedNow ? "reveal" : "hide"} node=${rule.node}`,
+                  class: "cm-skr-reveal-marker cm-skr-reveal-marker-active",
+                  skr: `reveal node=${rule.node}`,
                 }),
               });
               continue;
             }
-            if (revealedNow) {
+            // A line-scope marker keeps its node while hidden, reserving no
+            // width, so the line's geometry is settled before the caret ever
+            // arrives. An inside-scope marker is replaced outright: its
+            // characters must stay out of the caret's path.
+            if (rule.reveal === "cursor-line") {
+              built.push({
+                from: hideFrom,
+                to: hideTo,
+                decoration: Decoration.mark({
+                  class: "cm-skr-reveal-marker",
+                  skr: `hide node=${rule.node}`,
+                }),
+              });
               continue;
             }
             built.push({
@@ -3606,6 +4141,18 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               decoration: Decoration.replace({
                 atomic: true,
                 skr: `hide node=${rule.node}`,
+              }),
+            });
+          } else if (revealedNow) {
+            // A revealed mark or widget emits no presentation of its own, so
+            // the source shows through. It still carries the motion class, so
+            // the form that just arrived can be animated in place.
+            built.push({
+              from: ref.from,
+              to: ref.to,
+              decoration: Decoration.mark({
+                class: "cm-skr-reveal-motion cm-skr-reveal-source",
+                skr: `motion source=${rule.node}`,
               }),
             });
           } else if (presentation.present === "widget") {
@@ -3640,7 +4187,8 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               });
               if (
                 presentation.widget === "embed" ||
-                presentation.widget === "table"
+                presentation.widget === "table" ||
+                presentation.widget === "image"
               ) {
                 // Complete replacements own their syntax subtrees. Descendant
                 // decorations overlap the atomic range and can displace the
@@ -3649,9 +4197,14 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               }
             }
           } else {
-            const motionClass = ["Link", "Image", "Wikilink"].includes(
-              rule.node,
-            )
+            // Any rule the caret can turn into source carries the motion
+            // class in both forms, so whichever form arrives has a node to
+            // animate. A rule the caret never changes carries none: an
+            // element that never swaps has nothing to animate between.
+            const swaps =
+              rule.reveal !== "never" ||
+              ["Link", "Image", "Wikilink"].includes(rule.node);
+            const motionClass = swaps
               ? `cm-skr-reveal-motion ${
                   activeRevealOwns(node)
                     ? "cm-skr-reveal-source"
@@ -3713,14 +4266,7 @@ function buildViewDecorations(view: EditorView): DecorationSet {
   const wikilinks =
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
   const taskStatuses = state.facet(taskStatusConfiguration);
-  const activeReveal = findActiveReveal(
-    state.doc,
-    syntaxTree(state),
-    table,
-    selection,
-    wikilinks,
-    taskStatuses,
-  );
+  const activeReveal = activeRevealIn(state);
   const ranges =
     view.visibleRanges.length > 0
       ? view.visibleRanges.map((range) => ({ from: range.from, to: range.to }))
@@ -3753,14 +4299,7 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
     selection,
     wikilinks,
     taskStatuses,
-    activeReveal: findActiveReveal(
-      state.doc,
-      syntaxTree(state),
-      table,
-      selection,
-      wikilinks,
-      taskStatuses,
-    ),
+    activeReveal: activeRevealIn(state),
     explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
   });
 }
@@ -3778,6 +4317,147 @@ function refreshRequested(transaction: Transaction) {
   );
 }
 
+/**
+ * Native deletion and history replay may change a very large document while
+ * leaving the user waiting for the next paint. Existing decorations map
+ * exactly through those changes, so defer their expensive syntax walk until
+ * after the input transaction. Commands that deliberately change structure
+ * retain the synchronous rebuild they need to update their rendered control.
+ */
+function changesTouchBlockDecoration(
+  changes: Transaction["changes"],
+  decorations: DecorationSet | undefined,
+): boolean {
+  if (decorations === undefined) return false;
+  let touched = false;
+  changes.iterChangedRanges((fromA, toA) => {
+    decorations.between(fromA, toA, () => {
+      touched = true;
+    });
+  });
+  return touched;
+}
+
+function defersDecorationRebuild(
+  transaction: Transaction,
+  blockDecorations?: DecorationSet,
+): boolean {
+  return (
+    transaction.docChanged &&
+    !changesTouchBlockDecoration(transaction.changes, blockDecorations) &&
+    (transaction.annotation(bulkTextInputAnnotation) === true ||
+      transaction.isUserEvent("delete") ||
+      transaction.isUserEvent("undo") ||
+      transaction.isUserEvent("redo"))
+  );
+}
+
+/**
+ * Resolving the reveal walks the syntax tree around the caret, and several
+ * consumers want the same answer for the same state: the inline plugin, the
+ * block field, the deferred reveal refresh, and the motion driver. The result
+ * is a pure function of the state, and a state is immutable, so it is
+ * computed once and read back by everyone else.
+ */
+const revealRegionCache = new WeakMap<EditorState, RevealRegion | null>();
+
+function activeRevealIn(state: EditorState): RevealRegion | null {
+  const cached = revealRegionCache.get(state);
+  if (cached !== undefined) return cached;
+  const region = findActiveReveal(
+    state.doc,
+    syntaxTree(state),
+    state.facet(decorationTable),
+    revealSelection(state),
+    state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    state.facet(taskStatusConfiguration),
+  );
+  revealRegionCache.set(state, region);
+  return region;
+}
+
+function mappedReveal(
+  reveal: RevealRegion | null,
+  transaction: Transaction,
+): RevealRegion | null {
+  return reveal === null
+    ? null
+    : {
+        ...reveal,
+        from: transaction.changes.mapPos(reveal.from, -1),
+        to: transaction.changes.mapPos(reveal.to, 1),
+      };
+}
+
+function refreshRevealDecorations(
+  decorations: DecorationSet,
+  transaction: Transaction,
+  kind: "inline" | "block",
+): DecorationSet {
+  const previous = mappedReveal(
+    activeRevealIn(transaction.startState),
+    transaction,
+  );
+  const active = activeRevealIn(transaction.state);
+  const ranges = [previous, active].filter(
+    (range): range is RevealRegion => range !== null,
+  );
+  if (ranges.length === 0) return decorations;
+
+  const state = transaction.state;
+  const table = splitTable(state.facet(decorationTable))[kind];
+  const replacement = computeDecorations({
+    doc: state.doc,
+    tree: syntaxTree(state),
+    table,
+    selection: revealSelection(state),
+    ranges,
+    wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+    taskStatuses: state.facet(taskStatusConfiguration),
+    activeReveal: active,
+    explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
+    ...(kind === "inline"
+      ? {
+          suppressRenderedTableDescendants:
+            state.field(explicitTableSourceField, false) === null,
+        }
+      : {}),
+  });
+  const added: ReturnType<Decoration["range"]>[] = [];
+  const cursor = replacement.iter();
+  while (cursor.value !== null) {
+    added.push(cursor.value.range(cursor.from, cursor.to));
+    cursor.next();
+  }
+  return decorations.update({
+    filter: (from, to) =>
+      !ranges.some((range) => from <= range.to && to >= range.from),
+    add: added,
+    sort: true,
+  });
+}
+
+function decorationInputsChanged(
+  state: EditorState,
+  startState: EditorState,
+): boolean {
+  return (
+    state.facet(decorationTable) !== startState.facet(decorationTable) ||
+    state.facet(sourceRevealEnabled) !==
+      startState.facet(sourceRevealEnabled) ||
+    state.facet(sourceRevealFocusEnabled) !==
+      startState.facet(sourceRevealFocusEnabled) ||
+    state.field(tableCellRevealField, false) !==
+      startState.field(tableCellRevealField, false) ||
+    state.facet(taskStatusConfiguration) !==
+      startState.facet(taskStatusConfiguration) ||
+    state.field(wikilinkContext, false) !==
+      startState.field(wikilinkContext, false) ||
+    state.field(explicitTableSourceField, false) !==
+      startState.field(explicitTableSourceField, false)
+  );
+}
+
 const blockEngineField = StateField.define<BlockEngineState>({
   create: (state) => ({
     decorations: buildBlockDecorations(state),
@@ -3790,33 +4470,38 @@ const blockEngineField = StateField.define<BlockEngineState>({
         deferred: false,
       };
     }
-    if (
-      value.deferred ||
-      transaction.annotation(bulkTextInputAnnotation) === true
-    ) {
+    if (defersDecorationRebuild(transaction, value.decorations)) {
+      const decorations = transaction.docChanged
+        ? value.decorations.map(transaction.changes)
+        : value.decorations;
       return {
-        decorations: transaction.docChanged
-          ? value.decorations.map(transaction.changes)
-          : value.decorations,
+        decorations:
+          transaction.selection !== transaction.startState.selection
+            ? refreshRevealDecorations(decorations, transaction, "block")
+            : decorations,
         deferred: true,
       };
+    }
+    if (value.deferred && !transaction.docChanged) {
+      if (transaction.selection !== transaction.startState.selection) {
+        return {
+          decorations: refreshRevealDecorations(
+            value.decorations,
+            transaction,
+            "block",
+          ),
+          deferred: true,
+        };
+      }
+      if (!decorationInputsChanged(transaction.state, transaction.startState)) {
+        return { ...value, deferred: true };
+      }
     }
     if (
       transaction.docChanged ||
       transaction.selection !== transaction.startState.selection ||
       syntaxTree(transaction.state) !== syntaxTree(transaction.startState) ||
-      transaction.state.facet(decorationTable) !==
-        transaction.startState.facet(decorationTable) ||
-      transaction.state.facet(sourceRevealEnabled) !==
-        transaction.startState.facet(sourceRevealEnabled) ||
-      transaction.state.field(tableCellRevealField, false) !==
-        transaction.startState.field(tableCellRevealField, false) ||
-      transaction.state.facet(taskStatusConfiguration) !==
-        transaction.startState.facet(taskStatusConfiguration) ||
-      transaction.state.field(wikilinkContext, false) !==
-        transaction.startState.field(wikilinkContext, false) ||
-      transaction.state.field(explicitTableSourceField, false) !==
-        transaction.startState.field(explicitTableSourceField, false)
+      decorationInputsChanged(transaction.state, transaction.startState)
     ) {
       return {
         decorations: buildBlockDecorations(transaction.state),
@@ -3835,20 +4520,178 @@ function needsRebuild(update: ViewUpdate): boolean {
     update.viewportChanged ||
     update.selectionSet ||
     syntaxTree(update.state) !== syntaxTree(update.startState) ||
-    update.state.facet(decorationTable) !==
-      update.startState.facet(decorationTable) ||
-    update.state.facet(sourceRevealEnabled) !==
-      update.startState.facet(sourceRevealEnabled) ||
-    update.state.field(tableCellRevealField, false) !==
-      update.startState.field(tableCellRevealField, false) ||
-    update.state.facet(taskStatusConfiguration) !==
-      update.startState.facet(taskStatusConfiguration) ||
-    update.state.field(wikilinkContext, false) !==
-      update.startState.field(wikilinkContext, false) ||
-    update.state.field(explicitTableSourceField, false) !==
-      update.startState.field(explicitTableSourceField, false)
+    decorationInputsChanged(update.state, update.startState)
   );
 }
+
+function deferredUpdateNeedsImmediateRebuild(update: ViewUpdate): boolean {
+  return decorationInputsChanged(update.state, update.startState);
+}
+
+/** Whether a change rewrote the whole document rather than edited it. */
+function replacesWholeDocument(update: ViewUpdate): boolean {
+  if (!update.docChanged) return false;
+  let replaced = false;
+  update.changes.iterChangedRanges((fromA, toA) => {
+    if (fromA === 0 && toA === update.startState.doc.length) replaced = true;
+  });
+  return replaced;
+}
+
+/**
+ * Whether an update can have moved the reveal into a different construct.
+ * The motion follows the engine's own rebuilds: an update that only scrolled
+ * or remeasured cannot change what is revealed, and an input the engine
+ * defers has not rebuilt the DOM yet, so there is nothing new to animate
+ * until the deferred refresh lands. Both cases cost this plugin nothing,
+ * which is what keeps a keystroke in a large document off the syntax walk.
+ */
+function observesReveal(update: ViewUpdate): boolean {
+  if (update.transactions.some(refreshRequested)) return true;
+  if (
+    update.transactions.some((transaction) =>
+      defersDecorationRebuild(
+        transaction,
+        update.startState.field(blockEngineField, false)?.decorations,
+      ),
+    )
+  ) {
+    return false;
+  }
+  return (
+    update.docChanged ||
+    update.selectionSet ||
+    syntaxTree(update.state) !== syntaxTree(update.startState) ||
+    decorationInputsChanged(update.state, update.startState)
+  );
+}
+
+/**
+ * The reveal's motion. The decoration engine decides what a reveal looks
+ * like; this decides when it moves, which CSS cannot: CodeMirror builds a new
+ * node for a range whose decoration class changed, so the revealed form is
+ * always a fresh node already in its final state and no transition between
+ * the two forms can run. Watching the reveal region instead of watching
+ * elements is what keeps the motion honest — a node rebuilt for any other
+ * reason (a keystroke inside a revealed construct, a scroll bringing a
+ * heading into view, a note arriving) is not a reveal and must not animate.
+ */
+class RevealMotion {
+  private previous: RevealRegion | null;
+  private pending: {
+    previous: RevealRegion | null;
+    next: RevealRegion | null;
+  } | null = null;
+
+  constructor(view: EditorView) {
+    // The first observation is the view as it already is. A note opens with
+    // its caret wherever it was left, and that is a state, not an act.
+    this.previous = activeRevealIn(view.state);
+  }
+
+  update(update: ViewUpdate): void {
+    // The remembered region is mapped on every change, including the ones
+    // this plugin does no other work for: an input burst the engine defers
+    // still moves the text, and the region has to still describe the same
+    // construct when the deferred refresh finally lands.
+    if (update.docChanged && this.previous !== null) {
+      this.previous = {
+        ...this.previous,
+        from: update.changes.mapPos(this.previous.from, -1),
+        to: update.changes.mapPos(this.previous.to, 1),
+      };
+    }
+    if (!observesReveal(update)) return;
+    const previous = this.previous;
+    const next = activeRevealIn(update.state);
+    this.previous = next;
+    if (
+      (previous?.from === next?.from && previous?.to === next?.to) ||
+      replacesWholeDocument(update)
+    ) {
+      return;
+    }
+    this.pending = { previous, next };
+  }
+
+  /**
+   * Runs once the view has written this update out. A plugin sees an update
+   * before the DOM exists, and the next animation frame is already one paint
+   * too late: the revealed node would show at full strength for a frame and
+   * only then start fading in.
+   */
+  flush(view: EditorView): void {
+    const pending = this.pending;
+    this.pending = null;
+    if (pending === null) return;
+    this.play(view, pending.previous, pending.next);
+  }
+
+  private within(
+    view: EditorView,
+    element: HTMLElement,
+    region: RevealRegion,
+  ): boolean {
+    try {
+      const position = view.posAtDOM(element);
+      return position >= region.from && position <= region.to;
+    } catch {
+      return false;
+    }
+  }
+
+  private play(
+    view: EditorView,
+    previous: RevealRegion | null,
+    next: RevealRegion | null,
+  ): void {
+    if (next !== null) {
+      for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+        ".cm-skr-reveal-marker-active",
+      )) {
+        if (this.within(view, element, next)) playGlyphEntrance(element);
+      }
+      for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+        ".cm-skr-reveal-source",
+      )) {
+        // A construct whose markers are arriving has already said what
+        // changed. Fading the whole form as well would multiply the two
+        // opacities and darken the text that never changed at all.
+        if (
+          element.querySelector(".cm-skr-reveal-marker-active") !== null ||
+          !this.within(view, element, next)
+        ) {
+          continue;
+        }
+        playFormEntrance(element);
+      }
+    }
+    if (previous === null) return;
+    // The construct the caret just left: its markers are hidden again and its
+    // rendered form is back, both as nodes built in this same frame.
+    for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+      ".cm-skr-reveal-marker:not(.cm-skr-reveal-marker-active)",
+    )) {
+      if (this.within(view, element, previous)) playGlyphExit(element);
+    }
+    for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+      ".cm-skr-reveal-rendered",
+    )) {
+      if (this.within(view, element, previous)) playFormEntrance(element);
+    }
+  }
+}
+
+const revealMotionPlugin = ViewPlugin.fromClass(RevealMotion);
+
+/**
+ * The reveal's motion runs from an update listener rather than from the
+ * plugin's own update, because a plugin is told about an update before the
+ * view has written it to the DOM: the node to animate does not exist yet.
+ */
+const revealMotionDriver = EditorView.updateListener.of((update) => {
+  update.view.plugin(revealMotionPlugin)?.flush(update.view);
+});
 
 const enginePlugin = ViewPlugin.fromClass(
   class {
@@ -3864,24 +4707,54 @@ const enginePlugin = ViewPlugin.fromClass(
     update(update: ViewUpdate): void {
       if (update.transactions.some(refreshRequested)) {
         this.deferred = false;
-        this.decorations = buildViewDecorations(update.view);
+        this.decorations = this.build(update.view);
         return;
       }
-      const bulkInput = update.transactions.some(
-        (transaction) =>
-          transaction.annotation(bulkTextInputAnnotation) === true,
+      const blockDecorations = update.startState.field(
+        blockEngineField,
+        false,
+      )?.decorations;
+      const deferredInput = update.transactions.some((transaction) =>
+        defersDecorationRebuild(transaction, blockDecorations),
       );
-      if (this.deferred || bulkInput) {
-        if (update.docChanged) {
-          this.decorations = this.decorations.map(update.changes);
-        }
+      if (deferredInput) {
+        const decorations = update.docChanged
+          ? this.decorations.map(update.changes)
+          : this.decorations;
+        const transaction = update.transactions.at(-1);
+        this.decorations =
+          update.selectionSet && transaction !== undefined
+            ? refreshRevealDecorations(decorations, transaction, "inline")
+            : decorations;
         this.deferred = true;
         this.scheduleRefresh(update.view);
         return;
       }
-      if (needsRebuild(update)) {
-        this.decorations = buildViewDecorations(update.view);
+      if (this.deferred) {
+        if (
+          !update.docChanged &&
+          !deferredUpdateNeedsImmediateRebuild(update)
+        ) {
+          const transaction = update.transactions.at(-1);
+          if (update.selectionSet && transaction !== undefined) {
+            this.decorations = refreshRevealDecorations(
+              this.decorations,
+              transaction,
+              "inline",
+            );
+          }
+          return;
+        }
+        this.cancelRefresh();
+        this.deferred = false;
       }
+      if (needsRebuild(update)) {
+        this.decorations = this.build(update.view);
+      }
+    }
+
+    private build(view: EditorView): DecorationSet {
+      return buildViewDecorations(view);
     }
 
     private scheduleRefresh(view: EditorView): void {
@@ -3907,11 +4780,16 @@ const enginePlugin = ViewPlugin.fromClass(
       afterPaint(3);
     }
 
-    destroy(): void {
-      this.destroyed = true;
+    private cancelRefresh(): void {
       if (this.refreshFrame !== null) {
         cancelAnimationFrame(this.refreshFrame);
+        this.refreshFrame = null;
       }
+    }
+
+    destroy(): void {
+      this.destroyed = true;
+      this.cancelRefresh();
     }
   },
   { decorations: (plugin) => plugin.decorations },
@@ -3927,45 +4805,6 @@ type PreloadedNote = {
   source: Promise<string | null>;
 };
 
-function triangleArea(
-  a: PreviewPoint,
-  b: PreviewPoint,
-  c: PreviewPoint,
-): number {
-  return Math.abs(
-    (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y)) / 2,
-  );
-}
-
-/** Tests the safe-triangle corridor from a departed link to its preview. */
-export function pointInPreviewCone(
-  point: PreviewPoint,
-  origin: PreviewPoint,
-  panel: Pick<DOMRect, "left" | "right" | "top" | "bottom">,
-): boolean {
-  let first: PreviewPoint;
-  let second: PreviewPoint;
-  if (origin.x <= panel.left) {
-    first = { x: panel.left, y: panel.top - 12 };
-    second = { x: panel.left, y: panel.bottom + 12 };
-  } else if (origin.x >= panel.right) {
-    first = { x: panel.right, y: panel.top - 12 };
-    second = { x: panel.right, y: panel.bottom + 12 };
-  } else if (origin.y <= panel.top) {
-    first = { x: panel.left - 12, y: panel.top };
-    second = { x: panel.right + 12, y: panel.top };
-  } else {
-    first = { x: panel.left - 12, y: panel.bottom };
-    second = { x: panel.right + 12, y: panel.bottom };
-  }
-  const whole = triangleArea(origin, first, second);
-  const parts =
-    triangleArea(point, first, second) +
-    triangleArea(origin, point, second) +
-    triangleArea(origin, first, point);
-  return Math.abs(parts - whole) < 0.75;
-}
-
 class LinkPreviewController {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private scheduledLink: HTMLElement | null = null;
@@ -3980,6 +4819,7 @@ class LinkPreviewController {
   private coneTimer: ReturnType<typeof setTimeout> | null = null;
   private closeTimer: ReturnType<typeof setTimeout> | null = null;
   private preload: PreloadedNote | null = null;
+  private placementFrame: number | null = null;
   private readonly stopObservingViewport: () => void;
 
   constructor(readonly view: EditorView) {
@@ -4121,12 +4961,40 @@ class LinkPreviewController {
     panel.append(header, body);
     this.view.dom.append(panel);
 
-    const viewport = visualViewportRect(
-      this.view.dom.ownerDocument.defaultView ?? window,
+    this.place(panel, link);
+    enterMotionSurface(panel);
+
+    this.activeLink = link;
+    this.panel = panel;
+    this.leavePoint = null;
+    this.previousDescription = link.getAttribute("aria-describedby");
+    this.previousControls = link.getAttribute("aria-controls");
+    this.previousExpanded = link.getAttribute("aria-expanded");
+    link.setAttribute("aria-describedby", panel.id);
+    link.setAttribute("aria-controls", panel.id);
+    link.setAttribute("aria-expanded", "true");
+    this.cleanupRender = renderLinkedNote(
+      body,
+      target,
+      this.view.state.doc.toString(),
+      context,
+      `${STRINGS.linkPreviewLabel}: ${sourceName}`,
+      this.view.state.facet(taskStatusConfiguration),
+      () => {
+        this.view.requestMeasure();
+        this.schedulePlacement(panel, link);
+      },
+      "preview",
+      preload,
     );
+  }
+
+  private place(panel: HTMLElement, link: HTMLElement): void {
+    const ownerWindow = this.view.dom.ownerDocument.defaultView ?? window;
+    const viewport = visualViewportRect(ownerWindow);
     const bounds = link.getBoundingClientRect();
     const rootSize = Number.parseFloat(
-      getComputedStyle(document.documentElement).fontSize,
+      getComputedStyle(this.view.dom.ownerDocument.documentElement).fontSize,
     );
     panel.style.maxHeight = `${Math.min(
       18 * rootSize,
@@ -4149,33 +5017,31 @@ class LinkPreviewController {
     panel.dataset.motionSurface = placedBelow
       ? "anchored-top"
       : "anchored-bottom";
-    enterMotionSurface(panel);
+  }
 
-    this.activeLink = link;
-    this.panel = panel;
-    this.leavePoint = null;
-    this.previousDescription = link.getAttribute("aria-describedby");
-    this.previousControls = link.getAttribute("aria-controls");
-    this.previousExpanded = link.getAttribute("aria-expanded");
-    link.setAttribute("aria-describedby", panel.id);
-    link.setAttribute("aria-controls", panel.id);
-    link.setAttribute("aria-expanded", "true");
-    this.cleanupRender = renderLinkedNote(
-      body,
-      target,
-      this.view.state.doc.toString(),
-      context,
-      `${STRINGS.linkPreviewLabel}: ${sourceName}`,
-      this.view.state.facet(taskStatusConfiguration),
-      () => this.view.requestMeasure(),
-      "preview",
-      preload,
-    );
+  private schedulePlacement(panel: HTMLElement, link: HTMLElement): void {
+    if (this.placementFrame !== null) {
+      return;
+    }
+    this.placementFrame = requestAnimationFrame(() => {
+      this.placementFrame = null;
+      if (
+        this.panel === panel &&
+        this.activeLink === link &&
+        panel.isConnected
+      ) {
+        this.place(panel, link);
+      }
+    });
   }
 
   private dismiss(): void {
     this.cancelTimer();
     this.cancelTravelTimers();
+    if (this.placementFrame !== null) {
+      cancelAnimationFrame(this.placementFrame);
+      this.placementFrame = null;
+    }
     const panel = this.panel;
     const cleanupRender = this.cleanupRender;
     this.cleanupRender = null;
@@ -4260,11 +5126,6 @@ class LinkPreviewController {
   };
 
   private readonly onPointerMove = (event: PointerEvent) => {
-    const link = this.previewLink(event.target);
-    if (link !== null && link === this.scheduledLink) {
-      this.cancelTimer();
-      this.schedule(link);
-    }
     if (this.panel === null || this.leavePoint === null) return;
     if (
       this.panelContains(event.target) ||
@@ -4275,7 +5136,7 @@ class LinkPreviewController {
       return;
     }
     if (
-      pointInPreviewCone(
+      pointInMenuCone(
         { x: event.clientX, y: event.clientY },
         this.leavePoint,
         this.panel.getBoundingClientRect(),
@@ -4549,6 +5410,71 @@ const calloutPointerMapping = EditorView.domEventHandlers({
   },
 });
 
+/**
+ * The counterpart of a footnote node: a reference points at its
+ * definition, and a definition points back at the first reference that
+ * cites it. Returns the document position to travel to, or null when the
+ * note has no counterpart.
+ */
+function footnoteCounterpart(
+  state: EditorState,
+  label: string,
+  from: "reference" | "definition",
+): number | null {
+  const wanted =
+    from === "reference" ? "FootnoteDefinition" : "FootnoteReference";
+  let target: number | null = null;
+  syntaxTree(state).iterate({
+    enter(ref) {
+      if (target !== null || ref.name !== wanted) {
+        return undefined;
+      }
+      if (footnoteLabel(ref.node, state.doc) === label) {
+        target = ref.from;
+      }
+      return undefined;
+    },
+  });
+  return target;
+}
+
+/**
+ * A rendered footnote travels to its counterpart on activation, which is
+ * the navigation the construct exists for: a reference jumps to the note
+ * it cites, and the note's own marker returns to the citation. The caret
+ * lands on the counterpart, so the reveal model then shows that construct
+ * as source exactly as arriving by keyboard would.
+ */
+const footnotePointerNavigation = Prec.high(
+  EditorView.domEventHandlers({
+    mousedown(event, view) {
+      if (event.button !== 0 || !(event.target instanceof Element)) {
+        return false;
+      }
+      const element = event.target.closest<HTMLElement>("[data-footnote-role]");
+      const label = element?.dataset.footnote;
+      const role = element?.dataset.footnoteRole;
+      if (
+        element === null ||
+        element === undefined ||
+        label === undefined ||
+        (role !== "reference" && role !== "definition") ||
+        !view.dom.contains(element)
+      ) {
+        return false;
+      }
+      const anchor = footnoteCounterpart(view.state, label, role);
+      if (anchor === null) {
+        return false;
+      }
+      event.preventDefault();
+      view.focus();
+      view.dispatch({ selection: { anchor }, scrollIntoView: true });
+      return true;
+    },
+  }),
+);
+
 function syncTableSelection(view: EditorView): void {
   const selection = view.state.selection.main;
   for (const grid of view.dom.querySelectorAll<HTMLElement>(
@@ -4778,8 +5704,11 @@ const engineTheme = EditorView.baseTheme({
     verticalAlign: "bottom",
     whiteSpace: "pre",
   },
+  // The revealed marker takes its natural width: the space was reserved in
+  // the frame the caret arrived, with no transition on any geometry, so the
+  // text around it has already settled by the time the glyph animates.
   ".cm-skr-reveal-marker-active": {
-    maxWidth: "7ch",
+    maxWidth: "none",
     opacity: "1",
   },
   ".cm-skr-emphasis": { fontStyle: "italic" },
@@ -4828,6 +5757,76 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-embed.cm-skr-embed-failed": {
     borderLeftColor: "var(--skr-danger)",
   },
+  // An image occupies the reading column and never widens it: the frame
+  // scales down to the measure and keeps its intrinsic ratio, so the
+  // shared left edge holds and the page never scrolls sideways.
+  ".cm-skr-image": {
+    boxSizing: "border-box",
+    display: "inline-block",
+    maxWidth: "100%",
+    verticalAlign: "top",
+  },
+  ".cm-skr-image-body": {
+    display: "block",
+  },
+  ".cm-skr-image-frame": {
+    display: "block",
+    maxWidth: "100%",
+    height: "auto",
+    borderRadius: "var(--skr-radius-surface)",
+  },
+  // While the bytes are outstanding the frame holds the shared placeholder
+  // treatment, and a target that fails or is absent keeps that frame with
+  // a danger-tinted leading rule rather than leaving a gap in the prose.
+  ".cm-skr-image-body[data-loading-state='pending'], .cm-skr-image-body[data-loading-state='skeleton'], .cm-skr-image-body[data-loading-state='failure']":
+    {
+      display: "flex",
+      minWidth: "14rem",
+      flexDirection: "column",
+      alignItems: "flex-start",
+      gap: "0.5rem",
+      borderLeftWidth: "3px",
+      borderLeftStyle: "solid",
+      borderLeftColor: "var(--skr-accent)",
+      borderTopRightRadius: "var(--skr-radius-surface)",
+      borderBottomRightRadius: "var(--skr-radius-surface)",
+      backgroundColor: "var(--skr-surface-subtle)",
+    },
+  ".cm-skr-image-body[data-loading-state='failure']": {
+    borderLeftColor: "var(--skr-danger)",
+  },
+  // A thematic break is the rule it stands for. The line reserves the
+  // vertical rhythm and the rule sits on the shared left edge.
+  ".cm-skr-thematic-break": {
+    display: "block",
+    width: "100%",
+    height: "0px",
+    margin: "1rem 0",
+    borderTopWidth: "1px",
+    borderTopStyle: "solid",
+    borderTopColor: "var(--skr-border)",
+  },
+  ".cm-skr-footnote-ref": {
+    color: "var(--skr-link)",
+    cursor: "pointer",
+    fontSize: "0.78em",
+    fontWeight: "600",
+    verticalAlign: "super",
+    lineHeight: "0",
+  },
+  ".cm-line.cm-skr-footnote-definition": {
+    color: "var(--skr-text-muted)",
+    fontSize: "0.875em",
+  },
+  ".cm-skr-footnote-definition-label": {
+    color: "var(--skr-link)",
+    cursor: "pointer",
+    fontWeight: "600",
+  },
+  ".cm-skr-footnote-definition-label::after": {
+    content: "'.'",
+    color: "var(--skr-text-muted)",
+  },
   ".cm-skr-embed-header": {
     display: "block",
     padding: "0.35rem 0.6rem",
@@ -4867,7 +5866,7 @@ const engineTheme = EditorView.baseTheme({
     color: "var(--skr-text-muted)",
     backgroundColor: "var(--skr-surface-raised)",
     fontFamily: "var(--skr-font-interface)",
-    fontSize: "13px",
+    fontSize: "var(--skr-type-control)",
     fontWeight: "400",
   },
   ".cm-skr-link-preview-body": { padding: "0.75rem 1rem" },
@@ -4951,6 +5950,13 @@ const engineTheme = EditorView.baseTheme({
     padding: "0.35rem",
     overflow: "auto",
     color: "var(--skr-text)",
+    // The palette is interface chrome, not document prose; without this it
+    // inherits `.cm-content`'s serif prose stack and its rows read in the
+    // wrong face next to every other menu in the product (design system
+    // section 2.3: interface controls and palette rows use the interface
+    // face). Row-level font-size declarations stay relative to whatever
+    // this resolves to, unchanged.
+    fontFamily: "var(--skr-font-interface)",
     backgroundColor: "var(--skr-surface-raised)",
     border: "1px solid var(--skr-border)",
     borderRadius: "var(--skr-radius-surface)",
@@ -4965,7 +5971,7 @@ const engineTheme = EditorView.baseTheme({
     padding: "0.35rem 0.5rem 0.15rem",
     color: "var(--skr-text-muted)",
     fontFamily: "var(--skr-font-interface)",
-    fontSize: "12px",
+    fontSize: "var(--skr-type-label)",
     fontWeight: "700",
     letterSpacing: "0.08em",
     lineHeight: "1.2",
@@ -4995,7 +6001,7 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-task-option-name": {
     overflow: "hidden",
-    fontSize: "0.82em",
+    fontSize: "0.8125em",
     lineHeight: "1.3",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
@@ -5039,7 +6045,10 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-inline-code": {
     fontFamily: "var(--skr-font-mono)",
-    fontSize: "0.9em",
+    // The code tier is one size: an inline span and a fenced block render
+    // the same concept and must measure the same, so both take 0.875em of
+    // their context rather than one taking a slightly larger ratio.
+    fontSize: "0.875em",
     fontWeight: "400",
     backgroundColor: "var(--skr-code-surface)",
     borderRadius: "var(--skr-radius-control)",
@@ -5325,11 +6334,14 @@ export function decorationEngine(
     explicitTableSourceField,
     blockEngineField,
     enginePlugin,
+    revealMotionPlugin,
+    revealMotionDriver,
     linkPreviewPlugin,
     linkPreviewKeys,
     EditorView.atomicRanges.of(atomicDecorations),
     frontmatterCursorGuard,
     calloutPointerMapping,
+    footnotePointerNavigation,
     tableSessionPlugin,
     engineTheme,
   ];

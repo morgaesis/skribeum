@@ -44,13 +44,26 @@ fn generate_bindings() -> String {
 /// `TAURI_INVOKE("name", ...)` call sites tauri-specta emits.
 fn command_set(bindings: &str) -> BTreeSet<String> {
     let mut commands = BTreeSet::new();
-    let needle = "TAURI_INVOKE(\"";
+    let needle = "__TAURI_INVOKE";
     let mut rest = bindings;
     while let Some(start) = rest.find(needle) {
         let after = &rest[start + needle.len()..];
-        if let Some(end) = after.find('"') {
-            commands.insert(after[..end].to_owned());
-            rest = &after[end..];
+        let Some(arguments) = after.find("(\"") else {
+            break;
+        };
+        let type_arguments = &after[..arguments];
+        let supported_call = type_arguments.is_empty()
+            || (type_arguments.starts_with('<')
+                && type_arguments.ends_with('>')
+                && !type_arguments.contains('\n'));
+        if !supported_call {
+            rest = after;
+            continue;
+        }
+        let command = &after[arguments + 2..];
+        if let Some(end) = command.find('"') {
+            commands.insert(command[..end].to_owned());
+            rest = &command[end..];
         } else {
             break;
         }

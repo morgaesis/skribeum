@@ -160,6 +160,34 @@ describe("settings store", () => {
     expect(store.snapshot.document).toEqual({ ...PERSISTED, theme: "light" });
   });
 
+  it("holds the default document, not the persisted one, until load settles", async () => {
+    // Reproduces, at the store level, the race behind the macOS e2e flake in
+    // smoke.spec.ts's palette_selection_and_system_matching_round_trip
+    // test: opening the settings dialog (mounting the view) is not proof
+    // that the persisted document has arrived, since `load()` reads it
+    // asynchronously. A caller that treats "load() started" as settled and
+    // reads the document immediately observes the default, not what is on
+    // disk; only awaiting the load (or polling `snapshot.loaded`) does.
+    let resolveRead: (document: SettingsDocument) => void = () => {};
+    const { store } = harness({
+      read: () =>
+        new Promise<SettingsDocument>((resolve) => {
+          resolveRead = resolve;
+        }),
+    });
+
+    const loaded = store.load();
+    expect(store.snapshot.loaded).toBe(false);
+    expect(store.snapshot.document).toEqual(DEFAULT_SETTINGS);
+    expect(store.snapshot.document).not.toEqual(PERSISTED);
+
+    resolveRead(PERSISTED);
+    await loaded;
+
+    expect(store.snapshot.loaded).toBe(true);
+    expect(store.snapshot.document).toEqual(PERSISTED);
+  });
+
   it("persists the merged document", async () => {
     const { store, written } = harness();
     await store.load();

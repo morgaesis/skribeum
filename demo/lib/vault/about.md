@@ -7,7 +7,7 @@ The vault is organized around two kinds of material:
 - **Features** contains focused demonstrations of Markdown and Obsidian-style syntax.
 - **Examples** contains longer working notes that combine those features in context.
 
-Start with [[quickstart|the guided tour]], or use [[index|the vault index]] as a map. The canvas at `demo.canvas` collects a few of the example notes into a visual project overview.
+Start with [[quickstart|the guided tour]], or use [[index|the vault index]] as a map. The canvas at `demo.canvas` collects a few of the example notes into a visual project overview. This browser demo shows the canvas read-only; the desktop app allows moving and editing cards.
 
 ## A useful editing loop
 

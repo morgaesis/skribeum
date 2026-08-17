@@ -38,6 +38,7 @@ const SAMPLE_DOCUMENTS = [
   "Setext one\n===\n\nSetext two\n---\n",
   "Some *emphasis* and **strong** and ~~struck~~ text.\n",
   'A [link](https://example.com "the title") and an image ![alt](picture.png) inline.\n',
+  "A reference image ![alt][picture] and a non-image ![doc](notes/other.md).\n\n[picture]: https://example.com/p.png\n",
   "A [full][label] reference and a [label] shortcut.\n\n[label]: https://example.com\n",
   "An autolink <https://example.com/direct> and bare https://example.com/bare text.\n",
   "A [[plain-target]] and an aliased [[target|alias]] link.\n",
@@ -52,6 +53,8 @@ const SAMPLE_DOCUMENTS = [
   "> plain quoted line\n",
   "A #sample-tag inline.\n",
   "A paragraph anchor. ^block-anchor-1\n",
+  "A claim needing support[^1] here.\n\n[^1]: The supporting note.\n",
+  "before the rule\n\n---\n\nafter the rule\n",
   "---\ntitle: sample\n---\n\nBody after frontmatter.\n",
 ];
 

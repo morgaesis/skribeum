@@ -34,7 +34,9 @@ import {
   propertyInsertion,
 } from "./editor/frontmatter";
 import { showInvisibleCharacters } from "./editor/invisibles";
+import { caretMotion } from "./editor/motion";
 import { NoteSession } from "./editor/noteSession";
+import { PostPaintScheduler } from "./editor/postPaintScheduler";
 import {
   noteRenderingExtensions,
   noteSourceExtensions,
@@ -44,6 +46,8 @@ import {
   type FollowWikilinkOptions,
   followWikilinkTarget,
   type NoteViewState,
+  readingViewportTop,
+  scrollAnchorForViewport,
 } from "./features/navigation";
 import {
   countCharacters,
@@ -104,6 +108,7 @@ let {
   onConflict,
   onWriteError,
   onDocChanged,
+  onOutlineChanged,
   onDirtyChanged,
   onTitleVisibilityChange,
   onSaved,
@@ -135,8 +140,10 @@ let {
   historyViewState?: NoteViewState | null;
   onConflict?: () => void;
   onWriteError?: (message: string) => void;
-  /** Notified after any document-changing transaction (outline refresh). */
+  /** Reports the latest source after document-changing transactions settle. */
   onDocChanged?: (source: string, path: string | null) => void;
+  /** Notified when document or background parsing changes the outline. */
+  onOutlineChanged?: () => void;
   /** Reports whether the note has pending or in-flight local edits. */
   onDirtyChanged?: (dirty: boolean) => void;
   /** Reports whether the shell title should be visible for this document. */
@@ -154,7 +161,9 @@ let {
 } = $props();
 
 let host: HTMLDivElement;
-let shell: HTMLDivElement;
+// A deferred arrival can land after this pane unmounts, at which point
+// `bind:this` has written `null` back into the reference.
+let shell: HTMLDivElement | null = null;
 let view: EditorView | undefined;
 let session: NoteSession | null = null;
 let durableEditHistory: DurableEditHistory | null = null;
@@ -239,11 +248,12 @@ let noteArrivalGeneration = $state(0);
 /** Word and character totals for the whole document, cached per change. */
 let documentWords = 0;
 let documentCharacters = 0;
-let statisticsFrame: number | undefined;
+const deferredConsumers = new PostPaintScheduler();
+let sourceNotificationPending = false;
+let statisticsPublishPending = false;
+let statisticsRecountPending = false;
 
-function recomputeDocumentStatistics(): void {
-  if (view === undefined) return;
-  const text = view.state.doc.toString();
+function recomputeDocumentStatistics(text: string): void {
   documentWords = countWords(text);
   documentCharacters = countCharacters(text);
 }
@@ -266,19 +276,53 @@ function publishStatistics(): void {
   });
 }
 
-let statisticsRecountPending = false;
+function runDeferredConsumers(
+  target: EditorView,
+  targetPath: string | null,
+): void {
+  const notifySource = sourceNotificationPending;
+  const publish = statisticsPublishPending;
+  const recount = statisticsRecountPending;
+  sourceNotificationPending = false;
+  statisticsPublishPending = false;
+  statisticsRecountPending = false;
+  if (view !== target || path !== targetPath || renderedPath !== targetPath) {
+    return;
+  }
+  const source = notifySource || recount ? target.state.doc.toString() : null;
+  if (recount && source !== null) recomputeDocumentStatistics(source);
+  if (notifySource && source !== null) onDocChanged?.(source, targetPath);
+  if (publish) publishStatistics();
+}
 
-function scheduleStatisticsRefresh(recount: boolean): void {
-  statisticsRecountPending = statisticsRecountPending || recount;
-  if (statisticsFrame !== undefined) return;
-  statisticsFrame = requestAnimationFrame(() => {
-    statisticsFrame = undefined;
-    if (statisticsRecountPending) {
-      statisticsRecountPending = false;
-      recomputeDocumentStatistics();
-    }
-    publishStatistics();
-  });
+function scheduleDeferredConsumers({
+  source = false,
+  statistics = false,
+  recount = false,
+}: {
+  source?: boolean;
+  statistics?: boolean;
+  recount?: boolean;
+}): void {
+  sourceNotificationPending =
+    sourceNotificationPending || (source && onDocChanged !== undefined);
+  statisticsPublishPending =
+    statisticsPublishPending ||
+    ((statistics || recount) && onStatisticsChanged !== undefined);
+  statisticsRecountPending =
+    statisticsRecountPending || (recount && onStatisticsChanged !== undefined);
+  if (!sourceNotificationPending && !statisticsPublishPending) return;
+  const target = view;
+  if (target === undefined) return;
+  const targetPath = path;
+  deferredConsumers.schedule(() => runDeferredConsumers(target, targetPath));
+}
+
+function fenceDeferredConsumers(): void {
+  deferredConsumers.fence();
+  sourceNotificationPending = false;
+  statisticsPublishPending = false;
+  statisticsRecountPending = false;
 }
 
 function defaultPropertiesExpanded(): boolean {
@@ -293,9 +337,17 @@ function renderingExtensions(
   content: string | Parameters<typeof noteRenderingExtensions>[0],
   statuses: readonly TaskStatus[],
 ): Extension[] {
-  return sourceMode
+  const presentation = sourceMode
     ? noteSourceExtensions(content, statuses)
     : noteRenderingExtensions(content, undefined, statuses);
+  // A drawn caret measures its own position on every selection change, and a
+  // pathological line makes that measurement cost more than the keystroke
+  // that caused it. Presentation is already all-or-nothing for such a
+  // document, and the caret belongs on the same side of that line: a
+  // document that renders as plain text keeps the platform's own caret.
+  return presentation.length === 0
+    ? presentation
+    : [...presentation, caretMotion()];
 }
 
 function refreshFrontmatter() {
@@ -560,6 +612,7 @@ function stateFor(
 function finishPreparedArrival(): void {
   if (!arrivalPrepared) return;
   arrivalPrepared = false;
+  if (!(shell instanceof HTMLElement)) return;
   delete shell.dataset.motionPreparing;
   enterMotionSurface(shell);
 }
@@ -665,21 +718,25 @@ function dispatchTransactions(
     scheduleIdleSave();
   }
   const docChanged = transactions.some((transaction) => transaction.docChanged);
-  if (
-    docChanged ||
-    transactions.some((transaction) => transaction.selection !== undefined)
-  ) {
-    scheduleStatisticsRefresh(docChanged);
+  const selectionChanged = transactions.some(
+    (transaction) => transaction.selection !== undefined,
+  );
+  if (docChanged || selectionChanged) {
+    scheduleDeferredConsumers({
+      source: docChanged,
+      statistics: true,
+      recount: docChanged,
+    });
   }
   if (docChanged) {
     refreshFrontmatter();
     scheduleTitleVisibilityRefresh();
-    onDocChanged?.(target.state.doc.toString(), path);
+    onOutlineChanged?.();
   } else if (treeGrewInBackground(target)) {
     // Background parsing advanced without a document change. Consumers of
     // the syntax tree (the outline) recompute, or a large note's outline
     // stays truncated at the initial parse slice until the first edit.
-    onDocChanged?.(target.state.doc.toString(), path);
+    onOutlineChanged?.();
   }
 }
 
@@ -887,9 +944,11 @@ export function requestSave(): Promise<boolean> {
 }
 
 /** Saves pending edits and reports whether the buffer is safe to replace. */
-export function flush(): Promise<boolean> {
+export async function flush(): Promise<boolean> {
   clearTimeout(idleSaveTimer);
-  return requestSave();
+  const saved = await requestSave();
+  await deferredConsumers.settled();
+  return saved;
 }
 
 function toIpcChanges(changes: readonly ByteChange[]): ByteRangeReplace[] {
@@ -983,6 +1042,7 @@ export function getView(): EditorView | undefined {
 export function preparePaneSwitch(kind: PaneSwitchKind): void {
   lastSwitchKind = kind;
   arrivalPrepared = true;
+  if (!(shell instanceof HTMLElement)) return;
   shell.dataset.motionPreparing = "true";
   delete shell.dataset.motionExiting;
 }
@@ -994,12 +1054,13 @@ export function forgetTab(path: string): void {
 
 /** Captures byte-exact selection offsets and the current reading position. */
 export function captureHistoryState(): NoteViewState | null {
-  if (view === undefined) return null;
-  const content = view.state.doc.toString();
-  let selection = view.state.selection.main;
-  const tableCell = focusedRenderedTableCell(view);
+  const target = view;
+  if (target === undefined) return null;
+  const content = target.state.doc.toString();
+  let selection = target.state.selection.main;
+  const tableCell = focusedRenderedTableCell(target);
   if (tableCell !== null) {
-    const table = view.state.sliceDoc(tableCell.tableFrom, tableCell.tableTo);
+    const table = target.state.sliceDoc(tableCell.tableFrom, tableCell.tableTo);
     const cell = tableCellRanges(table).find(
       (candidate) =>
         candidate.row === tableCell.row &&
@@ -1015,23 +1076,44 @@ export function captureHistoryState(): NoteViewState | null {
   }
   const viewportTop = Math.max(
     0,
-    view.scrollDOM.scrollTop - view.documentPadding.top,
+    target.scrollDOM.scrollTop - target.documentPadding.top,
   );
-  let scrollLine = view.lineBlockAtHeight(viewportTop);
-  const lineOffset = scrollLine.top - viewportTop;
-  const halfPhysicalPixel = 0.5 / Math.max(1, window.devicePixelRatio);
-  const crossesRoundedPixelBoundary =
-    lineOffset < 0 || (lineOffset > 0 && lineOffset < halfPhysicalPixel);
-  if (crossesRoundedPixelBoundary && scrollLine.to < view.state.doc.length) {
-    scrollLine = view.lineBlockAt(scrollLine.to + 1);
-  }
+  const reading = scrollAnchorForViewport({
+    viewportTop,
+    documentLength: target.state.doc.length,
+    devicePixelRatio: window.devicePixelRatio,
+    lineBlockAtHeight: (height) => target.lineBlockAtHeight(height),
+    lineBlockAt: (position) => target.lineBlockAt(position),
+  });
   return {
     anchor: byteOffsetForCharacter(content, selection.anchor),
     head: byteOffsetForCharacter(content, selection.head),
-    scrollAnchor: byteOffsetForCharacter(content, scrollLine.from),
-    scrollOffset: scrollLine.top - viewportTop,
+    scrollAnchor: byteOffsetForCharacter(content, reading.line.from),
+    scrollOffset: reading.offset,
     propertiesExpanded,
   };
+}
+
+/**
+ * How far the viewport sits, in CSS pixels, from where a stored reading
+ * position puts it. A scroller holds a position only to whole device pixels,
+ * so a restored position is checked as a distance from the stored one rather
+ * than as an equal encoding of it.
+ */
+export function readingPositionDrift(state: NoteViewState): number | null {
+  const target = view;
+  if (target === undefined) return null;
+  const content = target.state.doc.toString();
+  const anchor = characterOffsetForByte(content, state.scrollAnchor);
+  if (anchor > target.state.doc.length) return null;
+  const viewportTop = Math.max(
+    0,
+    target.scrollDOM.scrollTop - target.documentPadding.top,
+  );
+  return (
+    viewportTop -
+    readingViewportTop(target.lineBlockAt(anchor).top, state.scrollOffset)
+  );
 }
 
 async function rereadAndReconcile(): Promise<void> {
@@ -1098,6 +1180,7 @@ function restoreCachedState(cached: TabSnapshot): void {
 
 function initializeForNote(current: LoadedNote | null) {
   clearTimeout(idleSaveTimer);
+  fenceDeferredConsumers();
   captureOutgoingTabState();
   removed = false;
   addingProperty = false;
@@ -1112,10 +1195,13 @@ function initializeForNote(current: LoadedNote | null) {
     replaceEditorState(doc, false);
     applyLinkContext();
     refreshFrontmatter();
-    scheduleStatisticsRefresh(true);
     scheduleTitleVisibilityRefresh();
-    onDocChanged?.(view?.state.doc.toString() ?? doc, path);
     renderedPath = path;
+    scheduleDeferredConsumers({
+      source: true,
+      statistics: true,
+      recount: true,
+    });
     return;
   }
   if (current.readOnly) {
@@ -1128,10 +1214,13 @@ function initializeForNote(current: LoadedNote | null) {
     replaceEditorState(current.text, true);
     applyLinkContext();
     refreshFrontmatter();
-    scheduleStatisticsRefresh(true);
     scheduleTitleVisibilityRefresh();
-    onDocChanged?.(view?.state.doc.toString() ?? current.text, path);
     renderedPath = path;
+    scheduleDeferredConsumers({
+      source: true,
+      statistics: true,
+      recount: true,
+    });
     return;
   }
   session = new NoteSession(current.bytes, current.meta.projection_hash);
@@ -1180,10 +1269,9 @@ function initializeForNote(current: LoadedNote | null) {
   notifyDirty();
   applyLinkContext();
   refreshFrontmatter();
-  scheduleStatisticsRefresh(true);
   scheduleTitleVisibilityRefresh();
-  onDocChanged?.(view?.state.doc.toString() ?? text, path);
   renderedPath = path;
+  scheduleDeferredConsumers({ source: true, statistics: true, recount: true });
 }
 
 onMount(() => {
@@ -1201,9 +1289,7 @@ onMount(() => {
     if (titleVisibilityFrame !== undefined) {
       cancelAnimationFrame(titleVisibilityFrame);
     }
-    if (statisticsFrame !== undefined) {
-      cancelAnimationFrame(statisticsFrame);
-    }
+    fenceDeferredConsumers();
     view?.scrollDOM.removeEventListener(
       "scroll",
       scheduleTitleVisibilityRefresh,

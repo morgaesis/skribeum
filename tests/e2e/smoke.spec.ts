@@ -14,6 +14,8 @@ import {
 import {
   CANVAS_FILE_CONTENT,
   CANVAS_FILE_NAME,
+  CONFIG_FILE_CONTENT,
+  CONFIG_FILE_NAME,
   CRLF_NOTE_NAME,
   DESKTOP_EXTERNAL_NOTE_CONTENT,
   DESKTOP_EXTERNAL_NOTE_NAME,
@@ -27,6 +29,9 @@ import {
   DURABLE_EXTERNAL_NOTE_NAME,
   DURABLE_UNDO_NOTE_CONTENT,
   DURABLE_UNDO_NOTE_NAME,
+  IMAGE_FILE_HEIGHT,
+  IMAGE_FILE_NAME,
+  IMAGE_FILE_WIDTH,
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
@@ -1585,11 +1590,15 @@ async function pressEditorHistoryShortcut(
 
 /**
  * Waits for a [data-motion-surface] element's entrance transition to reach
- * its settled state (see enterMotionSurface in src/lib/motion.ts) before an
- * axe scan runs against it. axe's color-contrast rule reads the actually
+ * its settled state (see enterMotionSurface in src/lib/motion.ts).
+ *
+ * An axe scan needs it because the color-contrast rule reads the actually
  * rendered opacity: a scan mid-fade can see text still translucent against
  * its background and report a violation that clears on its own well
- * before a human ever perceives it.
+ * before a human ever perceives it. A click needs it because an anchored
+ * surface travels while it arrives, so a row's position at the moment
+ * WebDriver resolves it is not its position at the moment the click is
+ * dispatched.
  */
 async function waitForMotionSurfaceEntered(selector: string): Promise<void> {
   await browser.waitUntil(
@@ -2947,10 +2956,15 @@ describe("skribeum shell", () => {
         timeout: 10000,
       });
     };
+    // A surface is displayed as soon as it is rendered, which is while its
+    // entrance is still travelling, so the row's position when WebDriver
+    // resolves it is not its position when the click is dispatched. The
+    // fact to wait on is the entrance having settled, not more time.
     const runCommand = async (query: string, id: string) => {
       await browser.keys([modifierKey, "p"]);
       const surface = $('[data-testid="unified-command-surface"]');
       await surface.waitForDisplayed({ timeout: 10000 });
+      await waitForMotionSurfaceEntered(".command-surface-dialog");
       await surface.$('[role="combobox"]').addValue(query);
       const command = surface.$(`[role="option"][data-command-id="${id}"]`);
       await command.waitForDisplayed({ timeout: 10000 });
@@ -2961,6 +2975,7 @@ describe("skribeum shell", () => {
       await $('button[aria-label="More actions"]').click();
       const menu = $('nav[aria-label="More actions"]');
       await menu.waitForDisplayed({ timeout: 10000 });
+      await waitForMotionSurfaceEntered('[data-testid="anchored-menu"]');
       const command = menu.$(`button[data-command-id="${id}"]`);
       await command.waitForDisplayed({ timeout: 10000 });
       await command.click();
@@ -2970,6 +2985,7 @@ describe("skribeum shell", () => {
       {
         id: "table.row.insert-above",
         query: "table insert row above",
+        shape: { rows: 4, columns: 2 },
         table: [
           "| Name  | Score |",
           "| :--- | ---: |",
@@ -2981,6 +2997,7 @@ describe("skribeum shell", () => {
       {
         id: "table.row.insert-below",
         query: "table insert row below",
+        shape: { rows: 4, columns: 2 },
         table: [
           "| Name  | Score |",
           "| :--- | ---: |",
@@ -2992,6 +3009,7 @@ describe("skribeum shell", () => {
       {
         id: "table.column.insert-before",
         query: "table insert column left",
+        shape: { rows: 3, columns: 3 },
         table: [
           "| | Name  | Score |",
           "| --- | :--- | ---: |",
@@ -3002,6 +3020,7 @@ describe("skribeum shell", () => {
       {
         id: "table.column.insert-after",
         query: "table insert column right",
+        shape: { rows: 3, columns: 3 },
         table: [
           "| Name  | | Score |",
           "| :--- | --- | ---: |",
@@ -3012,6 +3031,7 @@ describe("skribeum shell", () => {
       {
         id: "table.row.delete",
         query: "table delete row",
+        shape: { rows: 2, columns: 2 },
         table: ["| Name  | Score |", "| :--- | ---: |", "| Ada | 10 |"].join(
           "\n",
         ),
@@ -3019,15 +3039,47 @@ describe("skribeum shell", () => {
       {
         id: "table.column.delete",
         query: "table delete column",
+        shape: { rows: 3, columns: 1 },
         table: ["| Score |", "| ---: |", "| keep  |", "| 10 |"].join("\n"),
       },
     ] as const;
 
     try {
+      // Two facts, in order: the command reached the note, read from the
+      // rendered table's own shape, and the note reached the disk. They are
+      // asserted separately because they fail for unrelated reasons and are
+      // indistinguishable from the file alone — a command that never ran and
+      // a save that never landed both leave the file exactly as it was.
+      const waitForFirstGridShape = async (
+        shape: { rows: number; columns: number },
+        message: string,
+      ) => {
+        const readShape = async () => {
+          const grid = (await $$(".cm-skr-table-grid"))[0];
+          return grid === undefined
+            ? "no rendered table"
+            : `${await grid.getAttribute("aria-rowcount")}x${await grid.getAttribute("aria-colcount")}`;
+        };
+        const wanted = `${shape.rows}x${shape.columns}`;
+        try {
+          await browser.waitUntil(async () => (await readShape()) === wanted, {
+            timeout: 10000,
+          });
+        } catch {
+          throw new Error(
+            `${message}; the rendered table is ${await readShape()}, expected ${wanted}`,
+          );
+        }
+      };
+
       for (const entry of cases) {
         await resetAndOpen();
         await focusBodyCell();
         await runCommand(entry.query, entry.id);
+        await waitForFirstGridShape(
+          entry.shape,
+          `${entry.id} from the command palette did not change the note`,
+        );
         const expected = original.replace(firstTable, entry.table);
         await browser.keys([modifierKey, "s"]);
         await waitForDisk(TABLE_EDITING_NOTE_NAME, expected);
@@ -3039,6 +3091,10 @@ describe("skribeum shell", () => {
         await resetAndOpen();
         await focusBodyCell();
         await runPointerCommand(entry.id);
+        await waitForFirstGridShape(
+          entry.shape,
+          `${entry.id} from the overflow menu did not change the note`,
+        );
         const expected = original.replace(firstTable, entry.table);
         await browser.keys([modifierKey, "s"]);
         await waitForDisk(TABLE_EDITING_NOTE_NAME, expected);
@@ -3778,6 +3834,87 @@ describe("skribeum shell", () => {
     // Every terminator stays CRLF, including on the edited line; only the
     // typed byte was added.
     await waitForDisk(CRLF_NOTE_NAME, "first\r\nsecond!\r\nthird\r\n");
+  });
+
+  it("edits_a_file_that_is_not_a_note_without_rewriting_its_other_bytes", async () => {
+    await openNoteFromTree(CONFIG_FILE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("drafts/*.tmp"),
+      { timeout: 15000 },
+    );
+
+    await placeCursorAtLineEnd("drafts/*.tmp");
+    await $(".cm-content").addValue("!");
+    await browser.keys([modifierKey, "s"]);
+
+    // CRLF terminators survive, no final newline is invented, and only the
+    // typed byte is added: the same guarantees a note gets, for a file the
+    // note extensions do not cover.
+    await waitForDisk(CONFIG_FILE_NAME, `${CONFIG_FILE_CONTENT}!`);
+  });
+
+  it("renders_an_image_file_at_its_natural_dimensions", async () => {
+    const row = $(`[role="treeitem"][data-path="${IMAGE_FILE_NAME}"]`);
+    await row.waitForExist({ timeout: 15000 });
+    await row.click();
+    try {
+      await browser.waitUntil(
+        async () => (await currentNotePath()) === IMAGE_FILE_NAME,
+        { timeout: 3000 },
+      );
+    } catch {
+      await browser.execute((path: string) => {
+        (
+          window as Window & {
+            __SKRIBEUM_E2E_OPEN_PATH__?: (path: string) => void;
+          }
+        ).__SKRIBEUM_E2E_OPEN_PATH__?.(path);
+      }, IMAGE_FILE_NAME);
+      await browser.waitUntil(
+        async () => (await currentNotePath()) === IMAGE_FILE_NAME,
+        {
+          timeout: 15000,
+          timeoutMsg: `${IMAGE_FILE_NAME} did not become the active document`,
+        },
+      );
+    }
+
+    const frame = $('[data-testid="image-view-frame"]');
+    await frame.waitForExist({ timeout: 15000 });
+
+    // Measure the decoded image, not an attribute the viewer set: an
+    // element that never loaded reports zero for both.
+    const measured = await browser.waitUntil(
+      async () => {
+        const size = await browser.execute(() => {
+          const element = document.querySelector<HTMLImageElement>(
+            '[data-testid="image-view-frame"]',
+          );
+          return element === null
+            ? null
+            : {
+                tag: element.tagName,
+                complete: element.complete,
+                naturalWidth: element.naturalWidth,
+                naturalHeight: element.naturalHeight,
+                scheme: element.currentSrc.split(":")[0],
+              };
+        });
+        return size !== null && size.naturalWidth > 0 ? size : false;
+      },
+      {
+        timeout: 15000,
+        timeoutMsg: `${IMAGE_FILE_NAME} never decoded in the viewer`,
+      },
+    );
+
+    expect(measured.tag).toBe("IMG");
+    expect(measured.complete).toBe(true);
+    expect(measured.naturalWidth).toBe(IMAGE_FILE_WIDTH);
+    expect(measured.naturalHeight).toBe(IMAGE_FILE_HEIGHT);
+    // Vault bytes reach the element as a blob, never as a file URL or as
+    // markup the webview would parse as a document.
+    expect(measured.scheme).toBe("blob");
   });
 
   it("restores_history_scroll_and_utf8_caret_without_editor_focus", async () => {

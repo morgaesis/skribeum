@@ -108,8 +108,15 @@ export function registerSurfaces(
   registry.register({
     id: "note.save",
     title: STRINGS.commandSaveNote,
+    // Global, not editor-scoped: saving is an act on the whole note, not
+    // an act at the caret, and it has to happen wherever the person's
+    // attention is — a rendered table cell, the file tree, a panel. An
+    // editor-scoped binding only claims Mod-s while the note's own
+    // editable surface holds focus, so a cell being edited, whose editable
+    // surface is a nested one the note's editor does not answer for,
+    // silently dropped the save. The window-level handler claims the key
+    // regardless of focus.
     keybindings: ["Mod-s"],
-    scope: "editor",
     pointer: ["action-menu", "command-palette"],
     run: (context) => {
       context.requestSave();

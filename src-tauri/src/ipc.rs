@@ -1225,16 +1225,7 @@ impl<R: Runtime> VaultWatchWorker<R> {
                     &self.root,
                     &event,
                 );
-                // External changes update the search index incrementally:
-                // updates re-read and re-index, removals drop the row.
-                if let Some(index) = self
-                    .search
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .as_ref()
-                {
-                    let _ = index.apply_recon_event(&RealFs, &self.root, &event);
-                }
+                index_recon_event(&self.search, &self.root, &event);
                 if !emit_recon_event(
                     &self.app,
                     self.vault_id,
@@ -1251,6 +1242,27 @@ impl<R: Runtime> VaultWatchWorker<R> {
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
+    }
+}
+
+/// Applies one reconciliation event to the search index: an update re-reads
+/// and re-indexes, a removal drops the row. Search indexes notes and nothing
+/// else, so an external write to any other file is skipped here rather than
+/// adding a row the next full rebuild removes. A removal always runs:
+/// dropping a row that is not there costs nothing, and a path can change
+/// kind between passes.
+fn index_recon_event(search: &Mutex<Option<SearchIndex>>, root: &Path, event: &ReconEvent) {
+    if let ReconEvent::ExternalUpdate { path, .. } = event
+        && !path.is_note()
+    {
+        return;
+    }
+    if let Some(index) = search
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
+        let _ = index.apply_recon_event(&RealFs, root, event);
     }
 }
 
@@ -1875,7 +1887,7 @@ fn epoch_milliseconds(duration: Duration) -> f64 {
     milliseconds
 }
 
-/// Reads the creation and modification timestamps of one indexed note. The
+/// Reads the creation and modification timestamps of one indexed file. The
 /// path resolves through the vault index exactly like `note_read`, so no
 /// unindexed path is ever statted.
 #[tauri::command]
@@ -1899,7 +1911,7 @@ fn note_stat(
         .ok_or_else(|| {
             AppError::from(skribeum_vault::VaultError::NoteNotFound).with_path(path.as_str())
         })?;
-    if entry.kind != EntryKind::Note {
+    if entry.kind == EntryKind::Directory {
         return Err(AppError::from(skribeum_vault::VaultError::NotANote).with_path(path.as_str()));
     }
     let absolute = open.vault.root().join(path.as_str());
@@ -2038,7 +2050,11 @@ fn note_write(
                     WriteResult::Written {
                         projection_hash: projection_hash.clone(),
                     },
-                    Some((Arc::clone(&open.search), base.bytes)),
+                    // Search indexes notes and nothing else, so a write to
+                    // any other file leaves the index alone. Indexing it
+                    // here would add a row the next full rebuild removes.
+                    path.is_note()
+                        .then(|| (Arc::clone(&open.search), base.bytes)),
                 )
             } else {
                 (

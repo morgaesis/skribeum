@@ -24,28 +24,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lists, continuations and nested sublists, asserts on the bytes the edit
   path writes that every legal move relocates its extent and leaves the rest
   of the file untouched, and that undoing a move restores the file exactly.
+- `Insert bullet list` and `Insert numbered list` build a list from the
+  command palette and the slash menu, over the caret's line or every line of
+  a selection. Running either again on lines that already are that list
+  removes it, which is also how a heading returns to a paragraph.
+- `Increase heading level` and `Decrease heading level` move a heading
+  between levels, and `Indent list item` and `Outdent list item` (`Mod-]`
+  and `Mod-[`) nest a list line by one indentation step. Each declines away
+  from the construct it restructures.
 - The Updates settings section can now act on what it reports: an available
   update offers an "Install update" button showing its release notes inline,
   a running download shows progress that reads honestly whether or not the
   server reports a download size, and an installed update offers "Restart to
   apply", which confirms first and saves any unsaved work through the same
   path any other window-closing action uses before restarting.
-- Tag search matches by prefix at path-segment boundaries and groups its
-  results in bands: the tag itself, then everything below it in the path,
-  then tags a path segment of which starts with the query, then near matches
-  under their own heading. Near matches are tags containing what was typed or
-  a bounded edit distance from it, capped at five rows, drawn muted, never
-  preselected, and never offered while authoring. Every row states how many
-  notes use the tag and orders by it. `*` is removed from a tag query wherever
-  it appears, so `#feat`, `#feat*` and `#*feat` are one query with one result
-  list, and typing one no longer empties the results or closes the completion
-  menu.
-- A tag query returns the notes below it in the path: `#work` lists notes
-  tagged `work/meetings` and not notes tagged `workshop`, and each row's note
-  count covers the same set the row produces.
-- Tag mode ends with a row that re-runs the query as a note-text search, and
-  its empty states name what to do next: how to make the vault's first tag,
-  or which query found nothing after the wildcards were removed.
 
 ### Changed
 
@@ -53,9 +45,40 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   raw error object: a signature or authentication failure is called out as a
   security concern rather than reading like an ordinary network hiccup, and
   it is announced assertively rather than as routine status text.
+- The file tree opens every row it shows. A file that is neither a note nor a
+  canvas is no longer drawn muted and inert, and the unified command surface
+  reaches every indexed file rather than notes and canvases alone.
+- A file that is neither an image nor valid UTF-8 opens read-only with the
+  non-UTF-8 notice, the same treatment a non-UTF-8 note gets, so no editing
+  pass can write a lossy re-encoding over a binary file.
+- Markdown services stay with Markdown documents. The outline, frontmatter
+  and the properties panel, source mode, and title resolution from a leading
+  heading apply to notes only, so a YAML document's leading `---` is not
+  folded away as frontmatter and a script's leading `#` is not read as a
+  heading.
+- A chosen local folder in the browser demo loads every file it contains, and
+  its tree shows dot-prefixed names, matching what the desktop application
+  indexes.
+- Search still indexes notes and nothing else, and now says so consistently:
+  the incremental update after a save and after an external change both skip
+  a path a full index rebuild would not have recorded, so a row can no longer
+  appear in results until the next rebuild silently removes it.
 
 ### Fixed
 
+- Every block insertion places the caret inside the construct it inserted.
+  A heading, task, list, or callout inserted on an empty line left the caret
+  in front of the marker, so the first character typed landed before it and
+  the line was not the construct that was asked for.
+- A heading command on a list line replaces the list marker instead of
+  writing a heading marker in front of it, and a callout wraps every line of
+  a selection rather than one, with its title line waiting for the caret.
+- Accepting a slash-menu entry replaces the trigger and its query with the
+  insertion in one document change, so one undo step reverses the whole
+  acceptance.
+- Searching the command surface for a due date reaches the task status menu,
+  the surface that carries a status's date field, rather than the `Time: Due`
+  status command, which writes a checkbox marker and no date.
 - Opening a note that lives inside a collapsed folder no longer stops the
   application. The file tree measured a row the same update had released,
   and the resulting error, thrown from inside a reactive effect, halted every
@@ -66,20 +89,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A failure inside one panel of the shell now takes down only that panel,
   which reports the failure in place and offers to rebuild itself, while the
   rest of the workspace keeps rendering and responding.
-- The inline tag completion menu offers the tag that was typed. It had
-  removed the exact match from its own results, so finishing a tag the vault
-  already holds showed "No matches", and pressing Enter committed a
-  neighbouring tag into the note.
-- The tag catalog holds every tag in the vault. It had been cut to the
-  thousand most-used, so a rarely written tag existed for no surface and
-  nothing said so.
-- A tag written with a decomposed accent is indexed and searchable. The
-  editor rendered, offered and accepted the whole word while the indexer
-  stopped at the combining mark, which the syntax specification already
-  counts as part of the letter it belongs to.
-- The tag completion menu stops at the ends of its list instead of wrapping
-  around, matching the command surface, and reopens when a character that
-  ended the query is deleted instead of requiring the hash to be retyped.
 ## [0.0.8] - 2026-08-15
 
 ### Added

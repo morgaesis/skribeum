@@ -3,6 +3,7 @@
 // imported lazily: a build without it (the demo) reports that updates are
 // unavailable rather than failing.
 
+import { invoke } from "@tauri-apps/api/core";
 import { updateCheck } from "../ipc/services";
 import { STRINGS } from "../strings";
 
@@ -14,7 +15,8 @@ export type UpdateState =
   | { kind: "available"; version: string; notes: string }
   | { kind: "downloading"; version: string; percent: number | null }
   | { kind: "ready"; version: string }
-  | { kind: "failed"; message: string };
+  | { kind: "restarting" }
+  | { kind: "failed"; message: string; security: boolean };
 
 type UpdateHandle = {
   version: string;
@@ -37,6 +39,45 @@ export function hasDesktopRuntime(): boolean {
     typeof window !== "undefined" &&
     "__TAURI_INTERNALS__" in (window as unknown as Record<string, unknown>)
   );
+}
+
+/** Pulls a readable message out of whatever an IPC rejection throws. */
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    const text = JSON.stringify(error);
+    if (text !== undefined && text !== "{}") return text;
+  } catch {
+    // Falls through to the generic stringification below.
+  }
+  return String(error);
+}
+
+/**
+ * Turns a thrown error into a message a person can act on and a flag for
+ * whether it is security-relevant. A signature or authentication failure
+ * means the download did not match what the update server signed for, so it
+ * is reported distinctly from an ordinary network hiccup rather than folded
+ * into the same "something went wrong, try again" text.
+ */
+export function describeUpdateFailure(error: unknown): {
+  message: string;
+  security: boolean;
+} {
+  const raw = errorText(error);
+  const lower = raw.toLowerCase();
+  if (/signature|minisign|authenticat|tamper/.test(lower)) {
+    return { message: STRINGS.updateFailedSignature, security: true };
+  }
+  if (
+    /network|dns|timeout|timed out|connect|reqwest|offline|unreachable/.test(
+      lower,
+    )
+  ) {
+    return { message: STRINGS.updateFailedNetwork, security: false };
+  }
+  return { message: `${STRINGS.updateFailed}: ${raw}`, security: false };
 }
 
 async function loadPlugin(): Promise<{
@@ -80,7 +121,7 @@ export async function checkForUpdate(
       notes: result.notes,
     });
   } catch (error) {
-    onState({ kind: "failed", message: String(error) });
+    onState({ kind: "failed", ...describeUpdateFailure(error) });
   }
 }
 
@@ -124,7 +165,31 @@ export async function installUpdate(
     });
     onState({ kind: "ready", version: update.version });
   } catch (error) {
-    onState({ kind: "failed", message: String(error) });
+    onState({ kind: "failed", ...describeUpdateFailure(error) });
+  }
+}
+
+/**
+ * Restarts the application to finish installing a previously downloaded
+ * update. Never called on its own: the caller confirms with the person and
+ * flushes unsaved work first, the same way any other path that closes the
+ * window does, so an install can never interrupt work in progress. When the
+ * restart itself succeeds the process exits and there is nothing left to
+ * report; a rejection (the platform declining to relaunch) becomes a
+ * `failed` state instead of a silent no-op.
+ */
+export async function restartToApply(
+  onState: (state: UpdateState) => void,
+): Promise<void> {
+  if (!hasDesktopRuntime()) {
+    onState({ kind: "unavailable", reason: STRINGS.updateUnavailable });
+    return;
+  }
+  onState({ kind: "restarting" });
+  try {
+    await invoke("plugin:process|restart");
+  } catch (error) {
+    onState({ kind: "failed", ...describeUpdateFailure(error) });
   }
 }
 
@@ -147,7 +212,9 @@ export function describeUpdateState(state: UpdateState): string {
         : `${STRINGS.updateDownloading} ${state.version} (${state.percent}%)`;
     case "ready":
       return `${STRINGS.updateReady} ${state.version}`;
+    case "restarting":
+      return STRINGS.updateRestarting;
     case "failed":
-      return `${STRINGS.updateFailed}: ${state.message}`;
+      return state.message;
   }
 }

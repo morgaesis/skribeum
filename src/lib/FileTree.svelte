@@ -66,13 +66,17 @@ let autoExpanded = $state<Record<string, boolean>>({});
 let focusIndex = $state(0);
 let scrollTop = $state(0);
 let viewportHeight = $state(0);
-let treeElement = $state<HTMLUListElement>();
-let itemElements = $state<Array<HTMLElement | undefined>>([]);
+// `bind:this` writes `null`, not `undefined`, into a slot whose element has
+// been torn down (a keyed row moving to a different index releases its old
+// slot that way), so every element reference below is checked for being an
+// element rather than for being defined.
+let treeElement = $state<HTMLUListElement | null>();
+let itemElements = $state<Array<HTMLElement | null | undefined>>([]);
 let menuPath = $state<string | null>(null);
 let menuLeft = $state(0);
 let menuTop = $state(0);
 let menuOrigin = $state<HTMLElement | null>(null);
-let menuElement = $state<HTMLElement>();
+let menuElement = $state<HTMLElement | null>();
 let dragPath = $state<string | null>(null);
 let dropPath = $state<string | null>(null);
 let hoveredPath = $state<string | null>(null);
@@ -82,9 +86,9 @@ let folderMotionGeneration = 0;
 let folderMotionFrame: number | null = null;
 let folderMotionTimer: ReturnType<typeof setTimeout> | null = null;
 let folderMotionElements: HTMLElement[] = [];
-let ghostElements = $state<Array<HTMLElement | undefined>>([]);
+let ghostElements = $state<Array<HTMLElement | null | undefined>>([]);
 let leavingRows = $state<GhostRow[]>([]);
-let highlightElement = $state<HTMLElement>();
+let highlightElement = $state<HTMLElement | null>();
 // Plain (non-reactive) bookkeeping: the choreography effect below both
 // reads and writes these, and making them `$state` would make its own
 // writes re-trigger itself mid-flush, stomping the entrance markers it had
@@ -433,7 +437,7 @@ $effect(() => {
   const path = selectedPath;
   const top = activeRowTop;
   const element = highlightElement;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
 
   if (top === null) {
     highlightMotionGeneration += 1;
@@ -533,7 +537,7 @@ $effect(() => {
 
 $effect(() => {
   const element = treeElement;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
   const measure = () => {
     if (mounted) viewportHeight = element.clientHeight;
   };
@@ -602,7 +606,7 @@ function captureFolderMotion(): Map<string, FolderMotionSnapshot> {
   for (const index of renderedIndices) {
     const row = rows[index];
     const element = itemElements[index];
-    if (row === undefined || element === undefined) continue;
+    if (row === undefined || !(element instanceof HTMLElement)) continue;
     snapshots.set(row.path, {
       presentation: {
         path: row.path,
@@ -630,10 +634,13 @@ function captureFolderMotion(): Map<string, FolderMotionSnapshot> {
       },
       open: ghost.open,
       top:
-        element === undefined
-          ? ghost.top
-          : renderedCoordinate(element, "y", ghost.top),
-      opacity: element === undefined ? ghost.opacity : renderedOpacity(element),
+        element instanceof HTMLElement
+          ? renderedCoordinate(element, "y", ghost.top)
+          : ghost.top,
+      opacity:
+        element instanceof HTMLElement
+          ? renderedOpacity(element)
+          : ghost.opacity,
     });
   }
   return snapshots;
@@ -668,10 +675,9 @@ async function toggleFolderWithReveal(row: Row) {
   cancelFolderCallbacks();
   settleFolderMotion();
   const tree = treeElement;
-  const duration =
-    tree === undefined
-      ? 0
-      : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
+  const duration = !(tree instanceof HTMLElement)
+    ? 0
+    : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
   if (duration > 0 && !opening) {
     leavingRows = renderedIndices.flatMap((index): GhostRow[] => {
       const hidden = rows[index];
@@ -697,7 +703,7 @@ async function toggleFolderWithReveal(row: Row) {
   userExpanded[folderPath] = opening;
   delete autoExpanded[folderPath];
   persistExpanded();
-  if (duration === 0 || tree === undefined) return;
+  if (duration === 0 || !(tree instanceof HTMLElement)) return;
   await playFolderReveal(snapshots, generation, opening ? [] : [folderPath]);
 }
 
@@ -707,7 +713,7 @@ async function playFolderReveal(
   collapsingPaths: readonly string[] = [],
 ): Promise<void> {
   const tree = treeElement;
-  if (!mounted || tree === undefined) return;
+  if (!mounted || !(tree instanceof HTMLElement)) return;
   const duration = motionDurationMilliseconds(
     "--skr-motion-panel-duration",
     tree,
@@ -733,7 +739,7 @@ async function playFolderReveal(
   for (const index of renderedIndices) {
     const current = rows[index];
     const element = itemElements[index];
-    if (current === undefined || element === undefined) continue;
+    if (current === undefined || !(element instanceof HTMLElement)) continue;
     const before = snapshots.get(current.path);
     if (before === undefined) {
       element.style.transition = "none";
@@ -751,7 +757,7 @@ async function playFolderReveal(
     }
   }
   const ghosts = ghostElements.filter(
-    (element): element is HTMLElement => element !== undefined,
+    (element): element is HTMLElement => element instanceof HTMLElement,
   );
   folderMotionElements = [...moving, ...ghosts];
   if (folderMotionElements.length === 0) {
@@ -810,7 +816,7 @@ function closeMenu(restore = true) {
       });
     }
   };
-  if (menu === undefined) finish();
+  if (!(menu instanceof HTMLElement)) finish();
   else void exitMotionSurface(menu, finish);
 }
 
@@ -836,7 +842,7 @@ function openMenu(row: Row, origin: HTMLElement, x?: number, y?: number) {
   void tick().then(() => {
     if (!mounted) return;
     const menu = menuElement;
-    if (menu === undefined) return;
+    if (!(menu instanceof HTMLElement)) return;
     const position = computeAnchoredPosition(
       anchor,
       { width: menu.offsetWidth, height: menu.offsetHeight },

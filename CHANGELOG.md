@@ -8,6 +8,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A headless list-move primitive: given a document, a list item and a
+  destination list and index, it returns the declared spans that relocate
+  the item and nothing else. The moved extent is the item's whole lines
+  including nested sublists, continuation paragraphs and indented code,
+  together with the blank line that separates it from its neighbour, so a
+  loose list stays loose and a tight one stays tight at both ends of the
+  move. Indentation and the marker character are rewritten only where the
+  destination list writes them differently, numbered items keep the numbers
+  the author gave them, and a file with no final newline still has none
+  afterwards. A move that cannot be written without changing a byte it was
+  not asked to touch is refused rather than approximated. A corpus of
+  board-shaped and list-shaped documents, covering CRLF, mixed and absent
+  terminators, tabs, every bullet marker, ordered lists, loose and tight
+  lists, continuations and nested sublists, asserts on the bytes the edit
+  path writes that every legal move relocates its extent and leaves the rest
+  of the file untouched, and that undoing a move restores the file exactly.
 - The Updates settings section can now act on what it reports: an available
   update offers an "Install update" button showing its release notes inline,
   a running download shows progress that reads honestly whether or not the
@@ -21,6 +37,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   raw error object: a signature or authentication failure is called out as a
   security concern rather than reading like an ordinary network hiccup, and
   it is announced assertively rather than as routine status text.
+
+### Fixed
+
+- Opening a note that lives inside a collapsed folder no longer stops the
+  application. The file tree measured a row the same update had released,
+  and the resulting error, thrown from inside a reactive effect, halted every
+  surface with no message and no recovery. The workspace it left behind was
+  saved, so the next visit reproduced it; a stored workspace now reconciles a
+  selected note with the folders on the way to it, so a record like that
+  heals when it is read.
+- A failure inside one panel of the shell now takes down only that panel,
+  which reports the failure in place and offers to rebuild itself, while the
+  rest of the workspace keeps rendering and responding.
 
 ## [0.0.8] - 2026-08-15
 

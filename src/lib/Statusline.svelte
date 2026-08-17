@@ -43,13 +43,13 @@ let announcementText = $state<string | null>(null);
 let announcementExiting = $state(false);
 let announcementTimer: ReturnType<typeof setTimeout> | undefined;
 let failureOpen = $state(false);
-let editedSegment = $state<HTMLButtonElement | undefined>();
-let barElement = $state<HTMLElement | undefined>();
+let editedSegment = $state<HTMLButtonElement | null>();
+let barElement = $state<HTMLElement | null>();
 let infoRendered = $state(false);
-let infoPopover = $state<HTMLElement | undefined>();
+let infoPopover = $state<HTMLElement | null>();
 let infoCloseGeneration = 0;
 let failureRendered = $state(false);
-let failurePopover = $state<HTMLElement | undefined>();
+let failurePopover = $state<HTMLElement | null>();
 let failureCloseGeneration = 0;
 
 const lastEdited = $derived(
@@ -118,7 +118,7 @@ $effect(() => {
     const finish = () => {
       if (generation === infoCloseGeneration) infoRendered = false;
     };
-    if (popover === undefined) finish();
+    if (!(popover instanceof HTMLElement)) finish();
     else void exitMotionSurface(popover, finish);
   }
 });
@@ -134,7 +134,7 @@ $effect(() => {
     const finish = () => {
       if (generation === failureCloseGeneration) failureRendered = false;
     };
-    if (popover === undefined) finish();
+    if (!(popover instanceof HTMLElement)) finish();
     else void exitMotionSurface(popover, finish);
   }
 });

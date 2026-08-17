@@ -4,13 +4,21 @@
 // range and runs the command; menu navigation itself is registry
 // keybindings (`slash.*` editor commands), so every key on this surface
 // is registered wiring.
+//
+// Acceptance is one document change, not two. The trigger range is armed
+// and a transaction filter folds its removal into the transaction the
+// command dispatches, so the trigger and the query it accumulated are
+// replaced by the insertion in a single undoable step and no intermediate
+// document state is ever observable.
 
 import {
   type EditorState,
   type Extension,
   Facet,
+  EditorState as State,
   StateEffect,
   StateField,
+  type TransactionSpec,
 } from "@codemirror/state";
 import {
   type EditorView,
@@ -41,6 +49,57 @@ const slashConfig = Facet.define<SlashConfig, SlashConfig | null>({
 
 const setSelected = StateEffect.define<number>();
 const closeMenu = StateEffect.define<null>();
+
+/** The `/query` range an accepted command is about to replace. */
+type TriggerRange = { from: number; to: number };
+
+const armTrigger = StateEffect.define<TriggerRange>();
+const disarmTrigger = StateEffect.define<null>();
+
+const armedTrigger = StateField.define<TriggerRange | null>({
+  create: () => null,
+  update(value, transaction) {
+    let next =
+      value === null
+        ? null
+        : {
+            from: transaction.changes.mapPos(value.from, -1),
+            to: transaction.changes.mapPos(value.to, 1),
+          };
+    for (const effect of transaction.effects) {
+      if (effect.is(armTrigger)) {
+        next = effect.value;
+      } else if (effect.is(disarmTrigger)) {
+        next = null;
+      }
+    }
+    return next;
+  },
+});
+
+/**
+ * Folds the armed trigger's removal into the first transaction that
+ * changes the document, which is the one the accepted command dispatched.
+ * The range is mapped through that transaction so a marker inserted at the
+ * trigger's start stays and a snippet inserted at its end stays: only the
+ * text the person typed to reach the menu goes.
+ */
+const removeArmedTrigger = State.transactionFilter.of((transaction) => {
+  const armed = transaction.startState.field(armedTrigger, false);
+  if (armed == null || !transaction.docChanged) {
+    return transaction;
+  }
+  const removal: TransactionSpec = {
+    changes: {
+      from: transaction.changes.mapPos(armed.from, 1),
+      to: transaction.changes.mapPos(armed.to, -1),
+      insert: "",
+    },
+    effects: disarmTrigger.of(null),
+    sequential: true,
+  };
+  return [transaction, removal];
+});
 
 function triggerAt(state: EditorState, pos: number): boolean {
   if (pos === 0) {
@@ -144,19 +203,26 @@ function acceptItem(view: EditorView): boolean {
   const query = queryOf(view.state, open) ?? "";
   const items = filteredSlashCommands(config.registry, query);
   const item = items[Math.min(open.selected, items.length - 1)];
+  const trigger: TriggerRange = {
+    from: open.from,
+    to: view.state.selection.main.head,
+  };
   view.dispatch({
-    changes: {
-      from: open.from,
-      to: view.state.selection.main.head,
-      insert: "",
-    },
-    effects: closeMenu.of(null),
-    userEvent: "input.slash",
+    effects: [closeMenu.of(null), armTrigger.of(trigger)],
   });
-  if (item === undefined) {
-    return true;
+  if (item !== undefined) {
+    config.registry.run(item.id, { ...config.contextProvider(), view });
   }
-  config.registry.run(item.id, { ...config.contextProvider(), view });
+  const stillArmed = view.state.field(armedTrigger, false);
+  if (stillArmed != null) {
+    // No entry ran, or the command declined: the trigger text is still the
+    // person's to be rid of, so remove it on its own.
+    view.dispatch({
+      changes: { ...stillArmed, insert: "" },
+      effects: disarmTrigger.of(null),
+      userEvent: "input.slash",
+    });
+  }
   return true;
 }
 
@@ -327,6 +393,8 @@ export function slashMenu(
   return [
     slashConfig.of({ registry, contextProvider }),
     slashMenuState,
+    armedTrigger,
+    removeArmedTrigger,
     slashTheme,
   ];
 }

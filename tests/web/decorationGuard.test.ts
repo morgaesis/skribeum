@@ -11,11 +11,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { Decoration, EditorView } from "@codemirror/view";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertDecorationsInert,
   decorationOrigin,
+  guardedDecorations,
 } from "../../src/lib/editor/decorationGuard";
 import {
   decorationEngine,
@@ -111,6 +112,29 @@ describe("decoration inertness guard", () => {
     } finally {
       view.destroy();
     }
+  });
+
+  it("answers a failed build with the decorations the note already had", () => {
+    const reported = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const fallback = Decoration.set([
+        Decoration.mark({ class: "kept" }).range(0, 4),
+      ]);
+      const result = guardedDecorations(() => {
+        throw new RangeError("Mark decorations may not be empty");
+      }, fallback);
+      expect(result).toBe(fallback);
+      expect(reported).toHaveBeenCalledOnce();
+    } finally {
+      reported.mockRestore();
+    }
+  });
+
+  it("answers a successful build with its own decorations", () => {
+    const built = Decoration.set([
+      Decoration.mark({ class: "built" }).range(0, 4),
+    ]);
+    expect(guardedDecorations(() => built, Decoration.none)).toBe(built);
   });
 
   it("holds over every corpus file with the real engine at sampled cursor positions", {

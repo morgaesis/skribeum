@@ -1,10 +1,14 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { describe, expect, it } from "vitest";
+// The tree's row presentation lives in the shell stylesheet, so the
+// assertions below can read resolved style rather than class names.
+import "../../src/app.css";
 import { showConfirmDialog, showPromptDialog } from "../../src/lib/dialogs";
 import FileTree from "../../src/lib/FileTree.svelte";
 import { createAppRegistry } from "../../src/lib/features";
 import type { TreeEntry } from "../../src/lib/ipc/bindings";
 import type { CommandContext } from "../../src/lib/registry";
+import { loadWorkspaceState } from "../../src/lib/workspaceState";
 import { reactiveState } from "./helpers/reactiveState.svelte";
 
 const ROW_HEIGHT = 28;
@@ -180,6 +184,61 @@ describe("designed file tree", () => {
     expect(plain?.textContent).toContain("Reading title");
     expect(plain?.textContent).not.toContain("plain.md");
     expect(manual?.textContent).toContain("manual.pdf");
+
+    await unmount(component);
+  });
+
+  it("opens a row that is not a note, on the same footing as a note", async () => {
+    const opened: string[] = [];
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        selectedPath: "manual.pdf",
+        onOpenPath: (path: string) => opened.push(path),
+      },
+    });
+    flushSync();
+
+    const note = document.querySelector<HTMLElement>('[data-path="plain.md"]');
+    const manual = document.querySelector<HTMLElement>(
+      '[data-path="manual.pdf"]',
+    );
+    // Nothing marks the row as unreachable, and it resolves to the same
+    // colour and pointer affordance as the notes beside it.
+    expect(manual?.getAttribute("aria-disabled")).toBeNull();
+    expect(manual?.getAttribute("aria-selected")).toBe("true");
+    expect(getComputedStyle(manual as HTMLElement).color).toBe(
+      getComputedStyle(note as HTMLElement).color,
+    );
+    expect(getComputedStyle(manual as HTMLElement).cursor).toBe(
+      getComputedStyle(note as HTMLElement).cursor,
+    );
+    expect(manual?.draggable).toBe(note?.draggable);
+
+    manual?.click();
+    await tick();
+    expect(opened).toEqual(["manual.pdf"]);
+
+    // A pane can receive it too: the drag carries the path under the key a
+    // pane drop reads, exactly as a note's drag does.
+    const carried = (row: HTMLElement | null): string | undefined => {
+      const data = new Map<string, string>();
+      row?.dispatchEvent(
+        Object.assign(new Event("dragstart", { bubbles: true }), {
+          dataTransfer: {
+            setData: (format: string, value: string) => data.set(format, value),
+          },
+        }),
+      );
+      return data.get("application/x-skribeum-tree-path");
+    };
+    expect(carried(manual)).toBe("manual.pdf");
+    expect(carried(note)).toBe("plain.md");
+    expect(
+      carried(document.querySelector<HTMLElement>('[data-path="Folder"]')),
+    ).toBeUndefined();
 
     await unmount(component);
   });
@@ -607,6 +666,199 @@ describe("designed file tree", () => {
     expect(newFocusedRow?.getAttribute("data-path")).toBe(
       document.activeElement?.getAttribute("data-path"),
     );
+
+    await unmount(component);
+  });
+});
+
+/**
+ * A workspace whose selected note lives inside a folder that is not in the
+ * expanded set. The tree opens the folder on its own, and the reveal
+ * choreography measures the rows the change displaces; a row released by
+ * that same update leaves `null` behind in the element array it was bound
+ * into, so the measurement has to reject a missing element rather than an
+ * undefined one. Getting that wrong threw out of an `$effect`, which stops
+ * every effect in the application, and the state was persisted, so the
+ * application re-entered it on every later visit.
+ */
+describe("a selection inside a collapsed folder", () => {
+  const vault: TreeEntry[] = [
+    { path: "Examples", kind: "directory", hidden: false },
+    { path: "Examples/Home", kind: "directory", hidden: false },
+    { path: "Examples/Home/groceries.md", kind: "note", hidden: false },
+    { path: "Examples/Home/repairs.md", kind: "note", hidden: false },
+    { path: "Examples/Personal", kind: "directory", hidden: false },
+    { path: "Examples/Personal/journal.md", kind: "note", hidden: false },
+    { path: "Examples/Personal/letters.md", kind: "note", hidden: false },
+    { path: "Examples/Research", kind: "directory", hidden: false },
+    {
+      path: "Examples/Research/literature-review.md",
+      kind: "note",
+      hidden: false,
+    },
+    { path: "Examples/Research/sources.md", kind: "note", hidden: false },
+    { path: "Examples/Work", kind: "directory", hidden: false },
+    { path: "Examples/Work/standup.md", kind: "note", hidden: false },
+    { path: "Features", kind: "directory", hidden: false },
+    { path: "Features/showcase.md", kind: "note", hidden: false },
+    { path: "quickstart.md", kind: "note", hidden: false },
+  ];
+  const SELECTED = "Examples/Research/literature-review.md";
+  // Every folder above open, `Examples/Research` alone left out. Revealing
+  // it pushes the vault's last root-level note past the rows the tree keeps
+  // rendered while it has not measured its own height yet, so that note's
+  // row is released rather than moved: this is the shape that leaves `null`
+  // in the element array the reveal then measures.
+  const COLLAPSED_ANCESTOR = [
+    "Examples",
+    "Examples/Home",
+    "Examples/Personal",
+    "Examples/Work",
+    "Features",
+  ];
+  // With the selection's folder revealed the whole vault is on screen.
+  const EVERY_ROW = vault.length;
+
+  function mountTrap(onOpenPath: (path: string) => void) {
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries: vault,
+        expandedPaths: COLLAPSED_ANCESTOR,
+        selectedPath: SELECTED,
+        onOpenPath,
+      },
+    });
+    flushSync();
+    const tree = document.querySelector<HTMLUListElement>('[role="tree"]');
+    if (tree !== null) setViewport(tree, ROW_HEIGHT * (EVERY_ROW + 4));
+    return component;
+  }
+
+  it("renders the whole tree, reveals the selected note, and still answers a click", async () => {
+    const opened: string[] = [];
+    const component = mountTrap((path) => opened.push(path));
+
+    // The tree renders in full rather than freezing part-way through the
+    // update that revealed the folder.
+    expect(treeItems()).toHaveLength(EVERY_ROW);
+    const selected = document.querySelector<HTMLElement>(
+      `[data-path="${SELECTED}"]`,
+    );
+    expect(selected).not.toBeNull();
+    expect(selected?.getAttribute("aria-selected")).toBe("true");
+    expect(
+      document
+        .querySelector<HTMLElement>('[data-path="Examples/Research"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
+
+    // The shell is still live: a later click reaches its handler and the
+    // tree keeps rendering afterwards.
+    document
+      .querySelector<HTMLElement>('[data-path="Features/showcase.md"]')
+      ?.click();
+    await tick();
+    expect(opened).toEqual(["Features/showcase.md"]);
+    expect(treeItems()).toHaveLength(EVERY_ROW);
+
+    // And a folder toggle, the interaction that drives the same measuring
+    // code, keeps working.
+    document.querySelector<HTMLElement>('[data-path="Features"]')?.click();
+    await tick();
+    expect(
+      document
+        .querySelector<HTMLElement>('[data-path="Features"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(treeItems()).toHaveLength(EVERY_ROW - 1);
+
+    await unmount(component);
+  });
+
+  it("renders the whole tree from the persisted record that produced the trap", async () => {
+    // The stored workspace as it was written: the selected note sits in
+    // `Examples/Research`, and that folder is the one entry missing from
+    // the expanded set.
+    const persisted = JSON.stringify({
+      version: 2,
+      expandedFolders: COLLAPSED_ANCESTOR,
+      selectedPath: SELECTED,
+      layout: {
+        type: "leaf",
+        id: "pane-1",
+        tabs: [{ path: SELECTED, viewState: null }],
+        activePath: SELECTED,
+        history: [],
+        historyIndex: -1,
+      },
+    });
+    const restored = loadWorkspaceState("fixture", {
+      getItem: () => persisted,
+    });
+    // The read reconciles the pair, so the folder holding the selection
+    // arrives expanded rather than as the state the tree cannot show.
+    expect(restored.expandedFolders).toContain("Examples/Research");
+
+    const opened: string[] = [];
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries: vault,
+        expandedPaths: restored.expandedFolders,
+        selectedPath: restored.selectedPath,
+        onOpenPath: (path: string) => opened.push(path),
+      },
+    });
+    flushSync();
+    const tree = document.querySelector<HTMLUListElement>('[role="tree"]');
+    expect(tree).not.toBeNull();
+    if (tree === null) return;
+    setViewport(tree, ROW_HEIGHT * (EVERY_ROW + 4));
+
+    expect(treeItems()).toHaveLength(EVERY_ROW);
+    expect(
+      document.querySelector<HTMLElement>(`[data-path="${SELECTED}"]`),
+    ).not.toBeNull();
+    document
+      .querySelector<HTMLElement>('[data-path="Features/showcase.md"]')
+      ?.click();
+    await tick();
+    expect(opened).toEqual(["Features/showcase.md"]);
+
+    await unmount(component);
+  });
+
+  it("keeps working when the selection moves into another unexpanded folder", async () => {
+    const opened: string[] = [];
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries: vault,
+        expandedPaths: ["Examples"],
+        selectedPath: "Examples/Home/groceries.md",
+        onOpenPath: (path: string) => opened.push(path),
+      },
+    });
+    flushSync();
+    const tree = document.querySelector<HTMLUListElement>('[role="tree"]');
+    expect(tree).not.toBeNull();
+    if (tree === null) return;
+    setViewport(tree, ROW_HEIGHT * (EVERY_ROW + 4));
+
+    // Opening the selected note's sibling folder by hand puts a second
+    // reveal through the same measurement, this time with ghost rows.
+    document
+      .querySelector<HTMLElement>('[data-path="Examples/Research"]')
+      ?.click();
+    await tick();
+    expect(
+      document.querySelector<HTMLElement>(`[data-path="${SELECTED}"]`),
+    ).not.toBeNull();
+
+    document.querySelector<HTMLElement>(`[data-path="${SELECTED}"]`)?.click();
+    await tick();
+    expect(opened).toEqual([SELECTED]);
 
     await unmount(component);
   });

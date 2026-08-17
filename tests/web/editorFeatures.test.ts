@@ -485,8 +485,13 @@ describe("block authoring commands", () => {
     view.dispatch({ selection: { anchor: 0, head: source.length } });
     expect(runEditorCommand(id)).toBe(true);
     expect(view.state.doc.toString()).toBe(expected);
-    // The selection still covers the same text, so a second run reverses
-    // the first and the person is back where they started.
+    // The selection still holds the text it held, so typing over it
+    // replaces what the person had highlighted and nothing else, and a
+    // second run reverses the first.
+    const range = view.state.selection.main;
+    expect(view.state.doc.sliceString(range.from, range.to)).toBe(
+      expected.slice(expected.indexOf("one"), expected.length),
+    );
     expect(runEditorCommand(id)).toBe(true);
     expect(view.state.doc.toString()).toBe(source);
   });

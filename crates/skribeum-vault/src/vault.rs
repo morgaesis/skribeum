@@ -105,11 +105,14 @@ pub struct ConflictInfo {
 pub enum EntryKind {
     /// A directory.
     Directory,
-    /// An editable Markdown or plain-text note.
+    /// A Markdown or plain-text note: parsed as prose, indexed for search,
+    /// and resolvable as a link target.
     Note,
-    /// Any other file. Never parsed as prose; a registered render-only view
-    /// (the canvas board) may still read and, through [`Vault::write_file`],
-    /// overwrite one whole.
+    /// Any other file. Never parsed as prose and never indexed for search,
+    /// but read and written through the same byte-faithful change-set path
+    /// notes use ([`Vault::read_note`], [`Vault::write_note`]). A registered
+    /// render-only view (the canvas board) instead replaces one whole
+    /// through [`Vault::write_file`].
     File,
 }
 
@@ -272,14 +275,21 @@ impl Vault {
         &self.collisions
     }
 
-    /// Reads a note by vault-relative path, returning bytes, encoding
-    /// classification and the projection hash.
+    /// Reads an indexed file as an editing base by vault-relative path,
+    /// returning bytes, encoding classification and the projection hash, and
+    /// recording it as the base the next change set applies to.
+    ///
+    /// Every indexed file is editable, not only the Markdown family: what a
+    /// file is named decides how it is presented, never whether it may be
+    /// opened. What decides whether it may be *written* is its content, in
+    /// [`classify`]: a file that is not valid UTF-8 opens read-only and
+    /// [`Vault::write_note`] refuses it.
     ///
     /// # Errors
     ///
     /// Returns [`VaultError::NoteNotFound`] when the path is not in the
-    /// index, [`VaultError::NotANote`] when it is indexed but not a markdown
-    /// note, and propagates read failures.
+    /// index, [`VaultError::NotANote`] when it names a directory, and
+    /// propagates read failures.
     pub fn read_note(
         &self,
         fs: &dyn FileSystem,
@@ -290,7 +300,7 @@ impl Vault {
             .iter()
             .find(|entry| &entry.path == path)
             .ok_or(VaultError::NoteNotFound)?;
-        if entry.kind != EntryKind::Note {
+        if entry.kind == EntryKind::Directory {
             return Err(VaultError::NotANote);
         }
         let absolute = self.root.join(path.as_str());
@@ -504,17 +514,23 @@ impl Vault {
         Ok(String::from_utf8(bytes).ok())
     }
 
-    /// Writes a note through the crash-safe path: applies `change_set` (a
-    /// list of byte-range replacements) to the bytes this session last
-    /// read, after verifying that `expected_projection_hash` still matches
-    /// the current on-disk projection. On mismatch nothing is written and
-    /// the conflict variant returns the current hash plus a reconciliation
-    /// handle.
+    /// Writes an indexed file through the crash-safe path: applies
+    /// `change_set` (a list of byte-range replacements) to the bytes this
+    /// session last read, after verifying that `expected_projection_hash`
+    /// still matches the current on-disk projection. On mismatch nothing is
+    /// written and the conflict variant returns the current hash plus a
+    /// reconciliation handle.
+    ///
+    /// Every file the session has read through [`Vault::read_note`] writes
+    /// back this way, so a concurrent external write is caught for a
+    /// configuration file exactly as it is for prose: an edit is never lost
+    /// because of what the file is named. A file that is not valid UTF-8 is
+    /// refused outright, since its editor projection is lossy.
     ///
     /// # Errors
     ///
-    /// Returns [`VaultError::NoteNotRead`] when the note was never read in
-    /// this session, [`VaultError::NoteReadOnly`] for non-UTF-8 notes,
+    /// Returns [`VaultError::NoteNotRead`] when the file was never read in
+    /// this session, [`VaultError::NoteReadOnly`] for non-UTF-8 content,
     /// [`VaultError::BaseMismatch`] when `expected_projection_hash` is not
     /// the hash of the last-read base, [`VaultError::ChangeSet`] for a
     /// structurally invalid change set, and propagates filesystem
@@ -531,7 +547,7 @@ impl Vault {
             .iter()
             .find(|entry| &entry.path == path)
             .ok_or(VaultError::NoteNotFound)?;
-        if entry.kind != EntryKind::Note {
+        if entry.kind == EntryKind::Directory {
             return Err(VaultError::NotANote);
         }
         let base = self

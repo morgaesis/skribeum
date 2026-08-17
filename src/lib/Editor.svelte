@@ -25,6 +25,7 @@ import {
   type WikilinkResolutionContext,
   wikilinkPointerNavigation,
 } from "./editor/decorations/wikilinks";
+import { isMarkdownDocument } from "./editor/documentKinds";
 import { DurableEditHistory } from "./editor/durableHistory";
 import {
   applyTypeOverrides,
@@ -38,6 +39,7 @@ import { caretMotion } from "./editor/motion";
 import { NoteSession } from "./editor/noteSession";
 import { PostPaintScheduler } from "./editor/postPaintScheduler";
 import {
+  fileSyntaxExtensions,
   noteRenderingExtensions,
   noteSourceExtensions,
 } from "./editor/syntaxPolicy";
@@ -161,7 +163,9 @@ let {
 } = $props();
 
 let host: HTMLDivElement;
-let shell: HTMLDivElement;
+// A deferred arrival can land after this pane unmounts, at which point
+// `bind:this` has written `null` back into the reference.
+let shell: HTMLDivElement | null = null;
 let view: EditorView | undefined;
 let session: NoteSession | null = null;
 let durableEditHistory: DurableEditHistory | null = null;
@@ -204,6 +208,12 @@ const TAB_SNAPSHOT_LIMIT = 32;
 
 const historyCompartment = new Compartment();
 const renderingCompartment = new Compartment();
+/**
+ * The language services of a document that is not a note. Loading a grammar
+ * is asynchronous, so the compartment opens empty (fully editable plain
+ * text) and is reconfigured once the language for the open path resolves.
+ */
+const fileLanguageCompartment = new Compartment();
 const settingsCompartment = new Compartment();
 const sourceRevealFocusCompartment = new Compartment();
 
@@ -331,10 +341,67 @@ function defaultPropertiesExpanded(): boolean {
   );
 }
 
+/**
+ * Whether the open document is parsed and presented as Markdown. Every
+ * Markdown service downstream of this reads it, so a `.yml` file's leading
+ * `---` is never mistaken for a frontmatter fence and a shell script's
+ * leading `#` is never mistaken for a heading.
+ */
+function markdownDocument(): boolean {
+  return note === null || isMarkdownDocument(path);
+}
+
+/** The language services loaded for the currently open non-note path. */
+let fileLanguage: Extension[] = [];
+let fileLanguagePath: string | null = null;
+let fileLanguageGeneration = 0;
+
+/**
+ * Loads the language the open path names and reconfigures the running
+ * editor with it. A path naming no known language keeps plain text, which
+ * stays fully editable either way.
+ */
+async function refreshFileLanguage(): Promise<void> {
+  const generation = ++fileLanguageGeneration;
+  const targetPath = path;
+  if (targetPath === null || markdownDocument()) {
+    fileLanguage = [];
+    fileLanguagePath = null;
+    view?.dispatch({ effects: fileLanguageCompartment.reconfigure([]) });
+    return;
+  }
+  if (fileLanguagePath === targetPath) {
+    view?.dispatch({
+      effects: fileLanguageCompartment.reconfigure(fileLanguage),
+    });
+    return;
+  }
+  fileLanguage = [];
+  fileLanguagePath = targetPath;
+  view?.dispatch({ effects: fileLanguageCompartment.reconfigure([]) });
+  const target = view;
+  const resolved = await fileSyntaxExtensions(
+    targetPath,
+    target?.state.doc ?? "",
+  );
+  if (generation !== fileLanguageGeneration || view !== target) {
+    return;
+  }
+  fileLanguage = resolved;
+  view?.dispatch({
+    effects: fileLanguageCompartment.reconfigure(resolved),
+  });
+}
+
 function renderingExtensions(
   content: string | Parameters<typeof noteRenderingExtensions>[0],
   statuses: readonly TaskStatus[],
 ): Extension[] {
+  if (!markdownDocument()) {
+    // A non-note document carries no Markdown parse and no reading
+    // decorations; its language arrives through its own compartment.
+    return [];
+  }
   const presentation = sourceMode
     ? noteSourceExtensions(content, statuses)
     : noteRenderingExtensions(content, undefined, statuses);
@@ -349,7 +416,7 @@ function renderingExtensions(
 }
 
 function refreshFrontmatter() {
-  if (view === undefined || session === null) {
+  if (view === undefined || session === null || !markdownDocument()) {
     frontmatter = null;
     return;
   }
@@ -397,6 +464,7 @@ function addFrontmatterProperty(key: string, value: string) {
  */
 export function startAddProperty(): void {
   if (view === undefined || sourceMode || note?.readOnly === true) return;
+  if (!markdownDocument()) return;
   if (frontmatter === null) {
     view.dispatch({ changes: { from: 0, to: 0, insert: "---\n---\n" } });
   }
@@ -413,6 +481,7 @@ export function startAddProperty(): void {
  */
 export function ensurePermalinkId(): string | null {
   if (view === undefined || note?.readOnly === true) return null;
+  if (!markdownDocument()) return null;
   let current = frontmatter;
   if (current === null) {
     view.dispatch({ changes: { from: 0, to: 0, insert: "---\n---\n" } });
@@ -565,6 +634,7 @@ function stateFor(
       renderingCompartment.of(
         renderingExtensions(content, normalizedTaskStatuses),
       ),
+      fileLanguageCompartment.of(fileLanguage),
       ...(wikilinkNavigationOptions === undefined
         ? []
         : [wikilinkPointerNavigation(wikilinkNavigationOptions)]),
@@ -610,6 +680,7 @@ function stateFor(
 function finishPreparedArrival(): void {
   if (!arrivalPrepared) return;
   arrivalPrepared = false;
+  if (!(shell instanceof HTMLElement)) return;
   delete shell.dataset.motionPreparing;
   enterMotionSurface(shell);
 }
@@ -1039,6 +1110,7 @@ export function getView(): EditorView | undefined {
 export function preparePaneSwitch(kind: PaneSwitchKind): void {
   lastSwitchKind = kind;
   arrivalPrepared = true;
+  if (!(shell instanceof HTMLElement)) return;
   shell.dataset.motionPreparing = "true";
   delete shell.dataset.motionExiting;
 }
@@ -1175,6 +1247,11 @@ function restoreCachedState(cached: TabSnapshot): void {
 }
 
 function initializeForNote(current: LoadedNote | null) {
+  initializeDocument(current);
+  void refreshFileLanguage();
+}
+
+function initializeDocument(current: LoadedNote | null) {
   clearTimeout(idleSaveTimer);
   fenceDeferredConsumers();
   captureOutgoingTabState();

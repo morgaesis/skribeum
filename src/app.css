@@ -366,15 +366,6 @@ select {
   outline-offset: -2px;
 }
 
-.skr-tree-row-disabled {
-  color: var(--skr-text-muted);
-  cursor: default;
-}
-
-.skr-tree-row-disabled:hover {
-  background: transparent;
-}
-
 .skr-tree-row-dragging {
   opacity: 0.6;
 }
@@ -961,6 +952,17 @@ select {
   padding: var(--skr-gutter);
   color: var(--skr-text);
   background: var(--skr-surface);
+}
+
+.skr-unfocused-file {
+  box-sizing: border-box;
+  height: 100%;
+  margin: 0;
+  padding: var(--skr-gutter);
+  color: var(--skr-text-muted);
+  background: var(--skr-surface);
+  font-family: var(--skr-font-interface);
+  font-size: var(--skr-type-control);
 }
 
 .skr-header-overflow svg {

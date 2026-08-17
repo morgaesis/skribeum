@@ -22,17 +22,23 @@ import {
   type WriteResult,
 } from "./bindings";
 
+/**
+ * One open document. Every indexed file loads this way, whatever it is
+ * named: `note_read` records the change-set base and the projection hash
+ * for all of them, and the encoding classification, not the extension,
+ * decides whether the document may be written.
+ */
 export type LoadedNote = {
   meta: NoteContent;
   bytes: Uint8Array;
   /** Decoded text for display: BOM stripped, unmappable bytes replaced. */
   text: string;
-  /** True when the note must never be written (non-UTF-8). */
+  /** True when the document must never be written (non-UTF-8). */
   readOnly: boolean;
   /**
-   * A crash-journal delta recovered for this note before it was opened:
+   * A crash-journal delta recovered for this document before it was opened:
    * applying it to `bytes` reproduces the pre-crash buffer. The editor
-   * applies it as pending (unsaved) edits when the note opens.
+   * applies it as pending (unsaved) edits when the document opens.
    */
   recoveredChangeSet?: ByteRangeReplace[];
 };

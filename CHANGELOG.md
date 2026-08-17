@@ -6,6 +6,134 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A headless list-move primitive: given a document, a list item and a
+  destination list and index, it returns the declared spans that relocate
+  the item and nothing else. The moved extent is the item's whole lines
+  including nested sublists, continuation paragraphs and indented code,
+  together with the blank line that separates it from its neighbour, so a
+  loose list stays loose and a tight one stays tight at both ends of the
+  move. Indentation and the marker character are rewritten only where the
+  destination list writes them differently, numbered items keep the numbers
+  the author gave them, and a file with no final newline still has none
+  afterwards. A move that cannot be written without changing a byte it was
+  not asked to touch is refused rather than approximated. A corpus of
+  board-shaped and list-shaped documents, covering CRLF, mixed and absent
+  terminators, tabs, every bullet marker, ordered lists, loose and tight
+  lists, continuations and nested sublists, asserts on the bytes the edit
+  path writes that every legal move relocates its extent and leaves the rest
+  of the file untouched, and that undoing a move restores the file exactly.
+- `Insert bullet list` and `Insert numbered list` build a list from the
+  command palette and the slash menu, over the caret's line or every line of
+  a selection. Running either again on lines that already are that list
+  removes it, which is also how a heading returns to a paragraph.
+- `Increase heading level` and `Decrease heading level` move a heading
+  between levels, and `Indent list item` and `Outdent list item` (`Mod-]`
+  and `Mod-[`) nest a list line by one indentation step. Each declines away
+  from the construct it restructures.
+- The Updates settings section can now act on what it reports: an available
+  update offers an "Install update" button showing its release notes inline,
+  a running download shows progress that reads honestly whether or not the
+  server reports a download size, and an installed update offers "Restart to
+  apply", which confirms first and saves any unsaved work through the same
+  path any other window-closing action uses before restarting.
+- Every file a vault holds opens. A file that is not a note opens as an
+  editable buffer through the same read and write path notes use: line
+  endings, a byte-order mark, trailing whitespace, and a missing final
+  newline all survive an edit unchanged, the vault compares the on-disk
+  projection before writing, and a file that changed underneath the editor
+  reports a conflict rather than being overwritten. Those documents carry
+  creation and modification times in the note-information panel too.
+- Common formats get syntax highlighting, chosen from the file extension and
+  never from the file's contents: YAML, JSON, TOML, shell, and the rest of
+  the bundled language set, plus a small table of extensionless names such as
+  `Dockerfile` and shell startup files. A path naming no known language opens
+  as plain text and is still fully editable.
+- Image files open in a viewer: PNG, JPEG, GIF, WebP, SVG, and the other
+  formats the image extension allowlist names. Bytes reach an image element
+  and nothing else and are typed from the extension, so a vector image loads
+  in the user agent's secure static mode with scripts, event handlers, and
+  external references all disabled.
+- The browser demo vault ships a `.gitignore`, a YAML pipeline file, and a
+  PDF, so the non-note surfaces are visible without opening a local folder.
+
+### Changed
+
+- An update failure now reports something a person can act on instead of a
+  raw error object: a signature or authentication failure is called out as a
+  security concern rather than reading like an ordinary network hiccup, and
+  it is announced assertively rather than as routine status text.
+- The file tree opens every row it shows. A file that is neither a note nor a
+  canvas is no longer drawn muted and inert, and the unified command surface
+  reaches every indexed file rather than notes and canvases alone.
+- A file that is neither an image nor valid UTF-8 opens read-only with the
+  non-UTF-8 notice, the same treatment a non-UTF-8 note gets, so no editing
+  pass can write a lossy re-encoding over a binary file.
+- Markdown services stay with Markdown documents. The outline, frontmatter
+  and the properties panel, source mode, and title resolution from a leading
+  heading apply to notes only, so a YAML document's leading `---` is not
+  folded away as frontmatter and a script's leading `#` is not read as a
+  heading.
+- A chosen local folder in the browser demo loads every file it contains, and
+  its tree shows dot-prefixed names, matching what the desktop application
+  indexes.
+- Search still indexes notes and nothing else, and now says so consistently:
+  the incremental update after a save and after an external change both skip
+  a path a full index rebuild would not have recorded, so a row can no longer
+  appear in results until the next rebuild silently removes it.
+
+### Fixed
+
+- Every block insertion places the caret inside the construct it inserted.
+  A heading, task, list, or callout inserted on an empty line left the caret
+  in front of the marker, so the first character typed landed before it and
+  the line was not the construct that was asked for.
+- A heading command on a list line replaces the list marker instead of
+  writing a heading marker in front of it, and a callout wraps every line of
+  a selection rather than one, with its title line waiting for the caret.
+- Accepting a slash-menu entry replaces the trigger and its query with the
+  insertion in one document change, so one undo step reverses the whole
+  acceptance.
+- Searching the command surface for a due date reaches the task status menu,
+  the surface that carries a status's date field, rather than the `Time: Due`
+  status command, which writes a checkbox marker and no date.
+- Opening a note that lives inside a collapsed folder no longer stops the
+  application. The file tree measured a row the same update had released,
+  and the resulting error, thrown from inside a reactive effect, halted every
+  surface with no message and no recovery. The workspace it left behind was
+  saved, so the next visit reproduced it; a stored workspace now reconciles a
+  selected note with the folders on the way to it, so a record like that
+  heals when it is read.
+- A failure inside one panel of the shell now takes down only that panel,
+  which reports the failure in place and offers to rebuild itself, while the
+  rest of the workspace keeps rendering and responding.
+- Emptying a wikilink alias no longer costs the note every decoration it has.
+  A construct with no text between its markers now has no presentation
+  instead of an impossible one, and a decoration build that fails for any
+  other reason leaves the note rendering what it already had rather than
+  disabling the whole engine until the note is reopened.
+- A key pressed inside a rendered table cell can no longer land in the note.
+  The cell answers every key it receives: it acts on the cell, lets the
+  browser edit the cell that holds focus, hands the note its undo and redo
+  chords, or refuses the key outright. Select-all, which used to take focus
+  out of the cell and scatter the following keystrokes through the document,
+  now selects the cell's text. The cell's focus ring is painted from where
+  the keystrokes go, so it cannot point at a cell the caret has left.
+- A table structure command leaves the caret in the table it changed, in the
+  first cell of an inserted row or the cell that replaced what it removed,
+  and focus arriving at the note while a cell is being edited returns to that
+  cell, so running one of these commands from the command palette no longer
+  parks the caret inside the rendered table and puts the next characters
+  outside it.
+- Redo no longer runs undo. A chord on a letter is matched against the
+  event's modifiers exactly, so `Mod-Shift-z` reaches redo on every platform
+  and keyboard state, including Caps Lock, rather than being answered by the
+  `Mod-z` binding.
+- Saving works wherever the caret is. `Mod-s` was claimed only while the
+  note's own editable surface held focus, so a save pressed while editing a
+  rendered table cell did nothing.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

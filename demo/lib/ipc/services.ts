@@ -238,39 +238,73 @@ export async function searchQuery(
     .map(({ firstPosition: _firstPosition, ...result }) => result);
 }
 
+/** The first `depth` `/`-separated segments of a tag path. */
+function leadingSegments(tag: string, depth: number): string {
+  let seen = 0;
+  for (let index = 0; index < tag.length; index += 1) {
+    if (tag[index] === "/") {
+      seen += 1;
+      if (seen === depth) {
+        return tag.slice(0, index);
+      }
+    }
+  }
+  return tag;
+}
+
+/**
+ * The vault's tags with the counts they answer with: a tag is a path and a
+ * query for it includes everything below it, so `work` counts the notes
+ * tagged `work` together with those tagged `work/meetings`, each note once.
+ * A parent no note writes on its own is not listed; it answers by being
+ * derived from its children's paths at match time.
+ */
 export async function tagCatalog(
   handle: VaultHandle,
 ): Promise<TagCatalogEntry[]> {
   const totals = new Map<
     string,
-    { tag: string; note_count: number; occurrence_count: number }
+    {
+      tag: string;
+      written: boolean;
+      notes: Set<string>;
+      occurrence_count: number;
+    }
   >();
   for (const entry of await vaultTree(handle)) {
     if (entry.kind !== "note") {
       continue;
     }
-    const uses = tagUses((await readNote(handle, entry.path)).text);
-    const noteTags = new Set<string>();
-    for (const use of uses) {
+    for (const use of tagUses((await readNote(handle, entry.path)).text)) {
       const normalized = use.tag.toLocaleLowerCase();
-      const total = totals.get(normalized) ?? {
-        tag: use.tag,
-        note_count: 0,
-        occurrence_count: 0,
-      };
-      total.occurrence_count += 1;
-      if (!noteTags.has(normalized)) {
-        total.note_count += 1;
-        noteTags.add(normalized);
+      const segments = normalized.split("/").length;
+      for (let depth = 1; depth <= segments; depth += 1) {
+        const ancestor = leadingSegments(normalized, depth);
+        const total = totals.get(ancestor) ?? {
+          tag: leadingSegments(use.tag, depth),
+          written: false,
+          notes: new Set<string>(),
+          occurrence_count: 0,
+        };
+        total.written ||= depth === segments;
+        total.notes.add(entry.path);
+        total.occurrence_count += 1;
+        totals.set(ancestor, total);
       }
-      totals.set(normalized, total);
     }
   }
-  return [...totals.values()].sort(
-    (left, right) =>
-      right.occurrence_count - left.occurrence_count ||
-      left.tag.localeCompare(right.tag),
-  );
+  return [...totals.values()]
+    .filter((total) => total.written)
+    .map((total) => ({
+      tag: total.tag,
+      note_count: total.notes.size,
+      occurrence_count: total.occurrence_count,
+    }))
+    .sort(
+      (left, right) =>
+        right.occurrence_count - left.occurrence_count ||
+        left.tag.localeCompare(right.tag),
+    );
 }
 
 export async function updateCheck(

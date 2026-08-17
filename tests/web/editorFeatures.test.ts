@@ -668,27 +668,29 @@ describe("tag affordances", () => {
     const CATALOG: TagCatalogEntry[] = [
       { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 2 },
       { tag: "shared", noteCount: 2, occurrenceCount: 2 },
+      { tag: "cedar-notes", noteCount: 1, occurrenceCount: 1 },
       { tag: "context/outdoors", noteCount: 1, occurrenceCount: 1 },
       { tag: "delete-only", noteCount: 1, occurrenceCount: 1 },
     ];
 
-    it("answers ced with the tag whose path segment starts with it", () => {
-      // Only cedar-room starts with the query. context/outdoors neither
-      // contains it nor comes within one edit of a path segment of it, so a
-      // reader could not say why it would be on screen.
+    it("answers ced with the whole-tag match before the segment match", () => {
+      // cedar-notes starts with the query outright; project/cedar-room only
+      // does so from its second path segment, which is the weaker answer.
+      // The one note using cedar-notes against the two occurrences of
+      // project/cedar-room does not enter into it.
       expect(
         filteredTagCompletions(CATALOG, [], "ced").map((row) => `#${row.tag}`),
-      ).toEqual(["#project/cedar-room"]);
+      ).toEqual(["#cedar-notes", "#project/cedar-room"]);
     });
 
-    it("leads with the query once typing it has made it a tag", () => {
+    it("answers context with the one tag below it", () => {
+      // context/outdoors is a descendant of the query. Nothing else in the
+      // vault starts with it or comes within an edit of it.
       expect(
-        filteredTagCompletions(
-          [...CATALOG, { tag: "ced", noteCount: 1, occurrenceCount: 1 }],
-          [],
-          "ced",
-        ).map((row) => `#${row.tag}`),
-      ).toEqual(["#ced", "#project/cedar-room"]);
+        filteredTagCompletions(CATALOG, [], "context").map(
+          (row) => `#${row.tag}`,
+        ),
+      ).toEqual(["#context/outdoors"]);
     });
 
     it("puts the tag accepted most recently above one used as widely", () => {
@@ -699,6 +701,7 @@ describe("tag affordances", () => {
         { tag: "project/cedar-room", noteCount: 2, occurrenceCount: 3 },
         { tag: "context/outdoors", noteCount: 2, occurrenceCount: 2 },
         { tag: "shared", noteCount: 2, occurrenceCount: 2 },
+        { tag: "cedar-notes", noteCount: 1, occurrenceCount: 1 },
         { tag: "delete-only", noteCount: 1, occurrenceCount: 1 },
       ];
       expect(
@@ -707,6 +710,7 @@ describe("tag affordances", () => {
         "#context/outdoors",
         "#project/cedar-room",
         "#shared",
+        "#cedar-notes",
         "#delete-only",
       ]);
       expect(
@@ -719,9 +723,38 @@ describe("tag affordances", () => {
         "#project/cedar-room",
         "#context/outdoors",
         "#shared",
+        "#cedar-notes",
         "#delete-only",
       ]);
     });
+  });
+
+  it("answers from the catalog it had when the last key was pressed", () => {
+    // The menu is drawn by the editor's update cycle. A catalog that changes
+    // with no editing in between -- which is what an autosave of the
+    // half-typed word produces -- does not redraw it, and the next keystroke
+    // does. A test that waits for a catalog change to appear in an open menu
+    // is therefore waiting for something that will not happen until it types
+    // again.
+    tagCatalog = [
+      { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 2 },
+    ];
+    const view = makeView("", 0);
+    typeText(view, "#ced");
+    const rows = () =>
+      [...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]')].map(
+        (option) => option.textContent,
+      );
+    expect(rows()).toEqual(["#project/cedar-room"]);
+
+    tagCatalog = [
+      ...tagCatalog,
+      { tag: "ced", noteCount: 1, occurrenceCount: 1 },
+    ];
+
+    expect(rows()).toEqual(["#project/cedar-room"]);
+    view.dispatch({ selection: { anchor: view.state.selection.main.head } });
+    expect(rows()).toEqual(["#ced", "#project/cedar-room"]);
   });
 
   it("removes the trigger and query when dismissed with Escape", () => {

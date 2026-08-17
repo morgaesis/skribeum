@@ -682,19 +682,12 @@ async function typeTagCompletionQuery(
   // event that triggers the refresh) rather than a fixed duration guessed
   // to outlast the debounce.
   await harness.waitForQuerySaved(position, query);
-  // The saved query is itself a tag now, so the refresh it triggered must
-  // reach the open menu and put that tag first. Waiting for it here is what
-  // makes every caller's expected menu a single state rather than a race
-  // between the catalog before the save and the catalog after it.
-  await browser.waitUntil(
-    async () => (await tagCompletionOptionTexts())[0] === `#${query}`,
-    {
-      timeout: 15000,
-      timeoutMsg: `catalog refresh did not reach the open menu; rows: ${JSON.stringify(
-        await tagCompletionOptionTexts(),
-      )}`,
-    },
-  );
+  // That save makes the typed query a tag of this note, and the refresh it
+  // triggers does reach the catalog. It does not reach this menu: the menu
+  // is rendered by the editor's own update cycle, so it answers from the
+  // catalog it held at the last keystroke and nothing redraws it until the
+  // next one. Every expectation below is therefore the vault's answer, not
+  // the vault's answer plus the word still being typed.
 }
 
 async function saveAndExpectTagCompletionTarget(expected: string) {
@@ -826,25 +819,16 @@ async function tagCompletionOptionTexts(): Promise<string[]> {
   );
 }
 
-/**
- * The menu rows naming a tag other than the one being typed.
- *
- * A query typed into a note becomes a tag of that note as soon as the note
- * autosaves, and the menu leads with the exact match, so whether the query
- * itself is on screen depends on whether the catalog has been re-read yet.
- * A test that cares which *other* tags answer the query reads this instead,
- * and stops depending on that timing.
- */
-async function tagCompletionRowsBesides(query: string): Promise<string[]> {
-  return (await tagCompletionOptionTexts()).filter(
-    (row) => row !== `#${query}`,
-  );
-}
-
 type TagCompletionHarness = {
   prepare(): Promise<void>;
   expectResult(expected: string): Promise<void>;
   expectDismissedResult(expected: string): Promise<void>;
+  /**
+   * The rows this harness's vault answers the query `ced` with, in order.
+   * The two vaults hold different notes, so the answer is a property of the
+   * vault rather than of the matching rule they share.
+   */
+  completionRows: readonly string[];
   /**
    * Resolves once the autosave carrying the typed query has landed in
    * whichever store the harness persists to.
@@ -857,6 +841,10 @@ type TagCompletionHarness = {
 
 const packagedTagCompletionHarness: TagCompletionHarness = {
   prepare: prepareTagCompletionTarget,
+  // `cedar-notes` starts with the query outright and leads;
+  // `project/cedar-room` follows because only its second path segment does.
+  // That distinction fixes the order whatever the note counts are.
+  completionRows: ["#cedar-notes", "#project/cedar-room"],
   async expectResult(expected) {
     expect(await editorDocumentText()).toBe(expected);
     await saveAndExpectTagCompletionTarget(expected);
@@ -875,28 +863,23 @@ const packagedTagCompletionHarness: TagCompletionHarness = {
   },
 };
 
-/**
- * The menu both vaults answer `ced` with, and why.
- *
- * `ced` is a tag in its own right by the time the menu is asserted: the
- * query autosaved into the note being edited, so the catalog holds it. It is
- * therefore the exact match and leads. `project/cedar-room` follows because
- * its second path segment, `cedar-room`, starts with the query.
- *
- * Nothing else in either vault answers `ced`. `context/outdoors` used to,
- * and only because the old matcher would scatter `c`, `e` and `d` across it;
- * it neither contains `ced` nor comes within one edit of `outdoors`, so a
- * reader could not say why it was on screen.
- */
-const CED_COMPLETION_ROWS = ["#ced", "#project/cedar-room"] as const;
+async function selectedTagCompletionRow(): Promise<string> {
+  return $(".cm-skr-tag-menu [aria-selected=true]").getText();
+}
 
+/**
+ * `context/outdoors` used to answer the query `ced`, and only because the old
+ * matcher would scatter `c`, `e` and `d` across it. It neither contains `ced`
+ * nor comes within one edit of any of its path segments, so a reader could
+ * not say why it was on screen, and neither vault offers it now.
+ */
 async function verifyTagCompletionAcceptance(harness: TagCompletionHarness) {
   for (const position of ["middle", "final"] as const) {
     for (const chord of [[Key.Enter], [Key.Ctrl, Key.Enter]]) {
       await harness.prepare();
       await typeTagCompletionQuery(harness, position);
       expect(await tagCompletionOptionTexts()).toEqual([
-        ...CED_COMPLETION_ROWS,
+        ...harness.completionRows,
       ]);
 
       await browser.keys(chord);
@@ -904,11 +887,9 @@ async function verifyTagCompletionAcceptance(harness: TagCompletionHarness) {
         reverse: true,
         timeout: 3000,
       });
-      // Accepting the leading row commits the tag that was typed. The
-      // assertion that bites is the negative one: a menu that hides the
-      // exact match puts a neighbouring tag on the first row, and this
-      // chord would then write `#project/cedar-room` into the note.
-      await harness.expectResult(tagCompletionResult(position, "#ced"));
+      await harness.expectResult(
+        tagCompletionResult(position, harness.completionRows[0] ?? ""),
+      );
     }
   }
 }
@@ -916,41 +897,34 @@ async function verifyTagCompletionAcceptance(harness: TagCompletionHarness) {
 async function verifyTagCompletionArrowSelection(
   harness: TagCompletionHarness,
 ) {
+  const rows = harness.completionRows;
+  const first = rows[0] ?? "";
+  const last = rows[rows.length - 1] ?? "";
+  const press = async (key: string) => {
+    // One press more than there are rows, so the last one lands on a list
+    // that has already ended: it clamps rather than returning to the far
+    // side, and whichever row is shown selected is the row Enter commits.
+    for (let step = 0; step <= rows.length; step += 1) {
+      await browser.keys(key);
+    }
+  };
   for (const position of ["middle", "final"] as const) {
     await harness.prepare();
     await typeTagCompletionQuery(harness, position);
-    await browser.keys(Key.ArrowDown);
-    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
-      "#project/cedar-room",
-    );
-    // The list ends here rather than returning to the top, so a second
-    // press changes nothing and the following Enter still commits the row
-    // the reader can see is selected.
-    await browser.keys(Key.ArrowDown);
-    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
-      "#project/cedar-room",
-    );
+    expect(await tagCompletionOptionTexts()).toEqual([...rows]);
+    await press(Key.ArrowDown);
+    expect(await selectedTagCompletionRow()).toBe(last);
     await browser.keys(Key.Enter);
-    await harness.expectResult(
-      tagCompletionResult(position, "#project/cedar-room"),
-    );
+    await harness.expectResult(tagCompletionResult(position, last));
 
     await harness.prepare();
     await typeTagCompletionQuery(harness, position);
-    await browser.keys(Key.ArrowDown);
-    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
-      "#project/cedar-room",
-    );
-    await browser.keys(Key.ArrowUp);
-    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
-      "#ced",
-    );
-    await browser.keys(Key.ArrowUp);
-    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
-      "#ced",
-    );
+    await press(Key.ArrowDown);
+    expect(await selectedTagCompletionRow()).toBe(last);
+    await press(Key.ArrowUp);
+    expect(await selectedTagCompletionRow()).toBe(first);
     await browser.keys(Key.Enter);
-    await harness.expectResult(tagCompletionResult(position, "#ced"));
+    await harness.expectResult(tagCompletionResult(position, first));
   }
 }
 
@@ -1103,6 +1077,9 @@ async function prepareDemoTagCompletionTarget(): Promise<void> {
 
 const demoTagCompletionHarness: TagCompletionHarness = {
   prepare: prepareDemoTagCompletionTarget,
+  // The sample vault holds one tag a path segment of which starts with the
+  // query, and nothing that starts with it outright.
+  completionRows: ["#project/cedar-room"],
   async expectResult(expected) {
     expect(await demoTagCompletionTargetText()).toBe(expected);
   },
@@ -4138,29 +4115,26 @@ describe("skribeum shell", () => {
   });
 
   // Accepting a tag has to lift it above one the vault uses at least as
-  // much, or the assertion proves nothing. Two tags are accepted here for
-  // that reason. Both end up in two notes: `context/outdoors` and
-  // `project/cedar-room` each appear once in zz-tag-completion-catalog.md
-  // and once in the note being edited, alongside `shared` in the two
-  // navigation notes. Note count therefore cannot separate them and the
-  // alphabet puts `context/outdoors` first, so the only thing that can put
-  // `project/cedar-room` at the top of the menu is having been the tag
-  // accepted most recently.
+  // much, or the assertion proves nothing: a single acceptance also adds the
+  // note being edited to that tag's count, which would carry it to the top
+  // on usage alone. Two tags are accepted here for that reason.
+  // `context/outdoors` and `project/cedar-room` each appear once in
+  // zz-tag-completion-catalog.md and once in the note being edited, so they
+  // end level at two notes each, alongside `shared` in the two navigation
+  // notes. Note count cannot separate them and the alphabet puts
+  // `context/outdoors` first, so the only thing that can put
+  // `project/cedar-room` at the top is having been accepted last.
   it("ranks_an_inserted_tag_as_recent", async () => {
     await prepareTagCompletionTarget();
 
-    // `context` names an existing tag and is the parent of another, so the
-    // menu is the tag itself and then the path below it.
+    // Only one tag in the vault sits below `context`, so the menu is that
+    // one row and Enter takes it.
     await typeTagCompletionQuery(
       packagedTagCompletionHarness,
       "final",
       "context",
     );
-    expect(await tagCompletionOptionTexts()).toEqual([
-      "#context",
-      "#context/outdoors",
-    ]);
-    await browser.keys(Key.ArrowDown);
+    expect(await tagCompletionOptionTexts()).toEqual(["#context/outdoors"]);
     await browser.keys(Key.Enter);
     const firstAccepted = tagCompletionResult("final", "#context/outdoors");
     expect(await editorDocumentText()).toBe(firstAccepted);
@@ -4169,19 +4143,12 @@ describe("skribeum shell", () => {
     await placeCursorAtLineEnd("#context/outdoors");
     await browser.keys(Key.Enter);
     await $(".cm-content").addValue("#ced");
+    const cedRows = packagedTagCompletionHarness.completionRows;
     await browser.waitUntil(
-      async () => {
-        const options = await tagCompletionOptionTexts();
-        return (
-          options[0] === CED_COMPLETION_ROWS[0] &&
-          options[1] === CED_COMPLETION_ROWS[1]
-        );
-      },
-      {
-        timeout: 15000,
-        timeoutMsg: "the second query's menu did not settle",
-      },
+      async () => (await tagCompletionOptionTexts()).length === cedRows.length,
+      { timeout: 10000, timeoutMsg: "the second query's menu did not open" },
     );
+    expect(await tagCompletionOptionTexts()).toEqual([...cedRows]);
     await browser.keys(Key.ArrowDown);
     await browser.keys(Key.Enter);
     const secondAccepted = `${firstAccepted}\n#project/cedar-room`;
@@ -4192,20 +4159,16 @@ describe("skribeum shell", () => {
     await browser.keys(Key.Enter);
     await $(".cm-content").addValue("#");
     await browser.waitUntil(
-      async () => {
-        const options = await tagCompletionOptionTexts();
-        return (
-          options[0] === "#project/cedar-room" &&
-          options[1] === "#context/outdoors"
-        );
-      },
-      {
-        timeout: 15000,
-        timeoutMsg: "recent tag did not reach the first menu position",
-      },
+      async () => (await tagCompletionOptionTexts()).length > 0,
+      { timeout: 10000, timeoutMsg: "the empty tag query listed nothing" },
     );
+
     const recentlyOrdered = await tagCompletionOptionTexts();
-    // Reversed against the order note count and the alphabet would give.
+    // Reversed against the order the vault alone would give. Recency is
+    // recorded the moment a row is accepted, so this holds whether or not
+    // the catalog has been re-read since: with the newer counts the two tags
+    // tie and the alphabet would put `context/outdoors` first, and with the
+    // older ones `project/cedar-room` would be further down still.
     expect(recentlyOrdered[0]).toBe("#project/cedar-room");
     expect(recentlyOrdered[1]).toBe("#context/outdoors");
     await browser.keys(Key.Escape);
@@ -4231,9 +4194,11 @@ describe("skribeum shell", () => {
     try {
       await browser.waitUntil(
         async () =>
-          (await tagCompletionRowsBesides("catalog-r")).includes(
-            "#catalog-refresh",
-          ),
+          (
+            await $$(".cm-skr-tag-menu [role=option]").map((item) =>
+              item.getText(),
+            )
+          ).includes("#catalog-refresh"),
         { timeout: 10000 },
       );
     } catch {
@@ -4245,11 +4210,9 @@ describe("skribeum shell", () => {
         `tag completion did not refresh: ${JSON.stringify(state)}`,
       );
     }
-    // The tag saved a moment ago is the only one in the vault that starts
-    // with what was typed.
-    expect(await tagCompletionRowsBesides("catalog-r")).toEqual([
+    expect(await $(".cm-skr-tag-menu [role=option]").getText()).toBe(
       "#catalog-refresh",
-    ]);
+    );
   });
 
   it("refreshes_tag_completion_after_deleting_an_unopened_note", async () => {
@@ -4262,7 +4225,11 @@ describe("skribeum shell", () => {
     await editor.addValue("delete-o");
     await browser.waitUntil(
       async () =>
-        (await tagCompletionRowsBesides("delete-o")).includes("#delete-only"),
+        (
+          await $$(".cm-skr-tag-menu [role=option]").map((item) =>
+            item.getText(),
+          )
+        ).includes("#delete-only"),
       { timeout: 10000 },
     );
     await browser.keys(Key.Escape);
@@ -4278,10 +4245,8 @@ describe("skribeum shell", () => {
     await editor.addValue(" ");
     await editor.addValue("#");
     await editor.addValue("delete-o");
-    // The only note carrying the tag is gone, so nothing but the query the
-    // reader is still typing can answer it.
     await browser.waitUntil(
-      async () => (await tagCompletionRowsBesides("delete-o")).length === 0,
+      async () => (await $$(".cm-skr-tag-menu [role=option]")).length === 0,
       { timeout: 10000 },
     );
   });

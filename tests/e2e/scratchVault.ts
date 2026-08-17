@@ -129,8 +129,13 @@ export const TAG_DELETE_PROBE_NOTE_NAME = "zz-tag-delete-probe.md";
 export const TAG_DELETE_PROBE_NOTE_CONTENT = "Tag deletion probe.\n";
 
 export const TAG_COMPLETION_CATALOG_NOTE_NAME = "zz-tag-completion-catalog.md";
+// `cedar-notes` and `project/cedar-room` both answer the query `ced`, the
+// first because the whole tag starts with it and the second because its
+// second path segment does. A whole-tag match is the stronger answer and
+// leads whatever the counts are, so the completion menu has two rows in a
+// fixed order and arrow movement between them means something.
 export const TAG_COMPLETION_CATALOG_NOTE_CONTENT =
-  "#project/cedar-room #project/cedar-room #context/outdoors\n";
+  "#project/cedar-room #project/cedar-room #context/outdoors #cedar-notes\n";
 
 export const TAG_COMPLETION_TARGET_NOTE_NAME = "zz-tag-completion-target.md";
 export const TAG_COMPLETION_MIDDLE_LINE = "Tag completion target.";

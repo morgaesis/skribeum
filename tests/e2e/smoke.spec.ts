@@ -2955,6 +2955,7 @@ describe("skribeum shell", () => {
       {
         id: "table.row.insert-above",
         query: "table insert row above",
+        shape: { rows: 4, columns: 2 },
         table: [
           "| Name  | Score |",
           "| :--- | ---: |",
@@ -2966,6 +2967,7 @@ describe("skribeum shell", () => {
       {
         id: "table.row.insert-below",
         query: "table insert row below",
+        shape: { rows: 4, columns: 2 },
         table: [
           "| Name  | Score |",
           "| :--- | ---: |",
@@ -2977,6 +2979,7 @@ describe("skribeum shell", () => {
       {
         id: "table.column.insert-before",
         query: "table insert column left",
+        shape: { rows: 3, columns: 3 },
         table: [
           "| | Name  | Score |",
           "| --- | :--- | ---: |",
@@ -2987,6 +2990,7 @@ describe("skribeum shell", () => {
       {
         id: "table.column.insert-after",
         query: "table insert column right",
+        shape: { rows: 3, columns: 3 },
         table: [
           "| Name  | | Score |",
           "| :--- | --- | ---: |",
@@ -2997,6 +3001,7 @@ describe("skribeum shell", () => {
       {
         id: "table.row.delete",
         query: "table delete row",
+        shape: { rows: 2, columns: 2 },
         table: ["| Name  | Score |", "| :--- | ---: |", "| Ada | 10 |"].join(
           "\n",
         ),
@@ -3004,25 +3009,48 @@ describe("skribeum shell", () => {
       {
         id: "table.column.delete",
         query: "table delete column",
+        shape: { rows: 3, columns: 1 },
         table: ["| Score |", "| ---: |", "| keep  |", "| 10 |"].join("\n"),
       },
     ] as const;
 
     try {
-      // Two facts, in order: the command reached the document, and the
-      // document reached the disk. Asserted separately because they fail
-      // for unrelated reasons and are indistinguishable from the file
-      // alone — a command that never ran and a save that never landed both
-      // leave the file exactly as it was.
+      // Two facts, in order: the command reached the note, read from the
+      // rendered table's own shape, and the note reached the disk. They are
+      // asserted separately because they fail for unrelated reasons and are
+      // indistinguishable from the file alone — a command that never ran and
+      // a save that never landed both leave the file exactly as it was.
+      const waitForFirstGridShape = async (
+        shape: { rows: number; columns: number },
+        message: string,
+      ) => {
+        const readShape = async () => {
+          const grid = (await $$(".cm-skr-table-grid"))[0];
+          return grid === undefined
+            ? "no rendered table"
+            : `${await grid.getAttribute("aria-rowcount")}x${await grid.getAttribute("aria-colcount")}`;
+        };
+        const wanted = `${shape.rows}x${shape.columns}`;
+        try {
+          await browser.waitUntil(async () => (await readShape()) === wanted, {
+            timeout: 10000,
+          });
+        } catch {
+          throw new Error(
+            `${message}; the rendered table is ${await readShape()}, expected ${wanted}`,
+          );
+        }
+      };
+
       for (const entry of cases) {
         await resetAndOpen();
         await focusBodyCell();
         await runCommand(entry.query, entry.id);
-        const expected = original.replace(firstTable, entry.table);
-        await waitForEditorDocument(
-          expected,
+        await waitForFirstGridShape(
+          entry.shape,
           `${entry.id} from the command palette did not change the note`,
         );
+        const expected = original.replace(firstTable, entry.table);
         await browser.keys([modifierKey, "s"]);
         await waitForDisk(TABLE_EDITING_NOTE_NAME, expected);
         expect(await $$(".cm-skr-table-grid")).toHaveLength(2);
@@ -3033,11 +3061,11 @@ describe("skribeum shell", () => {
         await resetAndOpen();
         await focusBodyCell();
         await runPointerCommand(entry.id);
-        const expected = original.replace(firstTable, entry.table);
-        await waitForEditorDocument(
-          expected,
+        await waitForFirstGridShape(
+          entry.shape,
           `${entry.id} from the overflow menu did not change the note`,
         );
+        const expected = original.replace(firstTable, entry.table);
         await browser.keys([modifierKey, "s"]);
         await waitForDisk(TABLE_EDITING_NOTE_NAME, expected);
         expect(await $$(".cm-skr-table-grid")).toHaveLength(2);

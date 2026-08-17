@@ -1555,11 +1555,15 @@ async function pressEditorHistoryShortcut(
 
 /**
  * Waits for a [data-motion-surface] element's entrance transition to reach
- * its settled state (see enterMotionSurface in src/lib/motion.ts) before an
- * axe scan runs against it. axe's color-contrast rule reads the actually
+ * its settled state (see enterMotionSurface in src/lib/motion.ts).
+ *
+ * An axe scan needs it because the color-contrast rule reads the actually
  * rendered opacity: a scan mid-fade can see text still translucent against
  * its background and report a violation that clears on its own well
- * before a human ever perceives it.
+ * before a human ever perceives it. A click needs it because an anchored
+ * surface travels while it arrives, so a row's position at the moment
+ * WebDriver resolves it is not its position at the moment the click is
+ * dispatched.
  */
 async function waitForMotionSurfaceEntered(selector: string): Promise<void> {
   await browser.waitUntil(
@@ -2917,10 +2921,15 @@ describe("skribeum shell", () => {
         timeout: 10000,
       });
     };
+    // A surface is displayed as soon as it is rendered, which is while its
+    // entrance is still travelling, so the row's position when WebDriver
+    // resolves it is not its position when the click is dispatched. The
+    // fact to wait on is the entrance having settled, not more time.
     const runCommand = async (query: string, id: string) => {
       await browser.keys([modifierKey, "p"]);
       const surface = $('[data-testid="unified-command-surface"]');
       await surface.waitForDisplayed({ timeout: 10000 });
+      await waitForMotionSurfaceEntered(".command-surface-dialog");
       await surface.$('[role="combobox"]').addValue(query);
       const command = surface.$(`[role="option"][data-command-id="${id}"]`);
       await command.waitForDisplayed({ timeout: 10000 });
@@ -2931,6 +2940,7 @@ describe("skribeum shell", () => {
       await $('button[aria-label="More actions"]').click();
       const menu = $('nav[aria-label="More actions"]');
       await menu.waitForDisplayed({ timeout: 10000 });
+      await waitForMotionSurfaceEntered('[data-testid="anchored-menu"]');
       const command = menu.$(`button[data-command-id="${id}"]`);
       await command.waitForDisplayed({ timeout: 10000 });
       await command.click();
@@ -2994,11 +3004,20 @@ describe("skribeum shell", () => {
     ] as const;
 
     try {
+      // Two facts, in order: the command reached the document, and the
+      // document reached the disk. Asserted separately because they fail
+      // for unrelated reasons and are indistinguishable from the file
+      // alone — a command that never ran and a save that never landed both
+      // leave the file exactly as it was.
       for (const entry of cases) {
         await resetAndOpen();
         await focusBodyCell();
         await runCommand(entry.query, entry.id);
         const expected = original.replace(firstTable, entry.table);
+        await waitForEditorDocument(
+          expected,
+          `${entry.id} from the command palette did not change the note`,
+        );
         await browser.keys([modifierKey, "s"]);
         await waitForDisk(TABLE_EDITING_NOTE_NAME, expected);
         expect(await $$(".cm-skr-table-grid")).toHaveLength(2);
@@ -3010,6 +3029,10 @@ describe("skribeum shell", () => {
         await focusBodyCell();
         await runPointerCommand(entry.id);
         const expected = original.replace(firstTable, entry.table);
+        await waitForEditorDocument(
+          expected,
+          `${entry.id} from the overflow menu did not change the note`,
+        );
         await browser.keys([modifierKey, "s"]);
         await waitForDisk(TABLE_EDITING_NOTE_NAME, expected);
         expect(await $$(".cm-skr-table-grid")).toHaveLength(2);

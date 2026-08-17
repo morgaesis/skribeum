@@ -3785,14 +3785,15 @@ type BuiltDecoration = {
  * CodeMirror rejects: `span` covers a run of source text and drops a range
  * that covers none, `point` sits at one position and takes a single offset.
  *
- * The distinction is not academic. Several of the node kinds the table
- * decorates can be empty in a document a reader is part-way through
- * typing — a wikilink target or alias either side of a bare `|`, a link
- * label, a code info string, a footnote label — and a mark or a
+ * The distinction is not academic. A node the table decorates can be empty
+ * in a document a reader is part-way through typing — the target or the
+ * alias either side of a bare `|` in a wikilink, today — and a mark or a
  * replacement over an empty range throws. A throw from a decoration
- * provider costs the whole note its rendering for the life of the view,
- * so the emission path refuses the range instead: a construct with no text
- * has no presentation, which is what dropping it says.
+ * provider costs the whole note its rendering for the life of the view, so
+ * the emission path refuses the range instead: a construct with no text has
+ * no presentation, which is what dropping it says. Making that structural
+ * is what keeps the next row over a node that can be empty from repeating
+ * it.
  */
 type DecorationSink = {
   readonly items: BuiltDecoration[];

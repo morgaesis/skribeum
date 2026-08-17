@@ -1226,12 +1226,21 @@ impl<R: Runtime> VaultWatchWorker<R> {
                     &event,
                 );
                 // External changes update the search index incrementally:
-                // updates re-read and re-index, removals drop the row.
-                if let Some(index) = self
-                    .search
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .as_ref()
+                // updates re-read and re-index, removals drop the row. Only
+                // notes are indexed, so an external write to any other file
+                // must not add a row the next full rebuild removes; a
+                // removal still runs, since dropping a row that is not
+                // there costs nothing and a path can change kind.
+                let indexes = match &event {
+                    ReconEvent::ExternalUpdate { path, .. } => path.is_note(),
+                    _ => true,
+                };
+                if indexes
+                    && let Some(index) = self
+                        .search
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .as_ref()
                 {
                     let _ = index.apply_recon_event(&RealFs, &self.root, &event);
                 }
@@ -1875,7 +1884,7 @@ fn epoch_milliseconds(duration: Duration) -> f64 {
     milliseconds
 }
 
-/// Reads the creation and modification timestamps of one indexed note. The
+/// Reads the creation and modification timestamps of one indexed file. The
 /// path resolves through the vault index exactly like `note_read`, so no
 /// unindexed path is ever statted.
 #[tauri::command]
@@ -1899,7 +1908,7 @@ fn note_stat(
         .ok_or_else(|| {
             AppError::from(skribeum_vault::VaultError::NoteNotFound).with_path(path.as_str())
         })?;
-    if entry.kind != EntryKind::Note {
+    if entry.kind == EntryKind::Directory {
         return Err(AppError::from(skribeum_vault::VaultError::NotANote).with_path(path.as_str()));
     }
     let absolute = open.vault.root().join(path.as_str());
@@ -2038,7 +2047,11 @@ fn note_write(
                     WriteResult::Written {
                         projection_hash: projection_hash.clone(),
                     },
-                    Some((Arc::clone(&open.search), base.bytes)),
+                    // Search indexes notes and nothing else, so a write to
+                    // any other file leaves the index alone. Indexing it
+                    // here would add a row the next full rebuild removes.
+                    path.is_note()
+                        .then(|| (Arc::clone(&open.search), base.bytes)),
                 )
             } else {
                 (

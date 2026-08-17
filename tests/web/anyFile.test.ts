@@ -7,6 +7,7 @@ import type { EditorView } from "@codemirror/view";
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Editor from "../../src/lib/Editor.svelte";
+import { applyByteChangeSet } from "../../src/lib/editor/byteChangeSet";
 import {
   fileExtension,
   isMarkdownDocument,
@@ -15,7 +16,6 @@ import {
 import { fileLanguageDescription } from "../../src/lib/editor/syntaxPolicy";
 import type { LoadedNote, VaultHandle } from "../../src/lib/ipc/vault";
 import * as vaultIpc from "../../src/lib/ipc/vault";
-import { loadedVaultFile } from "../../src/lib/ipc/vault";
 import ImageView from "../../src/lib/rendering/ImageView.svelte";
 
 type EditorExports = {
@@ -46,10 +46,39 @@ function mountEditor(props: Record<string, unknown>): EditorExports {
   return component;
 }
 
+/** Presents raw bytes as an open document, the way `note_read` does. */
+function openedDocument(bytes: Uint8Array): LoadedNote {
+  let utf8 = true;
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    utf8 = false;
+  }
+  const hasBom =
+    bytes.length >= 3 &&
+    bytes[0] === 0xef &&
+    bytes[1] === 0xbb &&
+    bytes[2] === 0xbf;
+  return {
+    meta: {
+      encoding: !utf8 ? "non-utf8" : hasBom ? "utf8-bom" : "utf8",
+      projection_hash: "base",
+      byte_length: bytes.byteLength,
+    },
+    bytes,
+    text: new TextDecoder("utf-8", { fatal: false }).decode(
+      hasBom ? bytes.subarray(3) : bytes,
+    ),
+    readOnly: !utf8,
+  };
+}
+
 /**
- * Edits a document through the editor and returns the bytes the vault
- * received. The vault reports the same base back, so the pre-write base
- * check passes and the write proceeds.
+ * Edits a document through the editor and returns the bytes that land in
+ * the vault: the change set the editor sent, applied to the base exactly as
+ * `Vault::write_note` applies it. The byte-change implementation is the one
+ * the conformance corpus pins to the Rust apply, so this is the same
+ * arithmetic the desktop write performs.
  */
 async function savedBytes(
   bytes: Uint8Array,
@@ -58,14 +87,22 @@ async function savedBytes(
 ): Promise<Uint8Array | null> {
   let written: Uint8Array | null = null;
   stubEditHistory();
-  vi.spyOn(vaultIpc, "readVaultFile").mockResolvedValue(bytes);
-  vi.spyOn(vaultIpc, "writeVaultFile").mockImplementation(
-    async (_handle, _relPath, next) => {
-      written = next;
+  vi.spyOn(vaultIpc, "noteWrite").mockImplementation(
+    async (_handle, _relPath, changeSet, expectedProjectionHash) => {
+      expect(expectedProjectionHash).toBe("base");
+      written = applyByteChangeSet(
+        bytes,
+        changeSet.map((change) => ({
+          start: change.start,
+          end: change.end,
+          bytes: Uint8Array.from(change.bytes),
+        })),
+      );
+      return { result: "written", projection_hash: "written" };
     },
   );
   const component = mountEditor({
-    note: loadedVaultFile(bytes),
+    note: openedDocument(bytes),
     path,
     vault: VAULT,
   });
@@ -158,49 +195,11 @@ describe("file highlighting", () => {
   });
 });
 
-describe("non-note document classification", () => {
-  it("opens valid UTF-8 as an editable document", () => {
-    const loaded = loadedVaultFile(new TextEncoder().encode("root: true\n"));
-    expect(loaded.readOnly).toBe(false);
-    expect(loaded.persistence).toBe("file");
-    expect(loaded.meta.encoding).toBe("utf8");
-    expect(loaded.text).toBe("root: true\n");
-  });
-
-  it("keeps a byte-order mark in the bytes and out of the text", () => {
-    const bytes = Uint8Array.from([0xef, 0xbb, 0xbf, 0x61]);
-    const loaded = loadedVaultFile(bytes);
-    expect(loaded.meta.encoding).toBe("utf8-bom");
-    expect(loaded.text).toBe("a");
-    expect(loaded.bytes).toEqual(bytes);
-  });
-
-  it("opens a file that is not UTF-8 read-only", () => {
-    // A lone surrogate encoded as WTF-8, and a PNG signature: neither is
-    // valid UTF-8, so neither is ever written back.
-    for (const bytes of [
-      Uint8Array.from([0xed, 0xa0, 0x80]),
-      Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-      Uint8Array.from([0xff, 0xfe, 0x00]),
-    ]) {
-      const loaded = loadedVaultFile(bytes);
-      expect(loaded.readOnly).toBe(true);
-      expect(loaded.meta.encoding).toBe("non-utf8");
-    }
-  });
-
-  it("opens an empty file as an empty editable document", () => {
-    const loaded = loadedVaultFile(new Uint8Array());
-    expect(loaded.readOnly).toBe(false);
-    expect(loaded.text).toBe("");
-  });
-});
-
 describe("non-note editing", () => {
   it("carries no Markdown presentation into a configuration file", async () => {
     const source = "---\n# not a heading\nkey: value\n";
     const component = mountEditor({
-      note: loadedVaultFile(new TextEncoder().encode(source)),
+      note: openedDocument(new TextEncoder().encode(source)),
       path: "deploy.yml",
       vault: VAULT,
     });
@@ -228,7 +227,6 @@ describe("non-note editing", () => {
         bytes: new TextEncoder().encode(source),
         text: source,
         readOnly: false,
-        persistence: "note",
       } satisfies LoadedNote,
       path: "note.md",
       vault: VAULT,
@@ -299,15 +297,15 @@ describe("non-note editing", () => {
     );
   });
 
-  it("never writes a file that is not UTF-8", async () => {
-    const bytes = Uint8Array.from([0xed, 0xa0, 0x80, 0x0a]);
+  it.each([
+    ["a lone surrogate encoded as WTF-8", [0xed, 0xa0, 0x80, 0x0a]],
+    ["a PNG signature", [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
+  ])("never writes %s", async (_name, source) => {
+    const bytes = Uint8Array.from(source);
     stubEditHistory();
-    const write = vi
-      .spyOn(vaultIpc, "writeVaultFile")
-      .mockResolvedValue(undefined);
-    vi.spyOn(vaultIpc, "readVaultFile").mockResolvedValue(bytes);
+    const write = vi.spyOn(vaultIpc, "noteWrite");
     const component = mountEditor({
-      note: loadedVaultFile(bytes),
+      note: openedDocument(bytes),
       path: "archive.bin",
       vault: VAULT,
     });
@@ -318,18 +316,31 @@ describe("non-note editing", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("refuses to overwrite a file that moved under the open document", async () => {
+  it("opens an empty file as an empty editable document", () => {
+    const component = mountEditor({
+      note: openedDocument(new Uint8Array()),
+      path: ".gitignore",
+      vault: VAULT,
+    });
+    const view = component.getView();
+    expect(view?.state.readOnly).toBe(false);
+    expect(view?.state.doc.toString()).toBe("");
+  });
+
+  it("surfaces a conflict when the file moved under the open document", async () => {
     const bytes = new TextEncoder().encode("root: true\n");
     stubEditHistory();
-    const write = vi
-      .spyOn(vaultIpc, "writeVaultFile")
-      .mockResolvedValue(undefined);
-    vi.spyOn(vaultIpc, "readVaultFile").mockResolvedValue(
-      new TextEncoder().encode("someone else wrote this\n"),
+    vi.spyOn(vaultIpc, "noteWrite").mockResolvedValue({
+      result: "conflict",
+      current_projection_hash: "elsewhere",
+      reconciliation: 1,
+    });
+    vi.spyOn(vaultIpc, "readNote").mockResolvedValue(
+      openedDocument(new TextEncoder().encode("someone else wrote this\n")),
     );
     const onConflict = vi.fn();
     const component = mountEditor({
-      note: loadedVaultFile(bytes),
+      note: openedDocument(bytes),
       path: "deploy.yml",
       vault: VAULT,
       onConflict,
@@ -340,8 +351,11 @@ describe("non-note editing", () => {
     view.dispatch({ changes: { from: 0, insert: "# mine\n" } });
     flushSync();
     await component.flush();
-    expect(write).not.toHaveBeenCalled();
     expect(onConflict).toHaveBeenCalled();
+    // The other writer's content is loaded and the local edit is kept on
+    // top of it, rather than either side being dropped.
+    expect(view.state.doc.toString()).toContain("someone else wrote this");
+    expect(view.state.doc.toString()).toContain("# mine");
   });
 });
 

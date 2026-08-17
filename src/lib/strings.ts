@@ -460,6 +460,8 @@ export const STRINGS = {
   untitledNoteName: "Untitled",
   noteCreateFailed: "Creating the note failed",
   demoNoteNotMarkdown: "The requested demo file is not a note.",
+  demoNoteReadOnly:
+    "This file is not valid UTF-8 and cannot be edited in the browser demo.",
   demoNoteAlreadyExists: "The requested demo note already exists.",
   commandSaveNote: "Save note",
   commandClearEditHistory: "Note: clear edit history",

@@ -16,14 +16,11 @@ import type {
   WriteResult,
 } from "./bindings";
 
-export type DocumentPersistence = "note" | "file";
-
 export type LoadedNote = {
   meta: NoteContent;
   bytes: Uint8Array;
   text: string;
   readOnly: boolean;
-  persistence: DocumentPersistence;
   recoveredChangeSet?: ByteRangeReplace[];
 };
 
@@ -81,6 +78,16 @@ const LOCAL_FOLDER_VAULT = "skribeum-local-folder";
 const BROWSER_FILE_BYTE_LIMIT = 32 * 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+/** Whether `bytes` decode as UTF-8 without replacement. */
+function isUtf8(bytes: Uint8Array): boolean {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function seededFiles(): Map<string, Uint8Array> {
   const files = new Map(
@@ -585,14 +592,10 @@ export async function noteWrite(
   expectedProjectionHash: string,
 ): Promise<WriteResult> {
   const vault = vaultFor(handle);
-  if (vault.readOnlyPaths.has(relPath)) {
-    return fail(
-      "note/non-utf8-read-only",
-      "This note is not valid UTF-8 and cannot be edited in the browser demo.",
-      relPath,
-    );
-  }
   const current = cachedFileBytes(vault, relPath);
+  if (vault.readOnlyPaths.has(relPath) || !isUtf8(current)) {
+    return fail("note/non-utf8-read-only", STRINGS.demoNoteReadOnly, relPath);
+  }
   const currentProjectionHash = await projectionHash(current);
   if (currentProjectionHash !== expectedProjectionHash) {
     return {
@@ -757,9 +760,6 @@ export async function readNote(
   relPath: string,
 ): Promise<LoadedNote> {
   const vault = vaultFor(handle);
-  if (!isNotePath(relPath)) {
-    return fail("note/not-markdown", STRINGS.demoNoteNotMarkdown, relPath);
-  }
   const bytes = cachedFileBytes(vault, relPath).slice();
   await waitForTestGate(relPath);
   const hasBom =
@@ -767,7 +767,9 @@ export async function readNote(
     bytes[0] === 0xef &&
     bytes[1] === 0xbb &&
     bytes[2] === 0xbf;
-  const readOnly = vault.readOnlyPaths.has(relPath);
+  // What a file is named decides how it is presented; what its bytes are
+  // decides whether it may be written. This mirrors the native `classify`.
+  const readOnly = vault.readOnlyPaths.has(relPath) || !isUtf8(bytes);
   return {
     meta: {
       encoding: readOnly ? "non-utf8" : hasBom ? "utf8-bom" : "utf8",
@@ -777,49 +779,7 @@ export async function readNote(
     bytes,
     text: decoder.decode(hasBom ? bytes.subarray(3) : bytes),
     readOnly,
-    persistence: "note",
   };
-}
-
-/** Whether `bytes` decode as UTF-8 without replacement. */
-function isUtf8(bytes: Uint8Array): boolean {
-  try {
-    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Mirrors the native shell's presentation of any indexed file's bytes. */
-export function loadedVaultFile(bytes: Uint8Array): LoadedNote {
-  const utf8 = isUtf8(bytes);
-  const hasBom =
-    bytes.length >= 3 &&
-    bytes[0] === 0xef &&
-    bytes[1] === 0xbb &&
-    bytes[2] === 0xbf;
-  return {
-    meta: {
-      encoding: !utf8 ? "non-utf8" : hasBom ? "utf8-bom" : "utf8",
-      projection_hash: "",
-      byte_length: bytes.byteLength,
-    },
-    bytes,
-    text: decoder.decode(hasBom ? bytes.subarray(3) : bytes),
-    readOnly: !utf8,
-    persistence: "file",
-  };
-}
-
-/** Opens any indexed file as an editable document. */
-export async function readVaultDocument(
-  handle: VaultHandle,
-  relPath: string,
-): Promise<LoadedNote> {
-  return isNotePath(relPath)
-    ? readNote(handle, relPath)
-    : loadedVaultFile(await readVaultFile(handle, relPath));
 }
 
 export async function readVaultFile(

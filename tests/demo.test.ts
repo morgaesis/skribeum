@@ -16,7 +16,6 @@ import {
   openVault,
   openVaultResult,
   readNote,
-  readVaultDocument,
   readVaultFile,
   resetDemoVault,
   selectLocalDirectory,
@@ -179,12 +178,11 @@ describe("browser demo IPC", () => {
       false,
     );
 
-    const ignore = await readVaultDocument(handle, ".gitignore");
+    const ignore = await readNote(handle, ".gitignore");
     expect(ignore.readOnly).toBe(false);
-    expect(ignore.persistence).toBe("file");
     expect(ignore.text).toContain("drafts/*.tmp");
 
-    const pipeline = await readVaultDocument(handle, "Features/deploy.yml");
+    const pipeline = await readNote(handle, "Features/deploy.yml");
     expect(pipeline.readOnly).toBe(false);
     expect(pipeline.text).toContain("targets:");
   });
@@ -193,7 +191,7 @@ describe("browser demo IPC", () => {
     const handle = await openVault("demo");
     const path = "Examples/Work/printed-handout.pdf";
     const raw = await readVaultFile(handle, path);
-    const document = await readVaultDocument(handle, path);
+    const document = await readNote(handle, path);
 
     // The seeding pipeline delivered the file's own bytes, not a UTF-8
     // re-encoding of them: a PDF opens with its signature intact.
@@ -224,7 +222,7 @@ describe("browser demo IPC", () => {
       kind: "file",
       hidden: true,
     });
-    const loaded = await readVaultDocument(handle, ".gitignore");
+    const loaded = await readNote(handle, ".gitignore");
     expect(loaded.text).toBe("public/\n");
   });
 

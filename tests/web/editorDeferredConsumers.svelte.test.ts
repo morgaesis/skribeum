@@ -41,7 +41,6 @@ function loadedNote(text: string, hash: string): LoadedNote {
     bytes,
     text,
     readOnly: false,
-    persistence: "note",
   };
 }
 

@@ -13,7 +13,7 @@ import {
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { onMount } from "svelte";
 import { bulkTextInput } from "./editor/bulkInput";
-import { applyByteChangeSet, type ByteChange } from "./editor/byteChangeSet";
+import type { ByteChange } from "./editor/byteChangeSet";
 import { assertDecorationsInert } from "./editor/decorationGuard";
 import {
   dispatchWikilinkContext,
@@ -67,11 +67,7 @@ import { slashMenu } from "./features/slashMenu";
 import { tableEditingExtension } from "./features/tableEditing";
 import { tableCellRanges } from "./features/tableOperations";
 import { type TagAffordanceOptions, tagAffordances } from "./features/tags";
-import type {
-  ByteRangeReplace,
-  VaultHandle,
-  WriteResult,
-} from "./ipc/bindings";
+import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import {
   editHistoryAppend,
   editHistoryClear,
@@ -80,9 +76,7 @@ import {
   IpcError,
   type LoadedNote,
   noteWrite,
-  readVaultDocument,
-  readVaultFile,
-  writeVaultFile,
+  readNote,
 } from "./ipc/vault";
 import { ASYNC_SKELETON_DELAY_MS } from "./loadingStates";
 import { enterMotionSurface, type PaneSwitchKind } from "./motion";
@@ -938,42 +932,6 @@ function beginPersistenceGrace(): void {
   }, ASYNC_SKELETON_DELAY_MS);
 }
 
-/** Whether two byte strings are identical. */
-function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
-  return (
-    left.length === right.length && left.every((byte, at) => byte === right[at])
-  );
-}
-
-/**
- * Saves a document that persists through the vault's whole-file write. The
- * change set is applied to the session base locally, so the bytes that
- * reach the vault are exactly the bytes the buffer projects: no
- * normalization, no line-ending rewrite, no trailing newline. The file
- * write path carries no projection-hash check of its own, so the base is
- * verified against the current file immediately before the write and a
- * disagreement reports the same conflict a note reports rather than
- * overwriting someone else's edit.
- */
-async function writeDocumentFile(
-  handle: VaultHandle,
-  relPath: string,
-  active: NoteSession,
-  changeSet: readonly ByteChange[],
-): Promise<WriteResult> {
-  const base = active.base.bytes;
-  const current = await readVaultFile(handle, relPath);
-  if (!sameBytes(base, current)) {
-    return {
-      result: "conflict",
-      current_projection_hash: null,
-      reconciliation: 0,
-    };
-  }
-  await writeVaultFile(handle, relPath, applyByteChangeSet(base, changeSet));
-  return { result: "written", projection_hash: "" };
-}
-
 async function performSave(): Promise<boolean> {
   if (
     view === undefined ||
@@ -1005,15 +963,12 @@ async function performSave(): Promise<boolean> {
       reportPersistence({ kind: "saved" });
       return true;
     }
-    const result =
-      note?.persistence === "file"
-        ? await writeDocumentFile(vault, path, session, request.changeSet)
-        : await noteWrite(
-            vault,
-            path,
-            toIpcChanges(request.changeSet),
-            request.expectedProjectionHash,
-          );
+    const result = await noteWrite(
+      vault,
+      path,
+      toIpcChanges(request.changeSet),
+      request.expectedProjectionHash,
+    );
     if (result.result === "written") {
       try {
         session.commitSave(result.projection_hash);
@@ -1230,7 +1185,7 @@ async function rereadAndReconcile(): Promise<void> {
     return;
   }
   try {
-    reconcileWith(await readVaultDocument(vault, path));
+    reconcileWith(await readNote(vault, path));
   } catch (error) {
     onWriteError?.(
       error instanceof IpcError ? error.app.message : String(error),

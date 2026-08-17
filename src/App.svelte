@@ -127,9 +127,9 @@ import {
   type LoadedNote,
   noteCreate,
   openVaultResult,
+  readNote,
   readNoteStat,
   readVaultConfigFile,
-  readVaultDocument,
   readVaultFile,
   vaultTree,
   watchSubscribe,
@@ -3097,7 +3097,7 @@ async function openNote(
     : undefined;
   delete debugWindow.__SKRIBEUM_DEBUG_NOTE_OPEN_MS__;
   try {
-    const loaded = await readVaultDocument(currentVault, path);
+    const loaded = await readNote(currentVault, path);
     if (
       !activeVaultMatches(currentVault, vaultGeneration) ||
       !contentRequests.isCurrent(request)
@@ -3624,7 +3624,7 @@ async function reviewPath(path: string, bannerId: number) {
     const currentVault = vault;
     const request = contentRequests.next();
     try {
-      const loaded = await readVaultDocument(currentVault, path);
+      const loaded = await readNote(currentVault, path);
       if (
         vault !== currentVault ||
         selectedPath !== path ||
@@ -3745,6 +3745,7 @@ function pollEndToEndVault() {
       }
       const target = window as Window & {
         __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
+        __SKRIBEUM_E2E_OPEN_PATH__?: (path: string) => void;
         __SKRIBEUM_E2E_HISTORY_STATE__?: () => NoteViewState | null;
         __SKRIBEUM_E2E_READING_DRIFT__?: (
           state: NoteViewState,
@@ -3761,6 +3762,9 @@ function pollEndToEndVault() {
       };
       target.__SKRIBEUM_E2E_OPEN_NOTE__ = (notePath) =>
         navigateToNote(notePath);
+      // Routes by document kind, the way activating a tree row does, so a
+      // spec can reach the image viewer and not only the note surface.
+      target.__SKRIBEUM_E2E_OPEN_PATH__ = (targetPath) => openPath(targetPath);
       target.__SKRIBEUM_E2E_HISTORY_STATE__ = () =>
         editor?.captureHistoryState() ?? null;
       target.__SKRIBEUM_E2E_READING_DRIFT__ = (state) =>

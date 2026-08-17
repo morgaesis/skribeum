@@ -23,7 +23,6 @@ function openNote(doc: string): LoadedNote {
     bytes: new TextEncoder().encode(doc),
     text: doc,
     readOnly: false,
-    persistence: "note",
   };
 }
 

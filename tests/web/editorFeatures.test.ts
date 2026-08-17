@@ -658,6 +658,72 @@ describe("tag affordances", () => {
     ).toEqual([]);
   });
 
+  // The catalog the packaged end-to-end suite's scratch vault produces, read
+  // back from the index rather than assumed: zz-tag-completion-catalog.md
+  // writes #project/cedar-room twice and #context/outdoors once, the two
+  // navigation notes write #shared, and zz-tag-delete.md writes
+  // #delete-only. Keeping the same expectations here means an ordering
+  // regression shows up without a packaged build.
+  describe("the end-to-end vault's tag catalog", () => {
+    const CATALOG: TagCatalogEntry[] = [
+      { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 2 },
+      { tag: "shared", noteCount: 2, occurrenceCount: 2 },
+      { tag: "context/outdoors", noteCount: 1, occurrenceCount: 1 },
+      { tag: "delete-only", noteCount: 1, occurrenceCount: 1 },
+    ];
+
+    it("answers ced with the tag whose path segment starts with it", () => {
+      // Only cedar-room starts with the query. context/outdoors neither
+      // contains it nor comes within one edit of a path segment of it, so a
+      // reader could not say why it would be on screen.
+      expect(
+        filteredTagCompletions(CATALOG, [], "ced").map((row) => `#${row.tag}`),
+      ).toEqual(["#project/cedar-room"]);
+    });
+
+    it("leads with the query once typing it has made it a tag", () => {
+      expect(
+        filteredTagCompletions(
+          [...CATALOG, { tag: "ced", noteCount: 1, occurrenceCount: 1 }],
+          [],
+          "ced",
+        ).map((row) => `#${row.tag}`),
+      ).toEqual(["#ced", "#project/cedar-room"]);
+    });
+
+    it("puts the tag accepted most recently above one used as widely", () => {
+      // Both tags sit in two notes once each has been accepted into the
+      // note being edited, so note count cannot separate them and the
+      // alphabet favours context/outdoors. Only recency can reverse that.
+      const accepted: TagCatalogEntry[] = [
+        { tag: "project/cedar-room", noteCount: 2, occurrenceCount: 3 },
+        { tag: "context/outdoors", noteCount: 2, occurrenceCount: 2 },
+        { tag: "shared", noteCount: 2, occurrenceCount: 2 },
+        { tag: "delete-only", noteCount: 1, occurrenceCount: 1 },
+      ];
+      expect(
+        filteredTagCompletions(accepted, [], "").map((row) => `#${row.tag}`),
+      ).toEqual([
+        "#context/outdoors",
+        "#project/cedar-room",
+        "#shared",
+        "#delete-only",
+      ]);
+      expect(
+        filteredTagCompletions(
+          accepted,
+          ["project/cedar-room", "context/outdoors"],
+          "",
+        ).map((row) => `#${row.tag}`),
+      ).toEqual([
+        "#project/cedar-room",
+        "#context/outdoors",
+        "#shared",
+        "#delete-only",
+      ]);
+    });
+  });
+
   it("removes the trigger and query when dismissed with Escape", () => {
     tagCatalog = [{ tag: "alpha", noteCount: 1, occurrenceCount: 1 }];
     const view = makeView("Before ", 7);

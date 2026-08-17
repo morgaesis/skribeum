@@ -32,7 +32,6 @@ export const STRINGS = {
   treeRenamePrompt: "New name",
   treeMoveDestinationPrompt: "Destination folder, empty for the vault root",
   treeMoveUnknownFolder: "No folder in this vault has that path.",
-  treeMoveUndo: "Undo last move or rename",
   treeMoveNothingToUndo: "There is no move or rename to undo.",
   linkUpdateNone:
     "No other note links to this one, so nothing else is written. Its links keep resolving.",

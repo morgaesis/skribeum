@@ -667,7 +667,7 @@ export async function treeEntryMoveUndo(
   const vault = vaultFor(handle);
   const record = vault.lastMove;
   if (record === null) {
-    return fail("entry/not-found", "There is no move to undo.", null);
+    return fail("entry/not-found", STRINGS.treeMoveNothingToUndo, null);
   }
   for (const update of record.restore) {
     const base = vault.files.get(update.path);

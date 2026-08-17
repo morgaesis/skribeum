@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Expanding and collapsing a file tree folder moves the rows it displaces
+  through the positions between their old and new slots, with the tree's own
+  height on the same clock, so a vault taller than the sidebar grows and
+  shrinks under the reader instead of jumping to its new size and animating
+  over it. The rows a folder reveals unfold out of its slot and fold back
+  into it; the fill marking the open note travels on the row it belongs to,
+  and toggling a folder no longer scrolls the sidebar back to the open note.
+- Hovering a file tree row emphasises the entry's own text rather than
+  filling the whole row, leaving the filled row to mean one thing: this is
+  the note that is open.
+
+### Fixed
+
+- Collapsing a folder in a scrolled file tree no longer leaves the rows it
+  hid behind as duplicates stacked over the surviving rows.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

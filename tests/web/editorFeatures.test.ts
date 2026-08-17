@@ -4,6 +4,7 @@
 // panel with its match count. Views run the same extension set the
 // editor component assembles.
 
+import { history, undo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { searchPanelOpen } from "@codemirror/search";
 import { EditorState, type Extension } from "@codemirror/state";
@@ -355,6 +356,43 @@ describe("slash menu", () => {
     expect(view.state.doc.toString()).toBe("# ");
   });
 
+  it("leaves nothing of the trigger behind on any slash entry", () => {
+    let previous: EditorView | undefined;
+    for (const command of registry.slashCommands()) {
+      previous?.destroy();
+      const view = makeView("Body text.\n\n", 12);
+      previous = view;
+      typeText(view, "/");
+      const items = filteredSlashCommands(registry, "");
+      const index = items.findIndex((entry) => entry.id === command.id);
+      for (let step = 0; step < index; step += 1) {
+        runEditorCommand("slash.next");
+      }
+      expect(runEditorCommand("slash.accept")).toBe(true);
+      expect(view.state.doc.toString(), command.id).not.toContain("/");
+    }
+  });
+
+  it("replaces the trigger with the insertion in one undoable step", () => {
+    const view = makeView("", 0, [history()]);
+    typeText(view, "/task");
+    expect(runEditorCommand("slash.accept")).toBe(true);
+    // What the person types next is the task's text, not text in front of
+    // a marker that the caret was left behind.
+    typeText(view, "Buy milk");
+    expect(view.state.doc.toString()).toBe("- [ ] Buy milk");
+    view.destroy();
+
+    // One step back over the acceptance restores the whole trigger. Were
+    // the removal and the insertion two transactions, this step would
+    // reveal the document between them, with the trigger already gone.
+    const undone = makeView("", 0, [history()]);
+    typeText(undone, "/task");
+    expect(runEditorCommand("slash.accept")).toBe(true);
+    expect(undo(undone)).toBe(true);
+    expect(undone.state.doc.toString()).toBe("/task");
+  });
+
   it("navigates with the slash.* commands and closes on escape", () => {
     const view = makeView("", 0);
     typeText(view, "/");
@@ -380,6 +418,160 @@ describe("slash menu", () => {
         (option) => option.getAttribute("aria-selected") === "true",
       ),
     ).toHaveLength(1);
+  });
+});
+
+describe("block authoring commands", () => {
+  /**
+   * The observation that matters: run the command, type one character,
+   * read the document. A caret left in front of the marker it inserted
+   * produces a line that is not the construct that was asked for, and
+   * only typing shows it.
+   */
+  function afterTyping(
+    commandId: string,
+    document: string,
+    cursor: number,
+    typed = "X",
+  ): string {
+    const view = makeView(document, cursor);
+    expect(runEditorCommand(commandId)).toBe(true);
+    typeText(view, typed);
+    return view.state.doc.toString();
+  }
+
+  it.each([
+    ["insert.heading-1", "# X"],
+    ["insert.heading-2", "## X"],
+    ["insert.heading-3", "### X"],
+    ["insert.task", "- [ ] X"],
+    ["insert.bullet-list", "- X"],
+    ["insert.numbered-list", "1. X"],
+    ["insert.callout", "> [!note] X"],
+  ])("puts what is typed after %s inside the construct", (id, expected) => {
+    expect(afterTyping(id, "", 0)).toBe(expected);
+  });
+
+  it("keeps the caret in the text when the line already has some", () => {
+    // The caret sits on `f`; the marker arrives in front of the text and
+    // the caret travels with the text rather than staying at the offset.
+    expect(afterTyping("insert.task", "first bullet", 0)).toBe(
+      "- [ ] Xfirst bullet",
+    );
+    expect(afterTyping("insert.heading-2", "first bullet", 5)).toBe(
+      "## firstX bullet",
+    );
+    // A caret inside the marker being replaced belongs to the marker, and
+    // lands at the end of whatever replaces it, however much shorter.
+    expect(afterTyping("insert.bullet-list", "### Title", 2)).toBe("- XTitle");
+  });
+
+  it("turns a list line into a heading rather than a mixed line", () => {
+    const view = makeView("- first bullet", 2);
+    expect(runEditorCommand("insert.heading-2")).toBe(true);
+    expect(view.state.doc.toString()).toBe("## first bullet");
+    typeText(view, "X");
+    expect(view.state.doc.toString()).toBe("## Xfirst bullet");
+  });
+
+  it.each([
+    ["insert.task", "- [ ] one\n- [ ] two\n- [ ] three"],
+    ["insert.bullet-list", "- one\n- two\n- three"],
+    ["insert.numbered-list", "1. one\n2. two\n3. three"],
+    ["insert.heading-2", "## one\n## two\n## three"],
+  ])("applies %s to every line of the selection", (id, expected) => {
+    const source = "one\ntwo\nthree";
+    const view = makeView(source, 0);
+    view.dispatch({ selection: { anchor: 0, head: source.length } });
+    expect(runEditorCommand(id)).toBe(true);
+    expect(view.state.doc.toString()).toBe(expected);
+    // The selection still covers the same text, so a second run reverses
+    // the first and the person is back where they started.
+    expect(runEditorCommand(id)).toBe(true);
+    expect(view.state.doc.toString()).toBe(source);
+  });
+
+  it("wraps every selected line in a callout and waits on its title", () => {
+    const source = "Para A\nPara B\nPara C";
+    const view = makeView(source, 0);
+    view.dispatch({ selection: { anchor: 0, head: source.length } });
+    expect(runEditorCommand("insert.callout")).toBe(true);
+    expect(view.state.doc.toString()).toBe(
+      "> [!note] \n> Para A\n> Para B\n> Para C",
+    );
+    typeText(view, "Careful");
+    expect(view.state.doc.toString()).toBe(
+      "> [!note] Careful\n> Para A\n> Para B\n> Para C",
+    );
+  });
+
+  it("moves heading levels and declines away from a heading", () => {
+    const view = makeView("## Section", 4);
+    expect(runEditorCommand("heading.decrease-level")).toBe(true);
+    expect(view.state.doc.toString()).toBe("# Section");
+    expect(runEditorCommand("heading.increase-level")).toBe(true);
+    expect(runEditorCommand("heading.increase-level")).toBe(true);
+    expect(view.state.doc.toString()).toBe("### Section");
+    typeText(view, "X");
+    expect(view.state.doc.toString()).toBe("### SXection");
+    view.destroy();
+
+    const paragraph = makeView("just text", 2);
+    expect(runEditorCommand("heading.increase-level")).toBe(false);
+    expect(paragraph.state.doc.toString()).toBe("just text");
+  });
+
+  it("nests a list line by one step and declines off a list", () => {
+    const view = makeView("- one\n- two", 9);
+    expect(runEditorCommand("list.indent")).toBe(true);
+    expect(view.state.doc.toString()).toBe("- one\n  - two");
+    typeText(view, "X");
+    expect(view.state.doc.toString()).toBe("- one\n  - tXwo");
+    expect(runEditorCommand("list.outdent")).toBe(true);
+    expect(view.state.doc.toString()).toBe("- one\n- tXwo");
+    view.destroy();
+
+    const paragraph = makeView("just text", 2);
+    expect(runEditorCommand("list.indent")).toBe(false);
+    expect(runEditorCommand("list.outdent")).toBe(false);
+    expect(paragraph.state.doc.toString()).toBe("just text");
+  });
+
+  it("nests a list line from the keyboard through the registry binding", () => {
+    const view = makeView("- one\n- two", 8);
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "]",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(view.state.doc.toString()).toBe("- one\n  - two");
+  });
+
+  it("leaves a snippet's caret inside the snippet", () => {
+    const view = makeView("", 0);
+    expect(runEditorCommand("insert.code-fence")).toBe(true);
+    typeText(view, "print()");
+    expect(view.state.doc.toString()).toBe("```\nprint()\n```");
+  });
+
+  it("declines every authoring command in a read-only note", () => {
+    const view = makeView("text", 0, [EditorState.readOnly.of(true)]);
+    for (const id of [
+      "insert.heading-1",
+      "insert.task",
+      "insert.bullet-list",
+      "insert.numbered-list",
+      "insert.callout",
+      "insert.code-fence",
+      "heading.increase-level",
+      "list.indent",
+    ]) {
+      expect(runEditorCommand(id)).toBe(false);
+    }
+    expect(view.state.doc.toString()).toBe("text");
   });
 });
 

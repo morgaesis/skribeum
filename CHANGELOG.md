@@ -6,6 +6,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Insert bullet list` and `Insert numbered list` build a list from the
+  command palette and the slash menu, over the caret's line or every line of
+  a selection. Running either again on lines that already are that list
+  removes it, which is also how a heading returns to a paragraph.
+- `Increase heading level` and `Decrease heading level` move a heading
+  between levels, and `Indent list item` and `Outdent list item` (`Mod-]`
+  and `Mod-[`) nest a list line by one indentation step. Each declines away
+  from the construct it restructures.
+
+### Fixed
+
+- Every block insertion places the caret inside the construct it inserted.
+  A heading, task, list, or callout inserted on an empty line left the caret
+  in front of the marker, so the first character typed landed before it and
+  the line was not the construct that was asked for.
+- A heading command on a list line replaces the list marker instead of
+  writing a heading marker in front of it, and a callout wraps every line of
+  a selection rather than one, with its title line waiting for the caret.
+- Accepting a slash-menu entry replaces the trigger and its query with the
+  insertion in one document change, so one undo step reverses the whole
+  acceptance.
+- Searching the command surface for a due date reaches the task status menu,
+  the surface that carries a status's date field, rather than the `Time: Due`
+  status command, which writes a checkbox marker and no date.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

@@ -21,6 +21,24 @@ export type AppearancePreferences = {
 
 const themeSwitchGenerations = new WeakMap<HTMLElement, number>();
 
+/**
+ * Where the last applied appearance is mirrored for the page bootstrap. The
+ * settings document remains the only source of truth; it is read
+ * asynchronously, and the shell would otherwise paint its default palette for
+ * the length of that read. `public/appearance-bootstrap.js` reads this mirror
+ * before the first paint and the settings read then confirms it.
+ */
+export const APPEARANCE_MIRROR = "skribeum.appearance.v1";
+
+function appearanceMirror(root: HTMLElement): Storage | null {
+  try {
+    return root.ownerDocument.defaultView?.localStorage ?? null;
+  } catch {
+    // Storage access throws outright when the embedder blocks it.
+    return null;
+  }
+}
+
 export function isThemeName(value: string): value is ThemeName {
   return (THEME_NAMES as readonly string[]).includes(value);
 }
@@ -103,4 +121,12 @@ export function applyAppearance(
   applyProseFont(preferences.prose_font, root);
   applyCodeFont(preferences.code_font, root);
   applyAnimations(preferences.animations, root);
+  try {
+    appearanceMirror(root)?.setItem(
+      APPEARANCE_MIRROR,
+      JSON.stringify(preferences),
+    );
+  } catch {
+    // A full or blocked store costs the bootstrap its head start, nothing more.
+  }
 }

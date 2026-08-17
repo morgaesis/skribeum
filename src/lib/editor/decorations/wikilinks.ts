@@ -121,7 +121,9 @@ export function wikilinkPointerNavigation(
             return false;
           }
           event.preventDefault();
-          const handled = followLinkAt(view, candidate.position, options());
+          const handled = followLinkAt(view, candidate.position, options(), {
+            newTab: event.ctrlKey || event.metaKey,
+          });
           pendingClick = { position: candidate.position, handled };
           return handled;
         },
@@ -150,7 +152,21 @@ export function wikilinkPointerNavigation(
             return false;
           }
           event.preventDefault();
-          return followLinkAt(view, candidate.position, options());
+          return followLinkAt(view, candidate.position, options(), {
+            newTab: event.ctrlKey || event.metaKey,
+          });
+        },
+        auxclick(event, view) {
+          // Middle-click on a link opens it in a new tab, the browser
+          // convention; middle-click on a tab in a strip still closes it,
+          // and the two never share a target.
+          if (event.button !== 1) return false;
+          const candidate = activation(view, event.target);
+          if (candidate === undefined) return false;
+          event.preventDefault();
+          return followLinkAt(view, candidate.position, options(), {
+            newTab: true,
+          });
         },
       }),
     ),

@@ -17,6 +17,8 @@ export type WidgetName =
   | "mermaid-diagram"
   | "table"
   | "embed"
+  | "image"
+  | "thematic-break"
   | "code-copy"
   | "callout-icon";
 
@@ -57,7 +59,11 @@ export type DynamicAttribute =
   | "mermaid-block"
   | "task-status"
   | "task-date-payload"
-  | "tag-search";
+  | "tag-search"
+  | "inline-image"
+  | "reference-image"
+  | "footnote-reference"
+  | "footnote-definition";
 
 export type DecorationRule = {
   /** Lezer markdown node name this row decorates. */
@@ -169,8 +175,15 @@ const linkRows: DecorationRule[] = [
   },
   {
     node: "Image",
+    presentation: { present: "widget", widget: "image" },
+    reveal: "cursor-inside",
+    dynamic: "inline-image",
+  },
+  {
+    node: "Image",
     presentation: { present: "mark", class: "cm-skr-link" },
     reveal: "never",
+    dynamic: "reference-image",
   },
   {
     node: "LinkMark",
@@ -405,6 +418,50 @@ const quoteRows: DecorationRule[] = [
   },
 ];
 
+const footnoteRows: DecorationRule[] = [
+  {
+    node: "FootnoteReference",
+    presentation: { present: "mark", class: "cm-skr-footnote-ref" },
+    reveal: "cursor-inside",
+    revealScope: "node",
+    dynamic: "footnote-reference",
+  },
+  {
+    node: "FootnoteMark",
+    presentation: { present: "hide" },
+    reveal: "cursor-inside",
+  },
+  {
+    node: "FootnoteDefinition",
+    presentation: { present: "line", class: "cm-skr-footnote-definition" },
+    reveal: "never",
+  },
+  {
+    node: "FootnoteDefinitionMark",
+    presentation: { present: "hide" },
+    reveal: "cursor-line",
+  },
+  {
+    node: "FootnoteLabel",
+    parent: ["FootnoteDefinition"],
+    presentation: {
+      present: "mark",
+      class: "cm-skr-footnote-definition-label",
+    },
+    reveal: "cursor-line",
+    dynamic: "footnote-definition",
+  },
+];
+
+const breakRows: DecorationRule[] = [
+  {
+    node: "HorizontalRule",
+    presentation: { present: "widget", widget: "thematic-break" },
+    reveal: "cursor-line",
+    revealScope: "node",
+  },
+];
+
 const inlineRows: DecorationRule[] = [
   {
     node: "HashTag",
@@ -437,5 +494,7 @@ export const DECORATION_TABLE: readonly DecorationRule[] = [
   ...mathRows,
   ...codeRows,
   ...quoteRows,
+  ...footnoteRows,
+  ...breakRows,
   ...inlineRows,
 ];

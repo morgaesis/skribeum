@@ -17,7 +17,7 @@ let {
   mode: PickerMode;
   initialQuery?: string;
   onQueryChange: (query: string) => void;
-  onPick: (item: PickerItem) => void;
+  onPick: (item: PickerItem, intent?: { newTab?: boolean }) => void;
   onClose: () => void;
   restoreFocus?: boolean;
 } = $props();
@@ -25,10 +25,10 @@ let {
 const initialViewportHeight = () =>
   typeof window === "undefined" ? 0 : window.innerHeight;
 let active = $state(0);
-let inputElement = $state<HTMLInputElement | undefined>();
-let closeElement = $state<HTMLButtonElement | undefined>();
-let backdropElement = $state<HTMLElement | undefined>();
-let dialogElement = $state<HTMLElement | undefined>();
+let inputElement = $state<HTMLInputElement | null>();
+let closeElement = $state<HTMLButtonElement | null>();
+let backdropElement = $state<HTMLElement | null>();
+let dialogElement = $state<HTMLElement | null>();
 let closing = false;
 let visualTop = $state(0);
 let visualLeft = $state(0);
@@ -83,9 +83,11 @@ function onInput(event: Event & { currentTarget: HTMLInputElement }) {
   onQueryChange(event.currentTarget.value);
 }
 
-function pickActive() {
+function pickActive(intent?: { newTab?: boolean }) {
   const item = items[active];
-  if (item !== undefined) onPick(item);
+  if (item !== undefined && item.unavailableReason === undefined) {
+    onPick(item, intent);
+  }
 }
 
 // registry-exempt keydown: ARIA combobox pattern internal navigation
@@ -106,7 +108,9 @@ function onKeydown(event: KeyboardEvent) {
       active = Math.max(0, items.length - 1);
       break;
     case "Enter":
-      pickActive();
+      // Mod-Enter is the file mode's explicit new-tab action; plain Enter
+      // opens in place like every other default route.
+      pickActive({ newTab: event.ctrlKey || event.metaKey });
       break;
     default:
       return;
@@ -139,15 +143,15 @@ function requestClose() {
   closing = true;
   exitMotionSurfaces(
     [backdropElement, dialogElement].filter(
-      (element): element is HTMLElement => element !== undefined,
+      (element): element is HTMLElement => element instanceof HTMLElement,
     ),
     onClose,
   );
 }
 
 onMount(() => {
-  if (backdropElement !== undefined) enterMotionSurface(backdropElement);
-  if (dialogElement !== undefined) enterMotionSurface(dialogElement);
+  enterMotionSurface(backdropElement);
+  enterMotionSurface(dialogElement);
 });
 
 onDestroy(() => {
@@ -228,7 +232,12 @@ onDestroy(() => {
           data-action-kind={item.actionKind}
           data-command-id={item.commandId}
           aria-selected={index === active}
-          onclick={() => onPick(item)}
+          aria-disabled={item.unavailableReason === undefined ? undefined : true}
+          class:command-surface-unavailable={item.unavailableReason !== undefined}
+          onclick={(event) => {
+            if (item.unavailableReason !== undefined) return;
+            onPick(item, { newTab: event.ctrlKey || event.metaKey });
+          }}
           onmousemove={() => {
             active = index;
           }}
@@ -243,13 +252,15 @@ onDestroy(() => {
               {/if}
             </span>
             {#if item.keybinding !== undefined}
-              <kbd class="skr-muted shrink-0 rounded border px-1 text-xs">{item.keybinding}</kbd>
+              <kbd class="command-surface-chip skr-muted shrink-0 rounded border px-1">{item.keybinding}</kbd>
             {:else if item.prefixHint !== undefined}
-              <kbd class="skr-muted shrink-0 rounded border px-1 text-xs">{item.prefixHint}</kbd>
+              <kbd class="command-surface-chip skr-muted shrink-0 rounded border px-1">{item.prefixHint}</kbd>
             {/if}
           </span>
-          {#if item.detailSegments !== undefined}
-            <span class="skr-muted block truncate text-xs">
+          {#if item.unavailableReason !== undefined}
+            <span class="command-surface-detail skr-muted block truncate">{item.unavailableReason}</span>
+          {:else if item.detailSegments !== undefined}
+            <span class="command-surface-detail skr-muted block truncate">
               {#each item.detailSegments as segment, segmentIndex (segmentIndex)}
                 {#if segment.highlighted}<mark class="skr-match rounded">{segment.text}</mark>{:else}{segment.text}{/if}
               {/each}
@@ -259,12 +270,18 @@ onDestroy(() => {
       {/each}
     </ul>
     {#if items.length === 0}
-      <div class="skr-muted px-3 pb-2 text-sm" role="status">{STRINGS.noMatches}</div>
+      <div class="skr-muted px-3 pb-2" role="status">{STRINGS.noMatches}</div>
     {/if}
   </div>
 </div>
 
 <style>
+  /* An unavailable row stays listed so the capability is discoverable, and
+     reads as unavailable rather than as a row that silently does nothing. */
+  .command-surface-unavailable {
+    opacity: 0.55;
+  }
+
   .command-surface-backdrop {
     position: fixed;
     inset: 0;
@@ -300,7 +317,7 @@ onDestroy(() => {
     padding: 0.5rem 0.75rem;
     background: var(--skr-surface-raised);
     color: var(--skr-text);
-    font-size: 0.875rem;
+    font-size: var(--skr-type-control);
     outline: none;
   }
 
@@ -323,7 +340,7 @@ onDestroy(() => {
     overflow-y: auto;
     padding: 0.25rem;
     list-style: none;
-    font-size: 0.875rem;
+    font-size: var(--skr-type-control);
   }
 
   .command-surface-results [role="option"] {
@@ -342,10 +359,19 @@ onDestroy(() => {
   .command-surface-group {
     padding: 0.5rem 0.5rem 0.25rem;
     color: var(--skr-text-muted);
-    font-size: 0.6875rem;
+    font-size: var(--skr-type-label);
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+  }
+
+  .command-surface-chip {
+    font-family: var(--skr-font-mono);
+    font-size: var(--skr-type-chip);
+  }
+
+  .command-surface-detail {
+    font-size: var(--skr-type-label);
   }
 
   @media (max-width: 60rem) {

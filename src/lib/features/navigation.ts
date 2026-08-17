@@ -62,6 +62,8 @@ export type WikilinkResolutionContext = {
   currentPath?: string | null;
   /** Read-only note loader used by rendered embeds and link previews. */
   loadNote?: (path: string) => Promise<string | null>;
+  /** Read-only byte loader for vault files rendered images read. */
+  loadAsset?: (path: string) => Promise<Uint8Array | null>;
   /** Resolved note paths enclosing a nested embed. */
   embedAncestry?: readonly string[];
   /** Current rendered-embed nesting depth. */
@@ -328,6 +330,72 @@ export type NoteViewState = {
   scrollOffset: number;
   propertiesExpanded: boolean;
 };
+
+/** The vertical extent of one editor line block, in editor coordinates. */
+export type ScrollAnchorLine = {
+  from: number;
+  to: number;
+  top: number;
+};
+
+/** The measurements the reading-position rule reads from a laid-out editor. */
+export type ScrollAnchorGeometry = {
+  /** Editor-coordinate height of the viewport's top edge. */
+  viewportTop: number;
+  /** Character length of the document, so the last line is never advanced past. */
+  documentLength: number;
+  /** Physical pixels per CSS pixel, which webview zoom also changes. */
+  devicePixelRatio: number;
+  lineBlockAtHeight(height: number): ScrollAnchorLine;
+  lineBlockAt(position: number): ScrollAnchorLine;
+};
+
+/** The line a reading position is stored against, and its distance below the viewport edge. */
+export type ScrollAnchorPosition = {
+  line: ScrollAnchorLine;
+  offset: number;
+};
+
+/**
+ * Chooses the line a reading position is stored against: the first line the
+ * reader sees whole, and how far below the viewport's top edge it starts.
+ *
+ * The encoding names a line, so it steps by a whole line where the reader's
+ * position moves by a fraction of one: a viewport edge a hair above a line
+ * start and a hair below it are stored against different lines. Restoring is
+ * exact while the layout is unchanged, because the offset is the very
+ * distance the restore reproduces; a layout that changed in between, from
+ * webview zoom or from an image or font that finished loading, reproduces the
+ * position only as closely as the scroller can hold it. Comparisons of two
+ * stored positions therefore go through `readingViewportTop` rather than
+ * comparing anchors and offsets field by field.
+ */
+export function scrollAnchorForViewport(
+  geometry: ScrollAnchorGeometry,
+): ScrollAnchorPosition {
+  let line = geometry.lineBlockAtHeight(geometry.viewportTop);
+  const offset = line.top - geometry.viewportTop;
+  const halfPhysicalPixel = 0.5 / Math.max(1, geometry.devicePixelRatio);
+  const crossesRoundedPixelBoundary =
+    offset < 0 || (offset > 0 && offset < halfPhysicalPixel);
+  if (crossesRoundedPixelBoundary && line.to < geometry.documentLength) {
+    line = geometry.lineBlockAt(line.to + 1);
+  }
+  return { line, offset: line.top - geometry.viewportTop };
+}
+
+/**
+ * The viewport edge a stored reading position denotes, in the editor
+ * coordinates of the layout the anchor line was measured in. Two stored
+ * positions describe the same reading position when this agrees, whichever
+ * line each of them happens to be anchored to.
+ */
+export function readingViewportTop(
+  anchorLineTop: number,
+  scrollOffset: number,
+): number {
+  return anchorLineTop - scrollOffset;
+}
 
 export const NAVIGATION_HISTORY_LIMIT = 100;
 
@@ -598,6 +666,12 @@ export type NavigationMode = "browser" | "desktop";
 export type NoteNavigator = {
   start(fallback: NoteAddress | null): Promise<void>;
   open(address: NoteAddress): Promise<void>;
+  /**
+   * Points the current history entry at an address the shell already shows,
+   * without loading anything. Tab switches and renames change what the user
+   * is looking at without being navigations, and the address has to follow.
+   */
+  syncAddress(address: NoteAddress | null): void;
   reset(address: NoteAddress): Promise<void>;
   back(): boolean;
   forward(): boolean;
@@ -676,6 +750,11 @@ export function createNoteNavigator(options: {
       } else {
         history.push(address);
       }
+      options.changed?.(state());
+    },
+    syncAddress(address) {
+      if (address === null || sameAddress(history.current(), address)) return;
+      history.replace(address, null);
       options.changed?.(state());
     },
     async reset(address) {
@@ -801,7 +880,10 @@ export function cursorInsideWikilinkText(
 export type FollowWikilinkOptions = {
   context: WikilinkResolutionContext;
   currentPath: string | null;
-  navigate(address: NoteAddress): Promise<void> | void;
+  navigate(
+    address: NoteAddress,
+    intent?: { newTab?: boolean },
+  ): Promise<void> | void;
   unresolved(reason: string): void;
   /** Opens an external HTTP or HTTPS URL outside the note navigator. */
   openExternal?: (url: string) => Promise<void> | void;
@@ -889,10 +971,24 @@ export const wikilinkNavigationOptionsFacet = Facet.define<
   combine: (providers) => providers.at(-1) ?? null,
 });
 
+/**
+ * Calls the navigator, naming the new-tab intent only when one exists so a
+ * default follow stays the one-argument call every other route makes.
+ */
+function navigateWithIntent(
+  options: FollowWikilinkOptions,
+  address: NoteAddress,
+  intent: { newTab?: boolean },
+): void {
+  if (intent.newTab === true) void options.navigate(address, { newTab: true });
+  else void options.navigate(address);
+}
+
 /** Resolves and follows one wikilink target through the shared address model. */
 export function followWikilinkTarget(
   target: string,
   options: FollowWikilinkOptions,
+  intent: { newTab?: boolean } = {},
 ): boolean {
   const resolution = resolveWikilinkTarget(target, options.context);
   if (resolution.kind === "note") {
@@ -900,10 +996,12 @@ export function followWikilinkTarget(
       options.unresolved(STRINGS.wikilinkTargetNotNote);
       return true;
     }
-    void options.navigate(
+    navigateWithIntent(
+      options,
       resolution.fragment === undefined
         ? { path: resolution.path }
         : { path: resolution.path, fragment: resolution.fragment },
+      intent,
     );
     return true;
   }
@@ -911,10 +1009,12 @@ export function followWikilinkTarget(
     if (options.currentPath === null) {
       return false;
     }
-    void options.navigate(
+    navigateWithIntent(
+      options,
       resolution.fragment === undefined
         ? { path: options.currentPath }
         : { path: options.currentPath, fragment: resolution.fragment },
+      intent,
     );
     return true;
   }
@@ -925,7 +1025,7 @@ export function followWikilinkTarget(
     candidate !== undefined &&
     isNotePath(candidate.path)
   ) {
-    void options.navigate(candidate);
+    navigateWithIntent(options, candidate, intent);
   }
   return true;
 }
@@ -935,12 +1035,13 @@ export function followWikilinkAt(
   view: EditorView,
   position: number,
   options: FollowWikilinkOptions,
+  intent: { newTab?: boolean } = {},
 ): boolean {
   const reference = wikilinkReferenceAt(view.state, position);
   if (reference === null) {
     return false;
   }
-  const followed = followWikilinkTarget(reference.target, options);
+  const followed = followWikilinkTarget(reference.target, options, intent);
   if (followed) {
     view.contentDOM.blur();
   }
@@ -952,6 +1053,7 @@ export function followLinkAt(
   view: EditorView,
   position: number,
   options: FollowWikilinkOptions,
+  intent: { newTab?: boolean } = {},
 ): boolean {
   const external = externalLinkAt(view.state, position);
   if (external !== null && options.openExternal !== undefined) {
@@ -959,7 +1061,7 @@ export function followLinkAt(
     view.contentDOM.blur();
     return true;
   }
-  return followWikilinkAt(view, position, options);
+  return followWikilinkAt(view, position, options, intent);
 }
 
 /** Finds a wikilink position from a decorated DOM descendant. */

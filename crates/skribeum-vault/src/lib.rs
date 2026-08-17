@@ -14,6 +14,7 @@ pub mod search;
 pub mod settings;
 pub mod sim;
 pub mod vault;
+pub mod vault_session;
 pub mod write;
 
 pub use edit_history::{
@@ -27,7 +28,8 @@ pub use path::{PathCollision, VaultPath, VaultPathError, detect_collisions};
 pub use real::{RealClock, RealFs};
 pub use recon::{BannerReason, ReconEvent, Reconciler, ReconcilerConfig};
 pub use search::{
-    SEARCH_SCHEMA_VERSION, SearchError, SearchHit, SearchIndex, TagFrequency, index_file_name,
+    RebuildOutcome, SEARCH_SCHEMA_VERSION, SearchError, SearchHit, SearchIndex, TagFrequency,
+    index_file_name,
 };
 pub use settings::{
     SETTINGS_FILE_NAME, SETTINGS_SCHEMA_VERSION, Settings, SettingsError, SettingsStore,
@@ -41,4 +43,10 @@ pub use vault::{
     ConflictInfo, Encoding, EntryKind, NoteContent, TreeEntry, Vault, VaultError, WriteResult,
     classify, is_indexed_path,
 };
-pub use write::{WRITE_TEMP_PREFIX, is_write_temp_name, write_durable, write_temp_path};
+pub use vault_session::{
+    MAX_RECENT_VAULTS, VAULT_SESSION_DIRECTORY_NAME, VAULT_SESSION_FILE_NAME,
+    VAULT_SESSION_SCHEMA_VERSION, VaultSession, VaultSessionError, VaultSessionStore,
+};
+pub use write::{
+    WRITE_TEMP_PREFIX, is_write_temp_name, write_durable, write_durable_private, write_temp_path,
+};

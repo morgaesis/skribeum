@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" width="320" height="180" role="img" aria-label="Three stacked note cards">
+  <rect x="0" y="0" width="320" height="180" rx="10" fill="#eef2ef"/>
+  <rect x="28" y="30" width="180" height="26" rx="5" fill="#2f6d4f"/>
+  <rect x="28" y="70" width="264" height="14" rx="4" fill="#9fb5a8"/>
+  <rect x="28" y="96" width="230" height="14" rx="4" fill="#9fb5a8"/>
+  <rect x="28" y="122" width="150" height="14" rx="4" fill="#9fb5a8"/>
+  <circle cx="268" cy="42" r="18" fill="none" stroke="#2f6d4f" stroke-width="4"/>
+  <path d="M260 42l6 6 12-14" fill="none" stroke="#2f6d4f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -33,6 +33,56 @@ export function motionDurationMilliseconds(
   );
 }
 
+/**
+ * The compositor hint a surface carries while it moves. `will-change:
+ * transform` promotes its element to the containing block for every
+ * fixed-position descendant, so a surface holding the hint while idle
+ * reparents the menus and popovers rendered inside it: a permanently mounted
+ * pane would silently offset every one of them by its own origin. The hint is
+ * therefore held only for the length of the motion, and names only the
+ * properties the surface actually animates, so an opacity-only surface never
+ * asks for a transform layer at all.
+ */
+const motionGenerations = new WeakMap<HTMLElement, number>();
+
+function holdMotionHint(element: HTMLElement): number {
+  const generation = (motionGenerations.get(element) ?? 0) + 1;
+  motionGenerations.set(element, generation);
+  const variant = element.dataset.motionSurface;
+  element.style.willChange =
+    variant === "fade" || variant === "scrim"
+      ? "opacity"
+      : "opacity, transform";
+  return generation;
+}
+
+function releaseMotionHint(element: HTMLElement, generation: number): void {
+  if (motionGenerations.get(element) !== generation) return;
+  element.style.removeProperty("will-change");
+}
+
+/** Resolves a motion-class easing custom property to its cubic function. */
+export function motionEasing(
+  property:
+    | "--skr-motion-state-easing"
+    | "--skr-motion-surface-easing"
+    | "--skr-motion-panel-easing",
+  element: Element = document.documentElement,
+): string {
+  const value = getComputedStyle(element).getPropertyValue(property).trim();
+  return value === "" ? "linear" : value;
+}
+
+/** The shared entrance travel: the distance a surface covers arriving. */
+export function motionDistance(
+  element: Element = document.documentElement,
+): string {
+  const value = getComputedStyle(element)
+    .getPropertyValue("--skr-motion-distance")
+    .trim();
+  return value === "" ? "0px" : value;
+}
+
 /** Starts an entrance after the initial compositor state has been resolved. */
 export function enterMotionSurface(
   element: HTMLElement | null | undefined,
@@ -46,8 +96,12 @@ export function enterMotionSurface(
     });
     return;
   }
+  const generation = holdMotionHint(element);
   void element.offsetWidth;
   element.dataset.motionEntered = "true";
+  void awaitTransition(element).then(() =>
+    releaseMotionHint(element, generation),
+  );
 }
 
 function longestTransitionMilliseconds(element: HTMLElement): number {
@@ -64,18 +118,11 @@ function longestTransitionMilliseconds(element: HTMLElement): number {
   );
 }
 
-/** Runs the state-class opacity exit before its owner removes the surface. */
-export async function exitMotionSurface(
-  element: HTMLElement,
-  complete?: () => void,
-): Promise<void> {
-  element.dataset.motionExiting = "true";
+/** Settles when the element's own opacity transition has finished. */
+function awaitTransition(element: HTMLElement): Promise<void> {
   const duration = longestTransitionMilliseconds(element);
-  if (duration === 0) {
-    complete?.();
-    return;
-  }
-  await new Promise<void>((resolve) => {
+  if (duration === 0) return Promise.resolve();
+  return new Promise<void>((resolve) => {
     const finish = () => {
       clearTimeout(timer);
       element.removeEventListener("transitionend", onTransitionEnd);
@@ -91,6 +138,21 @@ export async function exitMotionSurface(
     element.addEventListener("transitionend", onTransitionEnd);
     element.addEventListener("transitioncancel", onTransitionEnd);
   });
+}
+
+/** Runs the state-class opacity exit before its owner removes the surface. */
+export async function exitMotionSurface(
+  element: HTMLElement,
+  complete?: () => void,
+): Promise<void> {
+  element.dataset.motionExiting = "true";
+  if (longestTransitionMilliseconds(element) === 0) {
+    complete?.();
+    return;
+  }
+  const generation = holdMotionHint(element);
+  await awaitTransition(element);
+  releaseMotionHint(element, generation);
   complete?.();
 }
 

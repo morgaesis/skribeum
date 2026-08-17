@@ -139,7 +139,7 @@ if (typeof window !== "undefined") {
     padding: 0.375rem 0.5rem 0.375rem 0.75rem;
     background: var(--skr-accent-subtle);
     color: var(--skr-accent);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     line-height: 1.4;
   }
 
@@ -173,7 +173,7 @@ if (typeof window !== "undefined") {
     background: transparent;
     color: inherit;
     cursor: pointer;
-    font-size: 1.1rem;
+    font-size: 1rem;
     line-height: 1;
   }
 
@@ -197,7 +197,7 @@ if (typeof window !== "undefined") {
     padding: 0.35rem 0.75rem;
     color: var(--skr-accent);
     background: var(--skr-accent-subtle);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
   }
 
   .demo-app > :global(.h-screen) {
@@ -207,7 +207,7 @@ if (typeof window !== "undefined") {
   @media (max-width: 60rem) {
     .demo-notice {
       padding-left: 0.75rem;
-      font-size: 0.75rem;
+      font-size: var(--skr-type-label);
     }
 
     /* The section 4.6 touch-target floor: 2.75rem (44 CSS pixels) in both

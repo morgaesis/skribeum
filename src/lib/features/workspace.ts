@@ -43,7 +43,9 @@ export function registerWorkspaceCommands(
     run: (context) =>
       withTreePath(
         context.treePath,
-        (path) => context.renameTreeEntry?.(path) ?? Promise.resolve(),
+        (path) =>
+          context.renameTreeEntry?.(path, context.restoreTreeFocus) ??
+          Promise.resolve(),
       ),
   });
   registry.register({
@@ -54,7 +56,9 @@ export function registerWorkspaceCommands(
     run: (context) =>
       withTreePath(
         context.treePath,
-        (path) => context.deleteTreeEntry?.(path) ?? Promise.resolve(),
+        (path) =>
+          context.deleteTreeEntry?.(path, context.restoreTreeFocus) ??
+          Promise.resolve(),
       ),
   });
   registry.register({
@@ -68,6 +72,17 @@ export function registerWorkspaceCommands(
         (path) =>
           context.moveTreeEntry?.(path, context.treeDestination ?? null) ??
           Promise.resolve(),
+      ),
+  });
+  registry.register({
+    id: "tree.note.open-in-new-tab",
+    title: STRINGS.openInNewTab,
+    palette: false,
+    pointer: ["action-menu"],
+    run: (context) =>
+      withTreePath(
+        context.treePath,
+        (path) => context.openNoteInNewTab?.(path) ?? Promise.resolve(),
       ),
   });
   registry.register({
@@ -155,30 +170,55 @@ export function registerWorkspaceCommands(
       run: (context) => context.activateTab?.(index === 9 ? "last" : index - 1),
     });
   }
-  registry.register({
-    id: "pane.split-right",
-    title: STRINGS.splitRight,
-    pointer: ["action-menu", "command-palette"],
-    run: (context) => context.splitPane?.(),
-  });
-  registry.register({
-    id: "pane.focus-left",
-    title: STRINGS.focusLeftPane,
-    keybindings: ["Mod-Alt-ArrowLeft"],
-    pointer: ["action-menu", "command-palette"],
-    run: (context) => context.focusPane?.("left"),
-  });
-  registry.register({
-    id: "pane.focus-right",
-    title: STRINGS.focusRightPane,
-    keybindings: ["Mod-Alt-ArrowRight"],
-    pointer: ["action-menu", "command-palette"],
-    run: (context) => context.focusPane?.("right"),
-  });
-  registry.register({
-    id: "pane.move-tab",
-    title: STRINGS.moveTabToOtherPane,
-    pointer: ["action-menu", "command-palette"],
-    run: (context) => context.moveTabToOtherPane?.(),
-  });
+  const paneDirections = [
+    {
+      side: "up",
+      split: STRINGS.splitUp,
+      focus: STRINGS.focusPaneAbove,
+      move: STRINGS.moveTabToPaneAbove,
+      key: "Mod-Alt-ArrowUp",
+    },
+    {
+      side: "down",
+      split: STRINGS.splitDown,
+      focus: STRINGS.focusPaneBelow,
+      move: STRINGS.moveTabToPaneBelow,
+      key: "Mod-Alt-ArrowDown",
+    },
+    {
+      side: "left",
+      split: STRINGS.splitLeft,
+      focus: STRINGS.focusLeftPane,
+      move: STRINGS.moveTabToPaneLeft,
+      key: "Mod-Alt-ArrowLeft",
+    },
+    {
+      side: "right",
+      split: STRINGS.splitRight,
+      focus: STRINGS.focusRightPane,
+      move: STRINGS.moveTabToPaneRight,
+      key: "Mod-Alt-ArrowRight",
+    },
+  ] as const;
+  for (const direction of paneDirections) {
+    registry.register({
+      id: `pane.split-${direction.side}`,
+      title: direction.split,
+      pointer: ["action-menu", "command-palette"],
+      run: (context) => context.splitPane?.(direction.side),
+    });
+    registry.register({
+      id: `pane.focus-${direction.side}`,
+      title: direction.focus,
+      keybindings: [direction.key],
+      pointer: ["action-menu", "command-palette"],
+      run: (context) => context.focusPane?.(direction.side),
+    });
+    registry.register({
+      id: `pane.move-tab-${direction.side}`,
+      title: direction.move,
+      pointer: ["action-menu", "command-palette"],
+      run: (context) => context.moveTabToPane?.(direction.side),
+    });
+  }
 }

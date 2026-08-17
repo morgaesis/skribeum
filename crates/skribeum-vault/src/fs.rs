@@ -164,6 +164,14 @@ pub trait FileSystem: Send + Sync {
     /// Creates a directory, including missing parents.
     fn create_dir_all(&self, path: &Path) -> Result<(), FsError>;
 
+    /// Creates a directory including missing parents, restricting the final
+    /// directory to its owner where the platform exposes Unix mode bits.
+    fn create_private_dir_all(&self, path: &Path) -> Result<(), FsError>;
+
+    /// Creates or truncates a file containing `bytes`, restricting it to its
+    /// owner where the platform exposes Unix mode bits.
+    fn write_private_file(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError>;
+
     /// Returns metadata for a path, following symlinks.
     fn metadata(&self, path: &Path) -> Result<FileMetadata, FsError>;
 

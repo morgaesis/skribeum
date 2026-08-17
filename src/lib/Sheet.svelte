@@ -8,17 +8,15 @@ let {
   onClose,
   children,
   restoreFocus = true,
-  variant = "sheet",
 }: {
   label: string;
   onClose: () => void;
   children?: Snippet;
   restoreFocus?: boolean;
-  variant?: "sheet" | "anchored";
 } = $props();
 
-let dialog = $state<HTMLElement>();
-let backdrop = $state<HTMLElement>();
+let dialog = $state<HTMLElement | null>();
+let backdrop = $state<HTMLElement | null>();
 let returnFocus: HTMLElement | null = null;
 let closing = false;
 const titleId = "skr-sheet-title";
@@ -26,7 +24,7 @@ const focusableSelector =
   'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 function focusableElements(): HTMLElement[] {
-  return dialog === undefined
+  return !(dialog instanceof HTMLElement)
     ? []
     : [...dialog.querySelectorAll<HTMLElement>(focusableSelector)].filter(
         (element) => !element.hasAttribute("inert"),
@@ -62,7 +60,7 @@ function requestClose() {
   closing = true;
   exitMotionSurfaces(
     [backdrop, dialog].filter(
-      (element): element is HTMLElement => element !== undefined,
+      (element): element is HTMLElement => element instanceof HTMLElement,
     ),
     onClose,
   );
@@ -79,8 +77,8 @@ onMount(() => {
   void tick().then(() => {
     (focusableElements()[0] ?? dialog)?.focus();
   });
-  if (backdrop !== undefined) enterMotionSurface(backdrop);
-  if (dialog !== undefined) enterMotionSurface(dialog);
+  enterMotionSurface(backdrop);
+  enterMotionSurface(dialog);
 });
 
 onDestroy(() => {
@@ -93,7 +91,6 @@ onDestroy(() => {
 <div
   bind:this={backdrop}
   class="sheet-backdrop"
-  class:sheet-backdrop-anchored={variant === "anchored"}
   role="presentation"
   data-motion-surface="scrim"
   onclick={(event) =>
@@ -102,32 +99,25 @@ onDestroy(() => {
   <div
     bind:this={dialog}
     class="sheet"
-    class:sheet-anchored={variant === "anchored"}
     role="dialog"
     aria-modal="true"
-    aria-labelledby={variant === "sheet" ? titleId : undefined}
-    aria-label={variant === "anchored" ? label : undefined}
+    aria-labelledby={titleId}
     tabindex="-1"
     data-testid="overlay-sheet"
-    data-sheet-variant={variant}
-    data-motion-surface={variant === "sheet"
-      ? "anchored-bottom"
-      : "anchored-top"}
+    data-motion-surface="anchored-bottom"
     onkeydown={onKeydown}
   >
-    {#if variant === "sheet"}
-      <header>
-        <h2 id={titleId}>{label}</h2>
-        <button
-          type="button"
-          class="sheet-close"
-          data-btn-role="secondary"
-          onclick={requestClose}
-        >
-          {STRINGS.closeAction}
-        </button>
-      </header>
-    {/if}
+    <header>
+      <h2 id={titleId}>{label}</h2>
+      <button
+        type="button"
+        class="sheet-close"
+        data-btn-role="secondary"
+        onclick={requestClose}
+      >
+        {STRINGS.closeAction}
+      </button>
+    </header>
     <div class="sheet-content">
       {#if children !== undefined}
         {@render children()}
@@ -166,22 +156,6 @@ onDestroy(() => {
     width: 100%;
   }
 
-  .sheet-backdrop-anchored {
-    align-items: flex-start;
-    justify-content: flex-end;
-    box-sizing: border-box;
-    padding: 2.25rem 0.25rem 0.25rem;
-    background: transparent;
-  }
-
-  .sheet-anchored {
-    width: min(22rem, calc(var(--skr-visual-viewport-width) - 0.5rem));
-    height: auto;
-    max-height: calc(var(--skr-visual-viewport-height) - 2.5rem);
-    border-bottom: 1px solid var(--skr-border);
-    border-radius: var(--skr-radius-surface);
-  }
-
   header {
     align-items: center;
     border-bottom: 1px solid var(--skr-border);
@@ -193,7 +167,7 @@ onDestroy(() => {
   }
 
   h2 {
-    font-size: 1rem;
+    font-size: var(--skr-type-title);
     margin: 0;
   }
 

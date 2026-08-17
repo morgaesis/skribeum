@@ -15,8 +15,8 @@ let {
   restoreFocus?: boolean;
 } = $props();
 
-let dialog = $state<HTMLElement>();
-let backdrop = $state<HTMLElement>();
+let dialog = $state<HTMLElement | null>();
+let backdrop = $state<HTMLElement | null>();
 let returnFocus: HTMLElement | null = null;
 let closing = false;
 const titleId = "skr-sheet-title";
@@ -24,7 +24,7 @@ const focusableSelector =
   'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 function focusableElements(): HTMLElement[] {
-  return dialog === undefined
+  return !(dialog instanceof HTMLElement)
     ? []
     : [...dialog.querySelectorAll<HTMLElement>(focusableSelector)].filter(
         (element) => !element.hasAttribute("inert"),
@@ -60,7 +60,7 @@ function requestClose() {
   closing = true;
   exitMotionSurfaces(
     [backdrop, dialog].filter(
-      (element): element is HTMLElement => element !== undefined,
+      (element): element is HTMLElement => element instanceof HTMLElement,
     ),
     onClose,
   );
@@ -77,8 +77,8 @@ onMount(() => {
   void tick().then(() => {
     (focusableElements()[0] ?? dialog)?.focus();
   });
-  if (backdrop !== undefined) enterMotionSurface(backdrop);
-  if (dialog !== undefined) enterMotionSurface(dialog);
+  enterMotionSurface(backdrop);
+  enterMotionSurface(dialog);
 });
 
 onDestroy(() => {

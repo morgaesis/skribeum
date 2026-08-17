@@ -58,7 +58,7 @@
     "@wdio/mocha-framework": "^9.30.0",
     "@wdio/tauri-service": "^1.2.0",
     "axe-core": "^4.12.1",
-    "expect-webdriverio": "^5.7.0",
+    "expect-webdriverio": "^6.0.2",
     "jsdom": "^30.0.1",
     "lefthook": "^2.1.10",
     "svelte-check": "^4.7.4",

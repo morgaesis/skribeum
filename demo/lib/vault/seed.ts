@@ -13,10 +13,12 @@ import researchLiteratureReview from "./Examples/Research/literature-review.md?r
 import researchReadingNotes from "./Examples/Research/reading-notes.md?raw";
 import workDecisionLog from "./Examples/Work/decision-log.md?raw";
 import workMeetingNotes from "./Examples/Work/meeting-notes.md?raw";
+import printedHandoutDataUrl from "./Examples/Work/printed-handout.pdf?inline";
 import workProjectIdeas from "./Examples/Work/project-ideas.md?raw";
 import blockMath from "./Features/block-math.md?raw";
 import callouts from "./Features/callouts.md?raw";
 import codeBlocks from "./Features/code-blocks.md?raw";
+import deployPipeline from "./Features/deploy.yml?raw";
 import embeds from "./Features/embeds.md?raw";
 import frontmatter from "./Features/frontmatter.md?raw";
 import images from "./Features/images.md?raw";
@@ -54,6 +56,16 @@ export const DEMO_FILES: Readonly<Record<string, string>> = Object.freeze({
     null,
     2,
   ),
+  // A vault holds files that are not notes, and every one of them opens.
+  ".gitignore": [
+    "# Local scratch space, never synced.",
+    ".cache/",
+    "drafts/*.tmp",
+    "",
+    "# Exported bundles.",
+    "public/",
+    "",
+  ].join("\n"),
   "about.md": about,
   "demo.canvas": demoCanvas,
   "Examples/Community/event-plan.md": communityEventPlan,
@@ -72,6 +84,7 @@ export const DEMO_FILES: Readonly<Record<string, string>> = Object.freeze({
   "Features/block-math.md": blockMath,
   "Features/callouts.md": callouts,
   "Features/code-blocks.md": codeBlocks,
+  "Features/deploy.yml": deployPipeline,
   "Features/embeds.md": embeds,
   "Features/frontmatter.md": frontmatter,
   "Features/images.md": images,
@@ -100,13 +113,18 @@ function decodeInlinedAsset(dataUrl: string): Uint8Array<ArrayBuffer> {
 /**
  * Non-text sample assets, keyed the same way as `DEMO_FILES`. A raster image
  * cannot survive `DEMO_FILES`' UTF-8 text pipeline intact, so its bytes come
- * in through an inlined `data:` URL and are decoded once here instead.
+ * in through an inlined `data:` URL and are decoded once here instead. The
+ * document is a file that is neither an image nor text: it opens read-only,
+ * so no editing pass can write a lossy re-encoding over it.
  */
 export const DEMO_BINARY_FILES: Readonly<
   Record<string, Uint8Array<ArrayBuffer>>
 > = Object.freeze({
   "Examples/Personal/harbor-sketch.png":
     decodeInlinedAsset(harborSketchDataUrl),
+  "Examples/Work/printed-handout.pdf": decodeInlinedAsset(
+    printedHandoutDataUrl,
+  ),
 });
 
 export const DEMO_INITIAL_NOTE = "quickstart.md";

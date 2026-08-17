@@ -8,6 +8,7 @@
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import type { Extension } from "@codemirror/state";
 import { type EditorView, type KeyBinding, keymap } from "@codemirror/view";
+import { noteHistoryChord } from "../editor/decorations/engine";
 import { quoteEditing } from "../editor/quoteEditing";
 import { taskEditing } from "../editor/taskEditing";
 import type { CommandRegistry } from "./registry";
@@ -16,6 +17,12 @@ import type { CommandContext } from "./types";
 export type HistoryCommands = {
   undo(view: EditorView): boolean;
   redo(view: EditorView): boolean;
+};
+
+/** One history chord and the step it takes. */
+type HistoryChord = {
+  binding: string;
+  run: (view: EditorView) => boolean;
 };
 
 /** A parsed binding: one key plus modifier requirements. */
@@ -83,7 +90,42 @@ export function keybindingMatches(
   );
 }
 
-const macRedoKeybinding = parseKeybinding("Mod-Shift-z");
+/** A chord whose key is a letter, which Shift does not change. */
+const LETTER_KEY = /^[a-z]$/u;
+
+/**
+ * Builds one editor binding.
+ *
+ * A chord on a letter is matched against the event's modifiers exactly.
+ * CodeMirror resolves a character key by first looking it up with Shift
+ * dropped, so a `Mod-x` binding answers `Mod-Shift-x` on any platform that
+ * reports the unshifted letter with Shift held — with Caps Lock on, and on
+ * layouts that do not case-shift — and the more specific chord becomes
+ * unreachable, all the more so where the shorter chord's command always
+ * reports the key handled. A letter's identity does not depend on Shift, so
+ * matching it exactly costs nothing. Every other key does depend on Shift,
+ * and keeps CodeMirror's lookup, which resolves `Mod-Shift-\` and `Mod-+`
+ * through the physical key rather than the character it produces.
+ */
+function editorBinding(
+  binding: string,
+  run: (view: EditorView) => boolean,
+  macPlatform: boolean,
+  claimAlways = false,
+): KeyBinding {
+  const parsed = parseKeybinding(binding);
+  if (!LETTER_KEY.test(parsed.key)) {
+    return { key: binding, run, preventDefault: claimAlways };
+  }
+  return {
+    any: (view, event) => {
+      if (!keybindingMatches(parsed, event, macPlatform)) {
+        return false;
+      }
+      return run(view) || claimAlways;
+    },
+  };
+}
 
 /** Renders a binding for display (`"Ctrl+Shift+P"`, `"⌘⇧P"` on macOS). */
 export function formatKeybinding(
@@ -153,47 +195,55 @@ export function editorKeymap(
   contextProvider: () => CommandContext,
   historyCommands?: HistoryCommands,
 ): Extension {
+  const mac = isMacPlatform();
   const bindings: KeyBinding[] = registry
     .boundCommands("editor")
     .flatMap((command) =>
-      (command.keybindings ?? []).map((key) => ({
-        key,
-        run: (view: EditorView) =>
-          registry.run(command.id, { ...contextProvider(), view }),
-      })),
+      (command.keybindings ?? []).map((key) =>
+        editorBinding(
+          key,
+          (view: EditorView) =>
+            registry.run(command.id, { ...contextProvider(), view }),
+          mac,
+        ),
+      ),
     );
-  const persistentHistoryBindings: KeyBinding[] =
+  // The note owns undo and redo: whether or not there is a step to take,
+  // the chord is claimed, so the browser never runs its own undo over an
+  // editable surface the note is the only writer of.
+  const historyChords: HistoryChord[] =
     historyCommands === undefined
       ? []
       : [
-          {
-            any: (view, event) =>
-              keybindingMatches(macRedoKeybinding, event, true) &&
-              historyCommands.redo(view),
-          },
-          {
-            key: "Mod-y",
-            mac: "Mod-Shift-z",
-            run: historyCommands.redo,
-            preventDefault: true,
-          },
-          {
-            linux: "Ctrl-Shift-z",
-            run: historyCommands.redo,
-            preventDefault: true,
-          },
-          {
-            key: "Mod-z",
-            run: historyCommands.undo,
-            preventDefault: true,
-          },
+          { binding: "Mod-Shift-z", run: historyCommands.redo },
+          ...(mac ? [] : [{ binding: "Mod-y", run: historyCommands.redo }]),
+          { binding: "Mod-z", run: historyCommands.undo },
         ];
+  const parsedHistoryChords = historyChords.map((chord) => ({
+    parsed: parseKeybinding(chord.binding),
+    run: chord.run,
+  }));
   return [
     taskEditing,
     quoteEditing,
+    // A rendered table cell is an editable surface of its own inside the
+    // note's, and its key contract hands the history chords back to the
+    // note rather than letting the browser undo the cell in isolation.
+    noteHistoryChord.of((view, event) => {
+      const chord = parsedHistoryChords.find((candidate) =>
+        keybindingMatches(candidate.parsed, event, mac),
+      );
+      if (chord === undefined) {
+        return false;
+      }
+      chord.run(view);
+      return true;
+    }),
     keymap.of([
       ...bindings,
-      ...persistentHistoryBindings,
+      ...historyChords.map((chord) =>
+        editorBinding(chord.binding, chord.run, mac, true),
+      ),
       ...defaultKeymap,
       ...historyKeymap,
     ]),

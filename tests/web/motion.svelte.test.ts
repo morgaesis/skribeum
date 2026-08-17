@@ -625,6 +625,26 @@ function highlightAgainstItsRow(pathName: string): [string, string] {
   return [highlight?.style.top ?? "", treeRow(pathName)?.style.top ?? ""];
 }
 
+/**
+ * The geometry a reveal renders on each successive flush. A reveal states its
+ * start geometry, then hands over its end geometry, and how many flushes that
+ * takes is the implementation's business, not the property's.
+ */
+async function revealFrames(
+  read: () => string,
+  flushes = 4,
+): Promise<string[]> {
+  const frames: string[] = [];
+  for (let flush = 0; flush < flushes; flush += 1) {
+    flushSync();
+    frames.push(read());
+    await tick();
+  }
+  flushSync();
+  frames.push(read());
+  return frames;
+}
+
 describe("file tree folder reveal", () => {
   it("arms the panel-clock transition before the geometry it animates moves", async () => {
     const component = mount(FileTree, {
@@ -677,14 +697,26 @@ describe("file tree folder reveal", () => {
       props: { entries: treeEntries, onOpenPath: () => {} },
     });
     flushSync();
-    const spacer = treeSpacer();
-    expect(spacer?.style.height).toBe(`${TREE_PADDING * 2 + 3 * ROW_HEIGHT}px`);
+    expect(treeSpacer()?.style.height).toBe(
+      `${TREE_PADDING * 2 + 3 * ROW_HEIGHT}px`,
+    );
 
     const folder = treeRow("Folder");
     expect(treeRow("Folder/one.md")).toBeNull();
     folder?.click();
-    await tick();
-    await tick();
+
+    const geometry = () => {
+      const first = treeRow("Folder/one.md");
+      const second = treeRow("Folder/two.md");
+      return [
+        first?.style.top,
+        second?.style.top,
+        first?.style.clipPath,
+        second?.style.clipPath,
+        treeSpacer()?.style.height,
+      ].join(" ");
+    };
+    const frames = await revealFrames(geometry);
 
     // The chevron flips in the same flush: its glyph swap is a state, not a
     // surface, and carries no transition at all.
@@ -696,18 +728,21 @@ describe("file tree folder reveal", () => {
       ) || 0,
     ).toBe(0);
 
-    // Start state: both revealed rows stand on the slot below their folder,
-    // clipped to nothing, so the block they form is flush with the rows
-    // beneath it rather than overlapping them.
+    // Start: both revealed rows stand on the slot below their folder, clipped
+    // to nothing, and the tree is still its old height, so the block they
+    // form is flush with the rows beneath it rather than overlapping them.
+    expect(frames[0]).toBe(
+      `${slotTop(1)} ${slotTop(1)} inset(0 0 100% 0) inset(0 0 100% 0) ${TREE_PADDING * 2 + 3 * ROW_HEIGHT}px`,
+    );
+    // End: every row on its own slot at full height, the scroll extent grown
+    // to match, both reached through the transition asserted below.
+    expect(frames.at(-1)).toBe(
+      `${slotTop(1)} ${slotTop(2)} inset(0 0 0 0) inset(0 0 0 0) ${TREE_PADDING * 2 + 5 * ROW_HEIGHT}px`,
+    );
+
     const first = treeRow("Folder/one.md");
-    const second = treeRow("Folder/two.md");
     expect(first).not.toBeNull();
-    expect(second).not.toBeNull();
-    if (first === null || second === null) return;
-    expect(first.style.top).toBe(slotTop(1));
-    expect(second.style.top).toBe(slotTop(1));
-    expect(first.style.clipPath).toBe("inset(0 0 100% 0)");
-    expect(second.style.clipPath).toBe("inset(0 0 100% 0)");
+    if (first === null) return;
     expect(first.getAttribute("role")).toBe("treeitem");
     expect(first.getAttribute("aria-level")).toBe("2");
 
@@ -727,25 +762,12 @@ describe("file tree folder reveal", () => {
       "height var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
     );
 
-    // End state: every row on its own slot at full height, and the scroll
-    // extent grown to match, both reached through the transition above.
-    await tick();
-    await tick();
-    expect(first.style.top).toBe(slotTop(1));
-    expect(second.style.top).toBe(slotTop(2));
-    expect(first.style.clipPath).toBe("inset(0 0 0 0)");
-    expect(second.style.clipPath).toBe("inset(0 0 0 0)");
-    expect(treeSpacer()?.style.height).toBe(
-      `${TREE_PADDING * 2 + 5 * ROW_HEIGHT}px`,
-    );
-
     // After the panel duration nothing is borrowed any more.
     await new Promise((resolve) => setTimeout(resolve, 220));
     expect(fileTree()?.classList.contains("skr-file-tree-revealing")).toBe(
       false,
     );
     expect(first.style.clipPath).toBe("");
-    expect(second.style.clipPath).toBe("");
 
     await unmount(component);
   });
@@ -807,29 +829,63 @@ describe("file tree folder reveal", () => {
     expect(treeRow("Folder/two.md")).toBeNull();
 
     props.selectedPath = "Folder/two.md";
-    flushSync();
-
     const highlight = document.querySelector<HTMLElement>(
       ".skr-tree-active-highlight",
     );
-    const staged: Array<[string, string]> = [];
-    for (let flush = 0; flush < 4; flush += 1) {
-      await tick();
+    const frames = await revealFrames(() => {
       const row = treeRow("Folder/two.md");
-      if (row === null) continue;
-      staged.push([
+      return [
         `${highlight?.style.top}|${highlight?.style.clipPath}`,
-        `${row.style.top}|${row.style.clipPath}`,
-      ]);
-    }
+        `${row?.style.top}|${row?.style.clipPath}`,
+      ].join(" vs ");
+    });
 
     // The note's row unfolds out of its folder's slot, and the fill marking
     // it unfolds from the same place, by the same amount, in the same frame.
-    expect(staged.length).toBeGreaterThan(1);
-    for (const [fill, row] of staged) expect(fill).toBe(row);
-    expect(staged[0]?.[1]).toBe(`${slotTop(1)}|inset(0 0 100% 0)`);
-    expect(staged.at(-1)?.[1]).toBe(`${slotTop(2)}|inset(0 0 0 0)`);
+    for (const frame of frames) {
+      const [fill, row] = frame.split(" vs ");
+      expect(fill).toBe(row);
+    }
+    expect(frames[0]).toContain(`${slotTop(1)}|inset(0 0 100% 0)`);
+    expect(frames.at(-1)).toContain(`${slotTop(2)}|inset(0 0 0 0)`);
+    expect(frames[0]).not.toBe(frames.at(-1));
     expect(getComputedStyle(highlight as Element).opacity).toBe("1");
+
+    await unmount(component);
+  });
+
+  it("renders a tree that opens onto a collapsed folder without animating it open", async () => {
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries: treeEntries,
+        selectedPath: "Folder/two.md",
+        onOpenPath: () => {},
+      },
+    });
+    flushSync();
+
+    // The folder holding the open note is revealed because the note is open,
+    // not because anyone opened the folder: no row was on screen to travel
+    // from, so the tree simply arrives in the state it is meant to be in.
+    expect(fileTree()?.classList.contains("skr-file-tree-revealing")).toBe(
+      false,
+    );
+    expect(treeRow("Folder")?.getAttribute("aria-expanded")).toBe("true");
+    expect(treeRow("Folder/one.md")?.style.top).toBe(slotTop(1));
+    expect(treeRow("Folder/two.md")?.style.top).toBe(slotTop(2));
+    expect(treeRow("Folder/two.md")?.style.clipPath ?? "").toBe("");
+    expect(treeRow("plain.md")?.style.top).toBe(slotTop(4));
+    expect(treeSpacer()?.style.height).toBe(
+      `${TREE_PADDING * 2 + 5 * ROW_HEIGHT}px`,
+    );
+
+    // The toggle that follows is a change, and animates.
+    treeRow("Folder")?.click();
+    flushSync();
+    expect(fileTree()?.classList.contains("skr-file-tree-revealing")).toBe(
+      true,
+    );
 
     await unmount(component);
   });
@@ -888,11 +944,10 @@ describe("file tree folder reveal", () => {
 
     const folder = treeRow("Folder");
     folder?.click();
-    await tick();
-    await tick();
+    flushSync();
 
-    // The real tree updates instantly: the hidden rows leave the ARIA tree
-    // in the same flush and only presentation ghosts remain to fold away.
+    // The real tree updates in the toggle's own flush: the hidden rows leave
+    // the ARIA tree at once and only presentation ghosts remain to fold away.
     expect(folder?.getAttribute("aria-expanded")).toBe("false");
     expect(treeRow("Folder/one.md")).toBeNull();
     const ghosts = [
@@ -905,11 +960,30 @@ describe("file tree folder reveal", () => {
       expect(ghost.hasAttribute("inert")).toBe(true);
       expect(getComputedStyle(ghost).pointerEvents).toBe("none");
     }
-    // They start on the slots they occupied, at full height.
-    expect(ghosts[0]?.style.top).toBe(slotTop(1));
-    expect(ghosts[1]?.style.top).toBe(slotTop(2));
-    expect(ghosts[0]?.style.clipPath).toBe("inset(0 0 0 0)");
-    expect(treeRow("plain.md")?.style.top).toBe(slotTop(2));
+
+    // They start on the slots they occupied at full height, and fold back
+    // into their folder's slot on the panel clock, while the row beneath
+    // them travels up out of the space they are giving back.
+    const frames = await revealFrames(() =>
+      [
+        ghosts[0]?.style.top,
+        ghosts[1]?.style.top,
+        ghosts[0]?.style.clipPath,
+        ghosts[1]?.style.clipPath,
+        treeRow("plain.md")?.style.top,
+      ].join(" "),
+    );
+    expect(frames[0]).toBe(
+      `${slotTop(1)} ${slotTop(2)} inset(0 0 0 0) inset(0 0 0 0) ${slotTop(4)}`,
+    );
+    expect(frames.at(-1)).toBe(
+      `${slotTop(1)} ${slotTop(1)} inset(0 0 100% 0) inset(0 0 100% 0) ${slotTop(2)}`,
+    );
+    for (const ghost of ghosts) {
+      expect(transitionOf(ghost)).toContain(
+        "top var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
+      );
+    }
 
     // Keyboard travel walks the real rows, never a ghost.
     folder?.focus();
@@ -921,16 +995,6 @@ describe("file tree folder reveal", () => {
       "manual.pdf",
     );
 
-    // They fold back into their folder's slot on the panel clock, then leave.
-    await tick();
-    await tick();
-    for (const ghost of ghosts) {
-      expect(ghost.style.top).toBe(slotTop(1));
-      expect(ghost.style.clipPath).toBe("inset(0 0 100% 0)");
-      expect(transitionOf(ghost)).toContain(
-        "top var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
-      );
-    }
     await new Promise((resolve) => setTimeout(resolve, 220));
     expect(document.querySelector(".skr-tree-ghost")).toBeNull();
 
@@ -989,8 +1053,7 @@ describe("file tree folder reveal", () => {
     const folder = treeRow("Folder");
     folder?.click();
     await tick();
-    await tick();
-    await tick();
+    flushSync();
 
     const ghost = document.querySelector<HTMLElement>(
       '[data-ghost-path="Folder/one.md"]',
@@ -1003,8 +1066,7 @@ describe("file tree folder reveal", () => {
     ghost.style.clipPath = "inset(0% 0% 60% 0%)";
 
     folder?.click();
-    await tick();
-    await tick();
+    flushSync();
 
     expect(folder?.getAttribute("aria-expanded")).toBe("true");
     const restored = treeRow("Folder/one.md");
@@ -1090,25 +1152,6 @@ describe("file tree hover emphasis", () => {
     expect(open?.getAttribute("aria-selected")).toBe("true");
     expect(getComputedStyle(highlight as Element).background).toContain(
       "var(--skr-accent-subtle)",
-    );
-
-    await unmount(component);
-  });
-
-  it("gives a file it cannot open no hover emphasis at all", async () => {
-    const component = mount(FileTree, {
-      target: document.body,
-      props: { entries: treeEntries, onOpenPath: () => {} },
-    });
-    flushSync();
-
-    const row = treeRow("manual.pdf");
-    const label = row?.querySelector<HTMLElement>(".skr-tree-label");
-    expect(row?.getAttribute("aria-disabled")).toBe("true");
-    row?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
-    flushSync();
-    expect(getComputedStyle(label as Element).backgroundColor).toBe(
-      "rgba(0, 0, 0, 0)",
     );
 
     await unmount(component);

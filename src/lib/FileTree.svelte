@@ -71,29 +71,38 @@ let autoExpanded = $state<Record<string, boolean>>({});
 let focusIndex = $state(0);
 let scrollTop = $state(0);
 let viewportHeight = $state(0);
-let treeElement = $state<HTMLUListElement>();
-let itemElements = $state<Array<HTMLElement | undefined>>([]);
+// `bind:this` writes `null`, not `undefined`, into a slot whose element has
+// been torn down (a keyed row moving to a different index releases its old
+// slot that way), so every element reference below is checked for being an
+// element rather than for being defined.
+let treeElement = $state<HTMLUListElement | null>();
+let itemElements = $state<Array<HTMLElement | null | undefined>>([]);
 let menuPath = $state<string | null>(null);
 let menuLeft = $state(0);
 let menuTop = $state(0);
 let menuOrigin = $state<HTMLElement | null>(null);
-let menuElement = $state<HTMLElement>();
+let menuElement = $state<HTMLElement | null>();
 let dragPath = $state<string | null>(null);
 let dropPath = $state<string | null>(null);
 let hoveredPath = $state<string | null>(null);
 let holdTimer: ReturnType<typeof setTimeout> | null = null;
 let menuCloseGeneration = 0;
 // The reveal in flight: whether the tree carries the panel-clock transitions,
-// which rows are unfolding and from where, which rows are folding away, and
-// whether the animation has been handed its end state yet.
+// which rows are unfolding and from where, which rows are held on the slot
+// they are travelling away from, which are folding away, and whether the
+// animation has been handed its end state yet. Only geometry is ever held;
+// the row list, the ARIA tree and the persisted expansion are the toggle's
+// own flush, so anything reading the tree sees the new state at once.
 let revealing = $state(false);
 let revealPhase = $state<0 | 1>(0);
 let unfoldingRows = $state<Record<string, FoldedStart>>({});
+let heldTops = $state<Record<string, number>>({});
+let heldHeight = $state<number | null>(null);
 let leavingRows = $state<GhostRow[]>([]);
 let revealSpan = $state(0);
 let revealGeneration = 0;
 let revealTimer: ReturnType<typeof setTimeout> | null = null;
-let highlightElement = $state<HTMLElement>();
+let highlightElement = $state<HTMLElement | null>();
 // Plain (non-reactive) bookkeeping: the choreography effect below both
 // reads and writes these, and making them `$state` would make its own
 // writes re-trigger itself mid-flush, stomping the entrance markers it had
@@ -104,6 +113,10 @@ let highlightMotionGeneration = 0;
 let highlightMotionFrame: number | null = null;
 let highlightMotionTimer: ReturnType<typeof setTimeout> | null = null;
 let revealedSelection: string | null = null;
+// The first expansion state the tree resolves is a rendering, not a change:
+// no row was on screen to travel from, so it lands in the frame the tree
+// first paints. Everything after it is a change the reader can see.
+let hasRendered = false;
 let mounted = true;
 
 type RowPresentation = {
@@ -356,9 +369,10 @@ const activeRowPath = $derived(activeRowIndex < 0 ? null : selectedPath);
  */
 const highlightTop = $derived.by((): number | null => {
   if (activeRowTop === null || activeRowPath === null) return activeRowTop;
-  const unfolding = unfoldingRows[activeRowPath];
-  if (unfolding === undefined || revealPhase === 1) return activeRowTop;
-  return unfolding.top;
+  if (revealPhase === 1) return activeRowTop;
+  return (
+    unfoldingRows[activeRowPath]?.top ?? heldTops[activeRowPath] ?? activeRowTop
+  );
 });
 const highlightClip = $derived.by((): string | null => {
   if (activeRowPath === null || unfoldingRows[activeRowPath] === undefined) {
@@ -485,7 +499,7 @@ $effect(() => {
   const top = highlightTop;
   const clip = highlightClip;
   const element = highlightElement;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
 
   if (top === null) {
     highlightMotionGeneration += 1;
@@ -611,7 +625,7 @@ $effect(() => {
 
 $effect(() => {
   const element = treeElement;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
   const measure = () => {
     if (mounted) viewportHeight = element.clientHeight;
   };
@@ -619,6 +633,13 @@ $effect(() => {
   const observer = new ResizeObserver(measure);
   observer.observe(element);
   return () => observer.disconnect();
+});
+
+// Declared last, so it runs after the expansion state settles on the first
+// pass: from the second pass on, a change to that state is a change to
+// something the reader has already seen.
+$effect(() => {
+  hasRendered = true;
 });
 
 async function focusRow(index: number, focus = true) {
@@ -694,7 +715,9 @@ function settleReveal(): void {
   revealing = false;
   revealPhase = 0;
   revealSpan = 0;
+  heldHeight = null;
   if (Object.keys(unfoldingRows).length > 0) unfoldingRows = {};
+  if (Object.keys(heldTops).length > 0) heldTops = {};
   if (leavingRows.length > 0) leavingRows = [];
 }
 
@@ -737,11 +760,15 @@ async function playExpansionChange(
     autoExpanded = nextAuto;
     if (persist) persistExpanded();
   };
-  const duration =
-    tree === undefined
-      ? 0
-      : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
-  if (tree === undefined || duration === 0 || !mounted) {
+  const duration = !(tree instanceof HTMLElement)
+    ? 0
+    : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
+  if (
+    !hasRendered ||
+    !(tree instanceof HTMLElement) ||
+    duration === 0 ||
+    !mounted
+  ) {
     revealGeneration += 1;
     cancelRevealCallbacks();
     settleReveal();
@@ -789,6 +816,16 @@ async function playExpansionChange(
     return;
   }
 
+  // Every surviving row the change displaces holds the slot it is travelling
+  // away from for one flush, which is what the transition then interpolates
+  // out of.
+  const held: Record<string, number> = {};
+  for (const [path, slot] of beforeSlots) {
+    const destination = afterSlots.get(path);
+    if (destination === undefined || destination === slot) continue;
+    held[path] = TREE_PADDING + slot * rowHeight;
+  }
+
   const generation = ++revealGeneration;
   cancelRevealCallbacks();
   // Ghosts still folding away from an earlier toggle keep their own motion;
@@ -799,21 +836,22 @@ async function playExpansionChange(
       folding.every((row) => row.path !== ghost.path),
   );
   revealing = true;
+  revealPhase = 0;
+  unfoldingRows = unfolding;
+  heldTops = held;
+  heldHeight = TREE_PADDING * 2 + before.length * rowHeight;
+  leavingRows = [...carried, ...folding];
   revealSpan = Math.max(Object.keys(unfolding).length, folding.length);
+  // The new state lands here, in the caller's own flush: rows, ARIA, and the
+  // persisted expansion are never a frame behind the click. Only where the
+  // rows are drawn is held back.
+  apply();
   await tick();
   if (!mounted || generation !== revealGeneration) return;
   // The transitions have to be committed before the geometry moves: a
   // transition runs only when the style it interpolates from already named
   // it, so reading layout here is what makes the next flush animate rather
   // than jump.
-  void tree.getBoundingClientRect();
-
-  revealPhase = 0;
-  unfoldingRows = unfolding;
-  leavingRows = [...carried, ...folding];
-  apply();
-  await tick();
-  if (!mounted || generation !== revealGeneration) return;
   void tree.getBoundingClientRect();
 
   revealPhase = 1;
@@ -830,10 +868,9 @@ async function playExpansionChange(
 function activate(row: Row, newTab = false) {
   if (row.kind === "directory") {
     toggleFolder(row);
-  } else if (
-    row.kind === "note" ||
-    row.path.toLowerCase().endsWith(".canvas")
-  ) {
+  } else {
+    // Every file the vault holds opens; the tree never shows a row it
+    // refuses to act on.
     onSelectionChange?.(row.path);
     onOpenPath(row.path, { newTab });
   }
@@ -858,7 +895,7 @@ function closeMenu(restore = true) {
       });
     }
   };
-  if (menu === undefined) finish();
+  if (!(menu instanceof HTMLElement)) finish();
   else void exitMotionSurface(menu, finish);
 }
 
@@ -884,7 +921,7 @@ function openMenu(row: Row, origin: HTMLElement, x?: number, y?: number) {
   void tick().then(() => {
     if (!mounted) return;
     const menu = menuElement;
-    if (menu === undefined) return;
+    if (!(menu instanceof HTMLElement)) return;
     const position = computeAnchoredPosition(
       anchor,
       { width: menu.offsetWidth, height: menu.offsetHeight },
@@ -1048,14 +1085,12 @@ function onMenuKeydown(event: KeyboardEvent) {
  */
 function rowStyle(path: string, index: number, depth: number): string {
   const unfolding = unfoldingRows[path];
-  const folded = unfolding !== undefined && revealPhase === 0;
-  const top =
-    folded && unfolding !== undefined
-      ? unfolding.top
-      : TREE_PADDING + index * rowHeight;
+  const held = revealPhase === 0;
+  const resting = TREE_PADDING + index * rowHeight;
+  const top = held ? (unfolding?.top ?? heldTops[path] ?? resting) : resting;
   const geometry = `top: ${top}px; height: ${rowHeight}px; padding-left: ${0.5 + depth}rem`;
   if (unfolding === undefined) return geometry;
-  return `${geometry}; clip-path: ${folded ? unfolding.clip : UNFOLDED_CLIP}`;
+  return `${geometry}; clip-path: ${held ? unfolding.clip : UNFOLDED_CLIP}`;
 }
 
 function ghostStyle(ghost: GhostRow): string {
@@ -1136,7 +1171,7 @@ function dropOn(destination: string | null) {
     role="presentation"
     aria-hidden="true"
     class="skr-tree-spacer"
-    style={`height: ${TREE_PADDING * 2 + rows.length * rowHeight}px`}
+    style={`height: ${revealPhase === 0 && heldHeight !== null ? heldHeight : TREE_PADDING * 2 + rows.length * rowHeight}px`}
   ></li>
   <li
     bind:this={highlightElement}
@@ -1157,17 +1192,15 @@ function dropOn(destination: string | null) {
         aria-posinset={row.position}
         aria-setsize={row.setSize}
         aria-expanded={row.kind === "directory" ? expanded(row.path) : undefined}
-        aria-selected={row.kind === "note" || row.path.toLowerCase().endsWith(".canvas") ? row.path === selectedPath : undefined}
-        aria-disabled={row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas") ? true : undefined}
+        aria-selected={row.kind === "directory" ? undefined : row.path === selectedPath}
         data-path={row.path}
         tabindex={index === focusIndex ? 0 : -1}
         class="skr-tree-row"
-        class:skr-tree-row-disabled={row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas")}
         class:skr-tree-row-dragging={dragPath === row.path}
         class:skr-tree-row-drop={dropPath === row.path}
         class:skr-tree-row-hovered={hoveredPath === row.path}
         style={rowStyle(row.path, index, row.depth)}
-        draggable={row.kind !== "file" || row.path.toLowerCase().endsWith(".canvas")}
+        draggable={true}
         onfocus={() => (focusIndex = index)}
         onclick={(event) => {
           void focusRow(index);
@@ -1191,7 +1224,9 @@ function dropOn(destination: string | null) {
         ondragstart={(event) => {
           dragPath = row.path;
           event.dataTransfer?.setData("text/plain", row.path);
-          if (row.kind === "note") {
+          if (row.kind !== "directory") {
+            // Every file opens, so every file row is something a pane can
+            // receive; the pane decides which surface the path lands on.
             event.dataTransfer?.setData(
               "application/x-skribeum-tree-path",
               row.path,

@@ -468,6 +468,21 @@ describe("note addressing and desktop history", () => {
     expect(noteAddressFromUrl(encoded)).toEqual(address);
   });
 
+  it("addresses a file by the extension it already carries", () => {
+    const base = "https://example.test/skribeum/";
+    const cases: readonly [string, string][] = [
+      ["Features%2Fdeploy.yml", "Features/deploy.yml"],
+      ["Examples%2Fharbor-sketch.png", "Examples/harbor-sketch.png"],
+      [".gitignore", ".gitignore"],
+      ["demo.canvas", "demo.canvas"],
+      ["quickstart", "quickstart.md"],
+    ];
+    for (const [query, expected] of cases) {
+      const resolved = noteAddressFromUrl(new URL(`${base}?note=${query}`));
+      expect(resolved?.path).toBe(expected);
+    }
+  });
+
   it("locates heading and block fragments in the open note", () => {
     const doc = "# Top\n\n## Details\n\nParagraph ^row-one\n";
     const state = EditorState.create({

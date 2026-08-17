@@ -348,6 +348,38 @@ function withLeafCap(node: WorkspaceNode): WorkspaceNode {
   return layout;
 }
 
+/**
+ * Every folder on the way to a path, outermost first: `a/b/note.md` yields
+ * `a` and `a/b`.
+ */
+function ancestorFolders(path: string): string[] {
+  const segments = path.split("/").slice(0, -1);
+  return segments.map((_, index) => segments.slice(0, index + 1).join("/"));
+}
+
+/**
+ * The selected note is always reachable in the tree, so every folder on the
+ * way to it is expanded. A record that selects a note inside a collapsed
+ * folder describes a workspace the tree does not render as written, and
+ * because that record is what the next visit restores, it would describe the
+ * same unreachable selection forever. Reconciling the pair here heals it on
+ * the read that finds it.
+ */
+function withReachableSelection(
+  expandedFolders: string[],
+  selectedPath: string | null,
+): string[] {
+  if (selectedPath === null) return expandedFolders;
+  const reachable = [...expandedFolders];
+  const present = new Set(expandedFolders);
+  for (const ancestor of ancestorFolders(selectedPath)) {
+    if (ancestor.length === 0 || present.has(ancestor)) continue;
+    present.add(ancestor);
+    reachable.push(ancestor);
+  }
+  return reachable;
+}
+
 /** Validates persisted state so corrupt local data cannot break the shell. */
 export function normalizeWorkspaceState(value: unknown): VaultWorkspaceState {
   const defaults = defaultWorkspaceState();
@@ -360,6 +392,8 @@ export function normalizeWorkspaceState(value: unknown): VaultWorkspaceState {
   const leaves = workspaceLeaves(layout);
   const requestedFocused =
     typeof stored.focusedPaneId === "string" ? stored.focusedPaneId : "";
+  const selectedPath =
+    typeof stored.selectedPath === "string" ? stored.selectedPath : null;
   return {
     version: 2,
     sidebarWidthRem: clamp(
@@ -374,13 +408,16 @@ export function normalizeWorkspaceState(value: unknown): VaultWorkspaceState {
       OUTLINE_MAX_REM,
     ),
     outlineCollapsed: stored.outlineCollapsed !== false,
-    expandedFolders: Array.isArray(stored.expandedFolders)
-      ? stored.expandedFolders.filter(
-          (path): path is string => typeof path === "string" && path.length > 0,
-        )
-      : [],
-    selectedPath:
-      typeof stored.selectedPath === "string" ? stored.selectedPath : null,
+    expandedFolders: withReachableSelection(
+      Array.isArray(stored.expandedFolders)
+        ? stored.expandedFolders.filter(
+            (path): path is string =>
+              typeof path === "string" && path.length > 0,
+          )
+        : [],
+      selectedPath,
+    ),
+    selectedPath,
     layout,
     focusedPaneId: leaves.some((leaf) => leaf.id === requestedFocused)
       ? requestedFocused

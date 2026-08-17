@@ -97,6 +97,7 @@ import {
   restartToApply,
   type UpdateState,
 } from "./lib/features/updates";
+import { linkUpdateDescription } from "./lib/features/workspace";
 import { M0_FIXTURE } from "./lib/fixture";
 import {
   type BannerReason,
@@ -114,6 +115,7 @@ import {
   tagCatalog,
   treeEntryDelete,
   treeEntryMove,
+  treeEntryMovePlan,
   treeEntryReveal,
   treeFolderCreate,
   vaultSessionForget,
@@ -1694,6 +1696,15 @@ async function renameTreeEntry(path: string, restoreFocus?: () => void) {
   if (name === undefined || name === "") return;
   const target = treeJoin(treeParent(path), name);
   if (target === path) return;
+  // A rename retargets the links pointing at this entry, which edits notes the
+  // person did not open. They see which ones before a byte is written.
+  const linkUpdates = await treeEntryMovePlan(activeVault, path, target);
+  const proceed = await showConfirmDialog({
+    title: STRINGS.treeRename,
+    message: linkUpdateDescription(linkUpdates),
+    confirmLabel: STRINGS.treeRename,
+  });
+  if (!proceed) return;
   const activePath = selectedPath;
   const affectsActive = activePath !== null && treePathWithin(activePath, path);
   const activeViewState = affectsActive

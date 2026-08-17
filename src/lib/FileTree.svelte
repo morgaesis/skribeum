@@ -788,10 +788,9 @@ async function playFolderReveal(
 function activate(row: Row, newTab = false) {
   if (row.kind === "directory") {
     toggleFolder(row);
-  } else if (
-    row.kind === "note" ||
-    row.path.toLowerCase().endsWith(".canvas")
-  ) {
+  } else {
+    // Every file the vault holds opens; the tree never shows a row it
+    // refuses to act on.
     onSelectionChange?.(row.path);
     onOpenPath(row.path, { newTab });
   }
@@ -1089,17 +1088,15 @@ function dropOn(destination: string | null) {
         aria-posinset={row.position}
         aria-setsize={row.setSize}
         aria-expanded={row.kind === "directory" ? expanded(row.path) : undefined}
-        aria-selected={row.kind === "note" || row.path.toLowerCase().endsWith(".canvas") ? row.path === selectedPath : undefined}
-        aria-disabled={row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas") ? true : undefined}
+        aria-selected={row.kind === "directory" ? undefined : row.path === selectedPath}
         data-path={row.path}
         tabindex={index === focusIndex ? 0 : -1}
         class="skr-tree-row"
-        class:skr-tree-row-disabled={row.kind === "file" && !row.path.toLowerCase().endsWith(".canvas")}
         class:skr-tree-row-dragging={dragPath === row.path}
         class:skr-tree-row-drop={dropPath === row.path}
         class:skr-tree-row-hovered={hoveredPath === row.path}
         style={`top: ${TREE_PADDING + index * rowHeight}px; height: ${rowHeight}px; padding-left: ${0.5 + row.depth}rem`}
-        draggable={row.kind !== "file" || row.path.toLowerCase().endsWith(".canvas")}
+        draggable={true}
         onfocus={() => (focusIndex = index)}
         onclick={(event) => {
           void focusRow(index);
@@ -1123,7 +1120,9 @@ function dropOn(destination: string | null) {
         ondragstart={(event) => {
           dragPath = row.path;
           event.dataTransfer?.setData("text/plain", row.path);
-          if (row.kind === "note") {
+          if (row.kind !== "directory") {
+            // Every file opens, so every file row is something a pane can
+            // receive; the pane decides which surface the path lands on.
             event.dataTransfer?.setData(
               "application/x-skribeum-tree-path",
               row.path,

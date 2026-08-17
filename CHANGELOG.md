@@ -30,6 +30,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server reports a download size, and an installed update offers "Restart to
   apply", which confirms first and saves any unsaved work through the same
   path any other window-closing action uses before restarting.
+- Every file a vault holds opens. A file that is not a note opens as an
+  editable buffer through the same read and write path notes use: line
+  endings, a byte-order mark, trailing whitespace, and a missing final
+  newline all survive an edit unchanged, the vault compares the on-disk
+  projection before writing, and a file that changed underneath the editor
+  reports a conflict rather than being overwritten. Those documents carry
+  creation and modification times in the note-information panel too.
+- Common formats get syntax highlighting, chosen from the file extension and
+  never from the file's contents: YAML, JSON, TOML, shell, and the rest of
+  the bundled language set, plus a small table of extensionless names such as
+  `Dockerfile` and shell startup files. A path naming no known language opens
+  as plain text and is still fully editable.
+- Image files open in a viewer: PNG, JPEG, GIF, WebP, SVG, and the other
+  formats the image extension allowlist names. Bytes reach an image element
+  and nothing else and are typed from the extension, so a vector image loads
+  in the user agent's secure static mode with scripts, event handlers, and
+  external references all disabled.
+- The browser demo vault ships a `.gitignore`, a YAML pipeline file, and a
+  PDF, so the non-note surfaces are visible without opening a local folder.
 
 ### Changed
 
@@ -37,6 +56,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   raw error object: a signature or authentication failure is called out as a
   security concern rather than reading like an ordinary network hiccup, and
   it is announced assertively rather than as routine status text.
+- The file tree opens every row it shows. A file that is neither a note nor a
+  canvas is no longer drawn muted and inert, and the unified command surface
+  reaches every indexed file rather than notes and canvases alone.
+- A file that is neither an image nor valid UTF-8 opens read-only with the
+  non-UTF-8 notice, the same treatment a non-UTF-8 note gets, so no editing
+  pass can write a lossy re-encoding over a binary file.
+- Markdown services stay with Markdown documents. The outline, frontmatter
+  and the properties panel, source mode, and title resolution from a leading
+  heading apply to notes only, so a YAML document's leading `---` is not
+  folded away as frontmatter and a script's leading `#` is not read as a
+  heading.
+- A chosen local folder in the browser demo loads every file it contains, and
+  its tree shows dot-prefixed names, matching what the desktop application
+  indexes.
+- Search still indexes notes and nothing else, and now says so consistently:
+  the incremental update after a save and after an external change both skip
+  a path a full index rebuild would not have recorded, so a row can no longer
+  appear in results until the next rebuild silently removes it.
 
 ### Fixed
 

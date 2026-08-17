@@ -171,6 +171,148 @@ fn scripted_edit_preserves_bytes_outside_the_edited_span() {
     }
 }
 
+/// A fresh single-file simulated vault holding `bytes` at `name`, for the
+/// paths the note extensions do not cover.
+fn vault_with_file(name: &str, bytes: &[u8]) -> (SimFs, Vault, VaultPath) {
+    let fs = SimFs::new();
+    let root = PathBuf::from("vault");
+    fs.external_create_dir(&root);
+    fs.external_write(&root.join(name), bytes);
+    fs.deliver_all();
+    let vault = Vault::open(&fs, &root).expect("vault opens");
+    let path = VaultPath::new(name).expect("valid path");
+    (fs, vault, path)
+}
+
+/// A file the note extensions do not cover reads and writes through the
+/// change-set path with the same byte fidelity prose gets: CRLF endings,
+/// the absence of a final newline, and every byte outside the edited span
+/// survive the save.
+#[test]
+fn a_file_that_is_not_a_note_round_trips_byte_for_byte() {
+    let original = b"# scratch\r\n.cache/\r\ndrafts/*.tmp".to_vec();
+    let (fs, vault, path) = vault_with_file(".gitignore", &original);
+    let base = vault.read_note(&fs, &path).expect("the file reads");
+    assert_eq!(base.bytes, original, "the read must be byte-exact");
+    assert_eq!(base.encoding, Encoding::Utf8);
+
+    let result = vault
+        .write_note(
+            &fs,
+            &path,
+            &[ByteRangeReplace {
+                start: original.len(),
+                end: original.len(),
+                bytes: b"\r\npublic/".to_vec(),
+            }],
+            &base.projection_hash,
+        )
+        .expect("the edit writes");
+    assert!(matches!(result, WriteResult::Written { .. }));
+
+    let on_disk = fs
+        .read(&PathBuf::from("vault/.gitignore"))
+        .expect("the file reads back");
+    assert_eq!(
+        on_disk, b"# scratch\r\n.cache/\r\ndrafts/*.tmp\r\npublic/",
+        "no normalization, no line-ending rewrite, no appended final newline"
+    );
+}
+
+/// The property that matters most: an external process writes to an open
+/// file that is not a note while an edit is pending. The save must report
+/// the same conflict a note's save reports, and the external content must
+/// still be on disk afterwards.
+#[test]
+fn an_external_write_conflicts_rather_than_clobbering_a_file_that_is_not_a_note() {
+    let original = b"version: 2\nsite:\n  name: Field notes\n".to_vec();
+    let (fs, vault, path) = vault_with_file("deploy.yml", &original);
+    let base = vault.read_note(&fs, &path).expect("the file reads");
+
+    // Another process rewrites the file after this session read it.
+    let external = b"version: 3\nsite:\n  name: Someone else\n".to_vec();
+    fs.external_write(&PathBuf::from("vault/deploy.yml"), &external);
+
+    let result = vault
+        .write_note(
+            &fs,
+            &path,
+            &[ByteRangeReplace {
+                start: 0,
+                end: 0,
+                bytes: b"# mine\n".to_vec(),
+            }],
+            &base.projection_hash,
+        )
+        .expect("the save reports rather than failing");
+    let WriteResult::Conflict {
+        current_projection_hash,
+        ..
+    } = result
+    else {
+        panic!("a concurrent external write must conflict, never overwrite");
+    };
+    assert_eq!(
+        current_projection_hash.as_deref(),
+        Some(classify(external.clone()).projection_hash.as_str()),
+        "the conflict must report the hash actually on disk"
+    );
+    assert_eq!(
+        fs.read(&PathBuf::from("vault/deploy.yml"))
+            .expect("the file reads back"),
+        external,
+        "the other process's bytes must survive the refused save"
+    );
+}
+
+/// A file that is neither an image nor valid UTF-8 is refused by the write
+/// path outright, whatever its name, and stays byte-identical on disk.
+#[test]
+fn a_file_that_is_not_utf8_is_never_written() {
+    let original = vec![0x25, 0x50, 0x44, 0x46, 0x2d, 0xed, 0xa0, 0x80, 0x0a];
+    let (fs, vault, path) = vault_with_file("handout.pdf", &original);
+    let base = vault.read_note(&fs, &path).expect("the file reads");
+    assert_eq!(base.encoding, Encoding::NonUtf8);
+
+    assert_eq!(
+        vault.write_note(
+            &fs,
+            &path,
+            &[ByteRangeReplace {
+                start: 0,
+                end: 0,
+                bytes: b"x".to_vec(),
+            }],
+            &base.projection_hash,
+        ),
+        Err(VaultError::NoteReadOnly)
+    );
+    assert_eq!(
+        fs.read(&PathBuf::from("vault/handout.pdf"))
+            .expect("the file reads back"),
+        original
+    );
+}
+
+/// A directory is still not a document: the relaxed guard admits every
+/// indexed file, not every indexed path.
+#[test]
+fn a_directory_is_never_read_or_written_as_a_document() {
+    let fs = SimFs::new();
+    let root = PathBuf::from("vault");
+    fs.external_create_dir(&root);
+    fs.external_write(&root.join("Folder/note.md"), b"content\n");
+    fs.deliver_all();
+    let vault = Vault::open(&fs, &root).expect("vault opens");
+    let folder = VaultPath::new("Folder").expect("valid path");
+
+    assert_eq!(vault.read_note(&fs, &folder), Err(VaultError::NotANote));
+    assert_eq!(
+        vault.write_note(&fs, &folder, &[], "any"),
+        Err(VaultError::NotANote)
+    );
+}
+
 #[test]
 fn external_ingest_advances_the_next_write_base() {
     let (fs, vault, path) = vault_with(b"base\n");

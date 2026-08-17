@@ -221,6 +221,13 @@ describe("persistent history keymap", () => {
   it("routes the macOS redo chord before the unshifted undo fallback", () => {
     let undoCalls = 0;
     let redoCalls = 0;
+    // The chord is the platform's: the keymap resolves Mod against the
+    // platform it is built on, so the macOS chord is asserted on macOS.
+    const platform = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", {
+      configurable: true,
+      value: "MacIntel",
+    });
     const view = new EditorView({
       state: EditorState.create({
         doc: "edited",
@@ -250,6 +257,64 @@ describe("persistent history keymap", () => {
     });
 
     expect(view.contentDOM.dispatchEvent(event)).toBe(false);
+    expect(redoCalls).toBe(1);
+    expect(undoCalls).toBe(0);
+
+    if (platform === undefined) {
+      Reflect.deleteProperty(navigator, "platform");
+    } else {
+      Object.defineProperty(navigator, "platform", platform);
+    }
+  });
+
+  it("leaves the macOS redo chord to the platform that has it", () => {
+    let undoCalls = 0;
+    let redoCalls = 0;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "edited",
+        extensions: [
+          editorKeymap(registry, context, {
+            undo: () => {
+              undoCalls += 1;
+              return true;
+            },
+            redo: () => {
+              redoCalls += 1;
+              return true;
+            },
+          }),
+        ],
+      }),
+      parent: document.body,
+    });
+    activeView = view;
+    // Meta is not the primary modifier here, so this chord is nobody's: it
+    // must not fall through to undo either.
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "KeyZ",
+        key: "z",
+        metaKey: true,
+        shiftKey: true,
+      }),
+    );
+    expect(redoCalls).toBe(0);
+    expect(undoCalls).toBe(0);
+
+    // The platform's own redo chord runs.
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "KeyZ",
+        key: "z",
+        ctrlKey: true,
+        shiftKey: true,
+      }),
+    );
     expect(redoCalls).toBe(1);
     expect(undoCalls).toBe(0);
   });

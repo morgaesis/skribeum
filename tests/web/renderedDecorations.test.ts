@@ -1,6 +1,6 @@
 import { cursorCharForward, deleteCharBackward } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxHighlighting } from "@codemirror/language";
+import { forceParsing, syntaxHighlighting } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,13 +24,18 @@ import { obsidianMarkdownExtensionsFor } from "../../src/lib/editor/markdown/obs
 import { createAppRegistry } from "../../src/lib/features";
 import { TASK_STATUS_MENU_COMMAND } from "../../src/lib/features/taskCommands";
 import { hoverIntentDelay } from "../../src/lib/motion";
-import type { CommandContext } from "../../src/lib/registry";
+import {
+  type CommandContext,
+  editorKeymap,
+  globalKeydownHandler,
+} from "../../src/lib/registry";
 import {
   DEFAULT_TASK_STATUSES,
   type TaskStatus,
 } from "../../src/lib/taskStatuses";
 
 const views: EditorView[] = [];
+const cleanups: (() => void)[] = [];
 
 function mountedView(
   doc: string,
@@ -87,6 +92,9 @@ async function hoverTaskCheckbox(control: HTMLElement | null): Promise<void> {
 }
 
 afterEach(() => {
+  for (const cleanup of cleanups.splice(0)) {
+    cleanup();
+  }
   for (const view of views.splice(0)) {
     view.destroy();
   }
@@ -2345,5 +2353,265 @@ describe("the rendered table cell key contract", () => {
     // The session is still on this cell; the ring is not.
     expect(cell?.dataset.editing).toBe("true");
     expect(ringed()).toBe(false);
+  });
+});
+
+// Saving is an act on the whole note, so it has to work from wherever the
+// person's attention is. A rendered cell's editable surface is a nested one
+// the note's editor does not answer for, so a chord the note claims only
+// while its own surface holds focus is a chord that silently does nothing
+// while a cell is being edited.
+describe("the note's own chords from a rendered cell", () => {
+  const source = "# Heading\n\n| a1 | b1 |\n| --- | --- |\n| a2 | b2 |\n";
+  const tableFrom = source.indexOf("| a1");
+
+  function harness(): { view: EditorView; saves: number[] } {
+    const saves: number[] = [];
+    const registry = createAppRegistry();
+    const context = (view: EditorView): CommandContext => ({
+      view,
+      openNote: () => Promise.resolve(),
+      openView: () => {},
+      openCommandSurface: () => {},
+      toggleView: () => {},
+      closeSurfaces: () => {},
+      requestSave: () => {
+        saves.push(saves.length + 1);
+      },
+      notePaths: () => [],
+      recentNotePaths: () => [],
+      navigateBack: () => false,
+      navigateForward: () => false,
+      followLink: () => false,
+    });
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: source,
+        selection: { anchor: 0 },
+        extensions: [
+          markdown({
+            base: markdownLanguage,
+            extensions: obsidianMarkdownExtensionsFor(DEFAULT_TASK_STATUSES),
+            codeLanguages: codeLanguage,
+          }),
+          taskStatusConfiguration.of(DEFAULT_TASK_STATUSES),
+          decorationEngine(),
+          editorKeymap(registry, () => context(view)),
+        ],
+      }),
+      parent: document.body,
+    });
+    views.push(view);
+    if (!forceParsing(view, view.state.doc.length, 5_000)) {
+      throw new Error("fixture syntax tree did not finish parsing");
+    }
+    view.dispatch({ selection: { anchor: 0 } });
+    const onKeydown = globalKeydownHandler(registry, () => context(view));
+    window.addEventListener("keydown", onKeydown);
+    cleanups.push(() => window.removeEventListener("keydown", onKeydown));
+    return { view, saves };
+  }
+
+  it("saves the note while a cell holds the caret", () => {
+    const { view, saves } = harness();
+    expect(focusRenderedTableCell(view, tableFrom, 1, 0, "end")).toBe(true);
+    const editor = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+    );
+    const nested = editor === null ? null : EditorView.findFromDOM(editor);
+    expect(document.activeElement).toBe(nested?.contentDOM);
+
+    nested?.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "s",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(saves).toHaveLength(1);
+    // The cell keeps the caret, and the note is untouched by the chord.
+    expect(document.activeElement).toBe(nested?.contentDOM);
+    expect(view.state.doc.toString()).toBe(source);
+  });
+
+  it("saves the note from the note's own surface too", () => {
+    const { view, saves } = harness();
+    view.focus();
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "s",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(saves).toHaveLength(1);
+  });
+});
+
+// A structure command changes the table under the person editing it, so it
+// has to hand them back a place to keep typing. The note's own caret is
+// parked at the table's start while a cell is being edited, and that is not
+// a position the note's caret can be used from: it draws as a bar down the
+// whole table and the next character lands outside it. Each command is
+// asserted on where the caret ends and on where the next character goes.
+describe("table structure commands", () => {
+  const source =
+    "# Heading\n\n| a1 | b1 |\n| --- | --- |\n| a2 | b2 |\n| a3 | b3 |\n\nprose\n";
+  const tableFrom = source.indexOf("| a1");
+
+  function harness(): { view: EditorView; run: (id: string) => boolean } {
+    const registry = createAppRegistry();
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: source,
+        selection: { anchor: 0 },
+        extensions: [
+          markdown({
+            base: markdownLanguage,
+            extensions: obsidianMarkdownExtensionsFor(DEFAULT_TASK_STATUSES),
+            codeLanguages: codeLanguage,
+          }),
+          taskStatusConfiguration.of(DEFAULT_TASK_STATUSES),
+          decorationEngine(),
+        ],
+      }),
+      parent: document.body,
+    });
+    views.push(view);
+    if (!forceParsing(view, view.state.doc.length, 5_000)) {
+      throw new Error("fixture syntax tree did not finish parsing");
+    }
+    view.dispatch({ selection: { anchor: 0 } });
+    return {
+      view,
+      run: (id: string) =>
+        registry.run(id, {
+          view,
+          openNote: () => Promise.resolve(),
+          openView: () => {},
+          openCommandSurface: () => {},
+          toggleView: () => {},
+          closeSurfaces: () => {},
+          requestSave: () => {},
+          notePaths: () => [],
+          recentNotePaths: () => [],
+          navigateBack: () => false,
+          navigateForward: () => false,
+          followLink: () => false,
+        }),
+    };
+  }
+
+  const activeCell = (view: EditorView) =>
+    view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"]',
+    );
+
+  const nestedOf = (cell: HTMLElement | null) => {
+    const editor = cell?.querySelector<HTMLElement>(".cm-editor") ?? null;
+    return editor === null ? null : EditorView.findFromDOM(editor);
+  };
+
+  // The cell each command hands back: the same column of the row or column
+  // it just made, or the cell that took the place of what it removed. The
+  // column carries over because filling a table by keyboard walks down one
+  // column at a time, which `Enter` on the last row relies on.
+  for (const [id, table, landing] of [
+    [
+      "table.row.insert-above",
+      "| a1 | b1 |\n| --- | --- |\n| | |\n| a2 | b2 |\n| a3 | b3 |",
+      { row: 1, column: 1 },
+    ],
+    [
+      "table.row.insert-below",
+      "| a1 | b1 |\n| --- | --- |\n| a2 | b2 |\n| | |\n| a3 | b3 |",
+      { row: 2, column: 1 },
+    ],
+    [
+      "table.column.insert-before",
+      "| a1 | | b1 |\n| --- | --- | --- |\n| a2 | | b2 |\n| a3 | | b3 |",
+      { row: 1, column: 1 },
+    ],
+    [
+      "table.column.insert-after",
+      "| a1 | b1 | |\n| --- | --- | --- |\n| a2 | b2 | |\n| a3 | b3 | |",
+      { row: 1, column: 2 },
+    ],
+    [
+      "table.row.delete",
+      "| a1 | b1 |\n| --- | --- |\n| a3 | b3 |",
+      { row: 1, column: 1 },
+    ],
+    [
+      "table.column.delete",
+      "| a1 |\n| --- |\n| a2 |\n| a3 |",
+      { row: 1, column: 0 },
+    ],
+  ] as const) {
+    it(`${id} keeps the caret in the table it changed`, {
+      timeout: 30000,
+    }, async () => {
+      const { view, run } = harness();
+      // The second column of the first body row, so the cell a command
+      // hands back is never the one that happened to be focused.
+      expect(focusRenderedTableCell(view, tableFrom, 1, 1, "end")).toBe(true);
+      expect(run(id)).toBe(true);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(view.state.doc.toString()).toBe(
+        source.replace(
+          "| a1 | b1 |\n| --- | --- |\n| a2 | b2 |\n| a3 | b3 |",
+          table,
+        ),
+      );
+      const cell = activeCell(view);
+      expect(cell, "a cell holds the editing session").not.toBeNull();
+      expect(document.activeElement?.closest(".cm-skr-table-cell")).toBe(cell);
+      expect({
+        row: Number(cell?.dataset.row),
+        column: Number(cell?.dataset.column),
+      }).toEqual(landing);
+
+      // The next character goes into that cell, not into the note.
+      const nested = nestedOf(cell);
+      nested?.dispatch({
+        changes: { from: 0, to: nested.state.doc.length, insert: "F" },
+      });
+      await Promise.resolve();
+      const row = view.state.doc
+        .toString()
+        .split("\n")
+        .find((line) => line.includes("F"));
+      expect(row, "the typed character landed in a table row").toMatch(
+        /^\|.*\|$/u,
+      );
+    });
+  }
+
+  it("hands focus back to the cell when the note takes it without asking", {
+    timeout: 30000,
+  }, async () => {
+    const { view, run } = harness();
+    expect(focusRenderedTableCell(view, tableFrom, 1, 0, "end")).toBe(true);
+    expect(run("table.row.insert-below")).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    const cell = activeCell(view);
+    expect(document.activeElement?.closest(".cm-skr-table-cell")).toBe(cell);
+
+    // A surface closing behind the command restores focus to the note. Its
+    // caret is parked inside the rendered table, so the focus belongs to the
+    // cell that holds the session.
+    view.focus();
+    view.contentDOM.dispatchEvent(new FocusEvent("focus"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(
+      document.activeElement?.closest(".cm-skr-table-cell"),
+    ).not.toBeNull();
   });
 });

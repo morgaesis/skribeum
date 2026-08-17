@@ -37,6 +37,15 @@ Reveal policies:
 - **never**: the decoration applies regardless of the cursor. Rows that
   only style usually reveal nothing and use `never`.
 
+A construct with no text between its markers has no presentation. A mark or a
+replacement covers a run of source, so a row whose node is empty — the target
+or the alias either side of a bare `|` in a wikilink, mid-edit — emits
+nothing rather than an empty range. A decoration build that fails for any
+other reason costs that build and nothing else: the note keeps the
+decorations it already has and the next successful build replaces them,
+because a decoration provider that throws is one CodeMirror disables for the
+life of the view, leaving the note as raw source with no way back.
+
 `revealScope=node` makes the syntax node itself the candidate region instead
 of the row's usual enclosing construct. `revealDescendants` makes that region
 composite: selecting it retains the owning presentation while revealing every
@@ -132,6 +141,39 @@ content wraps within the shared tracks when the source-derived proportions need
 more room, rather than making individual rows horizontally scrollable. This
 keeps every cell aligned with its header and keeps the table available through
 one reading surface on both narrow and wide viewports.
+
+### The cell key contract
+
+A rendered cell declares `aria-multiline="false"`: it is one field holding one
+logical line, and its editable surface is nested inside the note's own. Every
+key event that reaches a focused cell falls into exactly one of four classes,
+and none of them is "whatever happens by default" — the default is the browser
+editing the note's editable surface around the cell, which puts the following
+keystrokes in places nobody addressed.
+
+| Class | Keys | Effect |
+| --- | --- | --- |
+| Cell action | `Home`, `End`, `PageUp`, `PageDown`, with `Shift` extending; `ArrowLeft`/`ArrowRight` within the cell and to the adjacent cell at its bounds; `ArrowUp`/`ArrowDown` to the cell above or below; `Shift` with an arrow at the table's bounds, which promotes the selection to the note over the whole table; `Tab` and `Shift-Tab`; `Enter`; `Escape`; `Mod-a`; `Backspace` at the cell's start and `Delete` at its end | Answered against the cell's own bounds and consumed. `Tab` past the last cell and `Enter` on the last row add a row; `Escape`, and travel past the table's bounds, move the caret into the note deliberately. `Mod-a` selects the cell's text |
+| Cell text entry | A character key without the primary modifier, including one composed with AltGr; `Backspace` and `Delete` inside the cell; the composition keys an input method delivers | Left to the browser, which edits the element holding focus: the cell |
+| Clipboard | `Mod-c`, `Mod-x`, `Mod-v`, `Ctrl-Insert`, `Shift-Insert` | Left to the browser, acting on the cell's own selection |
+| Note action | The undo and redo chords | Handed to the note, whose history owns the cell's edits |
+| Refused | Everything else | Consumed with no effect. The note never sees it. A window-level application shortcut on the same chord still runs, because refusing suppresses the key's own default and nothing else |
+
+`tests/web/renderedDecorations.test.ts` drives every printable, navigation and
+editing key against a focused cell under every modifier combination and asserts
+after each one that the note's text and caret are untouched and that focus is
+still in the cell or has left it by the contract.
+
+The focus ring is painted from where the keystrokes go, not from the editing
+session, so a cell cannot show a ring while the caret is elsewhere.
+
+A table structure command leaves the caret in the table it changed: the cell
+in the column being edited within an inserted row, the inserted cell of a new
+column, or the cell that took the place of what it deleted. `Tab` past the
+last cell lands in the first cell of the row it adds. Focus arriving at the note while a cell
+holds the editing session belongs to that cell and is handed back, so a
+command run from a surface that restores focus behind itself does not park the
+note's caret inside a rendered table.
 
 The Context column restricts a row: `parent=` requires one of the listed
 direct parents, `notParent=` excludes them, `ancestor=` requires an

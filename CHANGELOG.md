@@ -50,6 +50,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A failure inside one panel of the shell now takes down only that panel,
   which reports the failure in place and offers to rebuild itself, while the
   rest of the workspace keeps rendering and responding.
+- Emptying a wikilink alias no longer costs the note every decoration it has.
+  A construct with no text between its markers now has no presentation
+  instead of an impossible one, and a decoration build that fails for any
+  other reason leaves the note rendering what it already had rather than
+  disabling the whole engine until the note is reopened.
+- A key pressed inside a rendered table cell can no longer land in the note.
+  The cell answers every key it receives: it acts on the cell, lets the
+  browser edit the cell that holds focus, hands the note its undo and redo
+  chords, or refuses the key outright. Select-all, which used to take focus
+  out of the cell and scatter the following keystrokes through the document,
+  now selects the cell's text. The cell's focus ring is painted from where
+  the keystrokes go, so it cannot point at a cell the caret has left.
+- A table structure command leaves the caret in the table it changed, in the
+  first cell of an inserted row or the cell that replaced what it removed,
+  and focus arriving at the note while a cell is being edited returns to that
+  cell, so running one of these commands from the command palette no longer
+  parks the caret inside the rendered table and puts the next characters
+  outside it.
+- Redo no longer runs undo. A chord on a letter is matched against the
+  event's modifiers exactly, so `Mod-Shift-z` reaches redo on every platform
+  and keyboard state, including Caps Lock, rather than being answered by the
+  `Mod-z` binding.
+- Saving works wherever the caret is. `Mod-s` was claimed only while the
+  note's own editable surface held focus, so a save pressed while editing a
+  rendered table cell did nothing.
 
 ## [0.0.8] - 2026-08-15
 

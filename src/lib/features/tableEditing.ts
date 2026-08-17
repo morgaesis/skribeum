@@ -371,8 +371,6 @@ function insertCommand(
     if (kind === "insert-row") {
       const row =
         position === "above" ? context.currentRow : context.currentRow + 1;
-      // An inserted row is empty, and its first cell is where a person
-      // continues: they are filling the row in, left to right.
       return dispatchOperation(
         view,
         context,
@@ -381,7 +379,7 @@ function insertCommand(
           line: context.currentLine,
           position: position as "above" | "below",
         },
-        { row: Math.max(1, row), column: 0, selection: "all" },
+        { row: Math.max(1, row), column: context.currentColumn },
       );
     }
     const column =

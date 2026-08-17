@@ -9,7 +9,14 @@ pre-commit:
 # Hooks install into the shared .git/hooks, so every worktree of this
 # repository runs them; a new clone runs them after its first `bun install`
 # through the package prepare script.
+
+# A pull request runs one Linux leg, so the platform-independent gates are
+# worth answering before the push rather than after it. Each job below stays
+# inside a minute on a warm cache. The packaged end-to-end suite does not: it
+# drives a real application through a real WebDriver session for several
+# minutes, so it is invoked deliberately instead, per docs/ci.md.
 pre-push:
+  parallel: true
   jobs:
     - name: gitleaks
       run: |
@@ -18,3 +25,17 @@ pre-push:
         else
           gitleaks detect --redact
         fi
+
+    - name: rust
+      glob: "*.{rs,toml,lock}"
+      run: |
+        cargo fmt --all --check
+        cargo clippy --workspace --all-targets --locked -- -D warnings
+        cargo test --workspace --locked
+
+    - name: web
+      glob: "*.{ts,svelte,css,json,html}"
+      run: |
+        bunx biome check .
+        bun run check
+        bun run test:web

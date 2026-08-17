@@ -1,11 +1,12 @@
 // The registration API: id discipline, listing surfaces, dispatch
 // semantics, and the keybinding interpreters commands are wired through.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { CommandContext } from "../../src/lib/registry";
 import {
   CommandRegistry,
   formatKeybinding,
+  globalKeydownHandler,
   keybindingMatches,
   parseKeybinding,
 } from "../../src/lib/registry";
@@ -209,5 +210,90 @@ describe("keybinding interpretation", () => {
     expect(formatKeybinding("Mod-Shift-p", false)).toBe("Ctrl+Shift+P");
     expect(formatKeybinding("Mod-Shift-p", true)).toBe("⌘⇧P");
     expect(formatKeybinding("Ctrl-Enter", true)).toBe("⌃Enter");
+  });
+});
+
+// The global handler resolves the primary modifier from the running
+// platform rather than taking it as an argument, so a suite that only ever
+// runs on the platform it was written for exercises one branch of that
+// resolution. Overriding `navigator.platform` runs both branches anywhere,
+// which is what keeps the macOS chord answerable from a Linux machine.
+describe("global keybinding dispatch across platforms", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(
+    globalThis.navigator,
+    "platform",
+  );
+
+  afterEach(() => {
+    if (originalPlatform === undefined) {
+      Reflect.deleteProperty(globalThis.navigator, "platform");
+    } else {
+      Object.defineProperty(globalThis.navigator, "platform", originalPlatform);
+    }
+  });
+
+  function setPlatform(platform: string): void {
+    Object.defineProperty(globalThis.navigator, "platform", {
+      configurable: true,
+      value: platform,
+    });
+  }
+
+  /** Registers one `Mod-p` command and returns the handler plus its log. */
+  function handlerForPlatform(platform: string): {
+    handle: (event: KeyboardEvent) => void;
+    runs: string[];
+  } {
+    setPlatform(platform);
+    const registry = new CommandRegistry();
+    const runs: string[] = [];
+    registry.register({
+      id: "test.primary",
+      title: "Primary",
+      pointer: ["command-palette"],
+      keybindings: ["Mod-p"],
+      run: () => {
+        runs.push("test.primary");
+      },
+    });
+    return { handle: globalKeydownHandler(registry, contextStub), runs };
+  }
+
+  function chord(modifier: "ctrlKey" | "metaKey"): KeyboardEvent {
+    return new KeyboardEvent("keydown", {
+      key: "p",
+      [modifier]: true,
+      cancelable: true,
+    });
+  }
+
+  it("answers Command and refuses Control on a macOS platform string", () => {
+    const { handle, runs } = handlerForPlatform("MacIntel");
+
+    const command = chord("metaKey");
+    handle(command);
+    expect(runs).toEqual(["test.primary"]);
+    expect(command.defaultPrevented).toBe(true);
+
+    const control = chord("ctrlKey");
+    handle(control);
+    expect(runs).toEqual(["test.primary"]);
+    expect(control.defaultPrevented).toBe(false);
+  });
+
+  it("answers Control and refuses Command on Windows and Linux platform strings", () => {
+    for (const platform of ["Win32", "Linux x86_64", "Linux aarch64"]) {
+      const { handle, runs } = handlerForPlatform(platform);
+
+      const control = chord("ctrlKey");
+      handle(control);
+      expect(runs).toEqual(["test.primary"]);
+      expect(control.defaultPrevented).toBe(true);
+
+      const command = chord("metaKey");
+      handle(command);
+      expect(runs).toEqual(["test.primary"]);
+      expect(command.defaultPrevented).toBe(false);
+    }
   });
 });

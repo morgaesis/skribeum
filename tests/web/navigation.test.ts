@@ -259,7 +259,7 @@ describe("wikilink pointer navigation", () => {
     expect(view.dom.querySelectorAll(".cm-skr-reveal-source")).toHaveLength(1);
   });
 
-  it("explains an unresolved link and navigates to its missing candidate", () => {
+  it("names the path an unresolved link wanted and stays on the open note", () => {
     const navigate = vi.fn();
     const unresolved = vi.fn();
     const options = navigationOptions({ navigate, unresolved });
@@ -267,8 +267,10 @@ describe("wikilink pointer navigation", () => {
 
     pressLink(view);
 
-    expect(unresolved).toHaveBeenCalledWith(STRINGS.wikilinkUnresolvedReason);
-    expect(navigate).toHaveBeenCalledWith({ path: "Missing note.md" });
+    expect(unresolved).toHaveBeenCalledWith(
+      `${STRINGS.wikilinkUnresolvedReason} Missing note.md`,
+    );
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 

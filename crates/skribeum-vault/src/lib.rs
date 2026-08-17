@@ -40,8 +40,8 @@ pub use sim::{
     NetworkProfile, Scheduler, SchedulerOp, SimClock, SimFs, SimKill, install_quiet_kill_hook,
 };
 pub use vault::{
-    ConflictInfo, Encoding, EntryKind, NoteContent, TreeEntry, Vault, VaultError, WriteResult,
-    classify, is_indexed_path,
+    ConflictInfo, Encoding, EntryKind, LinkUpdate, MoveRecord, NoteContent, TreeEntry, Vault,
+    VaultError, WriteResult, classify, is_indexed_path,
 };
 pub use vault_session::{
     MAX_RECENT_VAULTS, VAULT_SESSION_DIRECTORY_NAME, VAULT_SESSION_FILE_NAME,

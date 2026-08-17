@@ -1,294 +1,38 @@
 // Note navigation has one address model and one controller on every surface.
 // The browser adapter projects addresses onto the History API; the desktop
-// adapter keeps the same addresses in memory. Wikilink parsing, resolution,
-// follow behavior, and command registration also live here so pointer,
-// keyboard, browser, and desktop entry points cannot drift apart.
+// adapter keeps the same addresses in memory. Wikilink parsing, follow
+// behavior, and command registration also live here so pointer, keyboard,
+// browser, and desktop entry points cannot drift apart. Target resolution
+// itself lives in `./links`, which the vault shares.
 
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, Facet } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 import { openSystemUrl } from "../ipc/services";
-import { isNotePath, withoutNoteExtension } from "../noteTitles";
+import { isNotePath } from "../noteTitles";
 import type { CommandRegistry } from "../registry";
 import { STRINGS } from "../strings";
+import type { NoteAddress, WikilinkResolutionContext } from "./links";
+import { normalizeNotePath, resolveWikilinkTarget } from "./links";
 
-export type ObsidianAppConfig = {
-  /** Link format the vault is configured to emit. */
-  newLinkFormat: "shortest" | "relative" | "absolute";
-  /** Whether the vault prefers markdown links over wikilinks. */
-  useMarkdownLinks: boolean;
-  /** Configured attachment folder mode, null when none is configured. */
-  attachmentFolderPath: string | null;
-};
-
-export const DEFAULT_OBSIDIAN_APP_CONFIG: ObsidianAppConfig = {
-  newLinkFormat: "shortest",
-  useMarkdownLinks: false,
-  attachmentFolderPath: null,
-};
-
-/** Parses the supported `.obsidian/app.json` link settings tolerantly. */
-export function parseObsidianAppConfig(jsonText: string): ObsidianAppConfig {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    return DEFAULT_OBSIDIAN_APP_CONFIG;
-  }
-  if (typeof parsed !== "object" || parsed === null) {
-    return DEFAULT_OBSIDIAN_APP_CONFIG;
-  }
-  const record = parsed as Record<string, unknown>;
-  const format = record.newLinkFormat;
-  const useMarkdown = record.useMarkdownLinks;
-  const attachments = record.attachmentFolderPath;
-  return {
-    newLinkFormat:
-      format === "relative" || format === "absolute" ? format : "shortest",
-    useMarkdownLinks: useMarkdown === true,
-    attachmentFolderPath:
-      typeof attachments === "string" && attachments.length > 0
-        ? attachments
-        : null,
-  };
-}
-
-export type WikilinkResolutionContext = {
-  /** Every note and file path in the open vault, vault-root-relative. */
-  paths: readonly string[];
-  config: ObsidianAppConfig;
-  /** The note whose editor owns this context. */
-  currentPath?: string | null;
-  /** Read-only note loader used by rendered embeds and link previews. */
-  loadNote?: (path: string) => Promise<string | null>;
-  /** Read-only byte loader for vault files rendered images read. */
-  loadAsset?: (path: string) => Promise<Uint8Array | null>;
-  /** Resolved note paths enclosing a nested embed. */
-  embedAncestry?: readonly string[];
-  /** Current rendered-embed nesting depth. */
-  embedDepth?: number;
-  /** Whether note links expose delayed rendered previews. */
-  linkPreviews?: boolean;
-  /** Nested embeds render as headers only inside a transient link preview. */
-  previewMode?: boolean;
-};
-
-export const EMPTY_WIKILINK_CONTEXT: WikilinkResolutionContext = {
-  paths: [],
-  config: DEFAULT_OBSIDIAN_APP_CONFIG,
-};
-
-export type NoteAddress = {
-  /** NFC, slash-separated, vault-root-relative note path including `.md`. */
-  path: string;
-  /** Obsidian heading or block suffix without the leading `#`. */
-  fragment?: string;
-};
+export type {
+  NoteAddress,
+  ObsidianAppConfig,
+  WikilinkResolution,
+  WikilinkResolutionContext,
+} from "./links";
+export {
+  candidateAddressForTarget,
+  DEFAULT_OBSIDIAN_APP_CONFIG,
+  EMPTY_WIKILINK_CONTEXT,
+  normalizeNotePath,
+  parseObsidianAppConfig,
+  resolveWikilinkTarget,
+} from "./links";
 
 function sameAddress(left: NoteAddress | null, right: NoteAddress): boolean {
   return left?.path === right.path && left.fragment === right.fragment;
-}
-
-export type WikilinkResolution =
-  | { kind: "self"; fragment?: string }
-  | { kind: "note"; path: string; fragment?: string }
-  | { kind: "unresolved"; candidate: NoteAddress | null };
-
-type SplitTarget = { path: string; fragment?: string };
-
-function splitWikilinkTarget(target: string): SplitTarget {
-  const hash = target.indexOf("#");
-  const path = (hash === -1 ? target : target.slice(0, hash)).trim();
-  const fragment = hash === -1 ? "" : target.slice(hash + 1).trim();
-  return fragment.length === 0 ? { path } : { path, fragment };
-}
-
-function joinVaultPath(baseDirectory: string, target: string): string | null {
-  const segments = `${baseDirectory}/${target}`.split("/");
-  const normalized: string[] = [];
-  for (const segment of segments) {
-    if (segment === "" || segment === ".") {
-      continue;
-    }
-    if (segment === "..") {
-      if (normalized.length === 0) {
-        return null;
-      }
-      normalized.pop();
-      continue;
-    }
-    normalized.push(segment);
-  }
-  return normalized.join("/").normalize("NFC");
-}
-
-function sourceDirectory(sourcePath: string | null | undefined): string {
-  if (sourcePath === null || sourcePath === undefined) {
-    return "";
-  }
-  const slash = sourcePath.lastIndexOf("/");
-  return slash === -1 ? "" : sourcePath.slice(0, slash);
-}
-
-function resolutionTarget(
-  path: string,
-  context: WikilinkResolutionContext,
-): string | null {
-  const rootPath = path.startsWith("/") ? path.slice(1) : path;
-  if (path.startsWith("./") || path.startsWith("../")) {
-    return joinVaultPath(sourceDirectory(context.currentPath), rootPath);
-  }
-  return rootPath.normalize("NFC");
-}
-
-function targetHasExtension(target: string): boolean {
-  const name = target.slice(target.lastIndexOf("/") + 1);
-  const dot = name.lastIndexOf(".");
-  return (
-    dot > 0 &&
-    dot < name.length - 1 &&
-    [...name.slice(dot + 1)].every((character) => /[A-Za-z0-9]/.test(character))
-  );
-}
-
-function exactWikilinkMatch(path: string, target: string): boolean {
-  return (
-    path === target ||
-    (!targetHasExtension(target) &&
-      isNotePath(path) &&
-      withoutNoteExtension(path) === target)
-  );
-}
-
-function suffixWikilinkMatch(path: string, target: string): boolean {
-  const tailMatches = (candidate: string) => {
-    const prefix = candidate.slice(0, -target.length);
-    return candidate.endsWith(target) && prefix.endsWith("/");
-  };
-  return (
-    tailMatches(path) ||
-    (!targetHasExtension(target) &&
-      isNotePath(path) &&
-      tailMatches(withoutNoteExtension(path)))
-  );
-}
-
-function deterministicPathOrder(left: string, right: string): number {
-  const segmentDifference = left.split("/").length - right.split("/").length;
-  if (segmentDifference !== 0) {
-    return segmentDifference;
-  }
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function attachmentCandidate(
-  target: string,
-  context: WikilinkResolutionContext,
-): string | null {
-  const configured = context.config.attachmentFolderPath;
-  if (configured === null || target.includes("/")) {
-    return null;
-  }
-  if (configured === "/") {
-    return target;
-  }
-  if (configured === "./") {
-    return joinVaultPath(sourceDirectory(context.currentPath), target);
-  }
-  return joinVaultPath(configured, target);
-}
-
-/** Mirrors the Rust index's exact, suffix, then case-folded match tiers. */
-function resolvePath(target: string, paths: readonly string[]): string | null {
-  const foldedTarget = target.toLowerCase();
-  const tiers = [
-    (path: string) => exactWikilinkMatch(path, target),
-    (path: string) => suffixWikilinkMatch(path, target),
-    (path: string) => exactWikilinkMatch(path.toLowerCase(), foldedTarget),
-    (path: string) => suffixWikilinkMatch(path.toLowerCase(), foldedTarget),
-  ];
-  for (const matches of tiers) {
-    const candidates = paths.filter(matches).sort(deterministicPathOrder);
-    if (candidates.length > 0) {
-      return candidates[0] ?? null;
-    }
-  }
-  return null;
-}
-
-/** Resolves a target with Obsidian-compatible path, suffix, and fragment rules. */
-export function resolveWikilinkTarget(
-  target: string,
-  context: WikilinkResolutionContext,
-): WikilinkResolution {
-  const split = splitWikilinkTarget(target);
-  if (split.path.length === 0) {
-    return split.fragment === undefined
-      ? { kind: "self" }
-      : { kind: "self", fragment: split.fragment };
-  }
-
-  const targetPath = resolutionTarget(split.path, context);
-  const attachment = attachmentCandidate(split.path, context);
-  const resolved =
-    (attachment === null ? null : resolvePath(attachment, context.paths)) ??
-    (targetPath === null ? null : resolvePath(targetPath, context.paths));
-  if (resolved !== null) {
-    return split.fragment === undefined
-      ? { kind: "note", path: resolved }
-      : { kind: "note", path: resolved, fragment: split.fragment };
-  }
-  return {
-    kind: "unresolved",
-    candidate: candidateAddressForTarget(target, context),
-  };
-}
-
-/** Produces the deterministic note path shown by the not-found surface. */
-export function candidateAddressForTarget(
-  target: string,
-  context: WikilinkResolutionContext,
-): NoteAddress | null {
-  const split = splitWikilinkTarget(target);
-  if (split.path.length === 0) {
-    const source = context.currentPath;
-    if (source === null || source === undefined) {
-      return null;
-    }
-    return split.fragment === undefined
-      ? { path: source }
-      : { path: source, fragment: split.fragment };
-  }
-  const candidate = resolutionTarget(split.path, context);
-  if (candidate === null || candidate.length === 0) {
-    return null;
-  }
-  const path = /\.[^/]+$/.test(candidate) ? candidate : `${candidate}.md`;
-  const normalized = normalizeNotePath(path);
-  if (normalized === null) {
-    return null;
-  }
-  return split.fragment === undefined
-    ? { path: normalized }
-    : { path: normalized, fragment: split.fragment };
-}
-
-/** Validates and normalizes a permalink path without allowing vault escape. */
-export function normalizeNotePath(path: string): string | null {
-  const slashPath = path.replaceAll("\\", "/").normalize("NFC");
-  if (slashPath.startsWith("/") || slashPath.length === 0) {
-    return null;
-  }
-  const segments = slashPath.split("/");
-  if (
-    segments.some(
-      (segment) => segment.length === 0 || segment === "." || segment === "..",
-    )
-  ) {
-    return null;
-  }
-  return slashPath;
 }
 
 export const NOTE_ADDRESS_PARAMETER = "note";
@@ -1018,15 +762,16 @@ export function followWikilinkTarget(
     );
     return true;
   }
-  options.unresolved(STRINGS.wikilinkUnresolvedReason);
-  const candidate = resolution.candidate;
-  if (
-    candidate !== null &&
-    candidate !== undefined &&
-    isNotePath(candidate.path)
-  ) {
-    navigateWithIntent(options, candidate, intent);
-  }
+  // A link that resolves to nothing fails where the reader is standing.
+  // Replacing the note they were reading with a not-found panel costs them
+  // their place to report a failure they can neither act on nor leave; the
+  // banner names the path that is missing and the note stays open.
+  const missing = resolution.candidate?.path;
+  options.unresolved(
+    missing === undefined || missing === null
+      ? STRINGS.wikilinkUnresolvedReason
+      : `${STRINGS.wikilinkUnresolvedReason} ${missing}`,
+  );
   return true;
 }
 

@@ -19,6 +19,8 @@ import {
   readNote,
   treeEntryDelete,
   treeEntryMove,
+  treeEntryMovePlan,
+  treeEntryMoveUndo,
   treeEntryReveal,
   treeFolderCreate,
   vaultTree,
@@ -635,7 +637,14 @@ export async function openSystemUrl(url: string): Promise<void> {
   globalThis.open(url, "_blank", "noopener");
 }
 
-export { treeEntryDelete, treeEntryMove, treeEntryReveal, treeFolderCreate };
+export {
+  treeEntryDelete,
+  treeEntryMove,
+  treeEntryMovePlan,
+  treeEntryMoveUndo,
+  treeEntryReveal,
+  treeFolderCreate,
+};
 
 export function byteRangesToCharRanges(
   text: string,

@@ -48,8 +48,24 @@ export const commands = {
 	noteCreate: (handle: VaultHandle, relPath: string) => typedError<null, AppError>(__TAURI_INVOKE("note_create", { handle, relPath })),
 	/**  Creates a folder inside an open vault and returns the refreshed tree. */
 	treeFolderCreate: (handle: VaultHandle, relPath: string) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("tree_folder_create", { handle, relPath })),
-	/**  Moves or renames one vault entry without replacing an existing entry. */
+	/**
+	 *  Moves or renames one vault entry without replacing an existing entry,
+	 *  retargeting every link that pointed at it so the vault's links keep
+	 *  resolving. The move is recorded so `tree_entry_move_undo` can put both
+	 *  the entry and every rewritten note back.
+	 */
 	treeEntryMove: (handle: VaultHandle, fromPath: string, toPath: string) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("tree_entry_move", { handle, fromPath, toPath })),
+	/**
+	 *  The notes a move of `from_path` to `to_path` would rewrite, so the
+	 *  person is told what a rename touches before it touches anything. Reads
+	 *  only; the vault is unchanged.
+	 */
+	treeEntryMovePlan: (handle: VaultHandle, fromPath: string, toPath: string) => typedError<LinkUpdateSummary[], AppError>(__TAURI_INVOKE("tree_entry_move_plan", { handle, fromPath, toPath })),
+	/**
+	 *  Reverses the last move or rename in this vault: the entry returns to its
+	 *  old path and every note rewritten with it is restored byte for byte.
+	 */
+	treeEntryMoveUndo: (handle: VaultHandle) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("tree_entry_move_undo", { handle })),
 	/**  Deletes one vault entry and returns the refreshed tree. */
 	treeEntryDelete: (handle: VaultHandle, relPath: string) => typedError<TreeEntry[], AppError>(__TAURI_INVOKE("tree_entry_delete", { handle, relPath })),
 	/**  Reveals one indexed entry in the operating system file manager. */
@@ -356,6 +372,17 @@ export type ExternalNoteUpdate = {
 	projection_hash: string,
 	/**  Delta from the last projection to the new content. */
 	change_set: ByteRangeReplace[],
+};
+
+/**
+ *  One note a rename would rewrite, and how many of its links point at the
+ *  entry being renamed. The change sets themselves stay inside the vault.
+ */
+export type LinkUpdateSummary = {
+	/**  Vault-relative path of the note holding the references. */
+	path: string,
+	/**  How many of its links the rename retargets. */
+	references: number,
 };
 
 /**

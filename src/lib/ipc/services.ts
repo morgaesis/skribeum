@@ -6,6 +6,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   commands,
+  type LinkUpdateSummary,
   type MaximizeButtonRect,
   type OpenFileTarget,
   type SearchHit,
@@ -146,13 +147,32 @@ export async function treeFolderCreate(
   return unwrap(await commands.treeFolderCreate(handle, path));
 }
 
-/** Moves or renames an entry and returns the refreshed tree. */
+/**
+ * Moves or renames an entry, retargeting every link that resolved to it,
+ * and returns the refreshed tree.
+ */
 export async function treeEntryMove(
   handle: VaultHandle,
   fromPath: string,
   toPath: string,
 ): Promise<TreeEntry[]> {
   return unwrap(await commands.treeEntryMove(handle, fromPath, toPath));
+}
+
+/** The notes a move would rewrite, so it can be described and declined. */
+export async function treeEntryMovePlan(
+  handle: VaultHandle,
+  fromPath: string,
+  toPath: string,
+): Promise<LinkUpdateSummary[]> {
+  return unwrap(await commands.treeEntryMovePlan(handle, fromPath, toPath));
+}
+
+/** Reverses the last move: the entry and every rewritten note go back. */
+export async function treeEntryMoveUndo(
+  handle: VaultHandle,
+): Promise<TreeEntry[]> {
+  return unwrap(await commands.treeEntryMoveUndo(handle));
 }
 
 /** Deletes an entry and returns the refreshed tree. */

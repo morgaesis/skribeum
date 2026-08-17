@@ -16,6 +16,7 @@ export type {
   AppError,
   BannerReason,
   ByteRangeReplace,
+  LinkUpdateSummary,
   MaximizeButtonRect,
   NoteContent,
   NoteStat,

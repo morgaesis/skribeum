@@ -249,6 +249,9 @@ onDestroy(() => {
     margin: 0.5rem 0 0;
     color: var(--skr-text-muted);
     font-size: var(--skr-type-label);
+    /* A message that lists the files an action will write puts one per
+       line; without this the list collapses into a single run of prose. */
+    white-space: pre-line;
   }
 
   .skr-dialog-field {

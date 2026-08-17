@@ -40,6 +40,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Renaming or moving a note no longer breaks the links that point at it.
+  Every wikilink and embed that resolved to the old path is retargeted to the
+  new one, across renames from the tree, drags between folders, and the
+  header's `Move`. The rewrite is surgical: only the bytes of the link target
+  inside the brackets change, and the alias, the heading or block subpath,
+  the presence of the `.md` extension and Obsidian's shortest-path form all
+  come across as the author wrote them, lengthening only where the short form
+  would become ambiguous. Before anything is written, the operation says how
+  many other notes it will rewrite and names them, and can be declined; a
+  rename that touches nothing says so. The whole operation reverses as one
+  step, restoring both the path and every rewritten note byte for byte. A
+  corpus test over the committed corpus asserts that a rename changes only
+  the declared link-target spans, that a note which never referenced the
+  renamed one is byte-identical afterwards, and that reversing restores every
+  file exactly.
+- `Move` in the header menu now moves the note. It asked the vault to move
+  an entry to a destination that only exists while dragging, so from any
+  other surface it silently did nothing; it now acts on the note in view and
+  asks which folder to move it to.
+- Following a link that resolves to nothing no longer replaces the note being
+  read with a not-found panel there is no way back from. The failure is
+  reported where the reader is standing, naming the path that is missing, and
+  the note stays open.
 - Opening a note that lives inside a collapsed folder no longer stops the
   application. The file tree measured a row the same update had released,
   and the resulting error, thrown from inside a reactive effect, halted every

@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use skribeum_vault::{
-    Clock, EditHistoryJournal, Encoding, EntryKind, FileSystem, Journal, RealClock, RealFs,
-    ReconEvent, Reconciler, ReplayOutcome, SearchIndex, Settings, SettingsError, SettingsStore,
-    Vault, VaultPath, VaultSession, VaultSessionStore, is_indexed_path,
+    Clock, EditHistoryJournal, Encoding, EntryKind, FileSystem, Journal, MoveRecord, RealClock,
+    RealFs, ReconEvent, Reconciler, ReplayOutcome, SearchIndex, Settings, SettingsError,
+    SettingsStore, Vault, VaultPath, VaultSession, VaultSessionStore, is_indexed_path,
 };
 use tauri::ipc::InvokeResponseBody;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
@@ -65,6 +65,25 @@ pub struct TreeEntry {
     pub kind: TreeEntryKind,
     /// Whether the final segment is dot-prefixed.
     pub hidden: bool,
+}
+
+/// One note a rename would rewrite, and how many of its links point at the
+/// entry being renamed. The change sets themselves stay inside the vault.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct LinkUpdateSummary {
+    /// Vault-relative path of the note holding the references.
+    pub path: String,
+    /// How many of its links the rename retargets.
+    pub references: u32,
+}
+
+impl From<&skribeum_vault::LinkUpdate> for LinkUpdateSummary {
+    fn from(update: &skribeum_vault::LinkUpdate) -> Self {
+        Self {
+            path: update.path.as_str().to_owned(),
+            references: u32::try_from(update.references).unwrap_or(u32::MAX),
+        }
+    }
 }
 
 /// One byte-range replacement over IPC: bytes `start..end` of the base
@@ -759,6 +778,9 @@ struct OpenVault {
     /// Rebuild workers owned by this handle generation. Closing the handle
     /// cancels and joins every worker before releasing the generation.
     rebuilds: Arc<IndexRebuilds>,
+    /// The last move or rename applied through this handle, held so it can
+    /// be undone as one step: the path change and every link rewrite.
+    last_move: Option<MoveRecord>,
 }
 
 /// Session state: open vaults by handle, plus the session clock driving
@@ -789,6 +811,7 @@ impl VaultRegistry {
                 reconciler: Arc::new(Mutex::new(Reconciler::default())),
                 search,
                 rebuilds: Arc::new(IndexRebuilds::default()),
+                last_move: None,
             },
         );
         VaultOpenResult {
@@ -1730,7 +1753,35 @@ fn tree_folder_create(
     Ok(entries)
 }
 
-/// Moves or renames one vault entry without replacing an existing entry.
+/// The notes a move of `from_path` to `to_path` would rewrite, so the
+/// person is told what a rename touches before it touches anything. Reads
+/// only; the vault is unchanged.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn tree_entry_move_plan(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+    from_path: String,
+    to_path: String,
+) -> Result<Vec<LinkUpdateSummary>, AppError> {
+    let from = VaultPath::new(&from_path)?;
+    let to = VaultPath::new(&to_path)?;
+    let vaults = registry.lock();
+    let open = vaults
+        .get(&handle.id)
+        .ok_or_else(AppError::unknown_handle)?;
+    let updates = open
+        .vault
+        .plan_link_updates(&RealFs, &from, &to)
+        .map_err(|error| AppError::from(error).with_path(from.as_str()))?;
+    Ok(updates.iter().map(LinkUpdateSummary::from).collect())
+}
+
+/// Moves or renames one vault entry without replacing an existing entry,
+/// retargeting every link that pointed at it so the vault's links keep
+/// resolving. The move is recorded so `tree_entry_move_undo` can put both
+/// the entry and every rewritten note back.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
@@ -1747,9 +1798,38 @@ fn tree_entry_move(
         let open = vaults
             .get_mut(&handle.id)
             .ok_or_else(AppError::unknown_handle)?;
-        open.vault
-            .move_entry(&RealFs, &from, &to)
+        let record = open
+            .vault
+            .move_entry_updating_links(&RealFs, &from, &to)
             .map_err(|error| AppError::from(error).with_path(from.as_str()))?;
+        open.last_move = Some(record);
+        spawn_index_rebuild(open, RealFs);
+        tree_entries(&open.vault)
+    };
+    Ok(entries)
+}
+
+/// Reverses the last move or rename in this vault: the entry returns to its
+/// old path and every note rewritten with it is restored byte for byte.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+fn tree_entry_move_undo(
+    registry: State<'_, VaultRegistry>,
+    handle: VaultHandle,
+) -> Result<Vec<TreeEntry>, AppError> {
+    let entries = {
+        let mut vaults = registry.lock();
+        let open = vaults
+            .get_mut(&handle.id)
+            .ok_or_else(AppError::unknown_handle)?;
+        let record = open
+            .last_move
+            .take()
+            .ok_or_else(|| AppError::from(skribeum_vault::VaultError::EntryNotFound))?;
+        open.vault
+            .revert_move(&RealFs, &record)
+            .map_err(|error| AppError::from(error).with_path(record.to.as_str()))?;
         spawn_index_rebuild(open, RealFs);
         tree_entries(&open.vault)
     };
@@ -3914,6 +3994,8 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             note_create,
             tree_folder_create,
             tree_entry_move,
+            tree_entry_move_plan,
+            tree_entry_move_undo,
             tree_entry_delete,
             tree_entry_reveal,
             note_read,

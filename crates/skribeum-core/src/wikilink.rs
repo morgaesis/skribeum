@@ -117,13 +117,14 @@ fn suffix_match(path: &str, note: &str) -> bool {
     tail_matches(path) || (!has_extension(note) && strip_md(path).is_some_and(tail_matches))
 }
 
-fn strip_md(path: &str) -> Option<&str> {
+/// The path without its `.md` extension, or `None` when it carries none.
+pub(crate) fn strip_md(path: &str) -> Option<&str> {
     path.strip_suffix(".md")
 }
 
 /// Whether the note part's final segment carries a file extension, in which
 /// case it matches as written only (attachment embeds like `figure.png`).
-fn has_extension(note: &str) -> bool {
+pub(crate) fn has_extension(note: &str) -> bool {
     note.rsplit('/')
         .next()
         .unwrap_or_default()

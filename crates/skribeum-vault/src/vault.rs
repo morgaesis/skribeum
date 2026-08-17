@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use sha2::{Digest, Sha256};
-use skribeum_core::{ByteRangeReplace, ChangeSetError, apply_change_set};
+use skribeum_core::{
+    ByteRangeReplace, ChangeSetError, PathChange, apply_change_set, index_after, invert_changes,
+    may_reference, remap, retarget_links,
+};
 
 use crate::fs::{FileSystem, FsError};
 use crate::path::{PathCollision, VaultPath, VaultPathError, detect_collisions};
@@ -147,6 +150,32 @@ pub struct NoteContent {
     pub encoding: Encoding,
     /// Lowercase hex SHA-256 of `bytes`. Opaque to callers.
     pub projection_hash: String,
+}
+
+/// One note whose link targets a move changes, and the byte edits that
+/// change them. Nothing outside those ranges is touched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkUpdate {
+    /// The note holding the references.
+    pub path: VaultPath,
+    /// How many references in it the edits retarget.
+    pub references: usize,
+    /// The byte-range replacements, sorted and non-overlapping.
+    pub changes: Vec<ByteRangeReplace>,
+}
+
+/// A completed move and everything needed to reverse it as one step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoveRecord {
+    /// The path the entry moved from.
+    pub from: VaultPath,
+    /// The path it moved to.
+    pub to: VaultPath,
+    /// Per rewritten note, the edits that restore its original bytes.
+    pub restore: Vec<LinkUpdate>,
+    /// Notes that changed on disk between planning and writing and were
+    /// therefore left alone; their links to the moved note still dangle.
+    pub skipped: Vec<VaultPath>,
 }
 
 /// An open vault: the validated root, the indexed tree, the last-read
@@ -408,6 +437,156 @@ impl Vault {
             path != from && !path.as_str().starts_with(&format!("{}/", from.as_str()))
         });
         self.refresh(fs)
+    }
+
+    /// The per-file path changes a move of `from` to `to` produces: one for
+    /// a file, one for every indexed file beneath it for a directory.
+    fn path_changes(&self, from: &VaultPath, to: &VaultPath) -> Vec<PathChange> {
+        let root = PathChange {
+            from: from.as_str().to_owned(),
+            to: to.as_str().to_owned(),
+        };
+        self.tree
+            .iter()
+            .filter(|entry| entry.kind != EntryKind::Directory)
+            .filter_map(|entry| {
+                remap(entry.path.as_str(), &root).map(|to| PathChange {
+                    from: entry.path.as_str().to_owned(),
+                    to,
+                })
+            })
+            .collect()
+    }
+
+    /// The notes whose links would have to be retargeted for a move of
+    /// `from` to `to` to leave the vault's links resolving, and the edits
+    /// that would do it. Paths are named as they stand before the move, so
+    /// the plan reads as what the person is looking at. Performs no writes
+    /// and changes no vault state.
+    ///
+    /// # Errors
+    ///
+    /// Propagates filesystem read failures.
+    pub fn plan_link_updates(
+        &self,
+        fs: &dyn FileSystem,
+        from: &VaultPath,
+        to: &VaultPath,
+    ) -> Result<Vec<LinkUpdate>, VaultError> {
+        let changes = self.path_changes(from, to);
+        if changes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let before: Vec<String> = self
+            .tree
+            .iter()
+            .filter(|entry| entry.kind != EntryKind::Directory)
+            .map(|entry| entry.path.as_str().to_owned())
+            .collect();
+        let after = index_after(&before, &changes);
+        let mut updates = Vec::new();
+        for entry in &self.tree {
+            if entry.kind != EntryKind::Note {
+                continue;
+            }
+            let bytes = fs.read(&self.root.join(entry.path.as_str()))?;
+            if !may_reference(&bytes, &changes) {
+                continue;
+            }
+            let edits = retarget_links(&bytes, &before, &after, &changes);
+            if edits.is_empty() {
+                continue;
+            }
+            updates.push(LinkUpdate {
+                path: entry.path.clone(),
+                references: edits.len(),
+                changes: edits,
+            });
+        }
+        Ok(updates)
+    }
+
+    /// Moves or renames one indexed entry and retargets every link that
+    /// pointed at it, so the vault's links keep resolving across the move.
+    ///
+    /// The rewrite is minimal: in each affected note only the bytes of the
+    /// link target change, and the returned record carries the edits that
+    /// restore every one of those notes, so the whole operation reverses as
+    /// one step through [`Vault::revert_move`]. A note that changed on disk
+    /// between the plan and the write is left alone and named in
+    /// [`MoveRecord::skipped`] rather than overwritten. Any other failure
+    /// rolls the whole operation back before returning.
+    ///
+    /// # Errors
+    ///
+    /// Returns what [`Vault::move_entry`] returns for an invalid move, and
+    /// propagates filesystem and write failures.
+    pub fn move_entry_updating_links(
+        &mut self,
+        fs: &dyn FileSystem,
+        from: &VaultPath,
+        to: &VaultPath,
+    ) -> Result<MoveRecord, VaultError> {
+        let planned = self.plan_link_updates(fs, from, to)?;
+        let root = PathChange {
+            from: from.as_str().to_owned(),
+            to: to.as_str().to_owned(),
+        };
+        self.move_entry(fs, from, to)?;
+
+        let mut record = MoveRecord {
+            from: from.clone(),
+            to: to.clone(),
+            restore: Vec::new(),
+            skipped: Vec::new(),
+        };
+        for update in planned {
+            let moved = remap(update.path.as_str(), &root)
+                .unwrap_or_else(|| update.path.as_str().to_owned());
+            let path = match VaultPath::new(&moved) {
+                Ok(path) => path,
+                Err(error) => {
+                    self.revert_move(fs, &record)?;
+                    return Err(error.into());
+                }
+            };
+            let applied = self.read_note(fs, &path).and_then(|note| {
+                let inverse = invert_changes(&note.bytes, &update.changes);
+                self.write_note(fs, &path, &update.changes, &note.projection_hash)
+                    .map(|result| (result, inverse))
+            });
+            match applied {
+                Ok((WriteResult::Written { .. }, inverse)) => record.restore.push(LinkUpdate {
+                    path,
+                    references: update.references,
+                    changes: inverse,
+                }),
+                Ok((WriteResult::Conflict { .. }, _)) => record.skipped.push(path),
+                Err(error) => {
+                    self.revert_move(fs, &record)?;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(record)
+    }
+
+    /// Undoes a recorded move: every rewritten note is restored to its
+    /// original bytes and the entry returns to the path it came from.
+    ///
+    /// # Errors
+    ///
+    /// Propagates filesystem, write and move failures.
+    pub fn revert_move(
+        &mut self,
+        fs: &dyn FileSystem,
+        record: &MoveRecord,
+    ) -> Result<(), VaultError> {
+        for update in &record.restore {
+            let note = self.read_note(fs, &update.path)?;
+            self.write_note(fs, &update.path, &update.changes, &note.projection_hash)?;
+        }
+        self.move_entry(fs, &record.to, &record.from)
     }
 
     /// Removes one indexed file or directory and refreshes the tree.

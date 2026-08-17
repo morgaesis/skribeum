@@ -30,6 +30,16 @@ export const STRINGS = {
   treeCopyLink: "Copy link",
   treeReveal: "Reveal in file manager",
   treeRenamePrompt: "New name",
+  treeMoveDestinationPrompt: "Destination folder, empty for the vault root",
+  treeMoveUnknownFolder: "No folder in this vault has that path.",
+  treeMoveUndo: "Undo last move or rename",
+  treeMoveNothingToUndo: "There is no move or rename to undo.",
+  linkUpdateNone:
+    "No other note links to this one, so nothing else is written. Its links keep resolving.",
+  linkUpdateOne:
+    "One other note links to this one. Its links are rewritten to the new path so they keep resolving:",
+  linkUpdateMany:
+    "{notes} other notes link to this one. Their links are rewritten to the new path so they keep resolving:",
   treeFolderPrompt: "Folder name",
   treeDeleteConfirm: "Delete this vault entry? This cannot be undone.",
   treeRenameInvalidExtension:

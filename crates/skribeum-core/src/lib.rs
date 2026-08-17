@@ -5,6 +5,7 @@ pub mod change_set;
 pub mod extract;
 pub mod frontmatter;
 pub mod line_endings;
+pub mod link_rewrite;
 pub mod wikilink;
 
 pub use change_set::{
@@ -13,6 +14,9 @@ pub use change_set::{
 pub use extract::{Extraction, ExtractionKind, extract};
 pub use frontmatter::read_frontmatter;
 pub use line_endings::{BufferEdit, LineEndingError, LineEndingMap, Terminator, buffer_from_bytes};
+pub use link_rewrite::{
+    PathChange, index_after, invert_changes, may_reference, remap, retarget_links,
+};
 pub use wikilink::{WikilinkResolution, WikilinkSubpath, resolve_wikilink};
 
 /// Converts a UTF-16 code-unit offset (the `CodeMirror` index space) into a UTF-8

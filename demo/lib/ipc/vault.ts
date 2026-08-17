@@ -3,12 +3,25 @@ import type {
   EditHistoryAction,
   EditHistorySnapshot,
 } from "../../../src/lib/editor/durableHistory";
+import type {
+  LinkUpdate,
+  WikilinkResolutionContext,
+} from "../../../src/lib/features/links";
+import {
+  DEFAULT_OBSIDIAN_APP_CONFIG,
+  indexAfter,
+  invertChanges,
+  pathChangesForMove,
+  remapPath,
+  retargetLinks,
+} from "../../../src/lib/features/links";
 import { isNotePath } from "../../../src/lib/noteTitles";
 import { STRINGS } from "../../../src/lib/strings";
 import { DEMO_BINARY_FILES, DEMO_FILES } from "../vault/seed";
 import type {
   AppError,
   ByteRangeReplace,
+  LinkUpdateSummary,
   NoteContent,
   NoteStat,
   TreeEntry,
@@ -90,6 +103,14 @@ function seededFiles(): Map<string, Uint8Array> {
   return files;
 }
 
+/** A completed move and everything needed to reverse it as one step. */
+type MoveRecord = {
+  from: string;
+  to: string;
+  /** Per rewritten note, the edits that restore its original bytes. */
+  restore: LinkUpdate[];
+};
+
 type DemoVault = {
   files: Map<string, Uint8Array>;
   directories: Set<string>;
@@ -98,6 +119,7 @@ type DemoVault = {
   directoryHandle: BrowserDirectoryHandle | null;
   folderWrites: boolean;
   skippedFiles: number;
+  lastMove: MoveRecord | null;
 };
 
 function seededVault(): DemoVault {
@@ -109,6 +131,7 @@ function seededVault(): DemoVault {
     directoryHandle: null,
     folderWrites: false,
     skippedFiles: 0,
+    lastMove: null,
   };
 }
 
@@ -297,6 +320,7 @@ export async function useLocalDirectory(
     directoryHandle: handle,
     folderWrites: writePermission === "granted",
     skippedFiles,
+    lastMove: null,
   });
   return selection;
 }
@@ -462,20 +486,101 @@ export async function treeFolderCreate(
   return indexedTree(vault);
 }
 
-export async function treeEntryMove(
-  handle: VaultHandle,
+/**
+ * Writes one indexed file's full contents, mirroring `noteWrite`'s
+ * best-effort write-through to a picked local folder. The in-memory copy is
+ * authoritative either way, so a folder the browser can no longer write
+ * degrades to a memory-only vault rather than losing the edit.
+ */
+async function writeIndexedFile(
+  vault: DemoVault,
+  relPath: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  const next = bytes.slice();
+  const localHandle = vault.fileHandles.get(relPath);
+  if (
+    vault.directoryHandle !== null &&
+    localHandle !== undefined &&
+    vault.folderWrites &&
+    localHandle.createWritable !== undefined
+  ) {
+    try {
+      const writable = await localHandle.createWritable();
+      await writable.write(next);
+      await writable.close();
+    } catch {
+      vault.folderWrites = false;
+      publishFolderStatus(vault);
+    }
+  }
+  vault.files.set(relPath, next);
+}
+
+/**
+ * The link-resolution context the vault's own notes resolve against, built
+ * from a path list. Link emission settings do not enter resolution.
+ */
+function resolutionContext(paths: string[]): WikilinkResolutionContext {
+  return { paths, config: DEFAULT_OBSIDIAN_APP_CONFIG };
+}
+
+/** The vault's indexed file paths, the list wikilinks resolve against. */
+function indexedPaths(vault: DemoVault): string[] {
+  return [...vault.files.keys()].filter(
+    (path) => !path.split("/").some((segment) => segment.startsWith(".")),
+  );
+}
+
+/**
+ * The notes a move of `fromPath` to `toPath` rewrites, and the byte edits
+ * that rewrite them. Paths are named as they stand before the move.
+ */
+function linkUpdatePlan(
+  vault: DemoVault,
   fromPath: string,
   toPath: string,
-): Promise<TreeEntry[]> {
-  const vault = vaultFor(handle);
-  assertRelativePath(fromPath);
-  assertRelativePath(toPath);
-  if (vault.files.has(toPath) || vault.directories.has(toPath)) {
-    return fail(
-      "entry/already-exists",
-      "The demo entry already exists.",
-      toPath,
+): LinkUpdate[] {
+  const paths = indexedPaths(vault);
+  const changes = pathChangesForMove(paths, fromPath, toPath);
+  if (changes.length === 0) {
+    return [];
+  }
+  const root = { from: fromPath, to: toPath };
+  const before = resolutionContext(paths);
+  const after = resolutionContext(indexAfter(paths, changes));
+  const updates: LinkUpdate[] = [];
+  for (const path of paths) {
+    const bytes = vault.files.get(path);
+    if (
+      !isNotePath(path) ||
+      vault.readOnlyPaths.has(path) ||
+      bytes === undefined
+    ) {
+      continue;
+    }
+    const edits = retargetLinks(
+      bytes,
+      remapPath(path, root) ?? path,
+      before,
+      after,
+      changes,
     );
+    if (edits.length > 0) {
+      updates.push({ path, references: edits.length, changes: edits });
+    }
+  }
+  return updates;
+}
+
+/** Relocates the entry's own paths, without touching any note's contents. */
+function relocateEntry(
+  vault: DemoVault,
+  fromPath: string,
+  toPath: string,
+): void {
+  if (vault.files.has(toPath) || vault.directories.has(toPath)) {
+    fail("entry/already-exists", "The demo entry already exists.", toPath);
   }
   const fileMoves = [...vault.files.entries()].filter(
     ([path]) => path === fromPath || path.startsWith(`${fromPath}/`),
@@ -484,16 +589,98 @@ export async function treeEntryMove(
     (path) => path === fromPath || path.startsWith(`${fromPath}/`),
   );
   if (fileMoves.length === 0 && directoryMoves.length === 0) {
-    return fail("entry/not-found", "The demo entry does not exist.", fromPath);
+    fail("entry/not-found", "The demo entry does not exist.", fromPath);
   }
   for (const [path, bytes] of fileMoves) {
     vault.files.delete(path);
     vault.files.set(`${toPath}${path.slice(fromPath.length)}`, bytes);
+    const handle = vault.fileHandles.get(path);
+    if (handle !== undefined) {
+      vault.fileHandles.delete(path);
+      vault.fileHandles.set(`${toPath}${path.slice(fromPath.length)}`, handle);
+    }
   }
   for (const path of directoryMoves) {
     vault.directories.delete(path);
     vault.directories.add(`${toPath}${path.slice(fromPath.length)}`);
   }
+}
+
+/** The notes a move would rewrite, so the person can be told and decline. */
+export async function treeEntryMovePlan(
+  handle: VaultHandle,
+  fromPath: string,
+  toPath: string,
+): Promise<LinkUpdateSummary[]> {
+  const vault = vaultFor(handle);
+  assertRelativePath(fromPath);
+  assertRelativePath(toPath);
+  return linkUpdatePlan(vault, fromPath, toPath).map((update) => ({
+    path: update.path,
+    references: update.references,
+  }));
+}
+
+/**
+ * Moves or renames one entry and retargets every link that resolved to it,
+ * so the vault's links keep resolving across the move. Only the bytes of
+ * the link targets change, and the move is recorded so it reverses whole.
+ */
+export async function treeEntryMove(
+  handle: VaultHandle,
+  fromPath: string,
+  toPath: string,
+): Promise<TreeEntry[]> {
+  const vault = vaultFor(handle);
+  assertRelativePath(fromPath);
+  assertRelativePath(toPath);
+  const planned = linkUpdatePlan(vault, fromPath, toPath);
+  relocateEntry(vault, fromPath, toPath);
+
+  const root = { from: fromPath, to: toPath };
+  const restore: LinkUpdate[] = [];
+  for (const update of planned) {
+    const path = remapPath(update.path, root) ?? update.path;
+    const base = vault.files.get(path);
+    if (base === undefined) {
+      continue;
+    }
+    const inverse = invertChanges(base, update.changes);
+    await writeIndexedFile(
+      vault,
+      path,
+      applyByteChangeSet(base, update.changes),
+    );
+    restore.push({ path, references: update.references, changes: inverse });
+  }
+  vault.lastMove = { from: fromPath, to: toPath, restore };
+  return indexedTree(vault);
+}
+
+/**
+ * Reverses the last move or rename: every note rewritten with it is
+ * restored byte for byte and the entry returns to its old path.
+ */
+export async function treeEntryMoveUndo(
+  handle: VaultHandle,
+): Promise<TreeEntry[]> {
+  const vault = vaultFor(handle);
+  const record = vault.lastMove;
+  if (record === null) {
+    return fail("entry/not-found", "There is no move to undo.", null);
+  }
+  for (const update of record.restore) {
+    const base = vault.files.get(update.path);
+    if (base !== undefined) {
+      await writeIndexedFile(
+        vault,
+        update.path,
+        applyByteChangeSet(base, update.changes),
+      );
+    }
+  }
+  relocateEntry(vault, record.to, record.from);
+  vault.lastMove = null;
   return indexedTree(vault);
 }
 
@@ -756,24 +943,7 @@ export async function writeVaultFile(
 ): Promise<void> {
   const vault = vaultFor(handle);
   assertRelativePath(relPath);
-  const next = bytes.slice();
-  const localHandle = vault.fileHandles.get(relPath);
-  if (
-    vault.directoryHandle !== null &&
-    localHandle !== undefined &&
-    vault.folderWrites &&
-    localHandle.createWritable !== undefined
-  ) {
-    try {
-      const writable = await localHandle.createWritable();
-      await writable.write(next);
-      await writable.close();
-    } catch {
-      vault.folderWrites = false;
-      publishFolderStatus(vault);
-    }
-  }
-  vault.files.set(relPath, next);
+  await writeIndexedFile(vault, relPath, bytes);
 }
 
 /**

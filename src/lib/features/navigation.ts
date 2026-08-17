@@ -299,7 +299,10 @@ export function noteAddressFromUrl(url: URL): NoteAddress | null {
   if (rawPath === null) {
     return null;
   }
-  const notePath = isNotePath(rawPath) ? rawPath : `${rawPath}.md`;
+  // An address naming an extension addresses that file whatever its kind, so a
+  // link to `deploy.yml`, `.gitignore` or an image resolves to itself. Only a
+  // bare name takes the Markdown shorthand, matching wikilink resolution.
+  const notePath = /\.[^/]+$/.test(rawPath) ? rawPath : `${rawPath}.md`;
   const path = normalizeNotePath(notePath);
   if (path === null) {
     return null;

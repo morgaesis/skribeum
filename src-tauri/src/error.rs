@@ -326,7 +326,7 @@ mod tests {
         let fs = skribeum_vault::SimFs::new();
         let root = std::path::PathBuf::from("vault");
         fs.external_write(&root.join("secret.md"), marker.as_bytes());
-        fs.external_write(&root.join("secret.csv"), marker.as_bytes());
+        fs.external_write(&root.join("Folder/secret.csv"), marker.as_bytes());
         let vault = skribeum_vault::Vault::open(&fs, &root).expect("vault opens");
 
         let missing = vault
@@ -336,9 +336,9 @@ mod tests {
         assert!(!app_error.message.contains(marker));
         assert_eq!(app_error.path.as_deref(), Some("absent.md"));
 
-        let not_note = vault
-            .read_note(&fs, &VaultPath::new("secret.csv").expect("valid"))
-            .expect_err("non-note read fails");
-        assert!(!AppError::from(not_note).message.contains(marker));
+        let directory = vault
+            .read_note(&fs, &VaultPath::new("Folder").expect("valid"))
+            .expect_err("a directory read fails");
+        assert!(!AppError::from(directory).message.contains(marker));
     }
 }

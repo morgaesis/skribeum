@@ -2160,3 +2160,190 @@ describe("task status menu hover intent", () => {
     expect(document.activeElement).toBe(checkbox);
   });
 });
+
+// A rendered cell is a field whose editable surface is nested inside the
+// note's own. Every key that reaches it therefore has to be decided: acted
+// on within the cell, left to the browser to run against the cell it is
+// focused in, handed to the note by name, or refused. A key decided by
+// nobody is decided by the browser against the note's editable surface, and
+// each round of that has cost the note text. The enumeration below is the
+// contract in `docs/decoration-rules.md`, driven key by key.
+describe("the rendered table cell key contract", () => {
+  const source =
+    "# Heading\n\n| a1 | b1 | c1 |\n| --- | --- | --- |\n| a2 | b2 | c2 |\n| a3 | b3 | c3 |\n\nprose after the table\n\n#tag\n";
+  const tableFrom = source.indexOf("| a1");
+
+  const PRINTABLE = ["a", "Z", "1", "!", " ", "é", "-", "|"];
+  const NAVIGATION = [
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "ArrowDown",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "Tab",
+    "Enter",
+  ];
+  const EDITING = ["Backspace", "Delete", "Insert"];
+  const OTHER = [
+    "F1",
+    "F5",
+    "F12",
+    "CapsLock",
+    "ContextMenu",
+    "PrintScreen",
+    "ScrollLock",
+    "Pause",
+    "NumLock",
+    "Clear",
+    "Help",
+    "Escape",
+  ];
+  const KEYS = [...PRINTABLE, ...NAVIGATION, ...EDITING, ...OTHER];
+  const MODIFIERS: { name: string; init: KeyboardEventInit }[] = [
+    { name: "", init: {} },
+    { name: "Control+", init: { ctrlKey: true } },
+    { name: "Alt+", init: { altKey: true } },
+    { name: "Shift+", init: { shiftKey: true } },
+    { name: "Meta+", init: { metaKey: true } },
+    { name: "Control+Shift+", init: { ctrlKey: true, shiftKey: true } },
+    { name: "Control+Alt+", init: { ctrlKey: true, altKey: true } },
+    { name: "Alt+Shift+", init: { altKey: true, shiftKey: true } },
+    { name: "Meta+Shift+", init: { metaKey: true, shiftKey: true } },
+    {
+      name: "Control+Alt+Shift+",
+      init: { ctrlKey: true, altKey: true, shiftKey: true },
+    },
+  ];
+
+  /**
+   * The browser's default is allowed to run for these, because its target
+   * is the element with focus and that element is the cell. Restated from
+   * the contract, not read from the engine.
+   */
+  function leftToTheBrowser(key: string, init: KeyboardEventInit): boolean {
+    const primary = init.ctrlKey === true || init.metaKey === true;
+    if (key.length === 1) {
+      return !primary;
+    }
+    if (key === "Backspace" || key === "Delete") {
+      return true;
+    }
+    if (primary && init.altKey !== true) {
+      return ["c", "x", "v", "insert"].includes(key.toLowerCase());
+    }
+    return init.shiftKey === true && key === "Insert";
+  }
+
+  /** Keys that take focus out of the table, by the contract's own list. */
+  function leavesTheTable(key: string): boolean {
+    return key === "Escape";
+  }
+
+  function activeCellEditor(view: EditorView): EditorView | null {
+    const editor = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+    );
+    return editor === null ? null : EditorView.findFromDOM(editor);
+  }
+
+  it.each(
+    MODIFIERS.flatMap((modifier) =>
+      KEYS.map(
+        (key) => [`${modifier.name}${key}`, key, modifier.init] as const,
+      ),
+    ),
+  )("answers %s without touching the note", (_name, key, init) => {
+    const view = mountedView(source, 0);
+    // The middle cell of the middle row: no edge behaviour, so no key in
+    // this sweep has any business changing the note's text.
+    expect(focusRenderedTableCell(view, tableFrom, 1, 1, 1)).toBe(true);
+    const before = view.state.doc.toString();
+    const nested = activeCellEditor(view);
+    expect(nested).not.toBeNull();
+
+    const event = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+    nested?.contentDOM.dispatchEvent(event);
+
+    expect(view.state.doc.toString(), "the note's text").toBe(before);
+    if (leftToTheBrowser(key, init)) {
+      // Not consumed, so the browser acts — on the cell, which still holds
+      // focus, and not on the note's editable surface around it.
+      expect(event.defaultPrevented, "left to the browser").toBe(false);
+    } else {
+      expect(event.defaultPrevented, "refused or answered").toBe(true);
+    }
+    const active = document.activeElement;
+    const caret = view.state.selection.main;
+    if (leavesTheTable(key)) {
+      // The one deliberate exit: focus is the note's, and its caret is at a
+      // position outside the table rather than parked inside it.
+      expect(active?.closest(".cm-skr-table-cell")).toBeNull();
+      expect(active).toBe(view.contentDOM);
+      expect(caret.empty).toBe(true);
+      expect(caret.head).toBeGreaterThan(source.indexOf("| a3 | b3 | c3 |"));
+    } else {
+      expect(
+        active?.closest(".cm-skr-table-cell"),
+        "focus stayed in a cell",
+      ).not.toBeNull();
+      // The note's caret stays parked at the table, which is the only
+      // position it may hold while a cell is being edited.
+      expect(caret.empty).toBe(true);
+      expect(caret.head, "the note's caret").toBe(tableFrom);
+    }
+  });
+
+  it("selects the cell's own text on the select-all chord", () => {
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, tableFrom, 1, 1, 1)).toBe(true);
+    const nested = activeCellEditor(view);
+    const before = view.state.doc.toString();
+    nested?.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "a",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(nested?.state.selection.main.from).toBe(0);
+    expect(nested?.state.selection.main.to).toBe(nested?.state.doc.length);
+    expect(view.state.doc.toString()).toBe(before);
+    expect(document.activeElement).toBe(nested?.contentDOM);
+  });
+
+  // The ring says "your keystrokes go here". The editing session outlives a
+  // focus move it did not ask for, so a ring drawn from the session alone
+  // points at a cell the caret has already left. jsdom performs no cascade,
+  // so the assertion is on the selector state the ring is painted from,
+  // evaluated by the DOM rather than by the engine.
+  it("carries the focus ring's selector state only while focus is in the cell", () => {
+    const view = mountedView(source, 0);
+    expect(focusRenderedTableCell(view, tableFrom, 1, 1, 1)).toBe(true);
+    const cell = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"]',
+    );
+    expect(cell).not.toBeNull();
+    const ringed = () =>
+      cell?.matches('.cm-skr-table-cell[data-editing="true"]:focus-within') ===
+      true;
+    expect(document.activeElement?.closest(".cm-skr-table-cell")).toBe(cell);
+    expect(ringed()).toBe(true);
+
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement?.closest(".cm-skr-table-cell")).not.toBe(
+      cell,
+    );
+    // The session is still on this cell; the ring is not.
+    expect(cell?.dataset.editing).toBe("true");
+    expect(ringed()).toBe(false);
+  });
+});

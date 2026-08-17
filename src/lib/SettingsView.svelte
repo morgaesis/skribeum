@@ -217,11 +217,11 @@ let {
   targetSetting?: string | null;
 } = $props();
 
-let dialogElement = $state<HTMLElement | undefined>();
-let backdropElement = $state<HTMLElement | undefined>();
-let contentElement = $state<HTMLElement | undefined>();
-let jumpButtonElement = $state<HTMLButtonElement | undefined>();
-let jumpMenuElement = $state<HTMLElement | undefined>();
+let dialogElement = $state<HTMLElement | null>();
+let backdropElement = $state<HTMLElement | null>();
+let contentElement = $state<HTMLElement | null>();
+let jumpButtonElement = $state<HTMLButtonElement | null>();
+let jumpMenuElement = $state<HTMLElement | null>();
 let closing = false;
 const returnFocusElement =
   typeof document !== "undefined" &&
@@ -299,8 +299,8 @@ onMount(() => {
 });
 
 onMount(() => {
-  if (backdropElement !== undefined) enterMotionSurface(backdropElement);
-  if (dialogElement !== undefined) enterMotionSurface(dialogElement);
+  enterMotionSurface(backdropElement);
+  enterMotionSurface(dialogElement);
 });
 
 $effect(() => {
@@ -320,7 +320,12 @@ async function focusSetting(id: string) {
   const row = contentElement?.querySelector<HTMLElement>(
     `[data-setting-id="${CSS.escape(id)}"]`,
   );
-  if (contentElement === undefined || row === null || row === undefined) return;
+  if (
+    !(contentElement instanceof HTMLElement) ||
+    row === null ||
+    row === undefined
+  )
+    return;
   const contentBox = contentElement.getBoundingClientRect();
   const rowBox = row.getBoundingClientRect();
   contentElement.scrollTop += rowBox.top - contentBox.top;
@@ -743,7 +748,7 @@ function closeSettings() {
   restorePreview();
   exitMotionSurfaces(
     [backdropElement, dialogElement].filter(
-      (element): element is HTMLElement => element !== undefined,
+      (element): element is HTMLElement => element instanceof HTMLElement,
     ),
     onClose,
   );
@@ -792,7 +797,7 @@ function hasMatches(section: SectionId): boolean {
 async function openJumpMenu() {
   jumpMenuOpen = true;
   await tick();
-  if (jumpMenuElement !== undefined) enterMotionSurface(jumpMenuElement);
+  enterMotionSurface(jumpMenuElement);
   jumpMenuElement
     ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
     ?.focus();
@@ -848,7 +853,7 @@ function jumpToSection(section: SectionId) {
 }
 
 function onJumpMenuKeydown(event: KeyboardEvent) {
-  if (jumpMenuElement === undefined) return;
+  if (!(jumpMenuElement instanceof HTMLElement)) return;
   const items = [
     ...jumpMenuElement.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
   ];
@@ -917,10 +922,10 @@ function onKeydown(event: KeyboardEvent) {
     }
     return;
   }
-  if (event.key !== "Tab" || dialogElement === undefined) {
+  if (event.key !== "Tab" || !(dialogElement instanceof HTMLElement)) {
     return;
   }
-  if (jumpMenuOpen && jumpMenuElement !== undefined) {
+  if (jumpMenuOpen && jumpMenuElement instanceof HTMLElement) {
     const menuFocusable = [
       ...jumpMenuElement.querySelectorAll<HTMLElement>(
         'button:not(:disabled), [tabindex]:not([tabindex="-1"])',

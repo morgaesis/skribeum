@@ -38,6 +38,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   security concern rather than reading like an ordinary network hiccup, and
   it is announced assertively rather than as routine status text.
 
+### Fixed
+
+- Opening a note that lives inside a collapsed folder no longer stops the
+  application. The file tree measured a row the same update had released,
+  and the resulting error, thrown from inside a reactive effect, halted every
+  surface with no message and no recovery. The workspace it left behind was
+  saved, so the next visit reproduced it; a stored workspace now reconciles a
+  selected note with the folders on the way to it, so a record like that
+  heals when it is read.
+- A failure inside one panel of the shell now takes down only that panel,
+  which reports the failure in place and offers to rebuild itself, while the
+  rest of the workspace keeps rendering and responding.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

@@ -7,6 +7,7 @@
 // exactly. Any touched byte outside a declared range would break the
 // reconstruction.
 
+import { Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import {
   applyByteChangeSet,
@@ -16,12 +17,14 @@ import {
   applyTableOperation,
   editTable,
   editTableCell,
+  extendedTableDocumentEnd,
   formatTableChanges,
   isDelimiterLine,
   type TableOperation,
   tableAlignments,
   tableCellRanges,
 } from "../../src/lib/features/tableOperations";
+import { TABLE_EDITING_NOTE_CONTENT } from "../e2e/scratchVault";
 
 const encoder = new TextEncoder();
 
@@ -300,6 +303,139 @@ describe("table cell navigation model", () => {
       "c",
       "d",
     ]);
+  });
+});
+
+describe("table block end over a partial row", () => {
+  const table = [
+    "| Name  | Score |",
+    "| :--- | ---: |",
+    "| café   | keep  |",
+    "| Ada | 10 |",
+  ].join("\n");
+  const document = Text.of(
+    [
+      "# Table cell editing",
+      "",
+      "Before editable table.",
+      "",
+      ...table.split("\n"),
+      "",
+      "Large table follows.",
+      "",
+    ]
+      .join("\n")
+      .split("\n"),
+  );
+  const tableFrom = document.toString().indexOf("| Name");
+  // A table block spans whole rows. A reported end that stops inside a
+  // row must still resolve to that row's end, because every offset a
+  // table edit declares is measured against the block text.
+  const partialRowEnd = tableFrom + 46;
+
+  it("completes a row the reported end stops inside", () => {
+    expect(document.sliceString(partialRowEnd - 3, partialRowEnd)).toBe("| k");
+    expect(extendedTableDocumentEnd(document, tableFrom, partialRowEnd)).toBe(
+      tableFrom + table.length,
+    );
+  });
+
+  it("never splices a structure edit into the middle of a row", () => {
+    const block = document.sliceString(
+      tableFrom,
+      extendedTableDocumentEnd(document, tableFrom, partialRowEnd),
+    );
+    const spans = editTable(block, {
+      kind: "insert-row",
+      line: 2,
+      position: "below",
+    });
+    const source = document.toString();
+    const edited = spans.reduce(
+      (text, span) =>
+        text.slice(0, tableFrom + span.from) +
+        span.insert +
+        text.slice(tableFrom + span.to),
+      source,
+    );
+    expect(edited).toBe(
+      source.replace("| café   | keep  |\n", "| café   | keep  |\n| | |\n"),
+    );
+  });
+
+  it("leaves a row-aligned reported end unchanged", () => {
+    for (const rows of [1, 2, 3, 4]) {
+      const end =
+        tableFrom + table.split("\n").slice(0, rows).join("\n").length;
+      expect(extendedTableDocumentEnd(document, tableFrom, end)).toBe(
+        tableFrom + table.length,
+      );
+    }
+  });
+
+  it("completes only partial rows, never a following paragraph", () => {
+    const prose = Text.of(
+      ["| a | b |", "| --- | --- |", "| c | d |", "", "Following prose."]
+        .join("\n")
+        .split("\n"),
+    );
+    const blockEnd = prose.toString().indexOf("\n\nFollowing");
+    // An end inside the paragraph is not a partial row, so it stays put
+    // rather than growing the block over prose.
+    expect(extendedTableDocumentEnd(prose, 0, blockEnd + 4)).toBe(blockEnd + 4);
+  });
+
+  it("completes a partial row in a table without outer pipes", () => {
+    const source = "a | b\n--- | ---\nc | d";
+    const pipeFree = Text.of(source.split("\n"));
+    expect(
+      extendedTableDocumentEnd(pipeFree, 0, source.indexOf("c |") + 1),
+    ).toBe(source.length);
+  });
+
+  it("leaves a prose line that happens to contain a pipe outside the block", () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |\n\nPipe | in prose.";
+    const withPipe = Text.of(source.split("\n"));
+    const tableEnd = source.indexOf("\n\nPipe");
+    // The prose line carries a pipe and the block's column count, but not
+    // the header's outer pipes, so it is not a row of this block.
+    for (let end = tableEnd + 2; end <= source.length; end += 1) {
+      expect(extendedTableDocumentEnd(withPipe, 0, end)).toBeLessThanOrEqual(
+        end,
+      );
+    }
+  });
+
+  it("completes the last row when the table ends the document", () => {
+    const source = "| a | b |\n| --- | --- |\n| c | d |";
+    const trailing = Text.of(source.split("\n"));
+    for (let end = 1; end <= source.length; end += 1) {
+      expect(extendedTableDocumentEnd(trailing, 0, end)).toBe(source.length);
+    }
+  });
+
+  it("never reaches past the first table of the rendered-table fixture", () => {
+    // The end-to-end fixture, verbatim: a small table, a paragraph, then a
+    // large table. No reported end may resolve into that paragraph, and a
+    // reported end inside the table always resolves to the table's end.
+    const fixture = Text.of(TABLE_EDITING_NOTE_CONTENT.split("\n"));
+    const text = fixture.toString();
+    const from = text.indexOf("| Name");
+    const trueEnd = from + table.length;
+    const proseFrom = text.indexOf("Large table follows.");
+    expect(text.slice(trueEnd, proseFrom)).toBe("\n\n");
+    for (let end = 0; end <= text.length; end += 1) {
+      const resolved = extendedTableDocumentEnd(fixture, from, end);
+      // An end anywhere inside the table resolves to the table's end.
+      if (end > from && end <= trueEnd) {
+        expect(resolved).toBe(trueEnd);
+      }
+      // The block never reaches into the paragraph unless the reported
+      // end was already there.
+      if (resolved >= proseFrom) {
+        expect(end).toBeGreaterThanOrEqual(proseFrom);
+      }
+    }
   });
 });
 

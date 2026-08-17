@@ -18,7 +18,7 @@ let {
   edge: "left" | "right";
   label: string;
   onResize: (next: number) => void;
-  onCollapse: () => void;
+  onCollapse: (origin: HTMLElement) => void;
 } = $props();
 
 let dragging = $state(false);
@@ -74,7 +74,7 @@ function onKeydown(event: KeyboardEvent) {
   else if (event.key === "Home") next = minimum;
   else if (event.key === "End") next = maximum;
   else if (event.key === "Enter") {
-    onCollapse();
+    onCollapse(event.currentTarget as HTMLElement);
     event.preventDefault();
     return;
   }

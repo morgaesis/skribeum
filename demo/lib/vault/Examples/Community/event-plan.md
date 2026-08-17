@@ -16,6 +16,10 @@ Host a half-day gathering where neighbors can learn simple repair skills, work a
 
 The shared-tool-table result in [[Features/tables|Tables]] suggests splitting common supplies between the object and bicycle zones. Clear labels should match the spoken orientation, following the access notes from [[Examples/Research/interview-notes|Interview notes]].
 
+The bicycle zone needs a stand, a floor pump within reach, and enough space to kneel beside the wheel:
+
+![Flat illustration of a bicycle held in a repair stand, with a floor pump beside it](https://skribeum.app/bicycle-stand.svg)
+
 ## Volunteer briefing
 
 - Begin by asking what outcome the visitor wants.

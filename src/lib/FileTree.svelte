@@ -1,5 +1,6 @@
 <script lang="ts">
-import { tick } from "svelte";
+import { onDestroy, tick } from "svelte";
+import { computeAnchoredPosition } from "./anchoredMenu";
 import { commandTooltip } from "./commandTooltip";
 import type { TreeEntry } from "./ipc/bindings";
 import {
@@ -10,6 +11,7 @@ import {
 import { noteFileName, noteIcon, resolveTitleCollisions } from "./noteTitles";
 import type { CommandContext, CommandRegistry } from "./registry";
 import { STRINGS } from "./strings";
+import { visualViewportRect } from "./visualViewport";
 
 const DESKTOP_ROW_HEIGHT = 28;
 const TOUCH_ROW_HEIGHT = 44;
@@ -50,7 +52,7 @@ let {
   expandedPaths?: readonly string[];
   onExpandedChange?: (paths: string[]) => void;
   onSelectionChange?: (path: string | null) => void;
-  onOpenPath: (path: string) => void;
+  onOpenPath: (path: string, options?: { newTab?: boolean }) => void;
   registry?: CommandRegistry;
   commandContext?: () => CommandContext;
   desktop?: boolean;
@@ -64,23 +66,29 @@ let autoExpanded = $state<Record<string, boolean>>({});
 let focusIndex = $state(0);
 let scrollTop = $state(0);
 let viewportHeight = $state(0);
-let treeElement = $state<HTMLUListElement>();
-let itemElements = $state<Array<HTMLElement | undefined>>([]);
+// `bind:this` writes `null`, not `undefined`, into a slot whose element has
+// been torn down (a keyed row moving to a different index releases its old
+// slot that way), so every element reference below is checked for being an
+// element rather than for being defined.
+let treeElement = $state<HTMLUListElement | null>();
+let itemElements = $state<Array<HTMLElement | null | undefined>>([]);
 let menuPath = $state<string | null>(null);
 let menuLeft = $state(0);
 let menuTop = $state(0);
 let menuOrigin = $state<HTMLElement | null>(null);
-let menuElement = $state<HTMLElement>();
+let menuElement = $state<HTMLElement | null>();
 let dragPath = $state<string | null>(null);
 let dropPath = $state<string | null>(null);
 let hoveredPath = $state<string | null>(null);
 let holdTimer: ReturnType<typeof setTimeout> | null = null;
 let menuCloseGeneration = 0;
 let folderMotionGeneration = 0;
+let folderMotionFrame: number | null = null;
+let folderMotionTimer: ReturnType<typeof setTimeout> | null = null;
 let folderMotionElements: HTMLElement[] = [];
-let ghostElements = $state<Array<HTMLElement | undefined>>([]);
+let ghostElements = $state<Array<HTMLElement | null | undefined>>([]);
 let leavingRows = $state<GhostRow[]>([]);
-let highlightElement = $state<HTMLElement>();
+let highlightElement = $state<HTMLElement | null>();
 // Plain (non-reactive) bookkeeping: the choreography effect below both
 // reads and writes these, and making them `$state` would make its own
 // writes re-trigger itself mid-flush, stomping the entrance markers it had
@@ -88,6 +96,9 @@ let highlightElement = $state<HTMLElement>();
 let highlightRestTop: number | null = null;
 let highlightAnimatedPath: string | null = null;
 let highlightMotionGeneration = 0;
+let highlightMotionFrame: number | null = null;
+let highlightMotionTimer: ReturnType<typeof setTimeout> | null = null;
+let mounted = true;
 
 type RowPresentation = {
   path: string;
@@ -111,6 +122,14 @@ type Row = TreeEntry & {
 type GhostRow = RowPresentation & {
   open: boolean;
   top: number;
+  opacity: number;
+};
+
+type FolderMotionSnapshot = {
+  presentation: RowPresentation;
+  open: boolean;
+  top: number;
+  opacity: number;
 };
 
 function parentPath(path: string): string {
@@ -121,6 +140,83 @@ function baseName(path: string): string {
   return path.split("/").at(-1) ?? path;
 }
 
+function transformOffset(element: HTMLElement, axis: "x" | "y"): number {
+  const transform = getComputedStyle(element).transform.trim();
+  if (transform === "" || transform === "none") return 0;
+
+  const matrix3d = transform.match(/^matrix3d\(([^)]+)\)$/);
+  if (matrix3d !== null) {
+    const values = matrix3d[1]?.split(",").map(Number) ?? [];
+    return values[axis === "x" ? 12 : 13] ?? 0;
+  }
+  const matrix = transform.match(/^matrix\(([^)]+)\)$/);
+  if (matrix !== null) {
+    const values = matrix[1]?.split(",").map(Number) ?? [];
+    return values[axis === "x" ? 4 : 5] ?? 0;
+  }
+
+  const translate = transform.match(
+    /^translate\(\s*(-?[\d.]+)px(?:,\s*(-?[\d.]+)px)?\s*\)$/,
+  );
+  if (translate !== null) {
+    return Number.parseFloat(translate[axis === "x" ? 1 : 2] ?? "0");
+  }
+  const axisTranslate = transform.match(
+    new RegExp(`^translate${axis.toUpperCase()}\\(\\s*(-?[\\d.]+)px\\s*\\)$`),
+  );
+  return axisTranslate === null
+    ? 0
+    : Number.parseFloat(axisTranslate[1] ?? "0");
+}
+
+function renderedCoordinate(
+  element: HTMLElement,
+  axis: "x" | "y",
+  fallback: number,
+): number {
+  const property = axis === "x" ? element.style.left : element.style.top;
+  const base = Number.parseFloat(property);
+  return (
+    (Number.isFinite(base) ? base : fallback) + transformOffset(element, axis)
+  );
+}
+
+function renderedOpacity(element: HTMLElement): number {
+  const opacity = Number.parseFloat(getComputedStyle(element).opacity);
+  return Number.isFinite(opacity) ? opacity : 1;
+}
+
+function cancelHighlightCallbacks(): void {
+  if (highlightMotionFrame !== null) {
+    cancelAnimationFrame(highlightMotionFrame);
+    highlightMotionFrame = null;
+  }
+  if (highlightMotionTimer !== null) {
+    clearTimeout(highlightMotionTimer);
+    highlightMotionTimer = null;
+  }
+}
+
+function cancelFolderCallbacks(): void {
+  if (folderMotionFrame !== null) {
+    cancelAnimationFrame(folderMotionFrame);
+    folderMotionFrame = null;
+  }
+  if (folderMotionTimer !== null) {
+    clearTimeout(folderMotionTimer);
+    folderMotionTimer = null;
+  }
+}
+
+onDestroy(() => {
+  mounted = false;
+  highlightMotionGeneration += 1;
+  folderMotionGeneration += 1;
+  menuCloseGeneration += 1;
+  cancelHighlightCallbacks();
+  cancelFolderCallbacks();
+  clearHold();
+});
 function expanded(path: string): boolean {
   return userExpanded[path] === true || autoExpanded[path] === true;
 }
@@ -266,6 +362,7 @@ const menuCommands = $derived.by(() => {
         ]
       : menuRow.kind === "note"
         ? [
+            "tree.note.open-in-new-tab",
             "tree.entry.rename",
             "tree.entry.delete",
             "tree.note.copy-link",
@@ -297,9 +394,27 @@ $effect(() => {
       if (userExpanded[ancestor] !== true) next[ancestor] = true;
     }
   }
-  autoExpanded = next;
+  const previous = autoExpanded;
+  const changed =
+    Object.keys(previous).length !== Object.keys(next).length ||
+    Object.keys(next).some((ancestor) => previous[ancestor] !== true);
+  if (changed) {
+    const snapshots = captureFolderMotion();
+    const collapsingPaths = Object.keys(previous).filter(
+      (folderPath) =>
+        previous[folderPath] === true &&
+        next[folderPath] !== true &&
+        userExpanded[folderPath] !== true,
+    );
+    const generation = ++folderMotionGeneration;
+    cancelFolderCallbacks();
+    settleFolderMotion();
+    autoExpanded = next;
+    void playFolderReveal(snapshots, generation, collapsingPaths);
+  }
   if (path !== null) {
     void tick().then(() => {
+      if (!mounted) return;
       const index = rows.findIndex((row) => row.path === path);
       if (index >= 0) void focusRow(index, false);
     });
@@ -322,9 +437,11 @@ $effect(() => {
   const path = selectedPath;
   const top = activeRowTop;
   const element = highlightElement;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
 
   if (top === null) {
+    highlightMotionGeneration += 1;
+    cancelHighlightCallbacks();
     // Deliberately leaves `highlightAnimatedPath` untouched: a row can
     // resolve to null on an intermediate pass within the same flush (e.g.
     // the tree hasn't derived its rows yet) before settling on the real
@@ -339,6 +456,11 @@ $effect(() => {
 
   const isNewSelection = path !== highlightAnimatedPath;
   highlightAnimatedPath = path;
+  const previousTop =
+    highlightRestTop === null
+      ? null
+      : renderedCoordinate(element, "y", highlightRestTop);
+  cancelHighlightCallbacks();
   const generation = ++highlightMotionGeneration;
 
   // The panel-duration custom property is root-scoped (theme and the
@@ -357,7 +479,6 @@ $effect(() => {
     return;
   }
 
-  const previousTop = highlightRestTop;
   if (previousTop === null) {
     element.style.transition = "";
     element.style.transform = "";
@@ -377,12 +498,14 @@ $effect(() => {
   element.style.transform = `translateY(${previousTop - top}px)`;
   highlightRestTop = top;
   void element.offsetHeight;
-  requestAnimationFrame(() => {
-    if (generation !== highlightMotionGeneration) return;
+  highlightMotionFrame = requestAnimationFrame(() => {
+    highlightMotionFrame = null;
+    if (!mounted || generation !== highlightMotionGeneration) return;
     element.style.transition = ACTIVE_HIGHLIGHT_TRAVEL_TRANSITION;
     element.style.transform = "";
-    setTimeout(() => {
-      if (generation !== highlightMotionGeneration) return;
+    highlightMotionTimer = setTimeout(() => {
+      highlightMotionTimer = null;
+      if (!mounted || generation !== highlightMotionGeneration) return;
       element.style.transition = "";
     }, duration);
   });
@@ -403,14 +526,21 @@ $effect(() => {
     }
     closeMenu(false);
   };
+  const dismissOnBlur = () => closeMenu(false);
   document.addEventListener("pointerdown", dismiss, true);
-  return () => document.removeEventListener("pointerdown", dismiss, true);
+  window.addEventListener("blur", dismissOnBlur);
+  return () => {
+    document.removeEventListener("pointerdown", dismiss, true);
+    window.removeEventListener("blur", dismissOnBlur);
+  };
 });
 
 $effect(() => {
   const element = treeElement;
-  if (element === undefined) return;
-  const measure = () => (viewportHeight = element.clientHeight);
+  if (!(element instanceof HTMLElement)) return;
+  const measure = () => {
+    if (mounted) viewportHeight = element.clientHeight;
+  };
   measure();
   const observer = new ResizeObserver(measure);
   observer.observe(element);
@@ -421,7 +551,7 @@ async function focusRow(index: number, focus = true) {
   if (rows.length === 0) return;
   const nextIndex = Math.max(0, Math.min(index, rows.length - 1));
   focusIndex = nextIndex;
-  if (treeElement !== undefined) {
+  if (treeElement != null) {
     const rowTop = TREE_PADDING + nextIndex * rowHeight;
     const rowBottom = rowTop + rowHeight;
     const viewportBottom = treeElement.scrollTop + treeElement.clientHeight;
@@ -432,7 +562,31 @@ async function focusRow(index: number, focus = true) {
     scrollTop = treeElement.scrollTop;
   }
   await tick();
+  if (!mounted) return;
   if (focus) itemElements[nextIndex]?.focus();
+}
+
+function restoreMenuTreeFocus(path: string): () => void {
+  const originIndex = rows.findIndex((row) => row.path === path);
+  if (originIndex >= 0) {
+    focusIndex = originIndex;
+    itemElements[originIndex]?.focus();
+  }
+
+  return () => {
+    const exactIndex = rows.findIndex((row) => row.path === path);
+    if (exactIndex >= 0) {
+      void focusRow(exactIndex);
+      return;
+    }
+    if (rows.length > 0) {
+      // A removed row hands focus to its following sibling when available,
+      // otherwise the preceding sibling at the final surviving index.
+      void focusRow(Math.min(Math.max(originIndex, 0), rows.length - 1));
+      return;
+    }
+    treeElement?.focus();
+  };
 }
 
 function persistExpanded() {
@@ -445,6 +599,51 @@ function persistExpanded() {
 
 function toggleFolder(row: Row) {
   void toggleFolderWithReveal(row);
+}
+
+function captureFolderMotion(): Map<string, FolderMotionSnapshot> {
+  const snapshots = new Map<string, FolderMotionSnapshot>();
+  for (const index of renderedIndices) {
+    const row = rows[index];
+    const element = itemElements[index];
+    if (row === undefined || !(element instanceof HTMLElement)) continue;
+    snapshots.set(row.path, {
+      presentation: {
+        path: row.path,
+        kind: row.kind,
+        depth: row.depth,
+        label: row.label,
+        ...(row.suffix === undefined ? {} : { suffix: row.suffix }),
+        ...(row.icon === undefined ? {} : { icon: row.icon }),
+      },
+      open: row.kind === "directory" && expanded(row.path),
+      top: renderedCoordinate(element, "y", TREE_PADDING + index * rowHeight),
+      opacity: renderedOpacity(element),
+    });
+  }
+  for (const [index, ghost] of leavingRows.entries()) {
+    const element = ghostElements[index];
+    snapshots.set(ghost.path, {
+      presentation: {
+        path: ghost.path,
+        kind: ghost.kind,
+        depth: ghost.depth,
+        label: ghost.label,
+        ...(ghost.suffix === undefined ? {} : { suffix: ghost.suffix }),
+        ...(ghost.icon === undefined ? {} : { icon: ghost.icon }),
+      },
+      open: ghost.open,
+      top:
+        element instanceof HTMLElement
+          ? renderedCoordinate(element, "y", ghost.top)
+          : ghost.top,
+      opacity:
+        element instanceof HTMLElement
+          ? renderedOpacity(element)
+          : ghost.opacity,
+    });
+  }
+  return snapshots;
 }
 
 /** Restores every row the reveal choreography touched to its settled state. */
@@ -471,33 +670,32 @@ function settleFolderMotion() {
 async function toggleFolderWithReveal(row: Row) {
   const folderPath = row.path;
   const opening = !expanded(folderPath);
+  const snapshots = captureFolderMotion();
   const generation = ++folderMotionGeneration;
+  cancelFolderCallbacks();
   settleFolderMotion();
   const tree = treeElement;
-  const duration =
-    tree === undefined
-      ? 0
-      : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
-  const previousIndex =
-    duration === 0
-      ? null
-      : new Map(rows.map((entry, index) => [entry.path, index]));
-  if (previousIndex !== null && !opening) {
+  const duration = !(tree instanceof HTMLElement)
+    ? 0
+    : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
+  if (duration > 0 && !opening) {
     leavingRows = renderedIndices.flatMap((index): GhostRow[] => {
       const hidden = rows[index];
-      if (hidden === undefined || !hidden.path.startsWith(`${folderPath}/`)) {
+      const snapshot =
+        hidden === undefined ? undefined : snapshots.get(hidden.path);
+      if (
+        hidden === undefined ||
+        snapshot === undefined ||
+        !hidden.path.startsWith(`${folderPath}/`)
+      ) {
         return [];
       }
       return [
         {
-          path: hidden.path,
-          kind: hidden.kind,
-          depth: hidden.depth,
-          label: hidden.label,
-          ...(hidden.suffix === undefined ? {} : { suffix: hidden.suffix }),
-          ...(hidden.icon === undefined ? {} : { icon: hidden.icon }),
-          open: hidden.kind === "directory" && expanded(hidden.path),
-          top: TREE_PADDING + index * rowHeight,
+          ...snapshot.presentation,
+          open: snapshot.open,
+          top: snapshot.top,
+          opacity: snapshot.opacity,
         },
       ];
     });
@@ -505,32 +703,71 @@ async function toggleFolderWithReveal(row: Row) {
   userExpanded[folderPath] = opening;
   delete autoExpanded[folderPath];
   persistExpanded();
-  if (previousIndex === null || tree === undefined) return;
+  if (duration === 0 || !(tree instanceof HTMLElement)) return;
+  await playFolderReveal(snapshots, generation, opening ? [] : [folderPath]);
+}
+
+async function playFolderReveal(
+  snapshots: Map<string, FolderMotionSnapshot>,
+  generation: number,
+  collapsingPaths: readonly string[] = [],
+): Promise<void> {
+  const tree = treeElement;
+  if (!mounted || !(tree instanceof HTMLElement)) return;
+  const duration = motionDurationMilliseconds(
+    "--skr-motion-panel-duration",
+    tree,
+  );
+  if (duration === 0) return;
+  if (collapsingPaths.length > 0) {
+    leavingRows = [...snapshots.values()]
+      .filter((snapshot) =>
+        collapsingPaths.some((folderPath) =>
+          snapshot.presentation.path.startsWith(`${folderPath}/`),
+        ),
+      )
+      .map((snapshot) => ({
+        ...snapshot.presentation,
+        open: snapshot.open,
+        top: snapshot.top,
+        opacity: snapshot.opacity,
+      }));
+  }
   await tick();
-  if (generation !== folderMotionGeneration) return;
+  if (!mounted || generation !== folderMotionGeneration) return;
   const moving: HTMLElement[] = [];
   for (const index of renderedIndices) {
     const current = rows[index];
     const element = itemElements[index];
-    if (current === undefined || element === undefined) continue;
-    const before = previousIndex.get(current.path);
+    if (current === undefined || !(element instanceof HTMLElement)) continue;
+    const before = snapshots.get(current.path);
     if (before === undefined) {
+      element.style.transition = "none";
       element.style.opacity = "0";
-    } else if (before !== index) {
-      element.style.transform = `translateY(${(before - index) * rowHeight}px)`;
+      moving.push(element);
     } else {
-      continue;
+      const finalTop = TREE_PADDING + index * rowHeight;
+      const offset = before.top - finalTop;
+      const opacityChanged = before.opacity < 1;
+      if (offset === 0 && !opacityChanged) continue;
+      element.style.transition = "none";
+      if (offset !== 0) element.style.transform = `translateY(${offset}px)`;
+      if (opacityChanged) element.style.opacity = `${before.opacity}`;
+      moving.push(element);
     }
-    element.style.transition = "none";
-    moving.push(element);
   }
   const ghosts = ghostElements.filter(
-    (element): element is HTMLElement => element !== undefined,
+    (element): element is HTMLElement => element instanceof HTMLElement,
   );
   folderMotionElements = [...moving, ...ghosts];
+  if (folderMotionElements.length === 0) {
+    settleFolderMotion();
+    return;
+  }
   void tree.offsetWidth;
-  requestAnimationFrame(() => {
-    if (generation !== folderMotionGeneration) return;
+  folderMotionFrame = requestAnimationFrame(() => {
+    folderMotionFrame = null;
+    if (!mounted || generation !== folderMotionGeneration) return;
     for (const element of moving) {
       element.style.transition = FOLDER_REVEAL_TRANSITION;
       element.style.transform = "";
@@ -540,14 +777,15 @@ async function toggleFolderWithReveal(row: Row) {
       ghost.style.transition = FOLDER_REVEAL_TRANSITION;
       ghost.style.opacity = "0";
     }
-    setTimeout(() => {
-      if (generation !== folderMotionGeneration) return;
+    folderMotionTimer = setTimeout(() => {
+      folderMotionTimer = null;
+      if (!mounted || generation !== folderMotionGeneration) return;
       settleFolderMotion();
     }, duration);
   });
 }
 
-function activate(row: Row) {
+function activate(row: Row, newTab = false) {
   if (row.kind === "directory") {
     toggleFolder(row);
   } else if (
@@ -555,7 +793,7 @@ function activate(row: Row) {
     row.path.toLowerCase().endsWith(".canvas")
   ) {
     onSelectionChange?.(row.path);
-    onOpenPath(row.path);
+    onOpenPath(row.path, { newTab });
   }
 }
 
@@ -569,34 +807,50 @@ function closeMenu(restore = true) {
   const menu = menuElement;
   const generation = ++menuCloseGeneration;
   const finish = () => {
-    if (generation !== menuCloseGeneration) return;
+    if (!mounted || generation !== menuCloseGeneration) return;
     menuPath = null;
     menuOrigin = null;
-    if (restore) void tick().then(() => origin?.focus());
+    if (restore) {
+      void tick().then(() => {
+        if (mounted) origin?.focus();
+      });
+    }
   };
-  if (menu === undefined) finish();
+  if (!(menu instanceof HTMLElement)) finish();
   else void exitMotionSurface(menu, finish);
 }
 
 function openMenu(row: Row, origin: HTMLElement, x?: number, y?: number) {
   menuCloseGeneration += 1;
   const bounds = origin.getBoundingClientRect();
+  // A context click or long-press anchors to that point; the row's own
+  // overflow button anchors to its own bottom-right corner. Either way the
+  // anchor is a single point, expressed as a zero-size rect so it shares
+  // the flip-to-fit clamp every other menu in the product uses.
+  const point = { left: x ?? bounds.right, top: y ?? bounds.bottom };
+  const anchor = {
+    ...point,
+    right: point.left,
+    bottom: point.top,
+    width: 0,
+    height: 0,
+  };
   menuPath = row.path;
   menuOrigin = origin;
-  menuLeft = x ?? bounds.right;
-  menuTop = y ?? bounds.bottom;
+  menuLeft = anchor.left;
+  menuTop = anchor.top;
   void tick().then(() => {
+    if (!mounted) return;
     const menu = menuElement;
-    if (menu === undefined) return;
-    const bounds = menu.getBoundingClientRect();
-    menuLeft = Math.max(
-      8,
-      Math.min(menuLeft, window.innerWidth - bounds.width - 8),
+    if (!(menu instanceof HTMLElement)) return;
+    const position = computeAnchoredPosition(
+      anchor,
+      { width: menu.offsetWidth, height: menu.offsetHeight },
+      visualViewportRect(window),
+      { gap: 0 },
     );
-    menuTop = Math.max(
-      8,
-      Math.min(menuTop, window.innerHeight - bounds.height - 8),
-    );
+    menuLeft = position.left;
+    menuTop = position.top;
     enterMotionSurface(menu);
     menu.querySelector<HTMLElement>("button")?.focus();
   });
@@ -606,8 +860,30 @@ function runMenuCommand(id: string) {
   const path = menuPath;
   if (path === null || registry === undefined || commandContext === undefined)
     return;
+  const restoreTreeFocus = restoreMenuTreeFocus(path);
   closeMenu(false);
-  registry.run(id, { ...commandContext(), treePath: path });
+  registry.run(id, {
+    ...commandContext(),
+    treePath: path,
+    restoreTreeFocus,
+  });
+}
+
+/**
+ * Runs a tree command directly against the focused row, bypassing the
+ * action menu: the `F2`/`Delete` accelerators every Obsidian and VS Code
+ * user reaches for first. Shares the same context shape `runMenuCommand`
+ * builds from the menu, so a rename or delete behaves identically and
+ * returns focus the same way whichever route triggered it.
+ */
+function runRowCommand(id: string, row: Row) {
+  if (registry === undefined || commandContext === undefined) return;
+  const restoreTreeFocus = restoreMenuTreeFocus(row.path);
+  registry.run(id, {
+    ...commandContext(),
+    treePath: row.path,
+    restoreTreeFocus,
+  });
 }
 
 function rowContextMenu(event: MouseEvent, row: Row) {
@@ -626,6 +902,7 @@ function beginHold(event: PointerEvent, row: Row) {
   const origin = event.currentTarget as HTMLElement;
   holdTimer = setTimeout(() => {
     holdTimer = null;
+    if (!mounted) return;
     openMenu(row, origin, event.clientX, event.clientY);
   }, HOLD_DELAY_MS);
 }
@@ -636,8 +913,9 @@ function clearHold() {
 }
 
 // registry-exempt keydown: ARIA tree and menu roving navigation stay inside
-// their widgets. Every application action dispatched from the menu is a
-// registered command.
+// their widgets. Every application action dispatched from a row, whether
+// through the menu or through the F2/Delete accelerators below, is a
+// registered command run through the registry.
 function onKeydown(event: KeyboardEvent) {
   const row = rows[focusIndex];
   if (row === undefined) return;
@@ -681,6 +959,12 @@ function onKeydown(event: KeyboardEvent) {
         row,
         itemElements[focusIndex] ?? (event.currentTarget as HTMLElement),
       );
+      break;
+    case "F2":
+      runRowCommand("tree.entry.rename", row);
+      break;
+    case "Delete":
+      runRowCommand("tree.entry.delete", row);
       break;
     default:
       return;
@@ -762,6 +1046,7 @@ function dropOn(destination: string | null) {
   bind:this={treeElement}
   class="skr-file-tree"
   role="tree"
+  tabindex="-1"
   aria-label={STRINGS.vaultTreeLabel}
   onkeydown={onKeydown}
   onscroll={(event) => {
@@ -816,9 +1101,15 @@ function dropOn(destination: string | null) {
         style={`top: ${TREE_PADDING + index * rowHeight}px; height: ${rowHeight}px; padding-left: ${0.5 + row.depth}rem`}
         draggable={row.kind !== "file" || row.path.toLowerCase().endsWith(".canvas")}
         onfocus={() => (focusIndex = index)}
-        onclick={() => {
+        onclick={(event) => {
           void focusRow(index);
-          activate(row);
+          activate(row, event.ctrlKey || event.metaKey);
+        }}
+        onauxclick={(event) => {
+          if (event.button !== 1) return;
+          event.preventDefault();
+          void focusRow(index);
+          activate(row, true);
         }}
         oncontextmenu={(event) => rowContextMenu(event, row)}
         onpointerdown={(event) => beginHold(event, row)}
@@ -862,6 +1153,7 @@ function dropOn(destination: string | null) {
         <button
           type="button"
           class="skr-tree-actions"
+          tabindex={index === focusIndex ? 0 : -1}
           aria-label={`${STRINGS.rowActions}: ${row.label}`}
           aria-haspopup="menu"
           aria-expanded={menuPath === row.path}
@@ -894,7 +1186,8 @@ function dropOn(destination: string | null) {
       aria-hidden="true"
       inert
       class="skr-tree-row skr-tree-ghost"
-      style={`top: ${ghost.top}px; height: ${rowHeight}px; padding-left: ${0.5 + ghost.depth}rem`}
+      data-ghost-path={ghost.path}
+      style={`top: ${ghost.top}px; height: ${rowHeight}px; padding-left: ${0.5 + ghost.depth}rem${ghost.opacity < 1 ? `; opacity: ${ghost.opacity}` : ""}`}
     >
       {@render rowBody(ghost, ghost.open)}
     </li>

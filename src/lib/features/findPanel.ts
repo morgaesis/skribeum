@@ -215,7 +215,7 @@ const findTheme = View.baseTheme({
     borderBottomColor: "var(--skr-border-strong)",
   },
   ".cm-skr-find-count": {
-    fontSize: "0.85em",
+    fontSize: "0.8125em",
     opacity: "0.7",
     minWidth: "5em",
   },

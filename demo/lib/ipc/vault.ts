@@ -5,7 +5,7 @@ import type {
 } from "../../../src/lib/editor/durableHistory";
 import { isNotePath } from "../../../src/lib/noteTitles";
 import { STRINGS } from "../../../src/lib/strings";
-import { DEMO_FILES } from "../vault/seed";
+import { DEMO_BINARY_FILES, DEMO_FILES } from "../vault/seed";
 import type {
   AppError,
   ByteRangeReplace,
@@ -22,6 +22,12 @@ export type LoadedNote = {
   text: string;
   readOnly: boolean;
   recoveredChangeSet?: ByteRangeReplace[];
+};
+
+/** Browser-equivalent vault identity for the frontend native-lifecycle seam. */
+export type VaultOpenResult = {
+  handle: VaultHandle;
+  root: string;
 };
 
 type PermissionMode = "read" | "readwrite";
@@ -72,12 +78,16 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 function seededFiles(): Map<string, Uint8Array> {
-  return new Map(
+  const files = new Map(
     Object.entries(DEMO_FILES).map(([path, content]) => [
       path,
       encoder.encode(content),
     ]),
   );
+  for (const [path, bytes] of Object.entries(DEMO_BINARY_FILES)) {
+    files.set(path, bytes);
+  }
+  return files;
 }
 
 type DemoVault = {
@@ -388,7 +398,7 @@ function indexedTree(vault: DemoVault): TreeEntry[] {
   );
 }
 
-export async function openVault(path: string): Promise<VaultHandle> {
+export async function openVaultResult(path: string): Promise<VaultOpenResult> {
   const vault = folderSelections.get(path) ?? seededVault();
   folderSelections.delete(path);
   activeVault = vault;
@@ -399,7 +409,17 @@ export async function openVault(path: string): Promise<VaultHandle> {
   }
   nextVaultId += 1;
   vaults.set(nextVaultId, vault);
-  return { id: nextVaultId };
+  return { handle: { id: nextVaultId }, root: path };
+}
+
+/** Compatibility adapter for callers that only retain a browser handle. */
+export async function openVault(path: string): Promise<VaultHandle> {
+  return (await openVaultResult(path)).handle;
+}
+
+/** Mirrors native idempotent teardown without altering browser vault data. */
+export async function closeVault(handle: VaultHandle): Promise<void> {
+  vaults.delete(handle.id);
 }
 
 export async function vaultTree(handle: VaultHandle): Promise<TreeEntry[]> {

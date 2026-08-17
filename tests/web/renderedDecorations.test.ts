@@ -4,6 +4,7 @@ import { syntaxHighlighting } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { pointInMenuCone } from "../../src/lib/anchoredMenu";
 import { changedTextSpan } from "../../src/lib/editor/byteChangeSet";
 import {
   closeRenderedTableSource,
@@ -13,7 +14,6 @@ import {
   explicitTableSource,
   focusedRenderedTableCell,
   focusRenderedTableCell,
-  pointInPreviewCone,
   sourceRevealFocusMode,
   taskStatusConfiguration,
   tokenHighlightStyle,
@@ -23,6 +23,7 @@ import { codeLanguage } from "../../src/lib/editor/markdown/codeLanguages";
 import { obsidianMarkdownExtensionsFor } from "../../src/lib/editor/markdown/obsidian";
 import { createAppRegistry } from "../../src/lib/features";
 import { TASK_STATUS_MENU_COMMAND } from "../../src/lib/features/taskCommands";
+import { hoverIntentDelay } from "../../src/lib/motion";
 import type { CommandContext } from "../../src/lib/registry";
 import {
   DEFAULT_TASK_STATUSES,
@@ -70,6 +71,19 @@ async function waitForElement(
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`element did not render: ${selector}`);
+}
+
+/**
+ * Summons a task menu the way a pointer does: rest on the checkbox itself,
+ * then wait out the shared intent delay before the surface appears.
+ */
+async function hoverTaskCheckbox(control: HTMLElement | null): Promise<void> {
+  control
+    ?.querySelector<HTMLElement>(".cm-skr-task-checkbox")
+    ?.dispatchEvent(new Event("pointerenter"));
+  await new Promise((resolve) =>
+    setTimeout(resolve, hoverIntentDelay(document.documentElement) + 20),
+  );
 }
 
 afterEach(() => {
@@ -162,10 +176,10 @@ describe("rendered decoration DOM", () => {
     expect(view.state.doc.toString()).toBe("- [/] task");
   });
 
-  it("groups the default menu into at most ten selectable rows", () => {
+  it("groups the default menu into at most ten selectable rows", async () => {
     const view = mountedView("- [ ] task");
     const control = view.dom.querySelector<HTMLElement>(".cm-skr-task-control");
-    control?.dispatchEvent(new Event("pointerenter"));
+    await hoverTaskCheckbox(control);
     expect(
       [...(control?.querySelectorAll("[data-task-track-heading]") ?? [])].map(
         (heading) => heading.textContent,
@@ -180,10 +194,10 @@ describe("rendered decoration DOM", () => {
     expect(control?.textContent).not.toContain("More statuses (29)");
   });
 
-  it("writes a menu date as plain text and renders its token as a chip", () => {
+  it("writes a menu date as plain text and renders its token as a chip", async () => {
     const view = mountedView("- [ ] task");
     const control = view.dom.querySelector<HTMLElement>(".cm-skr-task-control");
-    control?.dispatchEvent(new Event("pointerenter"));
+    await hoverTaskCheckbox(control);
     const due = [
       ...(control?.querySelectorAll<HTMLElement>('[role="option"]') ?? []),
     ].find((option) => option.textContent?.includes("Due"));
@@ -222,7 +236,7 @@ describe("rendered decoration DOM", () => {
     }
   });
 
-  it("renders and cycles a custom status while leaving unknown markers alone", () => {
+  it("renders and cycles a custom status while leaving unknown markers alone", async () => {
     const taskStatuses: TaskStatus[] = [
       {
         symbol: " ",
@@ -264,7 +278,7 @@ describe("rendered decoration DOM", () => {
     const updatedControl = view.dom.querySelector<HTMLElement>(
       ".cm-skr-task-control",
     );
-    updatedControl?.dispatchEvent(new Event("pointerenter"));
+    await hoverTaskCheckbox(updatedControl);
     const readyOption = [
       ...(updatedControl?.querySelectorAll<HTMLElement>('[role="option"]') ??
         []),
@@ -286,11 +300,13 @@ describe("rendered decoration DOM", () => {
     );
     const listbox = control?.querySelector<HTMLElement>('[role="listbox"]');
     expect(listbox?.hidden).toBe(true);
-    control?.dispatchEvent(new Event("pointerenter"));
+    await hoverTaskCheckbox(control);
     expect(listbox?.hidden).toBe(false);
     expect(listbox?.querySelectorAll('[role="option"]')).toHaveLength(10);
 
-    control?.dispatchEvent(new Event("pointerleave"));
+    control
+      ?.querySelector<HTMLElement>(".cm-skr-task-checkbox")
+      ?.dispatchEvent(new Event("pointerleave"));
     checkbox?.focus();
     checkbox?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
@@ -354,6 +370,70 @@ describe("rendered decoration DOM", () => {
     await Promise.resolve();
     expect(view.state.doc.toString()).toBe("- [-] task\n\noutside");
     expect(document.activeElement?.classList).toContain("cm-skr-task-checkbox");
+  });
+
+  it("re-anchors the tap-opened task menu when the editor scrolls under it", async () => {
+    const source = "- [ ] task\n\noutside";
+    const view = mountedView(source, source.indexOf("outside"));
+    const context: CommandContext = {
+      view,
+      openNote: () => Promise.resolve(),
+      openView: () => {},
+      openCommandSurface: () => {},
+      toggleView: () => {},
+      closeSurfaces: () => {},
+      requestSave: () => {},
+      notePaths: () => [],
+      recentNotePaths: () => [],
+      navigateBack: () => false,
+      navigateForward: () => false,
+      followLink: () => false,
+    };
+    const registry = createAppRegistry();
+    const checkbox = view.dom.querySelector<HTMLElement>(
+      ".cm-skr-task-checkbox",
+    );
+    checkbox?.focus();
+
+    const rectAt = (bottom: number): DOMRect =>
+      ({
+        left: 20,
+        right: 40,
+        top: bottom - 20,
+        bottom,
+        width: 20,
+        height: 20,
+        x: 20,
+        y: bottom - 20,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    // Before the menu opens, the checkbox sits low on screen.
+    Object.defineProperty(checkbox as HTMLElement, "getBoundingClientRect", {
+      configurable: true,
+      value: () => rectAt(120),
+    });
+
+    expect(registry.run(TASK_STATUS_MENU_COMMAND, context)).toBe(true);
+    await Promise.resolve();
+    const palette = view.dom.querySelector<HTMLElement>(".cm-skr-task-palette");
+    expect(palette?.hidden).toBe(false);
+    const topAfterOpen = palette?.style.top;
+    expect(topAfterOpen).not.toBe("");
+
+    // The note scrolls while the menu stays open: the checkbox is now much
+    // further up the screen. Without live re-anchoring the menu would stay
+    // glued to its first position, floating over whatever is now under it.
+    Object.defineProperty(checkbox as HTMLElement, "getBoundingClientRect", {
+      configurable: true,
+      value: () => rectAt(500),
+    });
+    view.scrollDOM.dispatchEvent(new Event("scroll"));
+
+    expect(palette?.style.top).not.toBe(topAfterOpen);
+    const numericTop = Number.parseFloat(palette?.style.top ?? "0");
+    // The menu tracks the checkbox's new bottom edge (minus the fixed
+    // finger gap the placement math reserves), not its stale first spot.
+    expect(numericTop).toBeGreaterThan(400);
   });
 
   it("keeps heading marker geometry stable while cursor visibility changes", async () => {
@@ -641,6 +721,79 @@ describe("rendered decoration DOM", () => {
     const nestedView = nested === null ? null : EditorView.findFromDOM(nested);
     expect(nestedView?.state.doc.toString()).toBe("aXb");
     expect(nestedView?.state.selection.main.head).toBe(3);
+  });
+
+  // A rendered cell's editable surface is nested inside the note's. Every
+  // caret key the cell declines is resolved by the engine against the host
+  // document, which walks its own line boxes: `End` stops at a wrap point
+  // in a cell wide enough to wrap, and `Control-End` leaves the cell for
+  // the end of the note while the cell still holds the editing session,
+  // so the next thing typed lands outside the table. Engines disagree on
+  // all of it, so the cell has to claim these keys and answer them
+  // against its own bounds. Claiming is the property under test: an
+  // unclaimed key is one the engine decides.
+  describe("rendered cell caret keys", () => {
+    const source = "| ab | b |\n| --- | --- |\n| cdef | d |";
+    const pressInCell = (view: EditorView, key: string, init = {}) => {
+      const nested = view.dom.querySelector<HTMLElement>(
+        '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+      );
+      const nestedView =
+        nested === null ? null : EditorView.findFromDOM(nested);
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      nestedView?.contentDOM.dispatchEvent(event);
+      return { nestedView, claimed: event.defaultPrevented };
+    };
+
+    for (const [key, offset] of [
+      ["Home", 0],
+      ["End", 4],
+      ["PageUp", 0],
+      ["PageDown", 4],
+    ] as const) {
+      it(`answers ${key} against the cell's own bounds`, () => {
+        const view = mountedView(source, 0);
+        expect(focusRenderedTableCell(view, 0, 1, 0, 2)).toBe(true);
+        const { nestedView, claimed } = pressInCell(view, key);
+        expect(claimed).toBe(true);
+        expect(nestedView?.state.doc.toString()).toBe("cdef");
+        expect(nestedView?.state.selection.main.head).toBe(offset);
+        expect(view.state.doc.toString()).toBe(source);
+      });
+    }
+
+    it("keeps a document-edge key inside the cell", () => {
+      const view = mountedView(source, 0);
+      expect(focusRenderedTableCell(view, 0, 1, 0, 2)).toBe(true);
+      const { nestedView, claimed } = pressInCell(view, "End", {
+        ctrlKey: true,
+      });
+      expect(claimed).toBe(true);
+      expect(nestedView?.state.selection.main.head).toBe(4);
+      expect(focusedRenderedTableCell(view)).toMatchObject({
+        row: 1,
+        column: 0,
+        head: 4,
+      });
+      expect(view.state.doc.toString()).toBe(source);
+    });
+
+    it("extends the cell selection when shift holds", () => {
+      const view = mountedView(source, 0);
+      expect(focusRenderedTableCell(view, 0, 1, 0, 1)).toBe(true);
+      const { nestedView, claimed } = pressInCell(view, "End", {
+        shiftKey: true,
+      });
+      expect(claimed).toBe(true);
+      expect(nestedView?.state.selection.main.anchor).toBe(1);
+      expect(nestedView?.state.selection.main.head).toBe(4);
+      expect(view.dom.querySelector(".cm-skr-table-selected")).toBeNull();
+    });
   });
 
   it("drops cell ownership when its rendered widget is evicted", () => {
@@ -1121,6 +1274,51 @@ describe("rendered decoration DOM", () => {
     ).toBeNull();
   });
 
+  it("holds embed skeleton geometry through the content replacement frame", async () => {
+    vi.useFakeTimers();
+    let resolveNote: ((source: string) => void) | undefined;
+    const loaded = new Promise<string>((resolve) => {
+      resolveNote = resolve;
+    });
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      embedAncestry: ["Root.md"],
+      embedDepth: 0,
+      loadNote: () => loaded,
+    };
+    const view = mountedView("![[Other]]\n\noutside", undefined, context);
+    await vi.advanceTimersByTimeAsync(150);
+    const loading = view.dom.querySelector<HTMLElement>(
+      '.skr-loading-embed[data-loading-state="skeleton"]',
+    );
+    expect(loading).not.toBeNull();
+    if (loading === null) return;
+    vi.spyOn(loading, "getBoundingClientRect").mockReturnValue({
+      width: 320,
+      height: 72,
+      top: 0,
+      right: 320,
+      bottom: 72,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    resolveNote?.("**Resolved content**");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loading.style.minHeight).toBe("72px");
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(loading.style.minHeight).toBe("");
+  });
+
   it("shows a visible notice for an embed cycle", () => {
     const context: WikilinkResolutionContext = {
       paths: ["Root.md"],
@@ -1208,7 +1406,7 @@ describe("rendered decoration DOM", () => {
     preview.getBoundingClientRect = () =>
       ({ left: 100, right: 300, top: 80, bottom: 200 }) as DOMRect;
     expect(
-      pointInPreviewCone(
+      pointInMenuCone(
         { x: 75, y: 100 },
         { x: 50, y: 50 },
         preview.getBoundingClientRect(),
@@ -1275,6 +1473,177 @@ describe("rendered decoration DOM", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(preview?.querySelector(".cm-skr-strong")).not.toBeNull();
     expect(preview?.querySelector(".skr-skeleton-bar")).toBeNull();
+  });
+
+  it("loads each preview target once while the pointer moves", () => {
+    vi.useFakeTimers();
+    const loadNote = vi.fn(async (path: string) => `# ${path}`);
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "First.md", "Second.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote,
+    };
+    const view = mountedView("[[First]] [[Second]]", undefined, context);
+    const [first, second] = [
+      ...view.dom.querySelectorAll<HTMLElement>("[data-preview-target]"),
+    ];
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    if (first === undefined || second === undefined) return;
+
+    first.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    for (let movement = 0; movement < 100; movement += 1) {
+      first.dispatchEvent(new MouseEvent("pointermove", { bubbles: true }));
+    }
+    expect(loadNote).toHaveBeenCalledTimes(1);
+    expect(loadNote).toHaveBeenLastCalledWith("First.md");
+
+    second.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    expect(loadNote).toHaveBeenCalledTimes(2);
+    expect(loadNote).toHaveBeenLastCalledWith("Second.md");
+  });
+
+  it("keeps an obsolete preview resolution out of the active panel", async () => {
+    vi.useFakeTimers();
+    let resolveFirst: ((source: string) => void) | undefined;
+    let resolveSecond: ((source: string) => void) | undefined;
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "First.md", "Second.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote: (path) =>
+        new Promise<string>((resolve) => {
+          if (path === "First.md") {
+            resolveFirst = resolve;
+          } else {
+            resolveSecond = resolve;
+          }
+        }),
+    };
+    const view = mountedView("[[First]] [[Second]]", undefined, context);
+    const [first, second] = [
+      ...view.dom.querySelectorAll<HTMLElement>("[data-preview-target]"),
+    ];
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    if (first === undefined || second === undefined) return;
+
+    first.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(450);
+    second.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(450);
+
+    const preview = view.dom.querySelector<HTMLElement>(
+      '[data-testid="link-preview"]',
+    );
+    expect(preview?.textContent).toContain("Second.md");
+    resolveFirst?.("# First result");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(preview?.textContent).not.toContain("First result");
+
+    resolveSecond?.("# Second result");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(preview?.textContent).toContain("Second result");
+    expect(preview?.textContent).not.toContain("First result");
+  });
+
+  it("repositions a preview after async content grows below its link", async () => {
+    vi.useFakeTimers();
+    const originalHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: 300,
+    });
+    let resolveNote: ((source: string) => void) | undefined;
+    const source = new Promise<string>((resolve) => {
+      resolveNote = resolve;
+    });
+    const context: WikilinkResolutionContext = {
+      paths: ["Root.md", "Other.md"],
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+      currentPath: "Root.md",
+      linkPreviews: true,
+      loadNote: () => source,
+    };
+    const view = mountedView("See [[Other]].", undefined, context);
+    const link = view.dom.querySelector<HTMLElement>("[data-preview-target]");
+    expect(link).not.toBeNull();
+    if (link === null) return;
+    vi.spyOn(link, "getBoundingClientRect").mockReturnValue({
+      width: 100,
+      height: 20,
+      top: 140,
+      right: 200,
+      bottom: 160,
+      left: 100,
+      x: 100,
+      y: 140,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const panelRect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement): DOMRect {
+        if (this.dataset.testid === "link-preview") {
+          const expanded = this.querySelector(".cm-content") !== null;
+          const height = expanded ? 180 : 80;
+          return {
+            width: 240,
+            height,
+            top: 0,
+            right: 240,
+            bottom: height,
+            left: 0,
+            x: 0,
+            y: 0,
+            toJSON: () => ({}),
+          } as DOMRect;
+        }
+        return {
+          width: 0,
+          height: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    try {
+      link.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(450);
+      const preview = view.dom.querySelector<HTMLElement>(
+        '[data-testid="link-preview"]',
+      );
+      expect(preview?.style.top).toBe("168px");
+
+      resolveNote?.("**Expanded preview**");
+      await vi.advanceTimersByTimeAsync(20);
+      expect(preview?.style.top).toBe("12px");
+      expect(preview?.dataset.motionSurface).toBe("anchored-bottom");
+    } finally {
+      panelRect.mockRestore();
+      Object.defineProperty(window, "innerHeight", {
+        configurable: true,
+        value: originalHeight,
+      });
+    }
   });
 
   it("renders preview content with the embed reading pipeline structure", async () => {
@@ -1536,5 +1905,258 @@ describe("rendered decoration DOM", () => {
       ),
     ).toBeNull();
     expect(view.dom.querySelector(".cm-skr-rich-callout")).not.toBeNull();
+  });
+});
+
+// The reveal audit: one row per construct the engine hides or renders, each
+// asserting the node the motion driver animates actually exists when the
+// caret is inside it. A construct missing from this table is a construct that
+// pops into place with no motion at all, which is what this replaced.
+describe("reveal motion coverage", () => {
+  const revealCases: {
+    construct: string;
+    doc: string;
+    /** A caret offset inside the construct. */
+    cursor: number;
+    /** Marker glyphs expected to carry the animated marker class. */
+    markers?: string[];
+    /** Whether the construct's source form carries the swap class. */
+    source?: boolean;
+  }[] = [
+    {
+      construct: "ATX heading mark",
+      doc: "# Heading",
+      cursor: 5,
+      markers: ["# "],
+    },
+    {
+      construct: "emphasis",
+      doc: "a *word* b",
+      cursor: 5,
+      markers: ["*", "*"],
+    },
+    {
+      construct: "strong emphasis",
+      doc: "a **word** b",
+      cursor: 6,
+      markers: ["**", "**"],
+    },
+    {
+      construct: "strikethrough",
+      doc: "a ~~word~~ b",
+      cursor: 6,
+      markers: ["~~", "~~"],
+    },
+    {
+      construct: "inline code",
+      doc: "a `code` b",
+      cursor: 5,
+      markers: ["`", "`"],
+    },
+    {
+      construct: "link",
+      doc: "a [label](https://example.com) b",
+      cursor: 5,
+      markers: ["[", "]", "(", "https://example.com", ")"],
+      source: true,
+    },
+    {
+      construct: "image",
+      doc: "a ![alt](picture.png) b",
+      cursor: 6,
+      markers: ["![", "]", "(", "picture.png", ")"],
+      source: true,
+    },
+    {
+      construct: "wikilink",
+      doc: "a [[Target]] b",
+      cursor: 6,
+      markers: ["[[", "]]"],
+      source: true,
+    },
+    {
+      construct: "aliased wikilink",
+      doc: "a [[Target|Alias]] b",
+      cursor: 14,
+      markers: ["[[", "Target", "|", "]]"],
+      source: true,
+    },
+    { construct: "task marker", doc: "- [ ] task", cursor: 3, source: true },
+    { construct: "inline math", doc: "a $x^2$ b", cursor: 4, source: true },
+    {
+      construct: "code fence marks",
+      doc: "```js\nx\n```\n",
+      cursor: 4,
+      source: true,
+    },
+    {
+      construct: "frontmatter",
+      doc: "---\nkey: value\n---\n\nbody\n",
+      cursor: 6,
+      source: true,
+    },
+    { construct: "callout", doc: "> [!note] Body\n", cursor: 4, source: true },
+  ];
+
+  for (const testCase of revealCases) {
+    it(`animates the revealed ${testCase.construct}`, async () => {
+      const view = mountedView(testCase.doc, testCase.cursor);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const markers = [
+        ...view.dom.querySelectorAll(".cm-skr-reveal-marker-active"),
+      ].map((element) => element.textContent);
+      if (testCase.markers !== undefined) {
+        expect(markers).toEqual(testCase.markers);
+      }
+      if (testCase.source === true) {
+        expect(
+          view.dom.querySelectorAll(".cm-skr-reveal-source").length,
+        ).toBeGreaterThan(0);
+      }
+      // Whatever the construct, something the driver can animate exists.
+      expect(
+        markers.length +
+          view.dom.querySelectorAll(".cm-skr-reveal-source").length,
+      ).toBeGreaterThan(0);
+    });
+  }
+
+  it("keeps the rendered form of every revealable construct animatable", async () => {
+    const view = mountedView(
+      "# Heading\n\na [label](https://example.com) and [[Target]] and `code`\n\n- [ ] task with $x^2$\n\n> [!note] callout\n",
+      0,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The caret sits on the heading, so every other construct is rendered and
+    // carries the class the driver animates when the caret leaves it.
+    expect(
+      view.dom.querySelectorAll(".cm-skr-reveal-rendered").length,
+    ).toBeGreaterThan(3);
+  });
+
+  it("hides a marker with no reserved width and reveals it at its natural width", async () => {
+    const hidden = mountedView("## Heading\n\nbody", 12);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const hiddenMarker = hidden.dom.querySelector(".cm-skr-reveal-marker");
+    expect(
+      hiddenMarker?.classList.contains("cm-skr-reveal-marker-active"),
+    ).toBe(false);
+
+    const revealed = mountedView("## Heading\n\nbody", 4);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const revealedMarker = revealed.dom.querySelector(
+      ".cm-skr-reveal-marker-active",
+    );
+    expect(revealedMarker?.textContent).toBe("## ");
+  });
+});
+
+// The hover contract on the task status control: a menu that appears on a
+// pass of the pointer, or dies in the gap between the checkbox and itself,
+// is a menu the reader has to race.
+describe("task status menu hover intent", () => {
+  function parts(view: EditorView): {
+    checkbox: HTMLElement;
+    palette: HTMLElement;
+  } {
+    const checkbox = view.dom.querySelector<HTMLElement>(
+      ".cm-skr-task-checkbox",
+    );
+    const palette = view.dom.querySelector<HTMLElement>('[role="listbox"]');
+    if (checkbox === null || palette === null) {
+      throw new Error("task control did not render");
+    }
+    return { checkbox, palette };
+  }
+
+  it("waits out the shared pointer-rest delay before it appears", async () => {
+    const view = mountedView("- [ ] task\n\noutside");
+    const { checkbox, palette } = parts(view);
+    const delay = hoverIntentDelay(document.documentElement);
+    expect(delay).toBe(450);
+
+    checkbox.dispatchEvent(new Event("pointerenter"));
+    await new Promise((resolve) => setTimeout(resolve, delay - 100));
+    expect(palette.hidden).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(palette.hidden).toBe(false);
+  });
+
+  it("shows nothing for a pointer that only passes across the checkbox", async () => {
+    const view = mountedView("- [ ] task\n\noutside");
+    const { checkbox, palette } = parts(view);
+    checkbox.dispatchEvent(new Event("pointerenter"));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    checkbox.dispatchEvent(new Event("pointerleave"));
+    await new Promise((resolve) =>
+      setTimeout(resolve, hoverIntentDelay(document.documentElement) + 80),
+    );
+    expect(palette.hidden).toBe(true);
+  });
+
+  it("survives the travel from the checkbox into the menu", async () => {
+    const view = mountedView("- [ ] task\n\noutside");
+    const { checkbox, palette } = parts(view);
+    await hoverTaskCheckbox(
+      view.dom.querySelector<HTMLElement>(".cm-skr-task-control"),
+    );
+    expect(palette.hidden).toBe(false);
+
+    palette.getBoundingClientRect = () =>
+      ({ left: 100, right: 300, top: 80, bottom: 200 }) as DOMRect;
+    checkbox.dispatchEvent(
+      Object.assign(new Event("pointerleave"), { clientX: 50, clientY: 50 }),
+    );
+    // Two hundred milliseconds of travel inside the corridor: far past the
+    // instant close this replaced, and each move renews the corridor.
+    for (const step of [
+      { x: 60, y: 60 },
+      { x: 75, y: 70 },
+      { x: 90, y: 78 },
+    ]) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      document.dispatchEvent(
+        Object.assign(new Event("pointermove"), {
+          clientX: step.x,
+          clientY: step.y,
+        }),
+      );
+      expect(palette.hidden).toBe(false);
+    }
+
+    // A pointer that leaves the corridor closes it on the leave grace.
+    document.dispatchEvent(
+      Object.assign(new Event("pointermove"), { clientX: 20, clientY: 400 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(palette.hidden).toBe(true);
+  });
+
+  it("dismisses a hover-opened menu when the window loses focus", async () => {
+    const view = mountedView("- [ ] task\n\noutside");
+    const { palette } = parts(view);
+    await hoverTaskCheckbox(
+      view.dom.querySelector<HTMLElement>(".cm-skr-task-control"),
+    );
+    expect(palette.hidden).toBe(false);
+    window.dispatchEvent(new Event("blur"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(palette.hidden).toBe(true);
+  });
+
+  it("returns focus to the checkbox when Tab leaves the menu", async () => {
+    const view = mountedView("- [ ] task\n\noutside");
+    const { checkbox, palette } = parts(view);
+    checkbox.focus();
+    checkbox.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    await Promise.resolve();
+    expect(document.activeElement).toBe(palette);
+    palette.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
+    );
+    expect(palette.hidden).toBe(true);
+    expect(document.activeElement).toBe(checkbox);
   });
 });

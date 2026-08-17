@@ -210,6 +210,36 @@ async function waitForEditorArrival(): Promise<void> {
   );
 }
 
+/**
+ * Summons a task status menu the way a resting pointer does. The checkbox
+ * itself owns the hover, and the menu waits out the shared pointer-rest
+ * delay before it appears, so a pass across a task line shows nothing.
+ */
+async function hoverTaskCheckbox() {
+  await browser.execute(() => {
+    const box = document.querySelector<HTMLElement>(".cm-skr-task-checkbox");
+    if (box === null) throw new Error("task checkbox missing");
+    const bounds = box.getBoundingClientRect();
+    box.dispatchEvent(
+      new PointerEvent("pointerenter", {
+        bubbles: true,
+        clientX: bounds.left + bounds.width / 2,
+        clientY: bounds.top + bounds.height / 2,
+        pointerType: "mouse",
+      }),
+    );
+  });
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        () =>
+          document.querySelector<HTMLElement>(".cm-skr-task-palette")
+            ?.hidden === false,
+      ),
+    { timeout: 5000, timeoutMsg: "task status menu did not open on hover" },
+  );
+}
+
 async function openNoteFromTree(name: string) {
   const row = $(`[role="treeitem"][data-path="${name}"]`);
   await row.waitForExist({ timeout: 15000 });
@@ -274,8 +304,11 @@ async function currentNotePath(): Promise<string | null> {
 }
 
 async function openNoteFromQuickSwitcher(name: string) {
+  // Every caller of this helper runs at the default wide viewport, where
+  // the overflow button opens the anchored menu, not the narrow-viewport
+  // bottom sheet.
   await $('button[aria-label="More actions"]').click();
-  const overflow = $('[data-testid="overlay-sheet"]');
+  const overflow = $('[data-testid="anchored-menu"]');
   await overflow.waitForDisplayed({ timeout: 10000 });
   await overflow.$('[data-command-id="quick-switcher.open"]').click();
   const input = $('[role="combobox"]');
@@ -684,21 +717,62 @@ async function capturedHistoryState(): Promise<CapturedHistoryState | null> {
   );
 }
 
-async function waitForCapturedHistoryState(
+type RestoredHistoryState = {
+  state: CapturedHistoryState | null;
+  /** CSS pixels between the viewport and where the expected state puts it. */
+  drift: number | null;
+  /** The coarsest scroll position an engine holds, in CSS pixels. */
+  positionTolerance: number;
+};
+
+async function restoredHistoryState(
+  expected: CapturedHistoryState,
+): Promise<RestoredHistoryState> {
+  return browser.execute((wanted: CapturedHistoryState) => {
+    const probe = window as Window & {
+      __SKRIBEUM_E2E_HISTORY_STATE__?: () => CapturedHistoryState | null;
+      __SKRIBEUM_E2E_READING_DRIFT__?: (
+        state: CapturedHistoryState,
+      ) => number | null;
+    };
+    return {
+      state: probe.__SKRIBEUM_E2E_HISTORY_STATE__?.() ?? null,
+      drift: probe.__SKRIBEUM_E2E_READING_DRIFT__?.(wanted) ?? null,
+      positionTolerance: Math.max(1, 1 / window.devicePixelRatio),
+    };
+  }, expected);
+}
+
+/**
+ * Waits for a restored note to carry the caret and panel state it was stored
+ * with, and to sit where the stored reading position puts it.
+ *
+ * The reading position is compared as a distance rather than as an equal
+ * anchor and offset, because the stored anchor line and its sub-pixel offset
+ * are one of several encodings of one place. A scroller holds a position only
+ * to whole pixels, so restoring into a layout that has changed since the
+ * position was stored, as this test's webview zoom makes it, lands within half
+ * a pixel of the stored position rather than on it, and the line the position
+ * is then anchored to can be its neighbour. A pixel is the whole budget: a
+ * position restored to the wrong line misses by a line height.
+ */
+async function waitForRestoredHistoryState(
   expected: CapturedHistoryState,
   description: string,
 ): Promise<void> {
   let actual: CapturedHistoryState | null = null;
+  let restored: RestoredHistoryState | null = null;
   try {
     await browser.waitUntil(
       async () => {
-        actual = await capturedHistoryState();
+        restored = await restoredHistoryState(expected);
+        actual = restored.state;
         return (
           actual?.anchor === expected.anchor &&
           actual.head === expected.head &&
-          actual.scrollAnchor === expected.scrollAnchor &&
-          Math.abs(actual.scrollOffset - expected.scrollOffset) < 1 &&
-          actual.propertiesExpanded === expected.propertiesExpanded
+          actual.propertiesExpanded === expected.propertiesExpanded &&
+          restored.drift !== null &&
+          Math.abs(restored.drift) <= restored.positionTolerance
         );
       },
       { timeout: 5000, timeoutMsg: description },
@@ -715,7 +789,7 @@ async function waitForCapturedHistoryState(
       };
     });
     throw new Error(
-      `${description}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)} with ${JSON.stringify(geometry)}`,
+      `${description}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)} at ${JSON.stringify(restored)} with ${JSON.stringify(geometry)}`,
     );
   }
 }
@@ -849,20 +923,53 @@ function browserDemoUrl(): string {
   return demoUrl;
 }
 
-async function waitForBrowserDemoNote(): Promise<void> {
+let browserDemoNavigationId = 0;
+
+/**
+ * Opens a fresh browser-demo document and waits for that exact navigation to
+ * commit. `browser.url()` can resolve while WebKit still paints the preceding
+ * document, whose matching shell and editor satisfy the generic readiness
+ * checks. A per-navigation query token survives note-address normalization, so
+ * the fixture never sends input to a page that is about to be replaced.
+ */
+async function openBrowserDemo(url: string | URL): Promise<void> {
+  const target = new URL(url);
+  const navigationId = String(++browserDemoNavigationId);
+  target.searchParams.set("e2e-navigation", navigationId);
+  await browser.url(target.href);
   await browser.waitUntil(
     () =>
-      browser.execute(() => {
+      browser.execute((expectedNavigationId) => {
+        type DemoWindow = Window & {
+          __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
+          __SKRIBEUM_E2E_SET_FROM_LAST_MATCH__?: (
+            sourceText: string,
+            relativeOffset: number,
+          ) => number | null;
+          __SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?: () => boolean | null;
+        };
         const content = document.querySelector<HTMLElement>(".cm-content");
         const text = content?.textContent ?? "";
+        const harness = window as DemoWindow;
         return (
+          document.readyState === "complete" &&
+          new URL(window.location.href).searchParams.get("e2e-navigation") ===
+            expectedNavigationId &&
+          document.querySelector(".demo-shell") !== null &&
           content !== null &&
           content.getClientRects().length > 0 &&
           text.trim().length > 0 &&
-          !text.includes("scaffold fixture")
+          !text.includes("scaffold fixture") &&
+          typeof harness.__SKRIBEUM_E2E_CURRENT_PATH__ === "function" &&
+          harness.__SKRIBEUM_E2E_CURRENT_PATH__() !== null &&
+          typeof harness.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__ === "function" &&
+          typeof harness.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__ === "function"
         );
-      }),
-    { timeout: 30000, timeoutMsg: "browser demo note content did not load" },
+      }, navigationId),
+    {
+      timeout: 30000,
+      timeoutMsg: "browser demo did not commit its requested ready document",
+    },
   );
 }
 
@@ -888,8 +995,9 @@ async function demoTagCompletionTargetText(): Promise<string | null> {
  * (`true`) reads differently from a pane with no active tab (`null`) or a
  * page that never installed the probe.
  */
-async function waitForActiveTabSaved(): Promise<void> {
+async function waitForActiveTabSaved(requireDirty = false): Promise<void> {
   let observed: boolean | null | undefined;
+  let sawDirty = false;
   try {
     await browser.waitUntil(
       async () => {
@@ -900,7 +1008,8 @@ async function waitForActiveTabSaved(): Promise<void> {
             }
           ).__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?.(),
         );
-        return observed === false;
+        sawDirty ||= observed === true;
+        return observed === false && (!requireDirty || sawDirty);
       },
       { timeout: 10000 },
     );
@@ -908,7 +1017,7 @@ async function waitForActiveTabSaved(): Promise<void> {
     throw new Error(
       `autosave did not settle: the active tab dirty probe reported ${
         observed === undefined ? "no probe on the page" : String(observed)
-      }`,
+      }${requireDirty && !sawDirty ? " without observing the edit" : ""}`,
     );
   }
 }
@@ -917,8 +1026,7 @@ async function prepareDemoTagCompletionTarget(): Promise<void> {
   const targetUrl = new URL(browserDemoUrl());
   targetUrl.searchParams.set("note", "about.md");
   targetUrl.searchParams.set("tag-fixture", Date.now().toString());
-  await browser.url(targetUrl.href);
-  await $(".demo-shell").waitForExist({ timeout: 15000 });
+  await openBrowserDemo(targetUrl);
   await browser.waitUntil(
     async () => (await editorText()).includes("About this vault"),
     { timeout: 15000, timeoutMsg: "browser demo target did not open" },
@@ -937,7 +1045,7 @@ async function prepareDemoTagCompletionTarget(): Promise<void> {
   // The next call navigates away (a fresh browser.url() for the next
   // prepare() cycle); wait for this edit to actually reach persistent
   // storage first so that navigation cannot race an in-flight write.
-  await waitForActiveTabSaved();
+  await waitForActiveTabSaved(true);
 }
 
 const demoTagCompletionHarness: TagCompletionHarness = {
@@ -951,7 +1059,7 @@ const demoTagCompletionHarness: TagCompletionHarness = {
   async waitForQuerySaved() {
     // The demo persists to browser storage, which the test process cannot
     // read, so the tab's own dirty signal is the available oracle.
-    await waitForActiveTabSaved();
+    await waitForActiveTabSaved(true);
   },
 };
 
@@ -1689,9 +1797,9 @@ describe("skribeum shell", () => {
     ] as const;
     for (const [command, query] of routes) {
       await $('button[aria-label="More actions"]').click();
-      const menu = $('[data-testid="overlay-sheet"]');
+      const menu = $('[data-testid="anchored-menu"]');
       await menu.waitForDisplayed({ timeout: 10000 });
-      expect(await menu.getAttribute("data-sheet-variant")).toBe("anchored");
+      expect(await menu.getAttribute("role")).toBe("menu");
       expect(await horizontalViewportEscapes()).toEqual([]);
       await menu.$(`[data-command-id="${command}"]`).click();
       const input = $('[role="combobox"]');
@@ -1746,7 +1854,7 @@ describe("skribeum shell", () => {
     expect(sourcePresentation.taskWidgets).toBe(0);
 
     await $('button[aria-label="More actions"]').click();
-    const menu = $('[data-testid="overlay-sheet"]');
+    const menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     expect(
       await menu
@@ -1925,6 +2033,7 @@ describe("skribeum shell", () => {
         { command: "tree.entry.rename", label: "Rename" },
         { command: "tree.entry.delete", label: "Delete" },
         { command: "tree.entry.move", label: "Move" },
+        { command: "tree.note.open-in-new-tab", label: "Open in new tab" },
         { command: "tree.note.copy-link", label: "Copy link" },
         { command: "tree.entry.reveal", label: "Reveal in file manager" },
         { command: "panel.sidebar.toggle", label: "Toggle sidebar" },
@@ -2813,10 +2922,9 @@ describe("skribeum shell", () => {
       const surface = $('[data-testid="unified-command-surface"]');
       await surface.waitForDisplayed({ timeout: 10000 });
       await surface.$('[role="combobox"]').addValue(query);
-      await surface
-        .$(`[role="option"][data-command-id="${id}"]`)
-        .waitForDisplayed({ timeout: 10000 });
-      await browser.keys(Key.Enter);
+      const command = surface.$(`[role="option"][data-command-id="${id}"]`);
+      await command.waitForDisplayed({ timeout: 10000 });
+      await command.click();
       await surface.waitForExist({ reverse: true, timeout: 10000 });
     };
     const runPointerCommand = async (id: string) => {
@@ -3062,7 +3170,13 @@ describe("skribeum shell", () => {
       const deletedExpected = original.replace(firstTable, "");
       await browser.keys([modifierKey, "s"]);
       await waitForDisk(TABLE_EDITING_NOTE_NAME, deletedExpected);
-      expect(await $$(".cm-skr-table-grid")).toHaveLength(1);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 1,
+        {
+          timeout: 10000,
+          timeoutMsg: "deleted rendered table did not settle",
+        },
+      );
 
       await resetAndOpen();
       const dragCellRect = await tableRect(true);
@@ -3359,15 +3473,39 @@ describe("skribeum shell", () => {
 
     await dismissBannersForPath();
     mkdirSync(screenshotDirectory, { recursive: true });
+    const caretColors: string[] = [];
     for (const theme of ["light", "dark"] as const) {
       await clearEditorSelection();
       await applyVisualTheme(theme);
-      const caretColor = await browser.execute(() => {
-        const content = document.querySelector<HTMLElement>(".cm-content");
-        return content === null ? "" : getComputedStyle(content).caretColor;
+      // The editor draws its own caret, so the property a reader sees is the
+      // rendered bar rather than the content element's `caret-color`, which
+      // the drawn caret deliberately makes transparent.
+      const caret = await browser.execute(() => {
+        const cursor = document.querySelector<HTMLElement>(".cm-cursor");
+        const style = cursor === null ? null : getComputedStyle(cursor);
+        return {
+          drawn: cursor !== null,
+          displayed: style !== null && style.display !== "none",
+          focused:
+            document
+              .querySelector(".cm-editor")
+              ?.classList.contains("cm-focused") ?? false,
+          width: style?.borderLeftWidth ?? "",
+          color: style?.borderLeftColor ?? "",
+          token: getComputedStyle(document.documentElement)
+            .getPropertyValue("--skr-caret")
+            .trim(),
+        };
       });
-      expect(caretColor).not.toBe("");
-      expect(caretColor).not.toBe("rgba(0, 0, 0, 0)");
+      expect(caret.drawn).toBe(true);
+      // A caret paints exactly while the editor holds focus, which is the
+      // invariant worth pinning: this window does not always own focus.
+      expect(caret.displayed).toBe(caret.focused);
+      expect(caret.width).toBe("2px");
+      expect(caret.color).not.toBe("");
+      expect(caret.color).not.toBe("rgba(0, 0, 0, 0)");
+      expect(caret.token).not.toBe("");
+      caretColors.push(caret.color);
       await dismissBannersForPath();
       await browser.saveScreenshot(
         path.join(screenshotDirectory, `after-editor-${theme}.png`),
@@ -3419,6 +3557,11 @@ describe("skribeum shell", () => {
         path.join(screenshotDirectory, `after-toolbar-${theme}.png`),
       );
     }
+
+    // The caret is a themed token, not a fixed colour: the two palettes must
+    // not resolve it to the same bar.
+    expect(caretColors).toHaveLength(2);
+    expect(caretColors[0]).not.toBe(caretColors[1]);
 
     expect(noteOnDisk(VISUAL_NOTE_NAME)).toBe(originalBytes);
     await browser.execute((theme: string) => {
@@ -3809,9 +3952,9 @@ describe("skribeum shell", () => {
     await back.click();
     if (savedState === null) throw new Error("source history state missing");
     try {
-      await waitForCapturedHistoryState(
+      await waitForRestoredHistoryState(
         savedState,
-        "history view state was not restored byte-exactly",
+        "history view state was not restored",
       );
     } catch (error) {
       await browser.keys([modifierKey, "0"]);
@@ -3883,9 +4026,9 @@ describe("skribeum shell", () => {
     await forward.waitForEnabled({ timeout: 15000 });
     await forward.click();
     if (targetState === null) throw new Error("target history state missing");
-    await waitForCapturedHistoryState(
+    await waitForRestoredHistoryState(
       targetState,
-      "forward history view state was not restored byte-exactly",
+      "forward history view state was not restored",
     );
     expect(await readingSurfaceFocusState()).toEqual({
       readingSurface: true,
@@ -4236,13 +4379,10 @@ describe("skribeum shell", () => {
           opacity: style.opacity,
           reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
           transform: style.transform,
-          transitionDurations: style.transitionDuration
-            .split(",")
-            .map((duration) =>
-              duration.trim().endsWith("ms")
-                ? Number.parseFloat(duration)
-                : Number.parseFloat(duration) * 1000,
-            ),
+          // The glyph is played rather than transitioned, because the view
+          // rebuilds the node whenever its decoration class changes and a
+          // transition would have no starting value to run from.
+          settled: marker.getAnimations().length === 0,
         };
       });
 
@@ -4284,18 +4424,17 @@ describe("skribeum shell", () => {
         timeoutMsg: "heading marker did not reveal on cursor entry",
       },
     );
+    await browser.waitUntil(
+      async () => (await headingMarkerState())?.settled === true,
+      {
+        timeout: 10000,
+        timeoutMsg: "heading marker did not settle after revealing",
+      },
+    );
     const revealed = await headingMarkerState();
+    // Settled active glyph: fully opaque and translated home.
     expect(revealed?.opacity).toBe("1");
-    if (revealed?.reducedMotion) {
-      expect(
-        revealed.transitionDurations.every((duration) => duration === 0),
-      ).toBe(true);
-    } else {
-      // Settled active glyph: translated home, having entered on the
-      // surface clock (opacity and transform both 120ms).
-      expect(revealed?.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
-      expect(revealed?.transitionDurations).toEqual([120, 120]);
-    }
+    expect(revealed?.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
     const followingPositionAfter = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -4325,20 +4464,12 @@ describe("skribeum shell", () => {
     await checkbox.waitForExist({ timeout: 15000 });
     expect(await checkbox.getAttribute("aria-label")).toBe("Todo");
 
+    await hoverTaskCheckbox();
     const hoverState = await browser.execute(() => {
       const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
       if (host === null) {
         return null;
       }
-      const bounds = host.getBoundingClientRect();
-      host.dispatchEvent(
-        new PointerEvent("pointerenter", {
-          bubbles: true,
-          clientX: bounds.left + bounds.width / 2,
-          clientY: bounds.top + bounds.height / 2,
-          pointerType: "mouse",
-        }),
-      );
       const liveCheckbox = host.querySelector<HTMLElement>(
         ".cm-skr-task-checkbox",
       );
@@ -4348,11 +4479,12 @@ describe("skribeum shell", () => {
         hidden: listbox?.hidden,
         optionCount: listbox?.querySelectorAll('[role="option"]').length,
       };
-      host.dispatchEvent(
+      const bounds = liveCheckbox?.getBoundingClientRect();
+      liveCheckbox?.dispatchEvent(
         new PointerEvent("pointerleave", {
           bubbles: true,
-          clientX: bounds.right + 1,
-          clientY: bounds.bottom + 1,
+          clientX: (bounds?.right ?? 0) + 1,
+          clientY: (bounds?.bottom ?? 0) + 1,
           pointerType: "mouse",
         }),
       );
@@ -4410,7 +4542,7 @@ describe("skribeum shell", () => {
 
     await placeCursorAtLineEnd("Review task");
     await $('button[aria-label="More actions"]').click();
-    let menu = $('[data-testid="overlay-sheet"]');
+    let menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     expect(
       await menu.$('[data-command-id="task.set-status"]').isDisplayed(),
@@ -4422,7 +4554,7 @@ describe("skribeum shell", () => {
       timeout: 10000,
     });
     await $('button[aria-label="More actions"]').click();
-    menu = $('[data-testid="overlay-sheet"]');
+    menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     const sourceTaskRoute = menu.$('[data-command-id="task.set-status"]');
     await sourceTaskRoute.waitForDisplayed({ timeout: 10000 });
@@ -4438,7 +4570,7 @@ describe("skribeum shell", () => {
 
     await placeCursorAtLineEnd("body text here");
     await $('button[aria-label="More actions"]').click();
-    menu = $('[data-testid="overlay-sheet"]');
+    menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     expect(
       await menu.$('[data-command-id="task.set-status"]').isExisting(),
@@ -4450,7 +4582,7 @@ describe("skribeum shell", () => {
       document.querySelector<HTMLElement>(".cm-skr-task-checkbox")?.focus();
     });
     await $('button[aria-label="More actions"]').click();
-    menu = $('[data-testid="overlay-sheet"]');
+    menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     expect(
       await menu.$('[data-command-id="task.set-status"]').isDisplayed(),
@@ -4476,7 +4608,7 @@ describe("skribeum shell", () => {
     expect(noteOnDisk(LIVE_PREVIEW_NOTE_NAME)).toBe(LIVE_PREVIEW_NOTE_CONTENT);
 
     await $('button[aria-label="More actions"]').click();
-    menu = $('[data-testid="overlay-sheet"]');
+    menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     await menu.$('[data-command-id="task.set-status"]').click();
     await listbox.waitForDisplayed({ timeout: 10000 });
@@ -4506,7 +4638,7 @@ describe("skribeum shell", () => {
     await listbox.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     await $('button[aria-label="More actions"]').click();
-    menu = $('[data-testid="overlay-sheet"]');
+    menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
     await menu.$('[data-command-id="task.set-status"]').click();
     await listbox.waitForDisplayed({ timeout: 10000 });
@@ -4791,9 +4923,9 @@ describe("skribeum shell", () => {
     await openNoteFromTree(TASK_TRACKS_NOTE_NAME);
     await $(".cm-skr-task-checkbox").waitForExist({ timeout: 15000 });
 
+    await hoverTaskCheckbox();
     const groupedMenu = await browser.execute(() => {
       const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
-      host?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
       return {
         headings: [
           ...document.querySelectorAll<HTMLElement>(
@@ -4925,14 +5057,14 @@ describe("skribeum shell", () => {
 
     await placeCursorAtEditorTextStart("Editable task");
     await browser.keys(Key.Backspace);
-    expect(
-      await browser.execute(
-        () =>
-          [...document.querySelectorAll<HTMLElement>(".cm-line")].find((line) =>
-            line.textContent?.includes("Editable task"),
-          )?.textContent ?? "",
-      ),
-    ).toBe("- [x]Editable task");
+    await browser.keys([modifierKey, "s"]);
+    await browser.waitUntil(
+      () =>
+        noteOnDisk(TASK_TRACKS_NOTE_NAME)
+          .split("\n")
+          .includes("- [x]Editable task"),
+      { timeout: 10000, timeoutMsg: "task source did not preserve its status" },
+    );
     for (let press = 0; press < 5; press += 1) {
       await browser.keys(Key.Backspace);
     }
@@ -5248,7 +5380,7 @@ describe("skribeum shell", () => {
       let observedAt: number | undefined;
       const sample = () => {
         const menu = document.querySelector<HTMLElement>(
-          '[data-sheet-variant="anchored"]',
+          '[data-testid="anchored-menu"]',
         );
         if (menu === null) {
           requestAnimationFrame(sample);
@@ -5550,6 +5682,54 @@ describe("skribeum core editing surfaces", () => {
       );
     }
   }
+
+  async function closeIfOpen(selector: string) {
+    const surface = $(selector);
+    if (!(await surface.isExisting())) return;
+    // Escape can dismiss one nested layer at a time (the settings dialog's
+    // own jump menu, for one), so press it until the surface itself is
+    // gone rather than assuming a single press clears it.
+    await browser.waitUntil(
+      async () => {
+        if (!(await surface.isExisting())) return true;
+        await browser.keys(Key.Escape);
+        return false;
+      },
+      { timeout: 5000, interval: 200 },
+    );
+  }
+
+  /** Restores `window.matchMedia` after a test patches it to simulate an OS
+   * colour-scheme change (see palette_selection_and_system_matching_round_trip_stored_fields). */
+  async function restoreNativeMatchMedia() {
+    await browser.execute(() => {
+      const testWindow = window as unknown as {
+        __skribeumColourSchemeQuery?: MediaQueryList;
+        __skribeumNativeMatchMedia?: typeof window.matchMedia;
+      };
+      if (testWindow.__skribeumNativeMatchMedia !== undefined) {
+        window.matchMedia = testWindow.__skribeumNativeMatchMedia;
+      }
+      delete testWindow.__skribeumColourSchemeQuery;
+      delete testWindow.__skribeumNativeMatchMedia;
+    });
+  }
+
+  // A test that throws mid-way leaves whatever it opened or patched behind:
+  // an open overlay or dialog blocks the next test's own surface from
+  // opening, and a patched window.matchMedia feeds it a fake colour-scheme
+  // query. Without this, one test's failure cascades into an unrelated
+  // failure on whatever runs next, in the same session. Each helper is a
+  // no-op when the test already cleaned up after itself.
+  afterEach(async () => {
+    await closeAnyOverlay();
+    await closeIfOpen('[data-testid="settings-view"]');
+    await closeIfOpen('[data-testid="dialog"]');
+    await restoreNativeMatchMedia();
+    // A test that throws between a narrow-viewport check and its restore
+    // would otherwise run every following test at phone width.
+    await restoreDesktopViewport();
+  });
 
   it("quick_switcher_opens_a_note_end_to_end", async () => {
     await browser.keys([modifierKey, "o"]);
@@ -6394,16 +6574,30 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    const systemToggle = $('[data-testid="settings-match-system"]');
-    expect(await systemToggle.isSelected()).toBe(true);
-    expect(
-      await $('[data-testid="settings-palette-gazette"]').getAttribute(
-        "aria-checked",
-      ),
-    ).toBe("true");
-    expect(
-      await $('[data-testid="settings-palette-signal"]').getAttribute("class"),
-    ).toContain("paired");
+    // Each read re-queries: the settings surface re-renders as the document
+    // commits, which detaches any handle held across a poll and turns a
+    // "not settled yet" into a thrown stale-element error.
+    const systemToggleSelected = () =>
+      $('[data-testid="settings-match-system"]').isSelected();
+    // The dialog's existence only means the container mounted; the controls
+    // inside it commit the persisted document a moment later, so poll for
+    // that committed state rather than asserting immediately on open.
+    await browser.waitUntil(
+      async () =>
+        (await systemToggleSelected()) &&
+        (await $('[data-testid="settings-palette-gazette"]').getAttribute(
+          "aria-checked",
+        )) === "true" &&
+        (
+          await $('[data-testid="settings-palette-signal"]').getAttribute(
+            "class",
+          )
+        ).includes("paired"),
+      {
+        timeout: 10000,
+        timeoutMsg: "settings surface did not commit the persisted document",
+      },
+    );
 
     await browser.execute(() => {
       const testWindow = window as unknown as {
@@ -6433,7 +6627,7 @@ describe("skribeum core editing surfaces", () => {
         timeoutMsg: "system dark palette did not become active",
       },
     );
-    expect(await systemToggle.isSelected()).toBe(true);
+    expect(await systemToggleSelected()).toBe(true);
     expect(
       await browser.execute(() => document.documentElement.dataset.theme),
     ).toBe("system");
@@ -6442,7 +6636,7 @@ describe("skribeum core editing surfaces", () => {
       '[data-testid="settings-palette-graphite"]',
       "Graphite palette",
     );
-    await browser.waitUntil(async () => !(await systemToggle.isSelected()), {
+    await browser.waitUntil(async () => !(await systemToggleSelected()), {
       timeout: 5000,
       timeoutMsg: "system match toggle stayed enabled",
     });
@@ -6474,7 +6668,7 @@ describe("skribeum core editing surfaces", () => {
       '[data-testid="settings-palette-studio"]',
       "Studio palette",
     );
-    await systemToggle.click();
+    await $('[data-testid="settings-match-system"]').click();
     await browser.waitUntil(
       async () => {
         const stored = await persistedSettings();
@@ -6491,19 +6685,8 @@ describe("skribeum core editing surfaces", () => {
       },
     );
 
-    await browser.keys(Key.Escape);
-    await dialog.waitForExist({ reverse: true, timeout: 5000 });
-    await browser.execute(() => {
-      const testWindow = window as unknown as {
-        __skribeumColourSchemeQuery?: MediaQueryList;
-        __skribeumNativeMatchMedia?: typeof window.matchMedia;
-      };
-      if (testWindow.__skribeumNativeMatchMedia !== undefined) {
-        window.matchMedia = testWindow.__skribeumNativeMatchMedia;
-      }
-      delete testWindow.__skribeumColourSchemeQuery;
-      delete testWindow.__skribeumNativeMatchMedia;
-    });
+    await closeIfOpen('[data-testid="settings-view"]');
+    await restoreNativeMatchMedia();
     await persistSettings(original);
     await browser.refresh();
     await $('[role="tree"]').waitForExist({ timeout: 15000 });
@@ -6750,6 +6933,46 @@ describe("skribeum core editing surfaces", () => {
     await persistSettings(original);
     await browser.refresh();
     await $('[role="tree"]').waitForExist({ timeout: 15000 });
+  });
+
+  it("contains_malicious_mermaid_configuration_and_resource_requests", async () => {
+    await openNoteFromTree(RENDERING_NOTE_NAME);
+    await browser.waitUntil(
+      async () => {
+        const states = await browser.execute(() =>
+          [...document.querySelectorAll<HTMLElement>(".cm-skr-mermaid")].map(
+            (host) =>
+              host.classList.contains("cm-skr-render-error") ||
+              host.querySelector("svg") !== null,
+          ),
+        );
+        return states.length === 6 && states.every(Boolean);
+      },
+      {
+        timeout: 30000,
+        timeoutMsg: "Mermaid security fixtures did not settle",
+      },
+    );
+
+    const result = await browser.execute(() => {
+      const diagrams = [
+        ...document.querySelectorAll<HTMLElement>(".cm-skr-mermaid"),
+      ];
+      const cssFixture = diagrams.at(-1);
+      return {
+        prototypePolluted: Object.hasOwn(
+          Object.prototype,
+          "mermaidPrototypePollutionMarker",
+        ),
+        cssFixtureContained:
+          cssFixture?.classList.contains("cm-skr-render-error") ||
+          (cssFixture?.querySelector("svg") !== null &&
+            cssFixture.childElementCount === 1),
+      };
+    });
+
+    expect(result.prototypePolluted).toBe(false);
+    expect(result.cssFixtureContained).toBe(true);
   });
 
   it("opens_and_operates_the_read_only_canvas_by_keyboard", async () => {
@@ -7236,23 +7459,11 @@ describe("skribeum core editing surfaces", () => {
   // CRLF and live-preview notes exclusively.
 
   it("browser_demo_restores_default_appearance_and_persists", async () => {
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(browserDemoUrl());
     await browser.execute(() => {
       localStorage.removeItem("skribeum.demo.settings");
     });
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(browserDemoUrl());
 
     const editor = $(".cm-content");
     await editor.waitForDisplayed({ timeout: 15000 });
@@ -7312,13 +7523,7 @@ describe("skribeum core editing surfaces", () => {
   });
 
   it("browser_demo_claims_mod_f_before_the_editor_has_focus", async () => {
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(browserDemoUrl());
 
     // Focus lands outside the editor, matching a visitor who opens the
     // demo and immediately reaches for find without clicking into the
@@ -7349,13 +7554,7 @@ describe("skribeum core editing surfaces", () => {
   it("browser_demo_renders_embed_skeletons_and_resolved_content", async () => {
     const fixtureUrl = new URL(browserDemoUrl());
     fixtureUrl.searchParams.set("embed-start", Date.now().toString());
-    await browser.url(fixtureUrl.href);
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      async () => new URL(await browser.getUrl()).searchParams.has("note"),
-      { timeout: 15000, timeoutMsg: "browser demo note address did not load" },
-    );
-    await waitForBrowserDemoNote();
+    await openBrowserDemo(fixtureUrl);
     await browser.execute(() => {
       type GateWindow = Window & {
         __SKRIBEUM_E2E_NOTE_GATES__?: Record<string, Promise<void>>;
@@ -7502,8 +7701,7 @@ describe("skribeum core editing surfaces", () => {
   });
 
   it("browser_demo_serves_scheme_aware_favicon_metadata", async () => {
-    await browser.url(browserDemoUrl());
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await openBrowserDemo(browserDemoUrl());
     const metadata = await browser.executeAsync<
       {
         iconType: string | null;
@@ -7560,8 +7758,7 @@ Promise.all([
   it("browser_demo_highlights_lazy_languages_with_palette_tokens", async () => {
     const target = new URL(browserDemoUrl());
     target.searchParams.set("note", "Features/code-blocks.md");
-    await browser.url(target.href);
-    await $(".demo-shell").waitForExist({ timeout: 15000 });
+    await openBrowserDemo(target);
     await browser.waitUntil(
       () =>
         browser.execute(() =>

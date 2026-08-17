@@ -24,12 +24,7 @@
 459..484 widget embed data-target="inline-embedded-note" role="group"
 558..558 line class="cm-skr-heading cm-skr-heading-2"
 558..561 hide node=HeaderMark
-610..612 hide node=LinkMark
-610..652 mark class="cm-skr-link"
-633..634 hide node=LinkMark
-634..635 hide node=LinkMark
-635..651 hide node=URL
-651..652 hide node=LinkMark
+610..652 widget image data-image-source="missing" data-image-target="local-figure.png"
 654..654 line class="cm-skr-heading cm-skr-heading-2"
 654..657 hide node=HeaderMark
 688..690 hide node=WikilinkMark

@@ -8,11 +8,13 @@ import {
 import {
   type BrowserDirectoryHandle,
   type BrowserFileHandle,
+  closeVault,
   demoVaultStatus,
   IpcError,
   noteCreate,
   noteWrite,
   openVault,
+  openVaultResult,
   readNote,
   readVaultFile,
   resetDemoVault,
@@ -110,6 +112,14 @@ class MockDirectoryHandle implements BrowserDirectoryHandle {
 }
 
 describe("browser demo IPC", () => {
+  it("provides canonical-style result identity and idempotent handle cleanup", async () => {
+    const opened = await openVaultResult("demo");
+
+    expect(opened.root).toBe("demo");
+    await closeVault(opened.handle);
+    await closeVault(opened.handle);
+  });
+
   beforeEach(() => {
     localStorage.clear();
     Reflect.deleteProperty(window, "showDirectoryPicker");
@@ -120,7 +130,7 @@ describe("browser demo IPC", () => {
     const handle = await openVault("ignored-in-browser");
     const tree = await vaultTree(handle);
 
-    expect(tree.filter((entry) => entry.kind === "note")).toHaveLength(25);
+    expect(tree.filter((entry) => entry.kind === "note")).toHaveLength(28);
     expect(tree).toContainEqual({
       path: "Features",
       kind: "directory",

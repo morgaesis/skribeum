@@ -40,11 +40,11 @@ const errorId = `skr-dialog-error-${nextDialogId}`;
 // deliberately does not resync if the prop changes later.
 let value = $state(untrack(() => initialValue));
 let error = $state<string | null>(null);
-let backdrop = $state<HTMLElement>();
-let dialog = $state<HTMLElement>();
-let inputElement = $state<HTMLInputElement>();
-let cancelElement = $state<HTMLButtonElement>();
-let confirmElement = $state<HTMLButtonElement>();
+let backdrop = $state<HTMLElement | null>();
+let dialog = $state<HTMLElement | null>();
+let inputElement = $state<HTMLInputElement | null>();
+let cancelElement = $state<HTMLButtonElement | null>();
+let confirmElement = $state<HTMLButtonElement | null>();
 let returnFocus: HTMLElement | null = null;
 let closing = false;
 
@@ -52,7 +52,7 @@ const focusableSelector =
   'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 function focusableElements(): HTMLElement[] {
-  return dialog === undefined
+  return !(dialog instanceof HTMLElement)
     ? []
     : [...dialog.querySelectorAll<HTMLElement>(focusableSelector)];
 }
@@ -127,8 +127,8 @@ onMount(() => {
     (kind === "prompt" ? inputElement : cancelElement)?.focus();
     inputElement?.select();
   });
-  if (backdrop !== undefined) enterMotionSurface(backdrop);
-  if (dialog !== undefined) enterMotionSurface(dialog);
+  enterMotionSurface(backdrop);
+  enterMotionSurface(dialog);
 });
 
 onDestroy(() => {
@@ -234,18 +234,21 @@ onDestroy(() => {
     background: var(--skr-surface-raised);
     box-shadow: var(--skr-shadow);
     outline: none;
+    /* The surface's own tier; the text field carries `font: inherit`. */
+    font-family: var(--skr-font-interface);
+    font-size: var(--skr-type-control);
   }
 
   .skr-dialog-title {
     margin: 0;
-    font-size: 1rem;
+    font-size: var(--skr-type-title);
     font-weight: 600;
   }
 
   .skr-dialog-message {
     margin: 0.5rem 0 0;
     color: var(--skr-text-muted);
-    font-size: 0.875rem;
+    font-size: var(--skr-type-label);
   }
 
   .skr-dialog-field {
@@ -276,7 +279,7 @@ onDestroy(() => {
   .skr-dialog-error {
     margin: 0.5rem 0 0;
     color: var(--skr-danger);
-    font-size: 0.8125rem;
+    font-size: var(--skr-type-label);
   }
 
   .skr-dialog-actions {

@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Revealed markdown markers behave like objects that take up room. A marker
+  grows from no width when the caret enters its construct and is squeezed
+  back to none when the caret leaves, so the text beside it is carried along
+  continuously instead of being displaced and then snapped back. Markers a
+  construct only shows while revealed keep their place through the exit on a
+  stand-in that is never part of the note, is hidden from assistive
+  technology, and is dropped as soon as the motion ends. Reduced motion
+  leaves the two resting widths and no motion between them.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

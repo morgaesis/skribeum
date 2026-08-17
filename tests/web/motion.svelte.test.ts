@@ -17,6 +17,7 @@ import {
 } from "vitest";
 import Dialog from "../../src/lib/Dialog.svelte";
 import {
+  glyphWidth,
   playFormEntrance,
   playGlyphEntrance,
   playGlyphExit,
@@ -376,14 +377,19 @@ describe("reveal marker glyph motion", () => {
    * is created already in its final state and a transition has no starting
    * value to run from.
    */
+  type RecordedAnimation = {
+    keyframes: Keyframe[];
+    options: KeyframeAnimationOptions;
+    finish: () => void;
+    /** A retarget reports this after its replacement has already started. */
+    reportCancelled: () => void;
+  };
+
   function recordAnimations(): {
-    calls: { keyframes: Keyframe[]; options: KeyframeAnimationOptions }[];
+    calls: RecordedAnimation[];
     restore: () => void;
   } {
-    const calls: {
-      keyframes: Keyframe[];
-      options: KeyframeAnimationOptions;
-    }[] = [];
+    const calls: RecordedAnimation[] = [];
     const target = Element.prototype as unknown as {
       animate?: (
         keyframes: Keyframe[],
@@ -392,8 +398,26 @@ describe("reveal marker glyph motion", () => {
     };
     const original = target.animate;
     target.animate = (keyframes, options) => {
-      calls.push({ keyframes, options });
-      return { id: "", cancel: () => {} } as unknown as Animation;
+      const finished: (() => void)[] = [];
+      const cancelled: (() => void)[] = [];
+      calls.push({
+        keyframes,
+        options,
+        finish: () => {
+          for (const listener of finished) listener();
+        },
+        reportCancelled: () => {
+          for (const listener of cancelled) listener();
+        },
+      });
+      return {
+        id: "",
+        cancel: () => {},
+        addEventListener: (type: string, listener: () => void) => {
+          if (type === "finish") finished.push(listener);
+          if (type === "cancel") cancelled.push(listener);
+        },
+      } as unknown as Animation;
     };
     return {
       calls,
@@ -404,11 +428,28 @@ describe("reveal marker glyph motion", () => {
     };
   }
 
-  it("rests at the two states the glyph animates between, with no transition of its own", () => {
+  /**
+   * jsdom lays nothing out, so a glyph that has to measure its own width has
+   * to be given one. The width the driver ends up animating to is the width
+   * this returns, which is what proves the driver measures the element rather
+   * than assuming a size.
+   */
+  function withMeasuredWidth(element: HTMLElement, width: number): void {
+    element.getBoundingClientRect = () =>
+      ({
+        width,
+        height: 16,
+        top: 0,
+        left: 0,
+        right: width,
+        bottom: 16,
+      }) as DOMRect;
+  }
+
+  it("rests at the two states the glyph animates between, with no transition and no travel", () => {
     const marker = markerProbe();
     const hidden = getComputedStyle(marker);
     expect(hidden.opacity).toBe("0");
-    expect(hidden.transform).toBe("translateX(var(--skr-motion-distance))");
     // Nothing declares a transition here: one would never run, because the
     // revealed marker is a different node from the hidden one.
     expect(transitionOf(marker)).toBe("");
@@ -416,17 +457,24 @@ describe("reveal marker glyph motion", () => {
     marker.classList.add("cm-skr-reveal-marker-active");
     const revealed = getComputedStyle(marker);
     expect(revealed.opacity).toBe("1");
-    expect(revealed.transform).toBe("translateX(0)");
     expect(transitionOf(marker)).toBe("");
-    // The reserved space is geometry, and geometry never animates: the
-    // revealed marker takes its natural width in the frame it appears.
+
+    // The glyph is an object that takes up room, so its width is the motion
+    // and nothing about it slides: a translate on top of a growing width
+    // would carry the glyph out of the space it is opening.
+    expect(hidden.transform).toBe("none");
+    expect(revealed.transform).toBe("none");
+    expect(loadedDeclarations(".cm-skr-reveal-marker", "transform")).toEqual(
+      [],
+    );
     expect(
-      loadedDeclarations(".cm-skr-reveal-marker-active", "max-width"),
+      loadedDeclarations(".cm-skr-reveal-marker-active", "transform"),
     ).toEqual([]);
   });
 
-  it("enters a glyph on the surface clock, travelling the shared distance", () => {
+  it("enters a glyph on the surface clock, growing from no width to the width it measures", () => {
     const marker = markerProbe();
+    withMeasuredWidth(marker, 27.5);
     const recorder = recordAnimations();
     try {
       playGlyphEntrance(marker);
@@ -438,16 +486,23 @@ describe("reveal marker glyph motion", () => {
       );
       expect(call?.options.fill).toBe("none");
       expect(call?.keyframes).toEqual([
-        { opacity: "0", transform: "translateX(0.25rem)" },
-        { opacity: "1", transform: "translateX(0)" },
+        { maxWidth: "0px", opacity: "0" },
+        { maxWidth: "27.5px", opacity: "1" },
       ]);
+      // Clipped while it grows, so a glyph only shows as much of itself as it
+      // has room for; unclipped again once it is all there, so a descender is
+      // never shaved at rest.
+      expect(getComputedStyle(marker).overflow).toBe("hidden");
+      call?.finish();
+      expect(marker.style.overflow).toBe("");
     } finally {
       recorder.restore();
     }
   });
 
-  it("leaves a glyph on the state clock, mirroring its own entrance", () => {
+  it("leaves a glyph on the state clock, squeezing its measured width back to nothing", () => {
     const marker = markerProbe();
+    withMeasuredWidth(marker, 27.5);
     const recorder = recordAnimations();
     try {
       playGlyphExit(marker);
@@ -455,12 +510,50 @@ describe("reveal marker glyph motion", () => {
       expect(call?.options.duration).toBe(50);
       expect(call?.options.easing).toBe("linear");
       expect(call?.keyframes).toEqual([
-        { opacity: "1", transform: "translateX(0)" },
-        { opacity: "0", transform: "translateX(0.25rem)" },
+        { maxWidth: "27.5px", opacity: "1" },
+        { maxWidth: "0px", opacity: "0" },
       ]);
+      expect(getComputedStyle(marker).overflow).toBe("hidden");
+      call?.finish();
+      expect(marker.style.overflow).toBe("");
     } finally {
       recorder.restore();
     }
+  });
+
+  it("keeps a retargeted glyph clipped when the motion it replaced reports its end", () => {
+    const marker = markerProbe();
+    withMeasuredWidth(marker, 27.5);
+    const recorder = recordAnimations();
+    try {
+      playGlyphEntrance(marker);
+      // The caret turns around mid-entrance and the glyph is sent back out.
+      playGlyphExit(marker);
+      expect(getComputedStyle(marker).overflow).toBe("hidden");
+      // The entrance's cancel lands afterwards. The exit is still running, so
+      // the glyph stays clipped until the exit itself is done with it.
+      recorder.calls[0]?.reportCancelled();
+      expect(getComputedStyle(marker).overflow).toBe("hidden");
+      recorder.calls[1]?.finish();
+      expect(marker.style.overflow).toBe("");
+    } finally {
+      recorder.restore();
+    }
+  });
+
+  it("measures a glyph with its resting width cap lifted, and puts the cap back", () => {
+    const marker = markerProbe();
+    // The hidden resting state caps the glyph at no width at all, so a width
+    // read through that cap would report nothing to animate.
+    marker.style.maxWidth = "0px";
+    let capWhileMeasuring: string | null = null;
+    marker.getBoundingClientRect = () => {
+      capWhileMeasuring = marker.style.maxWidth;
+      return { width: 12, height: 16 } as DOMRect;
+    };
+    expect(glyphWidth(marker)).toBe(12);
+    expect(capWhileMeasuring).toBe("none");
+    expect(marker.style.maxWidth).toBe("0px");
   });
 
   it("swaps a construct between its forms with opacity alone", () => {

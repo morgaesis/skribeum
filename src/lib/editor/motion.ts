@@ -14,15 +14,12 @@
 // The timings themselves stay in the stylesheet. Every value read here comes
 // from a motion-class custom property, so reduced motion and the appearance
 // animations toggle zero these animations by zeroing the same tokens that
-// zero every CSS transition in the product.
+// zero every CSS transition in the product. With the timing zeroed the glyph
+// keeps its two resting widths and simply swaps between them.
 
 import type { Extension } from "@codemirror/state";
 import { drawSelection, type EditorView, ViewPlugin } from "@codemirror/view";
-import {
-  motionDistance,
-  motionDurationMilliseconds,
-  motionEasing,
-} from "../motion";
+import { motionDurationMilliseconds, motionEasing } from "../motion";
 
 /** One motion class, resolved against the element that will animate. */
 export type MotionTiming = { duration: number; easing: string };
@@ -52,6 +49,13 @@ export function surfaceTiming(element: Element): MotionTiming {
 /** Marks the animations this module owns, so a retarget can cancel its own. */
 const REVEAL_ANIMATION_ID = "skr-reveal";
 
+/** Stops whatever this module was already playing on an element. */
+function cancelReveal(element: HTMLElement): void {
+  for (const running of element.getAnimations?.() ?? []) {
+    if (running.id === REVEAL_ANIMATION_ID) running.cancel();
+  }
+}
+
 function play(
   element: HTMLElement,
   keyframes: Keyframe[],
@@ -59,9 +63,7 @@ function play(
 ): Animation | null {
   if (timing.duration <= 0) return null;
   if (typeof element.animate !== "function") return null;
-  for (const running of element.getAnimations?.() ?? []) {
-    if (running.id === REVEAL_ANIMATION_ID) running.cancel();
-  }
+  cancelReveal(element);
   const animation = element.animate(keyframes, {
     duration: timing.duration,
     easing: timing.easing,
@@ -72,33 +74,86 @@ function play(
 }
 
 /**
- * A revealed marker glyph arriving. The space it occupies was reserved in the
- * same frame the caret entered the line, with no transition of its own, so
- * this animates nothing that moves the text around it: the glyph fades in
- * while travelling the shared entrance distance from the reading direction,
- * inside geometry that has already settled.
+ * The width the glyph occupies once it is fully there. The resting geometry
+ * is a width cap, so the natural width is read with the cap lifted and the
+ * cap put straight back. An animation in flight outranks any width declared
+ * on the element, so one of ours is stopped first: measuring through it would
+ * report whatever width that animation had reached rather than the glyph's.
+ */
+export function glyphWidth(element: HTMLElement): number {
+  cancelReveal(element);
+  const declared = element.style.maxWidth;
+  element.style.maxWidth = "none";
+  const width = element.getBoundingClientRect().width;
+  if (declared === "") element.style.removeProperty("max-width");
+  else element.style.maxWidth = declared;
+  return width;
+}
+
+/**
+ * Clips the glyph to its own box for the length of one animation, so a width
+ * that is on its way to or from zero shows only as much of the glyph as it
+ * currently has room for. At rest a revealed glyph is unclipped, because a
+ * clip box that tight can shave a descender.
+ *
+ * A retarget reports the cancelled motion's end after its replacement has
+ * already taken the clip out again, so only the motion that took it may put
+ * it back: an unguarded handler unclips the glyph the new motion is still
+ * moving, and the glyph spills over the text beside it.
+ */
+const clipGenerations = new WeakMap<HTMLElement, number>();
+
+function clipWhile(element: HTMLElement, animation: Animation | null): void {
+  if (animation === null) return;
+  const generation = (clipGenerations.get(element) ?? 0) + 1;
+  clipGenerations.set(element, generation);
+  element.style.overflow = "hidden";
+  const drop = () => {
+    if (clipGenerations.get(element) !== generation) return;
+    element.style.removeProperty("overflow");
+  };
+  animation.addEventListener("finish", drop);
+  animation.addEventListener("cancel", drop);
+  animation.addEventListener("remove", drop);
+}
+
+/**
+ * A revealed marker glyph arriving. The glyph is an object that takes up
+ * room: it grows from no width at all to the width it will keep, and the text
+ * beside it is pushed along continuously rather than displaced in one frame.
+ * The fade rides the same clock, so the glyph is faintest when it is thinnest.
  */
 export function playGlyphEntrance(element: HTMLElement): Animation | null {
-  return play(
+  const width = glyphWidth(element);
+  const animation = play(
     element,
     [
-      { opacity: "0", transform: `translateX(${motionDistance(element)})` },
-      { opacity: "1", transform: "translateX(0)" },
+      { maxWidth: "0px", opacity: "0" },
+      { maxWidth: `${width}px`, opacity: "1" },
     ],
     surfaceTiming(element),
   );
+  clipWhile(element, animation);
+  return animation;
 }
 
-/** The same glyph leaving, on the state clock, mirroring its own entrance. */
+/**
+ * The same glyph leaving, on the state clock, mirroring its own entrance: it
+ * is squeezed back to no width while it fades, and the text closes over the
+ * space it was holding instead of snapping into it.
+ */
 export function playGlyphExit(element: HTMLElement): Animation | null {
-  return play(
+  const width = glyphWidth(element);
+  const animation = play(
     element,
     [
-      { opacity: "1", transform: "translateX(0)" },
-      { opacity: "0", transform: `translateX(${motionDistance(element)})` },
+      { maxWidth: `${width}px`, opacity: "1" },
+      { maxWidth: "0px", opacity: "0" },
     ],
     stateTiming(element),
   );
+  clipWhile(element, animation);
+  return animation;
 }
 
 /**

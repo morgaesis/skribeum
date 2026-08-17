@@ -80,7 +80,12 @@ import {
   obsidianMarkdownExtensionsFor,
   skribeumMarkdownParser,
 } from "../markdown/obsidian";
-import { playFormEntrance, playGlyphEntrance, playGlyphExit } from "../motion";
+import {
+  playFormEntrance,
+  playGlyphEntrance,
+  playGlyphExit,
+  stateTiming,
+} from "../motion";
 import { PostPaintScheduler } from "../postPaintScheduler";
 import { calloutIconSvg, parseCallout } from "./callouts";
 import {
@@ -4566,6 +4571,79 @@ function observesReveal(update: ViewUpdate): boolean {
   );
 }
 
+/** Marks the stand-in that carries a departing glyph's width. */
+const MARKER_EXIT_ATTRIBUTE = "data-skr-marker-exit";
+
+/**
+ * A departing marker's stand-in. The glyphs a construct shows while revealed
+ * come back from the document itself, and the moment the caret leaves, the
+ * engine takes them away again: a line-scope marker keeps a node of no width,
+ * and an inside-scope marker is replaced outright so its characters stay out
+ * of the caret's path. Either way the width that has to be given back
+ * belongs to a node that no longer holds it, so the exit is played on a
+ * stand-in instead — a widget holding the same glyphs, at the same place,
+ * for exactly as long as the exit runs.
+ *
+ * It never becomes part of the note. The document is untouched, the caret
+ * cannot enter it, it is hidden from assistive technology while it exists,
+ * and it is dropped as soon as the motion is over.
+ */
+class MarkerExitWidget extends WidgetType {
+  constructor(readonly text: string) {
+    super();
+  }
+
+  eq(other: MarkerExitWidget): boolean {
+    return other.text === this.text;
+  }
+
+  toDOM(): HTMLElement {
+    const element = document.createElement("span");
+    element.className = "cm-skr-reveal-marker";
+    element.setAttribute("aria-hidden", "true");
+    element.setAttribute(MARKER_EXIT_ATTRIBUTE, "true");
+    element.textContent = this.text;
+    return element;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+/**
+ * The glyphs the reveal is about to take away, read off the view as it still
+ * stands. This runs before the view has written the update out, which is the
+ * only moment the departing glyphs are still on screen to be copied.
+ */
+function departingGlyphs(
+  view: EditorView,
+  region: RevealRegion,
+  update: ViewUpdate,
+): { position: number; text: string }[] {
+  const found: { position: number; text: string }[] = [];
+  for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+    ".cm-skr-reveal-marker-active",
+  )) {
+    const text = element.textContent ?? "";
+    if (text === "") continue;
+    let position: number;
+    try {
+      position = view.posAtDOM(element);
+    } catch {
+      continue;
+    }
+    if (position < region.from || position > region.to) continue;
+    found.push({
+      position: update.docChanged
+        ? update.changes.mapPos(position, -1)
+        : position,
+      text,
+    });
+  }
+  return found;
+}
+
 /**
  * The reveal's motion. The decoration engine decides what a reveal looks
  * like; this decides when it moves, which CSS cannot: CodeMirror builds a new
@@ -4577,11 +4655,15 @@ function observesReveal(update: ViewUpdate): boolean {
  * heading into view, a note arriving) is not a reveal and must not animate.
  */
 class RevealMotion {
+  /** The stand-ins currently holding a departing glyph's width. */
+  exits: DecorationSet = Decoration.none;
   private previous: RevealRegion | null;
   private pending: {
     previous: RevealRegion | null;
     next: RevealRegion | null;
   } | null = null;
+  private retire: ReturnType<typeof setTimeout> | null = null;
+  private retiring = false;
 
   constructor(view: EditorView) {
     // The first observation is the view as it already is. A note opens with
@@ -4590,6 +4672,12 @@ class RevealMotion {
   }
 
   update(update: ViewUpdate): void {
+    if (this.retiring) {
+      this.retiring = false;
+      this.exits = Decoration.none;
+    } else if (update.docChanged && this.exits !== Decoration.none) {
+      this.exits = this.exits.map(update.changes);
+    }
     // The remembered region is mapped on every change, including the ones
     // this plugin does no other work for: an input burst the engine defers
     // still moves the text, and the region has to still describe the same
@@ -4612,6 +4700,35 @@ class RevealMotion {
       return;
     }
     this.pending = { previous, next };
+    this.exits =
+      previous === null ? Decoration.none : this.standInsFor(update, previous);
+  }
+
+  /**
+   * The stand-ins for one departure, built in the same update that takes the
+   * glyphs away so they are on screen in the frame the real ones leave. With
+   * the exit clock zeroed there is no motion to hold anything open for, so
+   * none are built at all and reduced motion costs the DOM nothing.
+   */
+  private standInsFor(
+    update: ViewUpdate,
+    previous: RevealRegion,
+  ): DecorationSet {
+    if (stateTiming(update.view.contentDOM).duration <= 0) {
+      return Decoration.none;
+    }
+    const glyphs = departingGlyphs(update.view, previous, update);
+    if (glyphs.length === 0) return Decoration.none;
+    return Decoration.set(
+      glyphs.map((glyph) =>
+        Decoration.widget({
+          widget: new MarkerExitWidget(glyph.text),
+          side: -1,
+          skr: `marker-exit ${JSON.stringify(glyph.text)}`,
+        }).range(glyph.position),
+      ),
+      true,
+    );
   }
 
   /**
@@ -4627,6 +4744,10 @@ class RevealMotion {
     this.play(view, pending.previous, pending.next);
   }
 
+  destroy(): void {
+    if (this.retire !== null) clearTimeout(this.retire);
+  }
+
   private within(
     view: EditorView,
     element: HTMLElement,
@@ -4638,6 +4759,22 @@ class RevealMotion {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Drops the stand-ins once the exit has run. Nothing else will necessarily
+   * touch the view again — a caret that moved once and stopped produces no
+   * further update — so the retirement asks for one of its own rather than
+   * waiting for a keystroke that may never come.
+   */
+  private retireStandIns(view: EditorView, after: number): void {
+    if (this.retire !== null) clearTimeout(this.retire);
+    this.retire = setTimeout(() => {
+      this.retire = null;
+      if (this.exits === Decoration.none) return;
+      this.retiring = true;
+      view.dispatch();
+    }, after);
   }
 
   private play(
@@ -4667,13 +4804,20 @@ class RevealMotion {
       }
     }
     if (previous === null) return;
-    // The construct the caret just left: its markers are hidden again and its
-    // rendered form is back, both as nodes built in this same frame.
+    // The construct the caret just left: its glyphs are squeezed back out of
+    // the line on their stand-ins, and its rendered form is back as a node
+    // built in this same frame.
+    let longest = 0;
     for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
-      ".cm-skr-reveal-marker:not(.cm-skr-reveal-marker-active)",
+      `[${MARKER_EXIT_ATTRIBUTE}]`,
     )) {
-      if (this.within(view, element, previous)) playGlyphExit(element);
+      if (playGlyphExit(element) !== null) {
+        longest = Math.max(longest, stateTiming(element).duration);
+      }
     }
+    // Whatever happened, the stand-ins go: one that could not be animated at
+    // all is a glyph the note would otherwise carry for good.
+    if (this.exits !== Decoration.none) this.retireStandIns(view, longest);
     for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
       ".cm-skr-reveal-rendered",
     )) {
@@ -4682,7 +4826,9 @@ class RevealMotion {
   }
 }
 
-const revealMotionPlugin = ViewPlugin.fromClass(RevealMotion);
+const revealMotionPlugin = ViewPlugin.fromClass(RevealMotion, {
+  decorations: (value) => value.exits,
+});
 
 /**
  * The reveal's motion runs from an update listener rather than from the
@@ -5690,25 +5836,24 @@ const engineTheme = EditorView.baseTheme({
     textTransform: "uppercase",
   },
   ".cm-skr-setext-underline": { color: "var(--skr-text-muted)" },
-  // The reserved-width geometry lives here and applies with no transition,
-  // so it always resolves in the same frame the caret enters the line. The
-  // glyph's own opacity and compositor translate (entrance on the surface
-  // clock, exit on the state clock, app.css) animate inside that already
-  // -settled space.
+  // A hidden glyph is an object of no width, clipped to the nothing it
+  // occupies. The width cap is what the entrance and the exit animate
+  // (app.css holds the resting pair), so the text beside the glyph is carried
+  // along by it rather than displaced in a single frame.
   ".cm-skr-reveal-marker": {
     display: "inline-block",
     maxWidth: "0",
-    overflow: "visible",
+    overflow: "hidden",
     color: "var(--skr-text-muted)",
     opacity: "0",
     verticalAlign: "bottom",
     whiteSpace: "pre",
   },
-  // The revealed marker takes its natural width: the space was reserved in
-  // the frame the caret arrived, with no transition on any geometry, so the
-  // text around it has already settled by the time the glyph animates.
+  // The revealed glyph takes its natural width and stops being clipped, so a
+  // descender is never shaved once the motion has finished with it.
   ".cm-skr-reveal-marker-active": {
     maxWidth: "none",
+    overflow: "visible",
     opacity: "1",
   },
   ".cm-skr-emphasis": { fontStyle: "italic" },

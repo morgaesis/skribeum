@@ -161,6 +161,7 @@ import SettingsView from "./lib/SettingsView.svelte";
 import Sheet from "./lib/Sheet.svelte";
 import StartupVaultRecovery from "./lib/StartupVaultRecovery.svelte";
 import Statusline from "./lib/Statusline.svelte";
+import SurfaceBoundary from "./lib/SurfaceBoundary.svelte";
 import {
   focusExpandedSidebarTarget,
   focusTabCloseSuccessor,
@@ -300,7 +301,7 @@ let historyViewState = $state<NoteViewState | null>(null);
 let workspace = $state(defaultWorkspaceState());
 let workspaceIdentity = $state<string | null>(null);
 let titleLoadGeneration = 0;
-let workspaceHost = $state<HTMLElement>();
+let workspaceHost = $state<HTMLElement | null>();
 let splitDraggingNode = $state<WorkspaceSplit | null>(null);
 /**
  * Each rendered pane's own box. A split halves the pane it acts on, so its
@@ -3732,7 +3733,7 @@ $effect(() => {
   // window resizes, panel collapse, and divider drags.
   void workspace.layout;
   const host = workspaceHost;
-  if (host === undefined) return;
+  if (!(host instanceof HTMLElement)) return;
   const measure = () => {
     const next = new Map<string, { width: number; height: number }>();
     for (const element of host.querySelectorAll<HTMLElement>(
@@ -4213,18 +4214,20 @@ onMount(() => {
             </div>
           </header>
           <div class="skr-sidebar-tree">
-            <FileTree
-              entries={tree}
-              {selectedPath}
-              titleSources={treeTitleSources}
-              expandedPaths={workspace.expandedFolders}
-              onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
-              onSelectionChange={(path) => (workspace.selectedPath = path)}
-              onOpenPath={openPath}
-              {registry}
-              {commandContext}
-              desktop={hasDesktopRuntime()}
-            />
+            <SurfaceBoundary label={STRINGS.vaultTreeLabel}>
+              <FileTree
+                entries={tree}
+                {selectedPath}
+                titleSources={treeTitleSources}
+                expandedPaths={workspace.expandedFolders}
+                onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
+                onSelectionChange={(path) => (workspace.selectedPath = path)}
+                onOpenPath={openPath}
+                {registry}
+                {commandContext}
+                desktop={hasDesktopRuntime()}
+              />
+            </SurfaceBoundary>
           </div>
         </nav>
         <PanelDivider
@@ -4502,11 +4505,13 @@ onMount(() => {
             </button>
           </div>
           <div class="skr-outline-body">
-            <OutlinePanel
-              entries={outlineEntries}
-              onNavigate={outlineNavigate}
-              onCopyHeading={copyOutlineHeading}
-            />
+            <SurfaceBoundary label={STRINGS.outlineLabel}>
+              <OutlinePanel
+                entries={outlineEntries}
+                onNavigate={outlineNavigate}
+                onCopyHeading={copyOutlineHeading}
+              />
+            </SurfaceBoundary>
           </div>
         </section>
         {/if}
@@ -4529,31 +4534,35 @@ onMount(() => {
 
 {#if activeSheet === "file-tree" && vault !== null}
   <Sheet label={STRINGS.vaultTreeLabel} onClose={closeSheet} restoreFocus={false}>
-    <FileTree
-      entries={tree}
-      {selectedPath}
-      titleSources={treeTitleSources}
-      expandedPaths={workspace.expandedFolders}
-      onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
-      onSelectionChange={(path) => (workspace.selectedPath = path)}
-      onOpenPath={openPath}
-      {registry}
-      {commandContext}
-      desktop={hasDesktopRuntime()}
-      touchMode={true}
-    />
+    <SurfaceBoundary label={STRINGS.vaultTreeLabel}>
+      <FileTree
+        entries={tree}
+        {selectedPath}
+        titleSources={treeTitleSources}
+        expandedPaths={workspace.expandedFolders}
+        onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
+        onSelectionChange={(path) => (workspace.selectedPath = path)}
+        onOpenPath={openPath}
+        {registry}
+        {commandContext}
+        desktop={hasDesktopRuntime()}
+        touchMode={true}
+      />
+    </SurfaceBoundary>
   </Sheet>
 {:else if activeSheet === "outline"}
   <Sheet label={STRINGS.outlineLabel} onClose={closeSheet} restoreFocus={false}>
-    <OutlinePanel
-      entries={outlineEntries}
-      onCopyHeading={copyOutlineHeading}
-      onNavigate={(from) => {
-        closeSheet();
-        outlineNavigate(from);
-      }}
-      touchMode={true}
-    />
+    <SurfaceBoundary label={STRINGS.outlineLabel}>
+      <OutlinePanel
+        entries={outlineEntries}
+        onCopyHeading={copyOutlineHeading}
+        onNavigate={(from) => {
+          closeSheet();
+          outlineNavigate(from);
+        }}
+        touchMode={true}
+      />
+    </SurfaceBoundary>
   </Sheet>
 {:else if activeSheet === "note-info"}
   <Sheet label={STRINGS.noteInfoLabel} onClose={closeSheet} restoreFocus={false}>

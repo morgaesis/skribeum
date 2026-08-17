@@ -200,6 +200,52 @@ describe("per-vault workspace state", () => {
     expect(state.focusedPaneId).toBe("pane-1");
   });
 
+  it("reconciles a selection that sits inside a folder outside the expanded set", () => {
+    // The record that traps the shell: the note is open, its folder is the
+    // one folder missing from the expanded set, and nothing in the product
+    // could put the folder back.
+    const state = normalizeWorkspaceState({
+      expandedFolders: ["Examples", "Examples/Home"],
+      selectedPath: "Examples/Research/literature-review.md",
+    });
+    expect(state.expandedFolders).toEqual([
+      "Examples",
+      "Examples/Home",
+      "Examples/Research",
+    ]);
+    expect(state.selectedPath).toBe("Examples/Research/literature-review.md");
+  });
+
+  it("heals the trapped record on the read that finds it", () => {
+    const storage = memoryStorage();
+    storage.values.set(
+      `skribeum.workspace.v1.${loadWorkspaceKeySuffix("vault-trap")}`,
+      JSON.stringify({
+        version: 2,
+        expandedFolders: ["Examples", "Examples/Home"],
+        selectedPath: "Examples/Research/literature-review.md",
+      }),
+    );
+
+    const restored = loadWorkspaceState("vault-trap", storage);
+    expect(restored.expandedFolders).toContain("Examples/Research");
+
+    // And the healed record is what the next write leaves behind, so the
+    // trap does not come back on the visit after that.
+    saveWorkspaceState("vault-trap", restored, storage);
+    expect(loadWorkspaceState("vault-trap", storage).expandedFolders).toContain(
+      "Examples/Research",
+    );
+  });
+
+  it("adds no ancestors for a selection at the vault root", () => {
+    const state = normalizeWorkspaceState({
+      expandedFolders: ["Examples"],
+      selectedPath: "quickstart.md",
+    });
+    expect(state.expandedFolders).toEqual(["Examples"]);
+  });
+
   it("gives every pane a unique identifier", () => {
     const state = normalizeWorkspaceState({
       layout: {

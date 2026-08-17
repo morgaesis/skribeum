@@ -25,10 +25,10 @@ let {
 const initialViewportHeight = () =>
   typeof window === "undefined" ? 0 : window.innerHeight;
 let active = $state(0);
-let inputElement = $state<HTMLInputElement | undefined>();
-let closeElement = $state<HTMLButtonElement | undefined>();
-let backdropElement = $state<HTMLElement | undefined>();
-let dialogElement = $state<HTMLElement | undefined>();
+let inputElement = $state<HTMLInputElement | null>();
+let closeElement = $state<HTMLButtonElement | null>();
+let backdropElement = $state<HTMLElement | null>();
+let dialogElement = $state<HTMLElement | null>();
 let closing = false;
 let visualTop = $state(0);
 let visualLeft = $state(0);
@@ -151,15 +151,15 @@ function requestClose() {
   closing = true;
   exitMotionSurfaces(
     [backdropElement, dialogElement].filter(
-      (element): element is HTMLElement => element !== undefined,
+      (element): element is HTMLElement => element instanceof HTMLElement,
     ),
     onClose,
   );
 }
 
 onMount(() => {
-  if (backdropElement !== undefined) enterMotionSurface(backdropElement);
-  if (dialogElement !== undefined) enterMotionSurface(dialogElement);
+  enterMotionSurface(backdropElement);
+  enterMotionSurface(dialogElement);
 });
 
 onDestroy(() => {

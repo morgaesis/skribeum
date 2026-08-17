@@ -13,7 +13,7 @@ let {
   disabledReason?: string | null;
 } = $props();
 
-let browseButton = $state<HTMLButtonElement>();
+let browseButton = $state<HTMLButtonElement | null>();
 let firstRecentButton = $state<HTMLButtonElement>();
 let focusedSurface = $state<string | null>(null);
 

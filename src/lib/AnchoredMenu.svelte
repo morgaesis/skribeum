@@ -51,7 +51,7 @@ let {
   children?: Snippet;
 } = $props();
 
-let surface = $state<HTMLElement>();
+let surface = $state<HTMLElement | null>();
 let closing = false;
 let stopDismissal: (() => void) | null = null;
 let stopViewport: (() => void) | null = null;
@@ -59,7 +59,7 @@ let stopHoverCorridor: (() => void) | null = null;
 
 function reposition() {
   const element = surface;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
   const viewport = visualViewportRect(
     element.ownerDocument.defaultView ?? window,
   );
@@ -86,7 +86,7 @@ function requestClose() {
   stopHoverCorridor?.();
   stopHoverCorridor = null;
   const element = surface;
-  if (element === undefined) {
+  if (!(element instanceof HTMLElement)) {
     onClose();
     return;
   }
@@ -95,7 +95,7 @@ function requestClose() {
 
 function onKeydown(event: KeyboardEvent) {
   const element = surface;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
   if (moveMenuFocus(element, event.key)) {
     event.preventDefault();
   }
@@ -103,7 +103,7 @@ function onKeydown(event: KeyboardEvent) {
 
 onMount(() => {
   const element = surface;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
   reposition();
   enterMotionSurface(element);
   stopViewport = observeVisualViewport(

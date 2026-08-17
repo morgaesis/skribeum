@@ -523,9 +523,19 @@ export const STRINGS = {
   updateAvailable: "Update available:",
   updateDownloading: "Downloading",
   updateReady: "Update installed, restart to use",
-  updateFailed: "Update check failed",
+  updateRestarting: "Restarting to apply the update",
+  updateFailed: "Update failed",
+  updateFailedNetwork:
+    "Could not reach the update server. Check your network connection and try again.",
+  updateFailedSignature:
+    "This update failed a security check and was not installed. The download may have been altered or corrupted; do not retry it on an untrusted network.",
   updateUnavailable: "Updates are delivered by the desktop application",
   updateInstall: "Install update",
+  updateRestart: "Restart to apply",
+  updateRestartConfirmTitle: "Restart to finish installing?",
+  updateRestartConfirmMessage:
+    "Skribeum closes and reopens to finish installing",
+  updateNotesSummary: "Release notes",
   slashHeading1: "Heading 1",
   slashHeading2: "Heading 2",
   slashHeading3: "Heading 3",

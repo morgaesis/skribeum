@@ -20,7 +20,7 @@ let {
 
 let collapsed = $state<Set<number>>(new Set());
 let focusIndex = $state(0);
-let itemElements: HTMLElement[] = [];
+let itemElements: Array<HTMLElement | null | undefined> = [];
 
 const rows = $derived.by((): FlatOutlineRow[] =>
   flattenOutline(entries, collapsed),

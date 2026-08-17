@@ -1,0 +1,96 @@
+{
+  "description": "List-move corpus. Every file states, by hand, the whole-line extent of each list item it contains: `line` is the zero-based line the list starts on, and each entry of `items` is the half-open line range the item occupies, blank separators excluded. The move suite checks the parser-derived extents against these numbers and computes every expected result from them, so a change in what the parser reports fails the suite instead of moving the expectation with it. All content here is synthesized for testing and dedicated to the public domain under CC0 1.0.",
+  "files": [
+    {
+      "name": "board-tight-lf.md",
+      "note": "Board-shaped columns: three tight bullet lists, each opening on the line directly under its heading, one of them holding a single item that ends the file.",
+      "lists": [
+        { "line": 3, "items": [[3, 4], [4, 5], [5, 6]] },
+        { "line": 8, "items": [[8, 9], [9, 10]] },
+        { "line": 12, "items": [[12, 13]] }
+      ]
+    },
+    {
+      "name": "board-tight-crlf.md",
+      "note": "The same board with CRLF terminators throughout.",
+      "lists": [
+        { "line": 3, "items": [[3, 4], [4, 5], [5, 6]] },
+        { "line": 8, "items": [[8, 9], [9, 10]] },
+        { "line": 12, "items": [[12, 13]] }
+      ]
+    },
+    {
+      "name": "mixed-endings.md",
+      "note": "LF, CRLF and lone-CR terminators in one file. The first column mixes CRLF and LF across its items; the second column separates a CR-terminated item from an LF-terminated one.",
+      "lists": [
+        { "line": 3, "items": [[3, 4], [4, 5], [5, 6]] },
+        { "line": 8, "items": [[8, 9], [9, 10]] }
+      ]
+    },
+    {
+      "name": "no-trailing-newline.md",
+      "note": "The last item is the final line of the file and carries no terminator.",
+      "lists": [{ "line": 1, "items": [[1, 2], [2, 3], [3, 4]] }]
+    },
+    {
+      "name": "tabs-nested.md",
+      "note": "A sublist indented with a tab rather than spaces.",
+      "lists": [
+        { "line": 1, "items": [[1, 4], [4, 5]] },
+        { "line": 2, "items": [[2, 3], [3, 4]] }
+      ]
+    },
+    {
+      "name": "markers-star-plus.md",
+      "note": "Two bullet lists written with different markers, so a move between them has to rewrite the marker character.",
+      "lists": [
+        { "line": 1, "items": [[1, 2], [2, 3], [3, 4]] },
+        { "line": 6, "items": [[6, 7], [7, 8]] }
+      ]
+    },
+    {
+      "name": "ordered.md",
+      "note": "Numbered lists with the two delimiters.",
+      "lists": [
+        { "line": 1, "items": [[1, 2], [2, 3], [3, 4]] },
+        { "line": 6, "items": [[6, 7], [7, 8]] }
+      ]
+    },
+    {
+      "name": "loose.md",
+      "note": "A loose list with one blank line between items, one of which holds non-ASCII text so buffer offsets and byte offsets diverge.",
+      "lists": [{ "line": 1, "items": [[1, 2], [3, 4], [5, 6]] }]
+    },
+    {
+      "name": "loose-and-tight-columns.md",
+      "note": "A loose column beside a tight one, so a move between them carries a blank separator into a list that has none.",
+      "lists": [
+        { "line": 1, "items": [[1, 2], [3, 4]] },
+        { "line": 6, "items": [[6, 7], [7, 8]] }
+      ]
+    },
+    {
+      "name": "continuations.md",
+      "note": "Multi-line items: one continued at two spaces, one at four.",
+      "lists": [{ "line": 1, "items": [[1, 3], [3, 5], [5, 6]] }]
+    },
+    {
+      "name": "nested-sublist.md",
+      "note": "An item holding a nested sublist, indented with spaces.",
+      "lists": [
+        { "line": 1, "items": [[1, 4], [4, 5], [5, 6]] },
+        { "line": 2, "items": [[2, 3], [3, 4]] }
+      ]
+    },
+    {
+      "name": "empty-items.md",
+      "note": "Items that are a bare marker with no content, and a heading with no list under it at all.",
+      "lists": [{ "line": 1, "items": [[1, 2], [2, 3], [3, 4]] }]
+    },
+    {
+      "name": "indented-code-continuation.md",
+      "note": "An item whose continuation is indented far enough past its content column to be an indented code block, inside a loose list.",
+      "lists": [{ "line": 1, "items": [[1, 4], [5, 6], [7, 8]] }]
+    }
+  ]
+}

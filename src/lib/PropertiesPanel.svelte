@@ -33,9 +33,9 @@ let {
 
 const panelContentId = "skr-properties-content";
 
-let addKeyElement = $state<HTMLElement | undefined>();
-let addValueElement = $state<HTMLElement | undefined>();
-let addRowElement = $state<HTMLElement | undefined>();
+let addKeyElement = $state<HTMLElement | null>();
+let addValueElement = $state<HTMLElement | null>();
+let addRowElement = $state<HTMLElement | null>();
 // Tracked alongside the CSS :hover rule below (real pointer hover keeps
 // working through :hover directly) so the reveal is also driven by an
 // observable pointer event, matching the reveal pattern used elsewhere
@@ -120,7 +120,7 @@ function focusEditable(event: MouseEvent) {
 }
 
 $effect(() => {
-  if (adding && addKeyElement !== undefined) {
+  if (adding && addKeyElement instanceof HTMLElement) {
     addKeyElement.focus();
   }
 });
@@ -158,7 +158,7 @@ function additionKeydown(event: KeyboardEvent, cell: "key" | "value") {
 function additionFocusout(event: FocusEvent) {
   const next = event.relatedTarget;
   if (
-    addRowElement !== undefined &&
+    addRowElement instanceof HTMLElement &&
     next instanceof Node &&
     addRowElement.contains(next)
   ) {

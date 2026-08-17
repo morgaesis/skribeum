@@ -26,7 +26,9 @@ let {
   fileName: string;
 } = $props();
 
-let surface: HTMLDivElement;
+// `bind:this` writes `null` back when the element is torn down, so the
+// reference is nullable and every reader checks it.
+let surface: HTMLDivElement | null = null;
 let url = $state<string | null>(null);
 let failed = $state(false);
 

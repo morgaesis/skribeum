@@ -163,7 +163,9 @@ let {
 } = $props();
 
 let host: HTMLDivElement;
-let shell: HTMLDivElement;
+// A deferred arrival can land after this pane unmounts, at which point
+// `bind:this` has written `null` back into the reference.
+let shell: HTMLDivElement | null = null;
 let view: EditorView | undefined;
 let session: NoteSession | null = null;
 let durableEditHistory: DurableEditHistory | null = null;
@@ -678,6 +680,7 @@ function stateFor(
 function finishPreparedArrival(): void {
   if (!arrivalPrepared) return;
   arrivalPrepared = false;
+  if (!(shell instanceof HTMLElement)) return;
   delete shell.dataset.motionPreparing;
   enterMotionSurface(shell);
 }
@@ -1107,6 +1110,7 @@ export function getView(): EditorView | undefined {
 export function preparePaneSwitch(kind: PaneSwitchKind): void {
   lastSwitchKind = kind;
   arrivalPrepared = true;
+  if (!(shell instanceof HTMLElement)) return;
   shell.dataset.motionPreparing = "true";
   delete shell.dataset.motionExiting;
 }

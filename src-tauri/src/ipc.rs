@@ -1225,25 +1225,7 @@ impl<R: Runtime> VaultWatchWorker<R> {
                     &self.root,
                     &event,
                 );
-                // External changes update the search index incrementally:
-                // updates re-read and re-index, removals drop the row. Only
-                // notes are indexed, so an external write to any other file
-                // must not add a row the next full rebuild removes; a
-                // removal still runs, since dropping a row that is not
-                // there costs nothing and a path can change kind.
-                let indexes = match &event {
-                    ReconEvent::ExternalUpdate { path, .. } => path.is_note(),
-                    _ => true,
-                };
-                if indexes
-                    && let Some(index) = self
-                        .search
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .as_ref()
-                {
-                    let _ = index.apply_recon_event(&RealFs, &self.root, &event);
-                }
+                index_recon_event(&self.search, &self.root, &event);
                 if !emit_recon_event(
                     &self.app,
                     self.vault_id,
@@ -1260,6 +1242,27 @@ impl<R: Runtime> VaultWatchWorker<R> {
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
+    }
+}
+
+/// Applies one reconciliation event to the search index: an update re-reads
+/// and re-indexes, a removal drops the row. Search indexes notes and nothing
+/// else, so an external write to any other file is skipped here rather than
+/// adding a row the next full rebuild removes. A removal always runs:
+/// dropping a row that is not there costs nothing, and a path can change
+/// kind between passes.
+fn index_recon_event(search: &Mutex<Option<SearchIndex>>, root: &Path, event: &ReconEvent) {
+    if let ReconEvent::ExternalUpdate { path, .. } = event
+        && !path.is_note()
+    {
+        return;
+    }
+    if let Some(index) = search
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
+        let _ = index.apply_recon_event(&RealFs, root, event);
     }
 }
 

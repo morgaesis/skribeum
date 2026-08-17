@@ -51,8 +51,8 @@ additional cache is worth adding.
 
 ### Saving only from the default branch
 
-`RUST_CACHE_SAVE` in `ci.yml` restricts the save to runs on `main`. Every
-event still restores.
+The `save-if` condition on each `Swatinem/rust-cache` step restricts the save
+to runs on `main`. Every event still restores.
 
 A cache written from a pull request is scoped to that pull request's merge
 ref. No other pull request can read it, and the pull request that wrote it
@@ -71,6 +71,14 @@ a cold compile, which the table above prices at several minutes; the only
 thing the restriction costs is that a pull request which itself changes
 `Cargo.lock` re-resolves that change on each push instead of once, worth about
 90 s on the `rust` job.
+
+The condition is written inline at each of the three steps rather than once as
+a workflow variable. The action hashes into the cache key every environment
+variable whose name begins with `RUST`, `CARGO`, `CC`, `CFLAGS`, `CXX` or
+`CMAKE`, values included, so a variable holding a per-event condition changes
+the key per event: pull requests would key apart from the branch they restore
+from and never hit. The same trap applies to any variable added to `ci.yml`
+under one of those prefixes.
 
 ### Runner classes and cache keys
 
@@ -151,7 +159,7 @@ legs outright. Either way the platforms that a Linux-only pull request does
 not cover are the platforms `act` cannot cover either.
 
 Its runner image is not GitHub's. It is 1.7 GB, carries less preinstalled
-tooling, and resolves 215 apt packages where a hosted runner resolves 189, so
+tooling, and resolves 216 apt packages where a hosted runner resolves 189, so
 a step can pass in one and fail in the other. Installing the WebKitGTK
 packages takes 3 to 4.75 minutes in the container against 27-42 s on a hosted
 runner.

@@ -456,3 +456,92 @@ describe("AnchoredMenu.svelte", () => {
     anchor.remove();
   });
 });
+
+describe("AnchoredMenu.svelte hover corridor", () => {
+  function mountHoverMenu(): {
+    anchor: HTMLElement;
+    surface: HTMLElement;
+    component: object;
+    closed: () => boolean;
+  } {
+    const anchor = anchorButton({});
+    let closed = false;
+    const component = mount(AnchoredMenu, {
+      target: document.body,
+      props: {
+        anchor,
+        label: "Hover menu",
+        hoverSummoned: true,
+        onClose: () => {
+          closed = true;
+        },
+      },
+    });
+    flushSync();
+    const surface = document.querySelector<HTMLElement>(".skr-anchored-menu");
+    if (surface === null) throw new Error("menu did not render");
+    surface.getBoundingClientRect = () =>
+      ({ left: 300, right: 500, top: 424, bottom: 560 }) as DOMRect;
+    return { anchor, surface, component, closed: () => closed };
+  }
+
+  function pointerEvent(name: string, x: number, y: number): Event {
+    return Object.assign(new Event(name, { bubbles: true }), {
+      clientX: x,
+      clientY: y,
+    });
+  }
+
+  it("survives the travel from its anchor into the menu", async () => {
+    const { anchor, surface, component, closed } = mountHoverMenu();
+    anchor.dispatchEvent(pointerEvent("pointerleave", 320, 410));
+    // Inside the corridor between the departure point and the menu's near
+    // edge: each move renews the grace rather than spending it.
+    for (const [x, y] of [
+      [325, 415],
+      [335, 419],
+      [345, 422],
+    ] as const) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      document.dispatchEvent(pointerEvent("pointermove", x, y));
+      expect(closed()).toBe(false);
+    }
+    surface.dispatchEvent(new Event("pointerenter"));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(closed()).toBe(false);
+    await unmount(component);
+    anchor.remove();
+  });
+
+  it("closes once the pointer leaves the corridor", async () => {
+    const { anchor, component, closed } = mountHoverMenu();
+    anchor.dispatchEvent(pointerEvent("pointerleave", 320, 410));
+    document.dispatchEvent(pointerEvent("pointermove", 20, 700));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(closed()).toBe(true);
+    await unmount(component);
+    anchor.remove();
+  });
+
+  it("leaves a pressed menu alone, which no pointer departure closes", async () => {
+    const anchor = anchorButton({});
+    let closed = false;
+    const component = mount(AnchoredMenu, {
+      target: document.body,
+      props: {
+        anchor,
+        label: "Pressed menu",
+        onClose: () => {
+          closed = true;
+        },
+      },
+    });
+    flushSync();
+    anchor.dispatchEvent(pointerEvent("pointerleave", 320, 410));
+    document.dispatchEvent(pointerEvent("pointermove", 20, 700));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(closed).toBe(false);
+    await unmount(component);
+    anchor.remove();
+  });
+});

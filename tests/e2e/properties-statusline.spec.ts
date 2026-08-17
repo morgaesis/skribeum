@@ -129,8 +129,7 @@ async function usePhoneViewport() {
 async function clearWorkspaceStorage(): Promise<void> {
   await browser.execute(() => {
     for (const key of Object.keys(localStorage)) {
-      if (key.startsWith("skribeum.workspace.v1."))
-        localStorage.removeItem(key);
+      if (key.startsWith("skribeum.workspace.")) localStorage.removeItem(key);
     }
   });
 }

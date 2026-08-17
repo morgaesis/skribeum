@@ -52,7 +52,7 @@ let {
   expandedPaths?: readonly string[];
   onExpandedChange?: (paths: string[]) => void;
   onSelectionChange?: (path: string | null) => void;
-  onOpenPath: (path: string) => void;
+  onOpenPath: (path: string, options?: { newTab?: boolean }) => void;
   registry?: CommandRegistry;
   commandContext?: () => CommandContext;
   desktop?: boolean;
@@ -66,13 +66,17 @@ let autoExpanded = $state<Record<string, boolean>>({});
 let focusIndex = $state(0);
 let scrollTop = $state(0);
 let viewportHeight = $state(0);
-let treeElement = $state<HTMLUListElement>();
-let itemElements = $state<Array<HTMLElement | undefined>>([]);
+// `bind:this` writes `null`, not `undefined`, into a slot whose element has
+// been torn down (a keyed row moving to a different index releases its old
+// slot that way), so every element reference below is checked for being an
+// element rather than for being defined.
+let treeElement = $state<HTMLUListElement | null>();
+let itemElements = $state<Array<HTMLElement | null | undefined>>([]);
 let menuPath = $state<string | null>(null);
 let menuLeft = $state(0);
 let menuTop = $state(0);
 let menuOrigin = $state<HTMLElement | null>(null);
-let menuElement = $state<HTMLElement>();
+let menuElement = $state<HTMLElement | null>();
 let dragPath = $state<string | null>(null);
 let dropPath = $state<string | null>(null);
 let hoveredPath = $state<string | null>(null);
@@ -82,9 +86,9 @@ let folderMotionGeneration = 0;
 let folderMotionFrame: number | null = null;
 let folderMotionTimer: ReturnType<typeof setTimeout> | null = null;
 let folderMotionElements: HTMLElement[] = [];
-let ghostElements = $state<Array<HTMLElement | undefined>>([]);
+let ghostElements = $state<Array<HTMLElement | null | undefined>>([]);
 let leavingRows = $state<GhostRow[]>([]);
-let highlightElement = $state<HTMLElement>();
+let highlightElement = $state<HTMLElement | null>();
 // Plain (non-reactive) bookkeeping: the choreography effect below both
 // reads and writes these, and making them `$state` would make its own
 // writes re-trigger itself mid-flush, stomping the entrance markers it had
@@ -358,6 +362,7 @@ const menuCommands = $derived.by(() => {
         ]
       : menuRow.kind === "note"
         ? [
+            "tree.note.open-in-new-tab",
             "tree.entry.rename",
             "tree.entry.delete",
             "tree.note.copy-link",
@@ -432,7 +437,7 @@ $effect(() => {
   const path = selectedPath;
   const top = activeRowTop;
   const element = highlightElement;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
 
   if (top === null) {
     highlightMotionGeneration += 1;
@@ -532,7 +537,7 @@ $effect(() => {
 
 $effect(() => {
   const element = treeElement;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
   const measure = () => {
     if (mounted) viewportHeight = element.clientHeight;
   };
@@ -601,7 +606,7 @@ function captureFolderMotion(): Map<string, FolderMotionSnapshot> {
   for (const index of renderedIndices) {
     const row = rows[index];
     const element = itemElements[index];
-    if (row === undefined || element === undefined) continue;
+    if (row === undefined || !(element instanceof HTMLElement)) continue;
     snapshots.set(row.path, {
       presentation: {
         path: row.path,
@@ -629,10 +634,13 @@ function captureFolderMotion(): Map<string, FolderMotionSnapshot> {
       },
       open: ghost.open,
       top:
-        element === undefined
-          ? ghost.top
-          : renderedCoordinate(element, "y", ghost.top),
-      opacity: element === undefined ? ghost.opacity : renderedOpacity(element),
+        element instanceof HTMLElement
+          ? renderedCoordinate(element, "y", ghost.top)
+          : ghost.top,
+      opacity:
+        element instanceof HTMLElement
+          ? renderedOpacity(element)
+          : ghost.opacity,
     });
   }
   return snapshots;
@@ -667,10 +675,9 @@ async function toggleFolderWithReveal(row: Row) {
   cancelFolderCallbacks();
   settleFolderMotion();
   const tree = treeElement;
-  const duration =
-    tree === undefined
-      ? 0
-      : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
+  const duration = !(tree instanceof HTMLElement)
+    ? 0
+    : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
   if (duration > 0 && !opening) {
     leavingRows = renderedIndices.flatMap((index): GhostRow[] => {
       const hidden = rows[index];
@@ -696,7 +703,7 @@ async function toggleFolderWithReveal(row: Row) {
   userExpanded[folderPath] = opening;
   delete autoExpanded[folderPath];
   persistExpanded();
-  if (duration === 0 || tree === undefined) return;
+  if (duration === 0 || !(tree instanceof HTMLElement)) return;
   await playFolderReveal(snapshots, generation, opening ? [] : [folderPath]);
 }
 
@@ -706,7 +713,7 @@ async function playFolderReveal(
   collapsingPaths: readonly string[] = [],
 ): Promise<void> {
   const tree = treeElement;
-  if (!mounted || tree === undefined) return;
+  if (!mounted || !(tree instanceof HTMLElement)) return;
   const duration = motionDurationMilliseconds(
     "--skr-motion-panel-duration",
     tree,
@@ -732,7 +739,7 @@ async function playFolderReveal(
   for (const index of renderedIndices) {
     const current = rows[index];
     const element = itemElements[index];
-    if (current === undefined || element === undefined) continue;
+    if (current === undefined || !(element instanceof HTMLElement)) continue;
     const before = snapshots.get(current.path);
     if (before === undefined) {
       element.style.transition = "none";
@@ -750,7 +757,7 @@ async function playFolderReveal(
     }
   }
   const ghosts = ghostElements.filter(
-    (element): element is HTMLElement => element !== undefined,
+    (element): element is HTMLElement => element instanceof HTMLElement,
   );
   folderMotionElements = [...moving, ...ghosts];
   if (folderMotionElements.length === 0) {
@@ -778,7 +785,7 @@ async function playFolderReveal(
   });
 }
 
-function activate(row: Row) {
+function activate(row: Row, newTab = false) {
   if (row.kind === "directory") {
     toggleFolder(row);
   } else if (
@@ -786,7 +793,7 @@ function activate(row: Row) {
     row.path.toLowerCase().endsWith(".canvas")
   ) {
     onSelectionChange?.(row.path);
-    onOpenPath(row.path);
+    onOpenPath(row.path, { newTab });
   }
 }
 
@@ -809,7 +816,7 @@ function closeMenu(restore = true) {
       });
     }
   };
-  if (menu === undefined) finish();
+  if (!(menu instanceof HTMLElement)) finish();
   else void exitMotionSurface(menu, finish);
 }
 
@@ -835,7 +842,7 @@ function openMenu(row: Row, origin: HTMLElement, x?: number, y?: number) {
   void tick().then(() => {
     if (!mounted) return;
     const menu = menuElement;
-    if (menu === undefined) return;
+    if (!(menu instanceof HTMLElement)) return;
     const position = computeAnchoredPosition(
       anchor,
       { width: menu.offsetWidth, height: menu.offsetHeight },
@@ -858,6 +865,23 @@ function runMenuCommand(id: string) {
   registry.run(id, {
     ...commandContext(),
     treePath: path,
+    restoreTreeFocus,
+  });
+}
+
+/**
+ * Runs a tree command directly against the focused row, bypassing the
+ * action menu: the `F2`/`Delete` accelerators every Obsidian and VS Code
+ * user reaches for first. Shares the same context shape `runMenuCommand`
+ * builds from the menu, so a rename or delete behaves identically and
+ * returns focus the same way whichever route triggered it.
+ */
+function runRowCommand(id: string, row: Row) {
+  if (registry === undefined || commandContext === undefined) return;
+  const restoreTreeFocus = restoreMenuTreeFocus(row.path);
+  registry.run(id, {
+    ...commandContext(),
+    treePath: row.path,
     restoreTreeFocus,
   });
 }
@@ -889,8 +913,9 @@ function clearHold() {
 }
 
 // registry-exempt keydown: ARIA tree and menu roving navigation stay inside
-// their widgets. Every application action dispatched from the menu is a
-// registered command.
+// their widgets. Every application action dispatched from a row, whether
+// through the menu or through the F2/Delete accelerators below, is a
+// registered command run through the registry.
 function onKeydown(event: KeyboardEvent) {
   const row = rows[focusIndex];
   if (row === undefined) return;
@@ -934,6 +959,12 @@ function onKeydown(event: KeyboardEvent) {
         row,
         itemElements[focusIndex] ?? (event.currentTarget as HTMLElement),
       );
+      break;
+    case "F2":
+      runRowCommand("tree.entry.rename", row);
+      break;
+    case "Delete":
+      runRowCommand("tree.entry.delete", row);
       break;
     default:
       return;
@@ -1070,9 +1101,15 @@ function dropOn(destination: string | null) {
         style={`top: ${TREE_PADDING + index * rowHeight}px; height: ${rowHeight}px; padding-left: ${0.5 + row.depth}rem`}
         draggable={row.kind !== "file" || row.path.toLowerCase().endsWith(".canvas")}
         onfocus={() => (focusIndex = index)}
-        onclick={() => {
+        onclick={(event) => {
           void focusRow(index);
-          activate(row);
+          activate(row, event.ctrlKey || event.metaKey);
+        }}
+        onauxclick={(event) => {
+          if (event.button !== 1) return;
+          event.preventDefault();
+          void focusRow(index);
+          activate(row, true);
         }}
         oncontextmenu={(event) => rowContextMenu(event, row)}
         onpointerdown={(event) => beginHold(event, row)}
@@ -1116,6 +1153,7 @@ function dropOn(destination: string | null) {
         <button
           type="button"
           class="skr-tree-actions"
+          tabindex={index === focusIndex ? 0 : -1}
           aria-label={`${STRINGS.rowActions}: ${row.label}`}
           aria-haspopup="menu"
           aria-expanded={menuPath === row.path}

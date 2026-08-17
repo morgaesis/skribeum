@@ -18,8 +18,10 @@ import type { EditorView } from "@codemirror/view";
 export type CommandContext = {
   /** The active editor view, or null when no editor exists. */
   view: EditorView | null;
-  /** Opens a note by vault-relative path. */
+  /** Opens a note by vault-relative path, reusing the focused pane's tab. */
   openNote(path: string): Promise<void>;
+  /** Opens a note in a new tab, one of the explicit new-tab routes. */
+  openNoteInNewTab?(path: string): Promise<void>;
   /** Creates and opens a note in the configured default folder. */
   createNote?(): Promise<void>;
   /** Opens the platform vault picker. */
@@ -82,10 +84,14 @@ export type CommandContext = {
   /** Cycles or activates tabs in the focused pane. */
   cycleTab?(direction: -1 | 1): void;
   activateTab?(index: number | "last"): void;
-  /** Creates and controls the second editor pane. */
-  splitPane?(): void | Promise<void>;
-  focusPane?(direction: "left" | "right"): void;
-  moveTabToOtherPane?(): void | Promise<void>;
+  /** Splits the focused pane, placing its active tab on one side. */
+  splitPane?(side: "up" | "down" | "left" | "right"): void | Promise<void>;
+  /** Moves pane focus to the nearest pane in one geometric direction. */
+  focusPane?(direction: "up" | "down" | "left" | "right"): void;
+  /** Relocates the active tab to the nearest pane in one direction. */
+  moveTabToPane?(
+    direction: "up" | "down" | "left" | "right",
+  ): void | Promise<void>;
   /** Copies a link to a named heading, or the heading nearest the caret. */
   copyHeadingLink?(heading?: string): Promise<void>;
   /** Toggles the active note's transient whole-document source presentation. */

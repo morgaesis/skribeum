@@ -198,6 +198,8 @@ let {
   settingsFilePath = null,
   updateState = { kind: "idle" } as UpdateState,
   onCheckUpdate = () => {},
+  onInstallUpdate = () => {},
+  onRestartUpdate = () => {},
   targetSetting = null,
 }: {
   settings: SettingsState;
@@ -210,14 +212,16 @@ let {
   settingsFilePath?: string | null;
   updateState?: UpdateState;
   onCheckUpdate?: () => void;
+  onInstallUpdate?: () => void;
+  onRestartUpdate?: () => void;
   targetSetting?: string | null;
 } = $props();
 
-let dialogElement = $state<HTMLElement | undefined>();
-let backdropElement = $state<HTMLElement | undefined>();
-let contentElement = $state<HTMLElement | undefined>();
-let jumpButtonElement = $state<HTMLButtonElement | undefined>();
-let jumpMenuElement = $state<HTMLElement | undefined>();
+let dialogElement = $state<HTMLElement | null>();
+let backdropElement = $state<HTMLElement | null>();
+let contentElement = $state<HTMLElement | null>();
+let jumpButtonElement = $state<HTMLButtonElement | null>();
+let jumpMenuElement = $state<HTMLElement | null>();
 let closing = false;
 const returnFocusElement =
   typeof document !== "undefined" &&
@@ -295,8 +299,8 @@ onMount(() => {
 });
 
 onMount(() => {
-  if (backdropElement !== undefined) enterMotionSurface(backdropElement);
-  if (dialogElement !== undefined) enterMotionSurface(dialogElement);
+  enterMotionSurface(backdropElement);
+  enterMotionSurface(dialogElement);
 });
 
 $effect(() => {
@@ -316,7 +320,12 @@ async function focusSetting(id: string) {
   const row = contentElement?.querySelector<HTMLElement>(
     `[data-setting-id="${CSS.escape(id)}"]`,
   );
-  if (contentElement === undefined || row === null || row === undefined) return;
+  if (
+    !(contentElement instanceof HTMLElement) ||
+    row === null ||
+    row === undefined
+  )
+    return;
   const contentBox = contentElement.getBoundingClientRect();
   const rowBox = row.getBoundingClientRect();
   contentElement.scrollTop += rowBox.top - contentBox.top;
@@ -739,7 +748,7 @@ function closeSettings() {
   restorePreview();
   exitMotionSurfaces(
     [backdropElement, dialogElement].filter(
-      (element): element is HTMLElement => element !== undefined,
+      (element): element is HTMLElement => element instanceof HTMLElement,
     ),
     onClose,
   );
@@ -788,7 +797,7 @@ function hasMatches(section: SectionId): boolean {
 async function openJumpMenu() {
   jumpMenuOpen = true;
   await tick();
-  if (jumpMenuElement !== undefined) enterMotionSurface(jumpMenuElement);
+  enterMotionSurface(jumpMenuElement);
   jumpMenuElement
     ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
     ?.focus();
@@ -844,7 +853,7 @@ function jumpToSection(section: SectionId) {
 }
 
 function onJumpMenuKeydown(event: KeyboardEvent) {
-  if (jumpMenuElement === undefined) return;
+  if (!(jumpMenuElement instanceof HTMLElement)) return;
   const items = [
     ...jumpMenuElement.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
   ];
@@ -913,10 +922,10 @@ function onKeydown(event: KeyboardEvent) {
     }
     return;
   }
-  if (event.key !== "Tab" || dialogElement === undefined) {
+  if (event.key !== "Tab" || !(dialogElement instanceof HTMLElement)) {
     return;
   }
-  if (jumpMenuOpen && jumpMenuElement !== undefined) {
+  if (jumpMenuOpen && jumpMenuElement instanceof HTMLElement) {
     const menuFocusable = [
       ...jumpMenuElement.querySelectorAll<HTMLElement>(
         'button:not(:disabled), [tabindex]:not([tabindex="-1"])',
@@ -2148,9 +2157,65 @@ function onKeydown(event: KeyboardEvent) {
                     <span class="setting-label">{STRINGS.settingsCheckUpdates}</span>
                     <p>{checkUpdatesDescription}</p>
                     {#if updateState.kind !== "idle"}
-                      <p class="update-status" role="status">
+                      <p
+                        class="update-status"
+                        class:update-status-security={updateState.kind ===
+                          "failed" && updateState.security}
+                        role={updateState.kind === "failed" &&
+                        updateState.security
+                          ? "alert"
+                          : "status"}
+                      >
                         {describeUpdateState(updateState)}
                       </p>
+                    {/if}
+                    {#if updateState.kind === "available"}
+                      {#if updateState.notes.trim() !== ""}
+                        <details class="update-notes">
+                          <summary>{STRINGS.updateNotesSummary}</summary>
+                          <p>{updateState.notes}</p>
+                        </details>
+                      {/if}
+                      <button
+                        type="button"
+                        class="skr-btn-primary update-action"
+                        data-btn-role="primary"
+                        data-testid="settings-install-update"
+                        disabled={!desktopAvailable}
+                        onclick={onInstallUpdate}
+                        >{STRINGS.updateInstall}</button
+                      >
+                    {:else if updateState.kind === "downloading"}
+                      <div
+                        class="update-progress"
+                        role="progressbar"
+                        aria-label={describeUpdateState(updateState)}
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow={updateState.percent ?? undefined}
+                      >
+                        {#if updateState.percent === null}
+                          <div
+                            class="skr-skeleton-bar"
+                            style="width: 100%; height: 100%; border-radius: 0;"
+                          ></div>
+                        {:else}
+                          <div
+                            class="update-progress-fill"
+                            style={`width: ${updateState.percent}%`}
+                          ></div>
+                        {/if}
+                      </div>
+                    {:else if updateState.kind === "ready"}
+                      <button
+                        type="button"
+                        class="skr-btn-primary update-action"
+                        data-btn-role="primary"
+                        data-testid="settings-restart-update"
+                        disabled={!desktopAvailable}
+                        onclick={onRestartUpdate}
+                        >{STRINGS.updateRestart}</button
+                      >
                     {/if}
                   </div>
                   <button
@@ -2280,6 +2345,11 @@ function onKeydown(event: KeyboardEvent) {
     color: var(--skr-text);
     display: flex;
     flex-direction: column;
+    /* The surface's own tier. Controls that carry `font: inherit` (the
+       search field, the text controls, the jump-menu rows) resolve their
+       size from here rather than from the browser's dialog font. */
+    font-family: var(--skr-font-interface);
+    font-size: var(--skr-type-control);
     height: min(85vh, 48rem);
     max-height: calc(100vh - 2rem);
     outline: none;
@@ -2314,7 +2384,8 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .settings-header-primary .icon-button {
-    font-size: 1.125rem;
+    /* Icon glyphs are 1rem everywhere in the shell. */
+    font-size: 1rem;
     height: 2.75rem;
     padding: 0;
     width: 2.75rem;
@@ -2325,14 +2396,15 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .settings-header h2 {
-    font-size: 1rem;
+    font-size: var(--skr-type-title);
+    font-weight: 600;
     margin: 0;
   }
 
   .setting-copy p,
   .setting-copy > span:last-child {
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     line-height: 1.4;
     margin: 0.2rem 0 0;
   }
@@ -2342,7 +2414,7 @@ function onKeydown(event: KeyboardEvent) {
   .update-status {
     border-left: 3px solid var(--skr-warning);
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     margin: 0.75rem 1rem 0;
     padding-left: 0.6rem;
   }
@@ -2350,6 +2422,49 @@ function onKeydown(event: KeyboardEvent) {
   .settings-error {
     border-left-color: var(--skr-danger);
     color: var(--skr-danger);
+  }
+
+  .setting-copy .update-status.update-status-security {
+    /* Out-specifies the `.setting-copy p` color rule above on purpose: a
+       security failure must read as danger-colored, not the ordinary muted
+       status text every other update state uses. */
+    border-left-color: var(--skr-danger);
+    color: var(--skr-danger);
+  }
+
+  .update-action {
+    margin-top: 0.6rem;
+  }
+
+  .update-notes {
+    margin: 0.6rem 1rem 0;
+  }
+
+  .update-notes summary {
+    color: var(--skr-link);
+    cursor: pointer;
+    font-size: var(--skr-type-label);
+  }
+
+  .update-notes p {
+    color: var(--skr-text-muted);
+    font-size: var(--skr-type-label);
+    margin: 0.4rem 0 0;
+    white-space: pre-wrap;
+  }
+
+  .update-progress {
+    background: var(--skr-surface-subtle);
+    border-radius: var(--skr-radius-control);
+    height: 0.375rem;
+    margin: 0.75rem 1rem 0;
+    overflow: hidden;
+    width: 12rem;
+  }
+
+  .update-progress-fill {
+    background: var(--skr-accent);
+    height: 100%;
   }
 
   .settings-file-status {
@@ -2369,7 +2484,7 @@ function onKeydown(event: KeyboardEvent) {
   .setting-inline-error {
     color: var(--skr-danger);
     display: block;
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     margin-top: 0.35rem;
   }
 
@@ -2389,7 +2504,7 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .setting-label {
-    font-size: 0.8125rem;
+    font-size: var(--skr-type-control);
     font-weight: 600;
   }
 
@@ -2444,7 +2559,7 @@ function onKeydown(event: KeyboardEvent) {
     border-radius: var(--skr-radius-control);
     display: flex;
     flex: 0 0 2.75rem;
-    font-size: 1.25rem;
+    font-size: 1rem;
     height: 2.75rem;
     justify-content: center;
     padding: 0;
@@ -2483,7 +2598,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .settings-jump-heading {
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     font-weight: 600;
     padding: 0 0 0.5rem 0.5rem;
   }
@@ -2521,7 +2636,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .settings-content h3 {
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     font-weight: 700;
     letter-spacing: 0.08em;
     margin: 0 0 0.25rem;
@@ -2551,7 +2666,7 @@ function onKeydown(event: KeyboardEvent) {
   .segmented button {
     border: 0;
     border-right: 1px solid var(--skr-border);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-control);
     padding: 0.4rem 0.55rem;
     white-space: nowrap;
   }
@@ -2741,7 +2856,7 @@ function onKeydown(event: KeyboardEvent) {
     box-sizing: border-box;
     color: var(--skr-text);
     font-family: var(--skr-font-interface);
-    font-size: 0.8125rem;
+    font-size: var(--skr-type-control);
     min-height: 1.75rem;
     padding: 0.25rem 0.4rem;
     text-align: center;
@@ -2776,7 +2891,7 @@ function onKeydown(event: KeyboardEvent) {
 
   output {
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     text-align: right;
     white-space: nowrap;
   }
@@ -2896,7 +3011,7 @@ function onKeydown(event: KeyboardEvent) {
   .task-status-editor summary {
     color: var(--skr-link);
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: var(--skr-type-control);
     width: fit-content;
   }
 
@@ -2935,7 +3050,7 @@ function onKeydown(event: KeyboardEvent) {
   .task-status-header {
     background: var(--skr-surface-subtle);
     color: var(--skr-text-muted);
-    font-size: 0.7rem;
+    font-size: var(--skr-type-label);
     font-weight: 600;
   }
 
@@ -3039,23 +3154,26 @@ function onKeydown(event: KeyboardEvent) {
   .icon-button,
   .secondary-button {
     border-radius: var(--skr-radius-control);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     padding: 0.4rem 0.6rem;
   }
 
   .secondary-button {
+    /* A labelled button reads at the control tier wherever it appears, so
+       the same widget never renders at two sizes across the product. */
+    font-size: var(--skr-type-control);
     font-weight: 600;
   }
 
   a {
     color: var(--skr-link);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
   }
 
   .settings-footer {
     border-top: 1px solid var(--skr-border);
     color: var(--skr-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     gap: 1rem;
     padding: 0.65rem 1.125rem;
   }

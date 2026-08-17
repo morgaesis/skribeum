@@ -210,6 +210,36 @@ async function waitForEditorArrival(): Promise<void> {
   );
 }
 
+/**
+ * Summons a task status menu the way a resting pointer does. The checkbox
+ * itself owns the hover, and the menu waits out the shared pointer-rest
+ * delay before it appears, so a pass across a task line shows nothing.
+ */
+async function hoverTaskCheckbox() {
+  await browser.execute(() => {
+    const box = document.querySelector<HTMLElement>(".cm-skr-task-checkbox");
+    if (box === null) throw new Error("task checkbox missing");
+    const bounds = box.getBoundingClientRect();
+    box.dispatchEvent(
+      new PointerEvent("pointerenter", {
+        bubbles: true,
+        clientX: bounds.left + bounds.width / 2,
+        clientY: bounds.top + bounds.height / 2,
+        pointerType: "mouse",
+      }),
+    );
+  });
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        () =>
+          document.querySelector<HTMLElement>(".cm-skr-task-palette")
+            ?.hidden === false,
+      ),
+    { timeout: 5000, timeoutMsg: "task status menu did not open on hover" },
+  );
+}
+
 async function openNoteFromTree(name: string) {
   const row = $(`[role="treeitem"][data-path="${name}"]`);
   await row.waitForExist({ timeout: 15000 });
@@ -687,21 +717,62 @@ async function capturedHistoryState(): Promise<CapturedHistoryState | null> {
   );
 }
 
-async function waitForCapturedHistoryState(
+type RestoredHistoryState = {
+  state: CapturedHistoryState | null;
+  /** CSS pixels between the viewport and where the expected state puts it. */
+  drift: number | null;
+  /** The coarsest scroll position an engine holds, in CSS pixels. */
+  positionTolerance: number;
+};
+
+async function restoredHistoryState(
+  expected: CapturedHistoryState,
+): Promise<RestoredHistoryState> {
+  return browser.execute((wanted: CapturedHistoryState) => {
+    const probe = window as Window & {
+      __SKRIBEUM_E2E_HISTORY_STATE__?: () => CapturedHistoryState | null;
+      __SKRIBEUM_E2E_READING_DRIFT__?: (
+        state: CapturedHistoryState,
+      ) => number | null;
+    };
+    return {
+      state: probe.__SKRIBEUM_E2E_HISTORY_STATE__?.() ?? null,
+      drift: probe.__SKRIBEUM_E2E_READING_DRIFT__?.(wanted) ?? null,
+      positionTolerance: Math.max(1, 1 / window.devicePixelRatio),
+    };
+  }, expected);
+}
+
+/**
+ * Waits for a restored note to carry the caret and panel state it was stored
+ * with, and to sit where the stored reading position puts it.
+ *
+ * The reading position is compared as a distance rather than as an equal
+ * anchor and offset, because the stored anchor line and its sub-pixel offset
+ * are one of several encodings of one place. A scroller holds a position only
+ * to whole pixels, so restoring into a layout that has changed since the
+ * position was stored, as this test's webview zoom makes it, lands within half
+ * a pixel of the stored position rather than on it, and the line the position
+ * is then anchored to can be its neighbour. A pixel is the whole budget: a
+ * position restored to the wrong line misses by a line height.
+ */
+async function waitForRestoredHistoryState(
   expected: CapturedHistoryState,
   description: string,
 ): Promise<void> {
   let actual: CapturedHistoryState | null = null;
+  let restored: RestoredHistoryState | null = null;
   try {
     await browser.waitUntil(
       async () => {
-        actual = await capturedHistoryState();
+        restored = await restoredHistoryState(expected);
+        actual = restored.state;
         return (
           actual?.anchor === expected.anchor &&
           actual.head === expected.head &&
-          actual.scrollAnchor === expected.scrollAnchor &&
-          Math.abs(actual.scrollOffset - expected.scrollOffset) < 1 &&
-          actual.propertiesExpanded === expected.propertiesExpanded
+          actual.propertiesExpanded === expected.propertiesExpanded &&
+          restored.drift !== null &&
+          Math.abs(restored.drift) <= restored.positionTolerance
         );
       },
       { timeout: 5000, timeoutMsg: description },
@@ -718,7 +789,7 @@ async function waitForCapturedHistoryState(
       };
     });
     throw new Error(
-      `${description}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)} with ${JSON.stringify(geometry)}`,
+      `${description}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)} at ${JSON.stringify(restored)} with ${JSON.stringify(geometry)}`,
     );
   }
 }
@@ -1962,6 +2033,7 @@ describe("skribeum shell", () => {
         { command: "tree.entry.rename", label: "Rename" },
         { command: "tree.entry.delete", label: "Delete" },
         { command: "tree.entry.move", label: "Move" },
+        { command: "tree.note.open-in-new-tab", label: "Open in new tab" },
         { command: "tree.note.copy-link", label: "Copy link" },
         { command: "tree.entry.reveal", label: "Reveal in file manager" },
         { command: "panel.sidebar.toggle", label: "Toggle sidebar" },
@@ -3401,15 +3473,39 @@ describe("skribeum shell", () => {
 
     await dismissBannersForPath();
     mkdirSync(screenshotDirectory, { recursive: true });
+    const caretColors: string[] = [];
     for (const theme of ["light", "dark"] as const) {
       await clearEditorSelection();
       await applyVisualTheme(theme);
-      const caretColor = await browser.execute(() => {
-        const content = document.querySelector<HTMLElement>(".cm-content");
-        return content === null ? "" : getComputedStyle(content).caretColor;
+      // The editor draws its own caret, so the property a reader sees is the
+      // rendered bar rather than the content element's `caret-color`, which
+      // the drawn caret deliberately makes transparent.
+      const caret = await browser.execute(() => {
+        const cursor = document.querySelector<HTMLElement>(".cm-cursor");
+        const style = cursor === null ? null : getComputedStyle(cursor);
+        return {
+          drawn: cursor !== null,
+          displayed: style !== null && style.display !== "none",
+          focused:
+            document
+              .querySelector(".cm-editor")
+              ?.classList.contains("cm-focused") ?? false,
+          width: style?.borderLeftWidth ?? "",
+          color: style?.borderLeftColor ?? "",
+          token: getComputedStyle(document.documentElement)
+            .getPropertyValue("--skr-caret")
+            .trim(),
+        };
       });
-      expect(caretColor).not.toBe("");
-      expect(caretColor).not.toBe("rgba(0, 0, 0, 0)");
+      expect(caret.drawn).toBe(true);
+      // A caret paints exactly while the editor holds focus, which is the
+      // invariant worth pinning: this window does not always own focus.
+      expect(caret.displayed).toBe(caret.focused);
+      expect(caret.width).toBe("2px");
+      expect(caret.color).not.toBe("");
+      expect(caret.color).not.toBe("rgba(0, 0, 0, 0)");
+      expect(caret.token).not.toBe("");
+      caretColors.push(caret.color);
       await dismissBannersForPath();
       await browser.saveScreenshot(
         path.join(screenshotDirectory, `after-editor-${theme}.png`),
@@ -3461,6 +3557,11 @@ describe("skribeum shell", () => {
         path.join(screenshotDirectory, `after-toolbar-${theme}.png`),
       );
     }
+
+    // The caret is a themed token, not a fixed colour: the two palettes must
+    // not resolve it to the same bar.
+    expect(caretColors).toHaveLength(2);
+    expect(caretColors[0]).not.toBe(caretColors[1]);
 
     expect(noteOnDisk(VISUAL_NOTE_NAME)).toBe(originalBytes);
     await browser.execute((theme: string) => {
@@ -3851,9 +3952,9 @@ describe("skribeum shell", () => {
     await back.click();
     if (savedState === null) throw new Error("source history state missing");
     try {
-      await waitForCapturedHistoryState(
+      await waitForRestoredHistoryState(
         savedState,
-        "history view state was not restored byte-exactly",
+        "history view state was not restored",
       );
     } catch (error) {
       await browser.keys([modifierKey, "0"]);
@@ -3925,9 +4026,9 @@ describe("skribeum shell", () => {
     await forward.waitForEnabled({ timeout: 15000 });
     await forward.click();
     if (targetState === null) throw new Error("target history state missing");
-    await waitForCapturedHistoryState(
+    await waitForRestoredHistoryState(
       targetState,
-      "forward history view state was not restored byte-exactly",
+      "forward history view state was not restored",
     );
     expect(await readingSurfaceFocusState()).toEqual({
       readingSurface: true,
@@ -4278,13 +4379,10 @@ describe("skribeum shell", () => {
           opacity: style.opacity,
           reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
           transform: style.transform,
-          transitionDurations: style.transitionDuration
-            .split(",")
-            .map((duration) =>
-              duration.trim().endsWith("ms")
-                ? Number.parseFloat(duration)
-                : Number.parseFloat(duration) * 1000,
-            ),
+          // The glyph is played rather than transitioned, because the view
+          // rebuilds the node whenever its decoration class changes and a
+          // transition would have no starting value to run from.
+          settled: marker.getAnimations().length === 0,
         };
       });
 
@@ -4326,18 +4424,17 @@ describe("skribeum shell", () => {
         timeoutMsg: "heading marker did not reveal on cursor entry",
       },
     );
+    await browser.waitUntil(
+      async () => (await headingMarkerState())?.settled === true,
+      {
+        timeout: 10000,
+        timeoutMsg: "heading marker did not settle after revealing",
+      },
+    );
     const revealed = await headingMarkerState();
+    // Settled active glyph: fully opaque and translated home.
     expect(revealed?.opacity).toBe("1");
-    if (revealed?.reducedMotion) {
-      expect(
-        revealed.transitionDurations.every((duration) => duration === 0),
-      ).toBe(true);
-    } else {
-      // Settled active glyph: translated home, having entered on the
-      // surface clock (opacity and transform both 120ms).
-      expect(revealed?.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
-      expect(revealed?.transitionDurations).toEqual([120, 120]);
-    }
+    expect(revealed?.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
     const followingPositionAfter = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -4367,20 +4464,12 @@ describe("skribeum shell", () => {
     await checkbox.waitForExist({ timeout: 15000 });
     expect(await checkbox.getAttribute("aria-label")).toBe("Todo");
 
+    await hoverTaskCheckbox();
     const hoverState = await browser.execute(() => {
       const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
       if (host === null) {
         return null;
       }
-      const bounds = host.getBoundingClientRect();
-      host.dispatchEvent(
-        new PointerEvent("pointerenter", {
-          bubbles: true,
-          clientX: bounds.left + bounds.width / 2,
-          clientY: bounds.top + bounds.height / 2,
-          pointerType: "mouse",
-        }),
-      );
       const liveCheckbox = host.querySelector<HTMLElement>(
         ".cm-skr-task-checkbox",
       );
@@ -4390,11 +4479,12 @@ describe("skribeum shell", () => {
         hidden: listbox?.hidden,
         optionCount: listbox?.querySelectorAll('[role="option"]').length,
       };
-      host.dispatchEvent(
+      const bounds = liveCheckbox?.getBoundingClientRect();
+      liveCheckbox?.dispatchEvent(
         new PointerEvent("pointerleave", {
           bubbles: true,
-          clientX: bounds.right + 1,
-          clientY: bounds.bottom + 1,
+          clientX: (bounds?.right ?? 0) + 1,
+          clientY: (bounds?.bottom ?? 0) + 1,
           pointerType: "mouse",
         }),
       );
@@ -4833,9 +4923,9 @@ describe("skribeum shell", () => {
     await openNoteFromTree(TASK_TRACKS_NOTE_NAME);
     await $(".cm-skr-task-checkbox").waitForExist({ timeout: 15000 });
 
+    await hoverTaskCheckbox();
     const groupedMenu = await browser.execute(() => {
       const host = document.querySelector<HTMLElement>(".cm-skr-task-control");
-      host?.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
       return {
         headings: [
           ...document.querySelectorAll<HTMLElement>(
@@ -5592,6 +5682,54 @@ describe("skribeum core editing surfaces", () => {
       );
     }
   }
+
+  async function closeIfOpen(selector: string) {
+    const surface = $(selector);
+    if (!(await surface.isExisting())) return;
+    // Escape can dismiss one nested layer at a time (the settings dialog's
+    // own jump menu, for one), so press it until the surface itself is
+    // gone rather than assuming a single press clears it.
+    await browser.waitUntil(
+      async () => {
+        if (!(await surface.isExisting())) return true;
+        await browser.keys(Key.Escape);
+        return false;
+      },
+      { timeout: 5000, interval: 200 },
+    );
+  }
+
+  /** Restores `window.matchMedia` after a test patches it to simulate an OS
+   * colour-scheme change (see palette_selection_and_system_matching_round_trip_stored_fields). */
+  async function restoreNativeMatchMedia() {
+    await browser.execute(() => {
+      const testWindow = window as unknown as {
+        __skribeumColourSchemeQuery?: MediaQueryList;
+        __skribeumNativeMatchMedia?: typeof window.matchMedia;
+      };
+      if (testWindow.__skribeumNativeMatchMedia !== undefined) {
+        window.matchMedia = testWindow.__skribeumNativeMatchMedia;
+      }
+      delete testWindow.__skribeumColourSchemeQuery;
+      delete testWindow.__skribeumNativeMatchMedia;
+    });
+  }
+
+  // A test that throws mid-way leaves whatever it opened or patched behind:
+  // an open overlay or dialog blocks the next test's own surface from
+  // opening, and a patched window.matchMedia feeds it a fake colour-scheme
+  // query. Without this, one test's failure cascades into an unrelated
+  // failure on whatever runs next, in the same session. Each helper is a
+  // no-op when the test already cleaned up after itself.
+  afterEach(async () => {
+    await closeAnyOverlay();
+    await closeIfOpen('[data-testid="settings-view"]');
+    await closeIfOpen('[data-testid="dialog"]');
+    await restoreNativeMatchMedia();
+    // A test that throws between a narrow-viewport check and its restore
+    // would otherwise run every following test at phone width.
+    await restoreDesktopViewport();
+  });
 
   it("quick_switcher_opens_a_note_end_to_end", async () => {
     await browser.keys([modifierKey, "o"]);
@@ -6436,16 +6574,30 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    const systemToggle = $('[data-testid="settings-match-system"]');
-    expect(await systemToggle.isSelected()).toBe(true);
-    expect(
-      await $('[data-testid="settings-palette-gazette"]').getAttribute(
-        "aria-checked",
-      ),
-    ).toBe("true");
-    expect(
-      await $('[data-testid="settings-palette-signal"]').getAttribute("class"),
-    ).toContain("paired");
+    // Each read re-queries: the settings surface re-renders as the document
+    // commits, which detaches any handle held across a poll and turns a
+    // "not settled yet" into a thrown stale-element error.
+    const systemToggleSelected = () =>
+      $('[data-testid="settings-match-system"]').isSelected();
+    // The dialog's existence only means the container mounted; the controls
+    // inside it commit the persisted document a moment later, so poll for
+    // that committed state rather than asserting immediately on open.
+    await browser.waitUntil(
+      async () =>
+        (await systemToggleSelected()) &&
+        (await $('[data-testid="settings-palette-gazette"]').getAttribute(
+          "aria-checked",
+        )) === "true" &&
+        (
+          await $('[data-testid="settings-palette-signal"]').getAttribute(
+            "class",
+          )
+        ).includes("paired"),
+      {
+        timeout: 10000,
+        timeoutMsg: "settings surface did not commit the persisted document",
+      },
+    );
 
     await browser.execute(() => {
       const testWindow = window as unknown as {
@@ -6475,7 +6627,7 @@ describe("skribeum core editing surfaces", () => {
         timeoutMsg: "system dark palette did not become active",
       },
     );
-    expect(await systemToggle.isSelected()).toBe(true);
+    expect(await systemToggleSelected()).toBe(true);
     expect(
       await browser.execute(() => document.documentElement.dataset.theme),
     ).toBe("system");
@@ -6484,7 +6636,7 @@ describe("skribeum core editing surfaces", () => {
       '[data-testid="settings-palette-graphite"]',
       "Graphite palette",
     );
-    await browser.waitUntil(async () => !(await systemToggle.isSelected()), {
+    await browser.waitUntil(async () => !(await systemToggleSelected()), {
       timeout: 5000,
       timeoutMsg: "system match toggle stayed enabled",
     });
@@ -6516,7 +6668,7 @@ describe("skribeum core editing surfaces", () => {
       '[data-testid="settings-palette-studio"]',
       "Studio palette",
     );
-    await systemToggle.click();
+    await $('[data-testid="settings-match-system"]').click();
     await browser.waitUntil(
       async () => {
         const stored = await persistedSettings();
@@ -6533,19 +6685,8 @@ describe("skribeum core editing surfaces", () => {
       },
     );
 
-    await browser.keys(Key.Escape);
-    await dialog.waitForExist({ reverse: true, timeout: 5000 });
-    await browser.execute(() => {
-      const testWindow = window as unknown as {
-        __skribeumColourSchemeQuery?: MediaQueryList;
-        __skribeumNativeMatchMedia?: typeof window.matchMedia;
-      };
-      if (testWindow.__skribeumNativeMatchMedia !== undefined) {
-        window.matchMedia = testWindow.__skribeumNativeMatchMedia;
-      }
-      delete testWindow.__skribeumColourSchemeQuery;
-      delete testWindow.__skribeumNativeMatchMedia;
-    });
+    await closeIfOpen('[data-testid="settings-view"]');
+    await restoreNativeMatchMedia();
     await persistSettings(original);
     await browser.refresh();
     await $('[role="tree"]').waitForExist({ timeout: 15000 });

@@ -21,6 +21,8 @@ The pilot uses twelve movable chairs in three clusters. The route from the entra
 
 Registration is capped below the room's maximum seated capacity. The facilitator checks the route during setup and again before the doors open. Extra chairs stay folded unless someone requests one.
 
+---
+
 ## D-02: Use two material stations
 
 **Status:** Trial

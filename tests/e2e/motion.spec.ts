@@ -18,6 +18,41 @@ async function openTreePath(path: string): Promise<void> {
   await row.click();
 }
 
+/**
+ * Mod-click on a tree row: one of the explicit new-tab routes. A plain click
+ * reuses the focused pane's active tab, so a fixture that needs a strip with
+ * more than one tab in it has to ask for the extra tab the way a user does.
+ */
+async function openTreePathInNewTab(path: string): Promise<void> {
+  const row = $(`[role="treeitem"][data-path="${path}"]`);
+  await row.waitForExist({ timeout: 15000 });
+  await browser.execute(
+    (element) => {
+      (element as HTMLElement).dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          ctrlKey: true,
+          metaKey: true,
+        }),
+      );
+    },
+    await row.getElement(),
+  );
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        (selectedPath) =>
+          document
+            .querySelector<HTMLElement>(
+              `[role="treeitem"][data-path="${CSS.escape(selectedPath)}"]`,
+            )
+            ?.getAttribute("aria-selected") === "true",
+        path,
+      ),
+    { timeoutMsg: `${path} did not open in a new tab` },
+  );
+}
+
 async function expandFixtureFolder(): Promise<void> {
   const folder = $(`[role="treeitem"][data-path="${TREE_FOLDER_NAME}"]`);
   await folder.waitForExist({ timeout: 15000 });
@@ -278,7 +313,7 @@ describe("packaged motion geometry", () => {
     await browser.setWindowSize(1280, 800);
     await browser.execute(() => {
       for (const key of Object.keys(localStorage)) {
-        if (key.startsWith("skribeum.workspace.v1.")) {
+        if (key.startsWith("skribeum.workspace.")) {
           localStorage.removeItem(key);
         }
       }
@@ -290,7 +325,7 @@ describe("packaged motion geometry", () => {
   after(async () => {
     await browser.execute(() => {
       for (const key of Object.keys(localStorage)) {
-        if (key.startsWith("skribeum.workspace.v1.")) {
+        if (key.startsWith("skribeum.workspace.")) {
           localStorage.removeItem(key);
         }
       }
@@ -377,7 +412,7 @@ describe("packaged motion geometry", () => {
     }
 
     await selectTreePath(TREE_FIRST_NOTE_NAME);
-    await selectTreePath(TREE_SECOND_NOTE_NAME);
+    await openTreePathInNewTab(TREE_SECOND_NOTE_NAME);
     const tabCount = await browser.execute(
       () => document.querySelectorAll('[role="tab"]').length,
     );
@@ -435,8 +470,8 @@ describe("packaged motion geometry", () => {
     await setViewport(1200, 640);
     await expandFixtureFolder();
     await selectTreePath(TREE_FIRST_NOTE_NAME);
-    await selectTreePath(TREE_SECOND_NOTE_NAME);
-    await selectTreePath(LF_NOTE_NAME);
+    await openTreePathInNewTab(TREE_SECOND_NOTE_NAME);
+    await openTreePathInNewTab(LF_NOTE_NAME);
     const targetIndex = await browser.execute(() => {
       const tabs = [...document.querySelectorAll<HTMLElement>('[role="tab"]')];
       const activeIndex = tabs.findIndex(

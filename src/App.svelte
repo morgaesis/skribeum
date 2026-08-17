@@ -93,6 +93,8 @@ import {
 import {
   checkForUpdate,
   hasDesktopRuntime,
+  installUpdate,
+  restartToApply,
   type UpdateState,
 } from "./lib/features/updates";
 import { M0_FIXTURE } from "./lib/fixture";
@@ -159,6 +161,7 @@ import SettingsView from "./lib/SettingsView.svelte";
 import Sheet from "./lib/Sheet.svelte";
 import StartupVaultRecovery from "./lib/StartupVaultRecovery.svelte";
 import Statusline from "./lib/Statusline.svelte";
+import SurfaceBoundary from "./lib/SurfaceBoundary.svelte";
 import {
   focusExpandedSidebarTarget,
   focusTabCloseSuccessor,
@@ -175,7 +178,7 @@ import {
   type VaultStartupSession,
 } from "./lib/startupVaultRecovery";
 import { STRINGS } from "./lib/strings";
-import TabStrip from "./lib/TabStrip.svelte";
+import TabStrip, { currentTabDrag, setTabDrag } from "./lib/TabStrip.svelte";
 import {
   applyAppearance,
   isCodeFontName,
@@ -197,19 +200,32 @@ import WindowControls from "./lib/WindowControls.svelte";
 import { showWindowSystemMenu } from "./lib/windowChrome";
 import {
   defaultWorkspaceState,
+  emptyPane,
+  findWorkspaceLeaf,
+  flattenWorkspaceLayout,
   loadWorkspaceState,
+  MAX_LEAF_PANES,
+  minimumNodeExtentRem,
+  nextPaneId,
   OUTLINE_DEFAULT_REM,
   OUTLINE_MAX_REM,
   OUTLINE_MIN_REM,
   remapWorkspacePath,
+  removeWorkspaceLeaf,
   removeWorkspacePath,
   SIDEBAR_DEFAULT_REM,
   SIDEBAR_MAX_REM,
   SIDEBAR_MIN_REM,
+  SPLIT_MIN_HEIGHT_REM,
   SPLIT_MIN_REM,
+  type SplitSide,
   saveWorkspaceState,
-  type WorkspacePane,
+  splitWorkspaceLeaf,
+  type WorkspaceLeaf,
+  type WorkspaceNode,
+  type WorkspaceSplit,
   type WorkspaceTab,
+  workspaceLeaves,
 } from "./lib/workspaceState";
 
 let {
@@ -244,6 +260,19 @@ function initialStartupVaultSurface(): StartupVaultSurface {
 let startupVaultSurface = $state<StartupVaultSurface>(
   initialStartupVaultSurface(),
 );
+/**
+ * False until every route that might open a vault at startup has settled.
+ * The sidebar's column is reserved at its persisted width for that whole
+ * window, so the workspace paints its settled geometry in the first frame
+ * instead of shifting left when the vault arrives.
+ */
+let initialVaultSettled = $state(false);
+const pendingStartupVaultSources = new Set<string>(["recovery", "announced"]);
+
+function settleStartupVaultSource(source: string) {
+  pendingStartupVaultSources.delete(source);
+  if (pendingStartupVaultSources.size === 0) initialVaultSettled = true;
+}
 let banners = $state<BannerItem[]>([]);
 // Svelte resets a `bind:this` component binding to `null`, not `undefined`,
 // once the bound component unmounts (leaving canvas or the missing-note
@@ -272,9 +301,19 @@ let historyViewState = $state<NoteViewState | null>(null);
 let workspace = $state(defaultWorkspaceState());
 let workspaceIdentity = $state<string | null>(null);
 let titleLoadGeneration = 0;
-let workspaceHost = $state<HTMLElement>();
-let splitDragging = $state(false);
-let splitDropPaneId = $state<string | null>(null);
+let workspaceHost = $state<HTMLElement | null>();
+let splitDraggingNode = $state<WorkspaceSplit | null>(null);
+/**
+ * Each rendered pane's own box. A split halves the pane it acts on, so its
+ * current extent is what decides whether the pane the split would create
+ * can hold the minimum pane size.
+ */
+let paneExtents = $state(new Map<string, { width: number; height: number }>());
+/** The pane and edge a dragged tab is currently hovering, if any. */
+let splitDropZone = $state<{
+  paneId: string;
+  side: SplitSide | "center";
+} | null>(null);
 let sidebarHeaderHovered = $state(false);
 let sidebarFocused = $state(false);
 /** Live editor facts for the statusline and note-info surfaces. */
@@ -413,6 +452,43 @@ function checkSelectedUpdateChannel() {
       generation === updateCheckGeneration &&
       settingsState.document.update_channel === channel
     ) {
+      updateState = state;
+    }
+  });
+}
+
+/** Downloads and installs an update already reported as available. */
+function installSelectedUpdate() {
+  const generation = updateCheckGeneration;
+  void installUpdate((state) => {
+    if (generation === updateCheckGeneration) {
+      updateState = state;
+    }
+  });
+}
+
+/**
+ * Restarts into an update already installed and waiting. Confirms with the
+ * person first (the restart closes the window) and flushes unsaved work
+ * through the same path any other window-closing action uses, so an
+ * install can never silently drop an edit.
+ */
+async function restartForUpdate() {
+  if (updateState.kind !== "ready") return;
+  const version = updateState.version;
+  const confirmed = await showConfirmDialog({
+    title: STRINGS.updateRestartConfirmTitle,
+    message: `${STRINGS.updateRestartConfirmMessage} ${version}.`,
+    confirmLabel: STRINGS.updateRestart,
+  });
+  if (!confirmed) return;
+  if ((await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
+  const generation = updateCheckGeneration;
+  void restartToApply((state) => {
+    if (generation === updateCheckGeneration) {
       updateState = state;
     }
   });
@@ -639,17 +715,52 @@ function togglePanel(panel: "sidebar" | "outline", origin?: HTMLElement) {
   }
 }
 
-function focusedWorkspacePane(): WorkspacePane {
+const workspacePanes = $derived(workspaceLeaves(workspace.layout));
+
+/**
+ * Editor inputs held at component level rather than written inline in the
+ * pane snippet. An expression written as a prop inside a snippet becomes a
+ * derived owned by that snippet's effect, and the editor reads these from
+ * its own debounced save long after a split has torn that effect down.
+ */
+const editorVault = $derived(note !== null ? vault : null);
+const editorPath = $derived(note !== null ? selectedPath : null);
+const documentSettings = $derived(settingsState.document);
+const documentTaskStatuses = $derived(settingsState.document.task_statuses);
+
+function focusedWorkspacePane(): WorkspaceLeaf {
   return (
-    workspace.panes.find((pane) => pane.id === workspace.focusedPaneId) ??
-    workspace.panes[0] ?? {
-      id: "pane-1",
-      tabs: [],
-      activePath: null,
-      history: [],
-      historyIndex: -1,
-    }
+    findWorkspaceLeaf(workspace.layout, workspace.focusedPaneId) ??
+    workspaceLeaves(workspace.layout)[0] ??
+    emptyPane("pane-1")
   );
+}
+
+/** The pane holding a note in one of its tabs, searched in tree order. */
+function paneHoldingPath(path: string): WorkspaceLeaf | null {
+  return (
+    workspaceLeaves(workspace.layout).find((leaf) =>
+      leaf.tabs.some((tab) => tab.path === path),
+    ) ?? null
+  );
+}
+
+/**
+ * The leaf that inherits focus when one pane collapses: the first pane of
+ * its sibling subtree, which is the region that takes over its space.
+ */
+function siblingPaneId(node: WorkspaceNode, leafId: string): string | null {
+  if (node.type === "leaf") return null;
+  for (const [index, child] of node.children.entries()) {
+    if (findWorkspaceLeaf(child, leafId) === null) continue;
+    const nested = siblingPaneId(child, leafId);
+    if (nested !== null) return nested;
+    const sibling = node.children[index === 0 ? 1 : 0];
+    return sibling === undefined
+      ? null
+      : (workspaceLeaves(sibling)[0]?.id ?? null);
+  }
+  return null;
 }
 
 function updatePaneNavigationState() {
@@ -681,7 +792,7 @@ function captureFocusedTabState() {
   }
 }
 
-function ensurePaneTab(pane: WorkspacePane, path: string): WorkspaceTab {
+function ensurePaneTab(pane: WorkspaceLeaf, path: string): WorkspaceTab {
   const existing = pane.tabs.find((tab) => tab.path === path);
   if (existing !== undefined) return existing;
   const tab = { path, viewState: null } satisfies WorkspaceTab;
@@ -689,8 +800,49 @@ function ensurePaneTab(pane: WorkspacePane, path: string): WorkspaceTab {
   return tab;
 }
 
+/**
+ * Open in place: the focused pane's active tab becomes this note instead of
+ * the pane gaining one more tab. An empty pane, or one showing the empty
+ * tab, gains its first tab here rather than carrying a special case.
+ */
+function placeTabInPlace(pane: WorkspaceLeaf, path: string): void {
+  pane.emptyTab = false;
+  if (pane.tabs.some((tab) => tab.path === path)) {
+    pane.activePath = path;
+    return;
+  }
+  const index =
+    pane.activePath === null
+      ? -1
+      : pane.tabs.findIndex((tab) => tab.path === pane.activePath);
+  const tab = { path, viewState: null } satisfies WorkspaceTab;
+  if (index < 0) {
+    pane.tabs.push(tab);
+  } else {
+    const replaced = pane.tabs[index];
+    if (replaced !== undefined) editor?.forgetTab(replaced.path);
+    pane.tabs.splice(index, 1, tab);
+  }
+  pane.activePath = path;
+}
+
+/** One of the four explicit new-tab routes: always adds a tab. */
+function placeTabBeside(pane: WorkspaceLeaf, path: string): void {
+  pane.emptyTab = false;
+  if (pane.tabs.some((tab) => tab.path === path)) {
+    pane.activePath = path;
+    return;
+  }
+  const index =
+    pane.activePath === null
+      ? pane.tabs.length - 1
+      : pane.tabs.findIndex((tab) => tab.path === pane.activePath);
+  pane.tabs.splice(index + 1, 0, { path, viewState: null });
+  pane.activePath = path;
+}
+
 function pushPaneHistory(
-  pane: WorkspacePane,
+  pane: WorkspaceLeaf,
   address: NoteAddress,
   viewState: NoteViewState | null = null,
 ) {
@@ -707,23 +859,47 @@ function pushPaneHistory(
   updatePaneNavigationState();
 }
 
-async function activateWorkspaceTab(path: string) {
+async function activateWorkspaceTab(path: string | null) {
   const pane = focusedWorkspacePane();
+  if (path === null) {
+    if (pane.activePath === null) return;
+    captureFocusedTabState();
+    pane.emptyTab = true;
+    pane.activePath = null;
+    note = null;
+    selectedPath = null;
+    currentNoteSource = "";
+    return;
+  }
   if (pane.activePath === path && selectedPath === path) return;
   captureFocusedTabState();
   const tab = ensurePaneTab(pane, path);
+  pane.emptyTab = false;
   pane.activePath = path;
   await openNote(path, tab.viewState, "tab");
   updatePaneNavigationState();
 }
 
-async function focusWorkspacePane(id: string) {
-  if (workspace.focusedPaneId === id) return;
+/** Opens the strip's own empty tab in the focused pane. */
+async function openEmptyWorkspaceTab(paneId = workspace.focusedPaneId) {
+  await focusWorkspacePane(paneId);
+  const pane = focusedWorkspacePane();
+  if (pane.emptyTab === true && pane.activePath === null) return;
+  captureFocusedTabState();
   if ((await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
     return;
   }
-  captureFocusedTabState();
+  pane.emptyTab = true;
+  pane.activePath = null;
+  note = null;
+  selectedPath = null;
+  currentNoteSource = "";
+  updatePaneNavigationState();
+}
+
+/** Points the shell at one pane and loads whatever that pane was showing. */
+async function adoptFocusedPane(id: string) {
   workspace.focusedPaneId = id;
   await tick();
   contentHost =
@@ -740,6 +916,17 @@ async function focusWorkspacePane(id: string) {
     await openNote(pane.activePath, tab.viewState, "tab");
   }
   updatePaneNavigationState();
+}
+
+async function focusWorkspacePane(id: string) {
+  if (workspace.focusedPaneId === id) return;
+  if (findWorkspaceLeaf(workspace.layout, id) === null) return;
+  if ((await editor?.flush()) === false) {
+    errorText = STRINGS.contentSwitchUnsaved;
+    return;
+  }
+  captureFocusedTabState();
+  await adoptFocusedPane(id);
 }
 
 let tabCloseFocusGeneration = 0;
@@ -760,15 +947,42 @@ function restoreTabCloseFocus(paneId: string, generation: number) {
   });
 }
 
+/**
+ * Drops an emptied pane and hands its space to its sibling, repeating up
+ * the tree so no split is ever left with one child. The last pane standing
+ * stays, empty, because the editor area always has a pane.
+ */
+async function collapseEmptyPane(pane: WorkspaceLeaf): Promise<boolean> {
+  const sibling = siblingPaneId(workspace.layout, pane.id);
+  const remaining = removeWorkspaceLeaf(workspace.layout, pane.id);
+  if (remaining === null || sibling === null) return false;
+  workspace.layout = remaining;
+  await adoptFocusedPane(sibling);
+  return true;
+}
+
 async function closeWorkspaceTab(
-  path = focusedWorkspacePane().activePath,
+  path: string | null = focusedWorkspacePane().activePath,
   restoreFocus = false,
 ) {
-  if (path === null) return;
   const pane = focusedWorkspacePane();
+  const generation = ++tabCloseFocusGeneration;
+  if (path === null) {
+    if (pane.emptyTab !== true) return;
+    pane.emptyTab = false;
+    if (pane.tabs.length === 0) {
+      if (await collapseEmptyPane(pane)) {
+        if (restoreFocus)
+          restoreTabCloseFocus(workspace.focusedPaneId, generation);
+      }
+      return;
+    }
+    await activateWorkspaceTab(pane.tabs.at(-1)?.path ?? null);
+    if (restoreFocus) restoreTabCloseFocus(pane.id, generation);
+    return;
+  }
   const index = pane.tabs.findIndex((tab) => tab.path === path);
   if (index < 0) return;
-  const generation = ++tabCloseFocusGeneration;
   const restoresActiveTabFocus = restoreFocus && pane.activePath === path;
   const closesActiveEditor = pane.activePath === path && selectedPath === path;
   if (closesActiveEditor && (await editor?.flush()) === false) {
@@ -784,28 +998,13 @@ async function closeWorkspaceTab(
   // closedTabs for Mod-Shift-T; the exact live CodeMirror state Editor
   // cached for instant tab-strip swaps does not need to outlive the tab.
   editor?.forgetTab(path);
-  if (pane.tabs.length === 0 && workspace.panes.length === 2) {
-    const other = workspace.panes.find((candidate) => candidate.id !== pane.id);
-    workspace.panes = workspace.panes.filter(
-      (candidate) => candidate.id !== pane.id,
-    );
-    if (other !== undefined) {
-      workspace.focusedPaneId = other.id;
-      await tick();
-      contentHost =
-        document.querySelector<HTMLElement>(
-          `[data-pane-id="${CSS.escape(other.id)}"] .skr-pane-content`,
-        ) ?? undefined;
-      if (other.activePath !== null) {
-        const tab = ensurePaneTab(other, other.activePath);
-        await openNote(other.activePath, tab.viewState, "tab");
+  if (pane.tabs.length === 0 && pane.emptyTab !== true) {
+    if (await collapseEmptyPane(pane)) {
+      if (restoresActiveTabFocus) {
+        restoreTabCloseFocus(workspace.focusedPaneId, generation);
       }
-      updatePaneNavigationState();
+      return;
     }
-    if (restoresActiveTabFocus) {
-      restoreTabCloseFocus(workspace.focusedPaneId, generation);
-    }
-    return;
   }
   if (pane.activePath === path) {
     const next = pane.tabs[Math.min(index, pane.tabs.length - 1)];
@@ -826,7 +1025,9 @@ async function reopenClosedWorkspaceTab() {
   if (tab === undefined) return;
   workspace.closedTabs = workspace.closedTabs.slice(0, -1);
   const pane = focusedWorkspacePane();
-  pane.tabs.push(tab);
+  if (!pane.tabs.some((candidate) => candidate.path === tab.path)) {
+    pane.tabs.push(tab);
+  }
   await activateWorkspaceTab(tab.path);
 }
 
@@ -856,78 +1057,213 @@ function reorderWorkspaceTabs(from: number, to: number) {
   pane.tabs.splice(target, 0, tab);
 }
 
-async function splitWorkspaceTab(path = focusedWorkspacePane().activePath) {
-  if (path === null || narrowViewport || workspace.panes.length >= 2) return;
-  captureFocusedTabState();
-  const source = focusedWorkspacePane();
-  if (source.tabs.length <= 1) return;
-  const index = source.tabs.findIndex((tab) => tab.path === path);
-  const [tab] = index < 0 ? [] : source.tabs.splice(index, 1);
-  if (tab === undefined) return;
-  source.activePath =
-    source.tabs[Math.min(index, source.tabs.length - 1)]?.path ?? null;
-  const pane: WorkspacePane = {
-    id: "pane-2",
-    tabs: [tab],
-    activePath: tab.path,
-    history: [{ address: { path: tab.path }, viewState: tab.viewState }],
-    historyIndex: 0,
-  };
-  workspace.panes.push(pane);
-  workspace.focusedPaneId = pane.id;
-  await tick();
-  contentHost =
-    document.querySelector<HTMLElement>(
-      `[data-pane-id="${CSS.escape(pane.id)}"] .skr-pane-content`,
-    ) ?? undefined;
-  if (selectedPath !== tab.path) {
-    await openNote(tab.path, tab.viewState, "tab");
-  } else {
-    selectedPath = tab.path;
+/**
+ * Why splitting one pane on one side is unavailable, or null when it is
+ * available. Two bounds exist and both are stated the same way: the hard
+ * leaf cap, and the geometry itself, because a tree whose panes cannot all
+ * hold the minimum pane size in the editor area would have to overflow it.
+ */
+function splitUnavailableReason(
+  paneId: string,
+  side: SplitSide,
+): string | null {
+  if (workspaceLeaves(workspace.layout).length >= MAX_LEAF_PANES) {
+    return STRINGS.splitPaneCapReached;
   }
-  updatePaneNavigationState();
+  const extent = paneExtents.get(paneId);
+  if (extent === undefined) return null;
+  // A split halves the pane it acts on, so both halves clear the floor only
+  // when the pane already holds twice it along that axis.
+  const horizontal = side === "left" || side === "right";
+  const available = horizontal ? extent.width : extent.height;
+  const floor =
+    (horizontal ? SPLIT_MIN_REM : SPLIT_MIN_HEIGHT_REM) * rootFontSize();
+  return available + 1 < floor * 2 ? STRINGS.splitPaneTooSmall : null;
 }
 
-async function moveWorkspaceTabToOtherPane() {
-  if (workspace.panes.length === 1) {
-    await splitWorkspaceTab();
-    return;
+function rootFontSize(): number {
+  return Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+}
+
+/**
+ * Splits one pane, carrying a tab into the new child on `side`. A pane
+ * holding more than one tab hands its tab over; a pane holding only the one
+ * keeps it and the new pane opens the same note, so the command always does
+ * something rather than declining silently.
+ */
+async function splitPaneWithTab(
+  paneId: string,
+  side: SplitSide,
+  path: string,
+  sourcePaneId = paneId,
+): Promise<void> {
+  if (narrowViewport || splitUnavailableReason(paneId, side) !== null) return;
+  const source = findWorkspaceLeaf(workspace.layout, sourcePaneId);
+  const target = findWorkspaceLeaf(workspace.layout, paneId);
+  if (source === null || target === null) return;
+  const index = source.tabs.findIndex((tab) => tab.path === path);
+  const held = source.tabs[index];
+  if (held === undefined) return;
+  captureFocusedTabState();
+  const moves = source.tabs.length > 1;
+  const carried: WorkspaceTab = moves
+    ? held
+    : { path: held.path, viewState: held.viewState };
+  if (moves) {
+    source.tabs.splice(index, 1);
+    if (source.activePath === path) {
+      source.activePath =
+        source.tabs[Math.min(index, source.tabs.length - 1)]?.path ?? null;
+    }
   }
+  const created: WorkspaceLeaf = {
+    type: "leaf",
+    id: nextPaneId(workspace.layout),
+    tabs: [carried],
+    activePath: carried.path,
+    history: [
+      { address: { path: carried.path }, viewState: carried.viewState },
+    ],
+    historyIndex: 0,
+  };
+  workspace.layout = splitWorkspaceLeaf(
+    workspace.layout,
+    paneId,
+    side,
+    created,
+  );
+  if (source.tabs.length === 0 && source.emptyTab !== true) {
+    const remaining = removeWorkspaceLeaf(workspace.layout, source.id);
+    if (remaining !== null) workspace.layout = remaining;
+  }
+  await adoptFocusedPane(created.id);
+}
+
+async function splitFocusedPane(side: SplitSide) {
+  const pane = focusedWorkspacePane();
+  if (pane.activePath === null) return;
+  await splitPaneWithTab(pane.id, side, pane.activePath);
+}
+
+/** Every rendered pane's box, for the geometric focus and move searches. */
+function paneBounds(): Array<{ id: string; rect: DOMRect }> {
+  return [...document.querySelectorAll<HTMLElement>("[data-pane-id]")].map(
+    (element) => ({
+      id: element.dataset.paneId ?? "",
+      rect: element.getBoundingClientRect(),
+    }),
+  );
+}
+
+/**
+ * The nearest pane in one geometric direction, resolved the way a tiling
+ * window manager does it: candidates strictly past the moving edge, ranked
+ * by distance along the axis, then by how far their centers drift across it.
+ */
+function nearestPaneInDirection(
+  fromId: string,
+  direction: SplitSide,
+): string | null {
+  const bounds = paneBounds();
+  const origin = bounds.find((entry) => entry.id === fromId)?.rect;
+  if (origin === undefined) return null;
+  const horizontal = direction === "left" || direction === "right";
+  const originCenter = horizontal
+    ? origin.top + origin.height / 2
+    : origin.left + origin.width / 2;
+  let best: { id: string; primary: number; cross: number } | null = null;
+  for (const entry of bounds) {
+    if (entry.id === fromId || entry.id.length === 0) continue;
+    const rect = entry.rect;
+    const primary =
+      direction === "left"
+        ? origin.left - rect.right
+        : direction === "right"
+          ? rect.left - origin.right
+          : direction === "up"
+            ? origin.top - rect.bottom
+            : rect.top - origin.bottom;
+    if (primary < -1) continue;
+    const cross = Math.abs(
+      (horizontal ? rect.top + rect.height / 2 : rect.left + rect.width / 2) -
+        originCenter,
+    );
+    if (
+      best === null ||
+      primary < best.primary - 1 ||
+      (Math.abs(primary - best.primary) <= 1 && cross < best.cross)
+    ) {
+      best = { id: entry.id, primary, cross };
+    }
+  }
+  return best?.id ?? null;
+}
+
+function focusWorkspacePaneDirection(direction: SplitSide) {
+  const target = nearestPaneInDirection(workspace.focusedPaneId, direction);
+  if (target !== null) void focusWorkspacePane(target);
+}
+
+/** Relocates one tab into another pane's strip at a given position. */
+async function moveTabIntoPane(
+  sourcePaneId: string,
+  path: string,
+  targetPaneId: string,
+  index: number,
+): Promise<void> {
+  if (sourcePaneId === targetPaneId) return;
+  const source = findWorkspaceLeaf(workspace.layout, sourcePaneId);
+  const target = findWorkspaceLeaf(workspace.layout, targetPaneId);
+  if (source === null || target === null) return;
+  const position = source.tabs.findIndex((tab) => tab.path === path);
+  if (position < 0) return;
+  captureFocusedTabState();
+  const [tab] = source.tabs.splice(position, 1);
+  if (tab === undefined) return;
+  if (source.activePath === path) {
+    source.activePath =
+      source.tabs[Math.min(position, source.tabs.length - 1)]?.path ?? null;
+  }
+  if (!target.tabs.some((candidate) => candidate.path === tab.path)) {
+    target.tabs.splice(
+      Math.max(0, Math.min(index, target.tabs.length)),
+      0,
+      tab,
+    );
+  }
+  target.emptyTab = false;
+  target.activePath = tab.path;
+  pushPaneHistory(target, { path: tab.path }, tab.viewState);
+  if (source.tabs.length === 0 && source.emptyTab !== true) {
+    const remaining = removeWorkspaceLeaf(workspace.layout, source.id);
+    if (remaining !== null) workspace.layout = remaining;
+  }
+  await adoptFocusedPane(target.id);
+}
+
+/**
+ * Why moving the active tab in one direction is unavailable. With a pane
+ * already there it is a relocation; without one it falls back to a split
+ * and inherits the split's own bounds.
+ */
+function moveTabUnavailableReason(direction: SplitSide): string | null {
+  const source = focusedWorkspacePane();
+  if (source.activePath === null) return STRINGS.movePaneUnavailable;
+  return nearestPaneInDirection(source.id, direction) !== null
+    ? null
+    : splitUnavailableReason(source.id, direction);
+}
+
+async function moveTabToPaneDirection(direction: SplitSide) {
   const source = focusedWorkspacePane();
   const path = source.activePath;
   if (path === null) return;
-  captureFocusedTabState();
-  const index = source.tabs.findIndex((tab) => tab.path === path);
-  const [tab] = source.tabs.splice(index, 1);
-  const target = workspace.panes.find((pane) => pane.id !== source.id);
-  if (tab === undefined || target === undefined) return;
-  if (!target.tabs.some((candidate) => candidate.path === tab.path)) {
-    target.tabs.push(tab);
+  const target = nearestPaneInDirection(source.id, direction);
+  if (target === null) {
+    await splitPaneWithTab(source.id, direction, path);
+    return;
   }
-  target.activePath = tab.path;
-  pushPaneHistory(target, { path: tab.path }, tab.viewState);
-  source.activePath =
-    source.tabs[Math.min(index, source.tabs.length - 1)]?.path ?? null;
-  if (source.tabs.length === 0) {
-    workspace.panes = workspace.panes.filter(
-      (candidate) => candidate.id !== source.id,
-    );
-  }
-  workspace.focusedPaneId = target.id;
-  await tick();
-  contentHost =
-    document.querySelector<HTMLElement>(
-      `[data-pane-id="${CSS.escape(target.id)}"] .skr-pane-content`,
-    ) ?? undefined;
-  await openNote(tab.path, tab.viewState, "tab");
-  updatePaneNavigationState();
-}
-
-function focusWorkspacePaneDirection(direction: "left" | "right") {
-  if (workspace.panes.length < 2) return;
-  const index = direction === "left" ? 0 : 1;
-  const pane = workspace.panes[index];
-  if (pane !== undefined) void focusWorkspacePane(pane.id);
+  await moveTabIntoPane(source.id, path, target, Number.MAX_SAFE_INTEGER);
 }
 
 function paneNavigate(direction: -1 | 1): boolean {
@@ -943,34 +1279,119 @@ function paneNavigate(direction: -1 | 1): boolean {
   captureFocusedTabState();
   pane.historyIndex = next;
   const tab = ensurePaneTab(pane, entry.address.path);
+  pane.emptyTab = false;
   pane.activePath = tab.path;
   void openNoteAddress(entry.address, entry.viewState, "history");
   updatePaneNavigationState();
   return true;
 }
 
-function beginSplitResize(event: PointerEvent) {
-  if (event.button !== 0 || workspaceHost === undefined) return;
+/** The zone a dragged tab is over: an outer quarter, or the center. */
+function dropZoneAt(
+  bounds: DOMRect,
+  clientX: number,
+  clientY: number,
+): SplitSide | "center" {
+  const left = (clientX - bounds.left) / bounds.width;
+  const top = (clientY - bounds.top) / bounds.height;
+  const nearest = Math.min(left, 1 - left, top, 1 - top);
+  if (nearest >= 0.25) return "center";
+  if (nearest === left) return "left";
+  if (nearest === 1 - left) return "right";
+  return nearest === top ? "up" : "down";
+}
+
+function updateTabDropZone(event: DragEvent, paneId: string) {
+  const origin = currentTabDrag();
+  if (origin === null) return;
+  const target = event.currentTarget as HTMLElement;
+  const side = dropZoneAt(
+    target.getBoundingClientRect(),
+    event.clientX,
+    event.clientY,
+  );
+  // An edge zone that cannot produce a pane does not activate: no overlay,
+  // and the drag keeps its no-drop cursor rather than promising a split.
+  if (side !== "center" && splitUnavailableReason(paneId, side) !== null) {
+    splitDropZone = null;
+    return;
+  }
   event.preventDefault();
+  splitDropZone = { paneId, side };
+}
+
+async function dropTabOnPane(event: DragEvent, paneId: string) {
+  const origin = currentTabDrag();
+  const zone = splitDropZone;
+  splitDropZone = null;
+  if (origin === null || zone === null || zone.paneId !== paneId) return;
+  event.preventDefault();
+  setTabDrag(null);
+  if (zone.side === "center") {
+    await moveTabIntoPane(
+      origin.paneId,
+      origin.path,
+      paneId,
+      Number.MAX_SAFE_INTEGER,
+    );
+    return;
+  }
+  const source = findWorkspaceLeaf(workspace.layout, origin.paneId);
+  // Dropping a pane's only tab on that same pane's edge would split and
+  // immediately collapse: nothing to do.
+  if (origin.paneId === paneId && (source?.tabs.length ?? 0) <= 1) return;
+  await splitPaneWithTab(paneId, zone.side, origin.path, origin.paneId);
+}
+
+function splitRatioBounds(
+  node: WorkspaceSplit,
+  total: number,
+  rootSize: number,
+): { minimum: number; maximum: number } {
+  const first = minimumNodeExtentRem(node.children[0], node.axis) * rootSize;
+  const second = minimumNodeExtentRem(node.children[1], node.axis) * rootSize;
+  if (total <= 0 || first + second >= total) {
+    return { minimum: 0.5, maximum: 0.5 };
+  }
+  return { minimum: first / total, maximum: 1 - second / total };
+}
+
+let lastDividerPress: { node: WorkspaceSplit; at: number } | null = null;
+
+function beginSplitResize(event: PointerEvent, node: WorkspaceSplit) {
+  if (event.button !== 0) return;
   const divider = event.currentTarget as HTMLElement;
+  const container = divider.parentElement;
+  if (container === null) return;
+  event.preventDefault();
+  const now = event.timeStamp;
+  const previous = lastDividerPress;
+  lastDividerPress = { node, at: now };
+  if (previous !== null && previous.node === node && now - previous.at < 500) {
+    lastDividerPress = null;
+    node.ratio = 0.5;
+    return;
+  }
   const pointer = event.pointerId;
-  const bounds = workspaceHost.getBoundingClientRect();
+  const bounds = container.getBoundingClientRect();
   const rootSize = Number.parseFloat(
     getComputedStyle(document.documentElement).fontSize,
   );
-  const minimum = Math.min(0.5, (SPLIT_MIN_REM * rootSize) / bounds.width);
-  splitDragging = true;
+  const total = node.axis === "row" ? bounds.width : bounds.height;
+  const { minimum, maximum } = splitRatioBounds(node, total, rootSize);
+  splitDraggingNode = node;
   divider.setPointerCapture(pointer);
   const move = (next: PointerEvent) => {
     if (next.pointerId !== pointer) return;
-    workspace.splitRatio = Math.max(
-      minimum,
-      Math.min(1 - minimum, (next.clientX - bounds.left) / bounds.width),
-    );
+    const offset =
+      node.axis === "row"
+        ? (next.clientX - bounds.left) / bounds.width
+        : (next.clientY - bounds.top) / bounds.height;
+    node.ratio = Math.max(minimum, Math.min(maximum, offset));
   };
   const stop = (end: PointerEvent) => {
     if (end.pointerId !== pointer) return;
-    splitDragging = false;
+    splitDraggingNode = null;
     divider.removeEventListener("pointermove", move);
     divider.removeEventListener("pointerup", stop);
     divider.removeEventListener("pointercancel", stop);
@@ -982,24 +1403,24 @@ function beginSplitResize(event: PointerEvent) {
 
 // registry-exempt keydown: ARIA separator arrow resizing stays local to the
 // split divider. Pane focus and structural actions remain registry commands.
-function resizeSplitWithKeyboard(event: KeyboardEvent) {
-  if (workspaceHost === undefined) return;
+function resizeSplitWithKeyboard(event: KeyboardEvent, node: WorkspaceSplit) {
+  const container = (event.currentTarget as HTMLElement).parentElement;
+  if (container === null) return;
+  const bounds = container.getBoundingClientRect();
   const rootSize = Number.parseFloat(
     getComputedStyle(document.documentElement).fontSize,
   );
-  const step = rootSize / workspaceHost.getBoundingClientRect().width;
-  if (event.key === "ArrowLeft") workspace.splitRatio -= step;
-  else if (event.key === "ArrowRight") workspace.splitRatio += step;
-  else if (event.key === "Home") workspace.splitRatio = 0.5;
+  const total = node.axis === "row" ? bounds.width : bounds.height;
+  const step = total === 0 ? 0 : rootSize / total;
+  const decrease = node.axis === "row" ? "ArrowLeft" : "ArrowUp";
+  const increase = node.axis === "row" ? "ArrowRight" : "ArrowDown";
+  let next = node.ratio;
+  if (event.key === decrease) next -= step;
+  else if (event.key === increase) next += step;
+  else if (event.key === "Home") next = 0.5;
   else return;
-  const minimum = Math.min(
-    0.5,
-    (SPLIT_MIN_REM * rootSize) / workspaceHost.getBoundingClientRect().width,
-  );
-  workspace.splitRatio = Math.max(
-    minimum,
-    Math.min(1 - minimum, workspace.splitRatio),
-  );
+  const { minimum, maximum } = splitRatioBounds(node, total, rootSize);
+  node.ratio = Math.max(minimum, Math.min(maximum, next));
   event.preventDefault();
 }
 
@@ -1292,6 +1713,9 @@ async function renameTreeEntry(path: string, restoreFocus?: () => void) {
     refreshLinkContext();
     if (affectsActive && selectedPath !== null) {
       await openNote(selectedPath, activeViewState);
+      // The renamed note keeps its place in the pane, so the address has to
+      // follow it: without this the query parameter still names the old path.
+      navigation?.syncAddress({ path: selectedPath });
     }
     await tick();
     restoreFocus?.();
@@ -1415,6 +1839,7 @@ function commandContext(): CommandContext {
   return {
     view: editor?.getView() ?? null,
     openNote: (path) => navigateToNote(path),
+    openNoteInNewTab: (path) => navigateToNote(path, undefined, "new-tab"),
     createNote: createNewNote,
     openVault: () => pickVault(),
     openView: (id) => {
@@ -1485,9 +1910,9 @@ function commandContext(): CommandContext {
     reopenClosedTab: reopenClosedWorkspaceTab,
     cycleTab: cycleWorkspaceTab,
     activateTab: activateWorkspaceTabIndex,
-    splitPane: () => splitWorkspaceTab(),
+    splitPane: (side) => splitFocusedPane(side),
     focusPane: focusWorkspacePaneDirection,
-    moveTabToOtherPane: () => moveWorkspaceTabToOtherPane(),
+    moveTabToPane: (direction) => moveTabToPaneDirection(direction),
     copyHeadingLink,
     openNoteStatistics,
     addProperty: () => editor?.startAddProperty(),
@@ -1551,17 +1976,39 @@ function applyApplicationZoom(action: "in" | "out" | "reset"): Promise<void> {
 }
 
 const onGlobalKeydown = globalKeydownHandler(registry, commandContext);
-const SPLIT_COMMAND_IDS = new Set([
-  "pane.split-right",
-  "pane.focus-left",
-  "pane.focus-right",
-  "pane.move-tab",
-]);
+const SPLIT_COMMAND_IDS = new Set(
+  (["up", "down", "left", "right"] as const).flatMap((side) => [
+    `pane.split-${side}`,
+    `pane.focus-${side}`,
+    `pane.move-tab-${side}`,
+  ]),
+);
 const actionCommands = $derived(
   registry
     .pointerCommands("action-menu")
     .filter((command) => !narrowViewport || !SPLIT_COMMAND_IDS.has(command.id)),
 );
+/**
+ * Why one pane command cannot run right now, keyed by command id. The
+ * action menu and the command surface both read it, so an unavailable
+ * command reads the same way wherever it is listed instead of running and
+ * doing nothing.
+ */
+const paneCommandUnavailability = $derived.by((): Map<string, string> => {
+  const reasons = new Map<string, string>();
+  if (narrowViewport) return reasons;
+  void workspace.layout;
+  void paneExtents;
+  const focused = workspace.focusedPaneId;
+  for (const side of ["up", "down", "left", "right"] as const) {
+    const split = splitUnavailableReason(focused, side);
+    if (split !== null) reasons.set(`pane.split-${side}`, split);
+    const move = moveTabUnavailableReason(side);
+    if (move !== null) reasons.set(`pane.move-tab-${side}`, move);
+  }
+  return reasons;
+});
+
 const vaultOpenCommand = registry.command("vault.open");
 const overflowCommands = $derived([
   {
@@ -1658,21 +2105,30 @@ $effect(() => {
     refreshOutline();
     openSheet("outline");
   }
-  if (narrowViewport && workspace.panes.length === 2) {
-    const [first, second] = workspace.panes;
-    if (first !== undefined && second !== undefined) {
-      for (const tab of second.tabs) {
-        if (!first.tabs.some((candidate) => candidate.path === tab.path)) {
-          first.tabs.push(tab);
-        }
-      }
-      if (workspace.focusedPaneId === second.id && second.activePath !== null) {
-        first.activePath = second.activePath;
-      }
-      workspace.panes = [first];
-      workspace.focusedPaneId = first.id;
-    }
+  if (narrowViewport && workspace.layout.type === "split") {
+    // A split tree shrunk below the breakpoint flattens into one pane, its
+    // tabs concatenated in the tree's own order; widening does not restore
+    // the tree.
+    const focused = focusedWorkspacePane().activePath;
+    const flattened = flattenWorkspaceLayout(workspace.layout);
+    if (focused !== null) flattened.activePath = focused;
+    workspace.layout = flattened;
+    workspace.focusedPaneId = flattened.id;
   }
+});
+
+$effect(() => {
+  if (navigationSurface !== "browser") return;
+  const path = focusedWorkspacePane().activePath;
+  // The address reports the note the shell is showing, so it follows only
+  // once the pane's active tab has actually loaded. A restored workspace
+  // names its note, and restores the selected path, before anything opens;
+  // until the note itself is loaded the address is still an input, naming
+  // the note a `?note=` link asked for.
+  if (path === null || note === null || selectedPath !== path) return;
+  const current = navigation?.state().address ?? null;
+  if (current?.path === path) return;
+  navigation?.syncAddress({ path });
 });
 
 function runActionCommand(id: string) {
@@ -1701,14 +2157,19 @@ function runActionCommand(id: string) {
 const notePaths = $derived(notePathsOf(tree));
 const commandSurfacePaths = $derived(commandSurfacePathsOf(tree));
 const openWorkspacePaths = $derived(
-  workspace.panes.flatMap((pane) => pane.tabs.map((tab) => tab.path)),
+  workspacePanes.flatMap((pane) => pane.tabs.map((tab) => tab.path)),
 );
 const parsedOverlayQuery = $derived(parsePickerQuery(overlayQuery));
 
 function visibleCommandItems(query: string): PickerItem[] {
-  return commandItems(registry, query, macPlatform).filter(
-    (item) => !narrowViewport || !SPLIT_COMMAND_IDS.has(item.value),
-  );
+  return commandItems(registry, query, macPlatform)
+    .filter((item) => !narrowViewport || !SPLIT_COMMAND_IDS.has(item.value))
+    .map((item) => {
+      const reason = paneCommandUnavailability.get(item.value);
+      return reason === undefined
+        ? item
+        : { ...item, unavailableReason: reason };
+    });
 }
 
 const overlayItems = $derived.by((): PickerItem[] => {
@@ -1832,7 +2293,7 @@ async function refreshTreeAfterTagCatalog(handle: VaultHandle) {
   }
 }
 
-function onOverlayPick(item: PickerItem) {
+function onOverlayPick(item: PickerItem, intent?: { newTab?: boolean }) {
   if (item.kind === "command") {
     // Keep the editor's selection stable until editor-scoped commands have
     // consumed it. Restoring focus first can reconcile a browser selection
@@ -1865,7 +2326,7 @@ function onOverlayPick(item: PickerItem) {
       return;
     }
     closeOverlay();
-    openPath(item.value);
+    openPath(item.value, { newTab: intent?.newTab === true });
   } else if (item.kind === "tag") {
     rememberTag(item.value);
     overlayQuery = `?#${item.value}`;
@@ -2000,11 +2461,9 @@ function onEditorOutlineChanged() {
  * can wait on the same underlying signal in single-tab scenarios.
  */
 function activeTabDirty(): boolean | null {
-  const pane = workspace.panes.find(
-    (candidate) => candidate.id === workspace.focusedPaneId,
-  );
+  const pane = findWorkspaceLeaf(workspace.layout, workspace.focusedPaneId);
   const tab = pane?.tabs.find(
-    (candidate) => candidate.path === pane.activePath,
+    (candidate) => candidate.path === pane?.activePath,
   );
   return tab?.dirty ?? null;
 }
@@ -2015,7 +2474,7 @@ function onEditorDirtyChanged(
   dirty: boolean,
 ) {
   if (path === null) return;
-  const pane = workspace.panes.find((candidate) => candidate.id === paneId);
+  const pane = findWorkspaceLeaf(workspace.layout, paneId);
   const tab = pane?.tabs.find((candidate) => candidate.path === path);
   if (tab !== undefined) tab.dirty = dirty;
 }
@@ -2150,6 +2609,13 @@ function refreshLinkContext() {
                   ? bytes.subarray(3)
                   : bytes;
               return new TextDecoder("utf-8", { fatal: false }).decode(content);
+            } catch {
+              return null;
+            }
+          },
+          loadAsset: async (path: string) => {
+            try {
+              return await readVaultFile(activeVault, path);
             } catch {
               return null;
             }
@@ -2347,7 +2813,26 @@ async function openVaultAtPath(
         updatePaneNavigationState();
       }
     } else if (addressed !== null) {
+      // An address that names a note is a request for that note, on a reload
+      // as much as on a first visit, so it outranks whatever the restored
+      // workspace last showed. The note joins the focused pane's strip
+      // instead of replacing a restored tab, so nothing persisted is lost.
       await navigation?.start(addressed);
+    } else if (
+      navigationSurface === "browser" &&
+      focusedWorkspacePane().activePath !== null &&
+      notePathsOf(tree).includes(focusedWorkspacePane().activePath ?? "")
+    ) {
+      // With no note in the address, the restored workspace decides what the
+      // focused pane shows and the address bar follows it.
+      const pane = focusedWorkspacePane();
+      const path = pane.activePath;
+      if (path !== null) {
+        const tab = ensurePaneTab(pane, path);
+        await openNote(path, tab.viewState);
+        navigation?.syncAddress({ path });
+        updatePaneNavigationState();
+      }
     } else if (typeof harnessNote === "string") {
       if (navigationSurface === "browser")
         await navigation?.start({ path: harnessNote });
@@ -2507,6 +2992,16 @@ async function openStartupVault(path?: string): Promise<void> {
 async function startDesktopVaultRecovery(
   webdriverVault: string | undefined,
 ): Promise<void> {
+  try {
+    await startupVaultRecoverySequence(webdriverVault);
+  } finally {
+    settleStartupVaultSource("recovery");
+  }
+}
+
+async function startupVaultRecoverySequence(
+  webdriverVault: string | undefined,
+): Promise<void> {
   const source = startupSource({
     desktop: navigationSurface === "desktop" && hasDesktopRuntime(),
     ...(webdriverVault === undefined ? {} : { webdriverVault }),
@@ -2657,6 +3152,7 @@ async function openNote(
     void refreshNoteTimes(currentVault, path);
     const pane = focusedWorkspacePane();
     ensurePaneTab(pane, path);
+    pane.emptyTab = false;
     pane.activePath = path;
     refreshLinkContext();
     recents = [path, ...recents.filter((entry) => entry !== path)].slice(0, 50);
@@ -2739,19 +3235,42 @@ async function openNoteAddress(
   return true;
 }
 
-async function navigateToNote(path: string, fragment?: string): Promise<void> {
+/**
+ * Opens a note. The default reuses the focused pane's active tab, and
+ * switches to an existing tab when the note is already open anywhere, so
+ * ordinary navigation never accumulates tabs. `newTab` is the explicit
+ * route: a mod-click or middle-click, an "Open in new tab" menu item, or
+ * the command surface's new-tab file action.
+ */
+async function navigateToNote(
+  path: string,
+  fragment?: string,
+  intent: "in-place" | "new-tab" = "in-place",
+): Promise<void> {
   const address = fragment === undefined ? { path } : { path, fragment };
-  if (navigationSurface === "browser") {
-    await (navigation?.open(address) ?? openNoteAddress(address));
-    const pane = focusedWorkspacePane();
-    ensurePaneTab(pane, path);
-    pane.activePath = path;
-    return;
+  if (intent === "in-place") {
+    const holder = paneHoldingPath(path);
+    if (holder !== null && holder.id !== workspace.focusedPaneId) {
+      await focusWorkspacePane(holder.id);
+      await activateWorkspaceTab(path);
+      if (fragment !== undefined) await openNoteAddress(address, null);
+      return;
+    }
   }
   captureFocusedTabState();
   const pane = focusedWorkspacePane();
-  const tab = ensurePaneTab(pane, path);
-  const opened = await openNoteAddress(address, tab.viewState);
+  // The tab is placed before the note loads: the load itself only ensures a
+  // tab exists, so placing afterwards would find the one it just added and
+  // leave the replaced tab behind.
+  if (intent === "new-tab") placeTabBeside(pane, path);
+  else placeTabInPlace(pane, path);
+  if (navigationSurface === "browser") {
+    await (navigation?.open(address) ?? openNoteAddress(address));
+    pane.activePath = path;
+    return;
+  }
+  const tab = pane.tabs.find((candidate) => candidate.path === path);
+  const opened = await openNoteAddress(address, tab?.viewState ?? null);
   if (opened) {
     pane.activePath = path;
     pushPaneHistory(pane, address);
@@ -2767,10 +3286,14 @@ function wikilinkNavigationOptions(): FollowWikilinkOptions {
   return {
     context: { ...context, currentPath: selectedPath },
     currentPath: selectedPath,
-    navigate: async (address) => {
+    navigate: async (address, intent) => {
       focusReadingSurface();
       try {
-        await navigateToNote(address.path, address.fragment);
+        await navigateToNote(
+          address.path,
+          address.fragment,
+          intent?.newTab === true ? "new-tab" : "in-place",
+        );
       } finally {
         focusReadingSurface();
         requestAnimationFrame(() => focusReadingSurface());
@@ -3012,14 +3535,18 @@ async function addCanvasNode() {
   }
 }
 
-function openPath(path: string) {
+function openPath(path: string, options?: { newTab?: boolean }) {
   if (activeSheet === "file-tree") {
     closeSheet();
   }
   if (path.toLowerCase().endsWith(".canvas")) {
     void openCanvas(path);
   } else {
-    void navigateToNote(path);
+    void navigateToNote(
+      path,
+      undefined,
+      options?.newTab === true ? "new-tab" : "in-place",
+    );
   }
 }
 
@@ -3130,6 +3657,16 @@ function setEndToEndSelectionFromLastMatch(
 // that plants the value.
 function pollEndToEndVault() {
   let attempts = 0;
+  // The announcement is planted before this component mounts, so its absence
+  // right now already answers for the reserved sidebar column: nothing is
+  // arriving to fill it, and the empty state must not sit beside it while a
+  // poll confirms that. The poll still runs, for the slower webview race.
+  if (
+    typeof (window as { __SKRIBEUM_E2E_VAULT__?: string })
+      .__SKRIBEUM_E2E_VAULT__ !== "string"
+  ) {
+    settleStartupVaultSource("announced");
+  }
   const timer = setInterval(() => {
     attempts += 1;
     const path = (window as { __SKRIBEUM_E2E_VAULT__?: string })
@@ -3140,7 +3677,7 @@ function pollEndToEndVault() {
       };
       if (debugWindow.__SKRIBEUM_E2E_RESET_WORKSPACE__ === true) {
         for (const key of Object.keys(localStorage)) {
-          if (key.startsWith("skribeum.workspace.v1.")) {
+          if (key.startsWith("skribeum.workspace.")) {
             localStorage.removeItem(key);
           }
         }
@@ -3149,6 +3686,9 @@ function pollEndToEndVault() {
       const target = window as Window & {
         __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
         __SKRIBEUM_E2E_HISTORY_STATE__?: () => NoteViewState | null;
+        __SKRIBEUM_E2E_READING_DRIFT__?: (
+          state: NoteViewState,
+        ) => number | null;
         __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
         __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
         __SKRIBEUM_E2E_SET_LINE_END__?: (lineText: string) => number | null;
@@ -3163,6 +3703,8 @@ function pollEndToEndVault() {
         navigateToNote(notePath);
       target.__SKRIBEUM_E2E_HISTORY_STATE__ = () =>
         editor?.captureHistoryState() ?? null;
+      target.__SKRIBEUM_E2E_READING_DRIFT__ = (state) =>
+        editor?.readingPositionDrift(state) ?? null;
       target.__SKRIBEUM_E2E_CURRENT_PATH__ = () => selectedPath;
       target.__SKRIBEUM_E2E_SET_SELECTION__ = setEndToEndSelection;
       target.__SKRIBEUM_E2E_SET_LINE_END__ = setEndToEndSelectionAtLineEnd;
@@ -3170,13 +3712,51 @@ function pollEndToEndVault() {
         setEndToEndSelectionFromLastMatch;
       target.__SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__ = activeTabDirty;
       clearInterval(timer);
-      void openEndToEndVault(path);
+      void openEndToEndVault(path).finally(() =>
+        settleStartupVaultSource("announced"),
+      );
     } else if (attempts > 50 || vault !== null) {
       clearInterval(timer);
     }
   }, 100);
   return timer;
 }
+
+$effect(() => {
+  // Re-observed whenever the tree changes shape; the observer itself covers
+  // window resizes, panel collapse, and divider drags.
+  void workspace.layout;
+  const host = workspaceHost;
+  if (!(host instanceof HTMLElement)) return;
+  const measure = () => {
+    const next = new Map<string, { width: number; height: number }>();
+    for (const element of host.querySelectorAll<HTMLElement>(
+      "[data-pane-id]",
+    )) {
+      const id = element.dataset.paneId;
+      if (id === undefined) continue;
+      const bounds = element.getBoundingClientRect();
+      next.set(id, { width: bounds.width, height: bounds.height });
+    }
+    const unchanged =
+      next.size === paneExtents.size &&
+      [...next].every(([id, box]) => {
+        const previous = paneExtents.get(id);
+        return (
+          previous !== undefined &&
+          Math.abs(previous.width - box.width) < 0.5 &&
+          Math.abs(previous.height - box.height) < 0.5
+        );
+      });
+    if (!unchanged) paneExtents = next;
+  };
+  const observer = new ResizeObserver(measure);
+  for (const element of host.querySelectorAll<HTMLElement>("[data-pane-id]")) {
+    observer.observe(element);
+  }
+  measure();
+  return () => observer.disconnect();
+});
 
 onMount(() => {
   const stopVisualViewportCss = bindVisualViewportCss();
@@ -3203,6 +3783,7 @@ onMount(() => {
     __SKRIBEUM_DEBUG_PERF__?: boolean;
     __SKRIBEUM_E2E_OPEN_NOTE__?: (path: string) => Promise<void>;
     __SKRIBEUM_E2E_HISTORY_STATE__?: () => NoteViewState | null;
+    __SKRIBEUM_E2E_READING_DRIFT__?: (state: NoteViewState) => number | null;
     __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
     __SKRIBEUM_E2E_SET_SELECTION__?: (anchor: number) => boolean;
     __SKRIBEUM_E2E_SET_LINE_END__?: (lineText: string) => number | null;
@@ -3217,7 +3798,7 @@ onMount(() => {
   };
   if (debugWindow.__SKRIBEUM_E2E_RESET_WORKSPACE__ === true) {
     for (const key of Object.keys(localStorage)) {
-      if (key.startsWith("skribeum.workspace.v1.")) {
+      if (key.startsWith("skribeum.workspace.")) {
         localStorage.removeItem(key);
       }
     }
@@ -3232,6 +3813,8 @@ onMount(() => {
     debugWindow.__SKRIBEUM_E2E_OPEN_NOTE__ = (path) => navigateToNote(path);
     debugWindow.__SKRIBEUM_E2E_HISTORY_STATE__ = () =>
       editor?.captureHistoryState() ?? null;
+    debugWindow.__SKRIBEUM_E2E_READING_DRIFT__ = (state) =>
+      editor?.readingPositionDrift(state) ?? null;
     debugWindow.__SKRIBEUM_E2E_CURRENT_PATH__ = () => selectedPath;
     debugWindow.__SKRIBEUM_E2E_SET_SELECTION__ = setEndToEndSelection;
     debugWindow.__SKRIBEUM_E2E_SET_LINE_END__ = setEndToEndSelectionAtLineEnd;
@@ -3403,6 +3986,7 @@ onMount(() => {
     delete debugWindow.__SKRIBEUM_DEBUG_OPEN_NOTE__;
     delete debugWindow.__SKRIBEUM_E2E_OPEN_NOTE__;
     delete debugWindow.__SKRIBEUM_E2E_HISTORY_STATE__;
+    delete debugWindow.__SKRIBEUM_E2E_READING_DRIFT__;
     delete debugWindow.__SKRIBEUM_E2E_CURRENT_PATH__;
     delete debugWindow.__SKRIBEUM_E2E_SET_SELECTION__;
     delete debugWindow.__SKRIBEUM_E2E_SET_LINE_END__;
@@ -3524,7 +4108,7 @@ onMount(() => {
     </div>
     <div class="skr-header-trailing">
       {#if note?.readOnly || contentView === VIEW_CANVAS}
-        <span class="skr-warning skr-read-only-badge rounded px-2 py-0.5 text-xs">
+        <span class="skr-type-label skr-warning skr-read-only-badge rounded px-2 py-0.5">
           {STRINGS.readOnlyBadge}
         </span>
       {/if}
@@ -3552,25 +4136,25 @@ onMount(() => {
   </header>
 
   {#if collisionGroups.length > 0}
-    <aside class="skr-warning border-b px-3 py-1 text-xs" role="alert">
+    <aside class="skr-type-label skr-warning border-b px-3 py-1" role="alert">
       {STRINGS.collisionBanner}
       {collisionGroups.map((group) => group.join(" / ")).join("; ")}
     </aside>
   {/if}
   {#if note?.readOnly}
-    <aside class="skr-warning border-b px-3 py-1 text-xs" role="alert">
+    <aside class="skr-type-label skr-warning border-b px-3 py-1" role="alert">
       {STRINGS.nonUtf8Banner}
     </aside>
   {/if}
   <Banners {banners} onDismiss={dismissBanner} />
   {#if errorText !== null}
-    <aside class="skr-error border-b px-3 py-1 text-xs" role="alert">
+    <aside class="skr-type-label skr-error border-b px-3 py-1" role="alert">
       {errorText}
     </aside>
   {/if}
 
   <main class="flex min-h-0 flex-1 overflow-hidden">
-    {#if vault !== null}
+    {#if vault !== null || !initialVaultSettled}
       <div
         class="skr-sidebar skr-desktop-sidebar skr-panel-motion"
         class:skr-sidebar-header-hovered={sidebarHeaderHovered}
@@ -3584,7 +4168,7 @@ onMount(() => {
           }
         }}
       >
-        {#if !workspace.sidebarCollapsed}
+        {#if !workspace.sidebarCollapsed && vault !== null}
         <nav class="skr-sidebar-content" aria-label={STRINGS.sidebarHeaderLabel}>
           <header
             class="skr-sidebar-header"
@@ -3624,18 +4208,20 @@ onMount(() => {
             </div>
           </header>
           <div class="skr-sidebar-tree">
-            <FileTree
-              entries={tree}
-              {selectedPath}
-              titleSources={treeTitleSources}
-              expandedPaths={workspace.expandedFolders}
-              onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
-              onSelectionChange={(path) => (workspace.selectedPath = path)}
-              onOpenPath={openPath}
-              {registry}
-              {commandContext}
-              desktop={hasDesktopRuntime()}
-            />
+            <SurfaceBoundary label={STRINGS.vaultTreeLabel}>
+              <FileTree
+                entries={tree}
+                {selectedPath}
+                titleSources={treeTitleSources}
+                expandedPaths={workspace.expandedFolders}
+                onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
+                onSelectionChange={(path) => (workspace.selectedPath = path)}
+                onOpenPath={openPath}
+                {registry}
+                {commandContext}
+                desktop={hasDesktopRuntime()}
+              />
+            </SurfaceBoundary>
           </div>
         </nav>
         <PanelDivider
@@ -3659,34 +4245,13 @@ onMount(() => {
           onOpen={(path) => void openStartupVault(path)}
         />
       {:else}
-        {#each workspace.panes as pane, paneIndex (pane.id)}
-          {#if paneIndex === 1}
-            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-            <div
-              class="skr-split-divider"
-              class:skr-split-divider-dragging={splitDragging}
-              role="separator"
-              aria-label={STRINGS.paneResize}
-              aria-orientation="vertical"
-              aria-valuemin="20"
-              aria-valuemax="80"
-              aria-valuenow={Math.round(workspace.splitRatio * 100)}
-              tabindex="0"
-              onpointerdown={beginSplitResize}
-              ondblclick={() => (workspace.splitRatio = 0.5)}
-              onkeydown={resizeSplitWithKeyboard}
-            ></div>
-          {/if}
+        {#snippet leafPane(pane: WorkspaceLeaf)}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <section
             class="skr-editor-pane"
             class:skr-editor-pane-focused={pane.id === workspace.focusedPaneId}
-            style={workspace.panes.length === 2
-              ? `flex-basis: ${(paneIndex === 0 ? workspace.splitRatio : 1 - workspace.splitRatio) * 100}%`
-              : undefined}
             data-pane-id={pane.id}
-            aria-label={`${STRINGS.editorPane} ${paneIndex + 1}`}
+            aria-label={`${STRINGS.editorPane} ${workspacePanes.indexOf(pane) + 1}`}
             onfocusin={() => void focusWorkspacePane(pane.id)}
             onpointerdown={() => void focusWorkspacePane(pane.id)}
             ondragover={(event) => {
@@ -3696,21 +4261,14 @@ onMount(() => {
                 )
               ) {
                 event.preventDefault();
-                splitDropPaneId = null;
+                splitDropZone = null;
                 return;
               }
-              if (workspace.panes.length !== 1) return;
-              const bounds = event.currentTarget.getBoundingClientRect();
-              if (event.clientX >= bounds.left + (bounds.width * 2) / 3) {
-                event.preventDefault();
-                splitDropPaneId = pane.id;
-              } else {
-                splitDropPaneId = null;
-              }
+              updateTabDropZone(event, pane.id);
             }}
             ondragleave={(event) => {
               if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                splitDropPaneId = null;
+                splitDropZone = null;
               }
             }}
             ondrop={(event) => {
@@ -3719,27 +4277,24 @@ onMount(() => {
               );
               if (treePath) {
                 event.preventDefault();
+                splitDropZone = null;
                 void (async () => {
                   await focusWorkspacePane(pane.id);
                   await navigateToNote(treePath);
                 })();
-              } else {
-                const tabPath = event.dataTransfer?.getData(
-                  "application/x-skribeum-tab",
-                );
-                if (tabPath && splitDropPaneId === pane.id) {
-                  event.preventDefault();
-                  void splitWorkspaceTab(tabPath);
-                }
+                return;
               }
-              splitDropPaneId = null;
+              void dropTabOnPane(event, pane.id);
             }}
           >
             <TabStrip
+              paneId={pane.id}
               tabs={pane.tabs}
               activePath={pane.activePath}
               titleSources={treeTitleSources}
               focused={pane.id === workspace.focusedPaneId}
+              visible={pane.tabs.length > 1 || workspacePanes.length > 1 || pane.emptyTab === true}
+              emptyTab={pane.emptyTab === true}
               closeTooltip={tooltipForCommand("tab.close", STRINGS.closeTab)}
               onActivate={(path) => {
                 void focusWorkspacePane(pane.id).then(() => activateWorkspaceTab(path));
@@ -3752,6 +4307,9 @@ onMount(() => {
               onReorder={(from, to) => {
                 if (pane.id === workspace.focusedPaneId) reorderWorkspaceTabs(from, to);
               }}
+              onNewTab={() => void openEmptyWorkspaceTab(pane.id)}
+              onAdopt={(origin, index) =>
+                void moveTabIntoPane(origin.paneId, origin.path, pane.id, index)}
             />
             <div
               class="skr-pane-content"
@@ -3760,38 +4318,40 @@ onMount(() => {
               data-testid="reading-surface"
               data-note-path={pane.id === workspace.focusedPaneId ? selectedPath : pane.activePath}
             >
-              {#if pane.id !== workspace.focusedPaneId && pane.activePath !== null}
+              {#if pane.id !== workspace.focusedPaneId}
+                {#if pane.activePath !== null}
                 <div class="skr-unfocused-note">
                   <ReadOnlyNote
                     source={treeTitleSources[pane.activePath] ?? ""}
                     label={STRINGS.editorLabel}
                     context={{ ...(linkContext ?? EMPTY_WIKILINK_CONTEXT), currentPath: pane.activePath }}
-                    taskStatuses={settingsState.document.task_statuses}
+                    taskStatuses={documentTaskStatuses}
                   />
                 </div>
+                {/if}
               {:else if contentView === VIEW_CANVAS && canvas !== null}
                 <CanvasView
                   bind:this={canvasViewer}
                   {canvas}
                   previews={canvasPreviews}
                   {linkContext}
-                  taskStatuses={settingsState.document.task_statuses}
+                  taskStatuses={documentTaskStatuses}
                   onOpenNode={openPath}
                   onMoveNode={(nodeId, x, y) => void moveCanvasNode(nodeId, x, y)}
                   onRemoveNode={(nodeId) => void removeCanvasNode(nodeId)}
                   onAddNode={() => void addCanvasNode()}
                 />
               {:else if contentView === VIEW_CANVAS && canvasError !== null}
-                <div class="skr-error m-4 rounded border p-3 text-sm" role="alert" data-testid="canvas-error">
+                <div class="skr-error m-4 rounded border p-3" role="alert" data-testid="canvas-error">
                   {canvasError}
                 </div>
               {:else if missingAddress !== null}
                 <div
-                  class="skr-error m-4 max-w-2xl rounded border p-4 text-sm"
+                  class="skr-error m-4 max-w-2xl rounded border p-4"
                   role="alert"
                   data-testid="note-not-found"
                 >
-                  <h2 class="m-0 text-base font-semibold">{STRINGS.noteNotFoundTitle}</h2>
+                  <h2 class="skr-type-title m-0 font-semibold">{STRINGS.noteNotFoundTitle}</h2>
                   <p class="my-2">{STRINGS.noteNotFoundPrefix}</p>
                   <p class="my-2 font-mono">{missingAddress.path}</p>
                   {#if navigationSurface === "browser"}
@@ -3824,21 +4384,22 @@ onMount(() => {
                   bind:this={editor}
                   doc={M0_FIXTURE}
                   {note}
-                  vault={note !== null ? vault : null}
-                  path={note !== null ? selectedPath : null}
+                  vault={editorVault}
+                  path={editorPath}
                   {linkContext}
                   {propertyTypes}
-                  taskStatuses={settingsState.document.task_statuses}
+                  taskStatuses={documentTaskStatuses}
                   {registry}
                   {commandContext}
-                  settings={settingsState.document}
+                  settings={documentSettings}
                   {sourceMode}
                   {historyViewState}
                   {onConflict}
                   {onWriteError}
                   onDocChanged={onEditorDocChanged}
                   onOutlineChanged={onEditorOutlineChanged}
-                  onDirtyChanged={(dirty) => onEditorDirtyChanged(pane.id, pane.activePath, dirty)}
+                  onDirtyChanged={(dirty) =>
+                    onEditorDirtyChanged(workspace.focusedPaneId, selectedPath, dirty)}
                   onTitleVisibilityChange={(visible) => (noteTitleVisible = visible)}
                   onSaved={onEditorSaved}
                   onStatisticsChanged={(statistics) => (editorStatistics = statistics)}
@@ -3847,12 +4408,58 @@ onMount(() => {
                   {tagAffordanceOptions}
                 />
               {/if}
+              {#if splitDropZone?.paneId === pane.id}
+                <div
+                  class="skr-pane-split-target"
+                  data-drop-side={splitDropZone.side}
+                  aria-hidden="true"
+                ></div>
+              {/if}
             </div>
-            {#if splitDropPaneId === pane.id}
-              <div class="skr-pane-split-target" aria-hidden="true"></div>
-            {/if}
           </section>
-        {/each}
+        {/snippet}
+
+        {#snippet paneNode(node: WorkspaceNode)}
+          {#if node.type === "split"}
+            <div
+              class="skr-split"
+              class:skr-split-column={node.axis === "column"}
+            >
+              <div
+                class="skr-split-child"
+                style={`flex-basis: ${node.ratio * 100}%`}
+              >
+                {@render paneNode(node.children[0])}
+              </div>
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+              <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+              <div
+                class="skr-split-divider"
+                class:skr-split-divider-column={node.axis === "column"}
+                class:skr-split-divider-dragging={splitDraggingNode === node}
+                role="separator"
+                aria-label={STRINGS.paneResize}
+                aria-orientation={node.axis === "row" ? "vertical" : "horizontal"}
+                aria-valuemin="5"
+                aria-valuemax="95"
+                aria-valuenow={Math.round(node.ratio * 100)}
+                tabindex="0"
+                onpointerdown={(event) => beginSplitResize(event, node)}
+                onkeydown={(event) => resizeSplitWithKeyboard(event, node)}
+              ></div>
+              <div
+                class="skr-split-child"
+                style={`flex-basis: ${(1 - node.ratio) * 100}%`}
+              >
+                {@render paneNode(node.children[1])}
+              </div>
+            </div>
+          {:else}
+            {@render leafPane(node)}
+          {/if}
+        {/snippet}
+
+        {@render paneNode(workspace.layout)}
       {/if}
     </div>
     {#if vault !== null}
@@ -3892,11 +4499,13 @@ onMount(() => {
             </button>
           </div>
           <div class="skr-outline-body">
-            <OutlinePanel
-              entries={outlineEntries}
-              onNavigate={outlineNavigate}
-              onCopyHeading={copyOutlineHeading}
-            />
+            <SurfaceBoundary label={STRINGS.outlineLabel}>
+              <OutlinePanel
+                entries={outlineEntries}
+                onNavigate={outlineNavigate}
+                onCopyHeading={copyOutlineHeading}
+              />
+            </SurfaceBoundary>
           </div>
         </section>
         {/if}
@@ -3919,31 +4528,35 @@ onMount(() => {
 
 {#if activeSheet === "file-tree" && vault !== null}
   <Sheet label={STRINGS.vaultTreeLabel} onClose={closeSheet} restoreFocus={false}>
-    <FileTree
-      entries={tree}
-      {selectedPath}
-      titleSources={treeTitleSources}
-      expandedPaths={workspace.expandedFolders}
-      onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
-      onSelectionChange={(path) => (workspace.selectedPath = path)}
-      onOpenPath={openPath}
-      {registry}
-      {commandContext}
-      desktop={hasDesktopRuntime()}
-      touchMode={true}
-    />
+    <SurfaceBoundary label={STRINGS.vaultTreeLabel}>
+      <FileTree
+        entries={tree}
+        {selectedPath}
+        titleSources={treeTitleSources}
+        expandedPaths={workspace.expandedFolders}
+        onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
+        onSelectionChange={(path) => (workspace.selectedPath = path)}
+        onOpenPath={openPath}
+        {registry}
+        {commandContext}
+        desktop={hasDesktopRuntime()}
+        touchMode={true}
+      />
+    </SurfaceBoundary>
   </Sheet>
 {:else if activeSheet === "outline"}
   <Sheet label={STRINGS.outlineLabel} onClose={closeSheet} restoreFocus={false}>
-    <OutlinePanel
-      entries={outlineEntries}
-      onCopyHeading={copyOutlineHeading}
-      onNavigate={(from) => {
-        closeSheet();
-        outlineNavigate(from);
-      }}
-      touchMode={true}
-    />
+    <SurfaceBoundary label={STRINGS.outlineLabel}>
+      <OutlinePanel
+        entries={outlineEntries}
+        onCopyHeading={copyOutlineHeading}
+        onNavigate={(from) => {
+          closeSheet();
+          outlineNavigate(from);
+        }}
+        touchMode={true}
+      />
+    </SurfaceBoundary>
   </Sheet>
 {:else if activeSheet === "note-info"}
   <Sheet label={STRINGS.noteInfoLabel} onClose={closeSheet} restoreFocus={false}>
@@ -4003,7 +4616,9 @@ onMount(() => {
         aria-pressed={command.id === TOGGLE_SOURCE_MODE_COMMAND
           ? sourceMode
           : undefined}
-        disabled={command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null}
+        disabled={(command.id === TOGGLE_SOURCE_MODE_COMMAND && note === null) ||
+          paneCommandUnavailability.has(command.id)}
+        title={paneCommandUnavailability.get(command.id)}
         onclick={() => runActionCommand(command.id)}
       >
         <span class="skr-action-menu-label">
@@ -4067,6 +4682,8 @@ onMount(() => {
     {settingsFilePath}
     {updateState}
     onCheckUpdate={checkSelectedUpdateChannel}
+    onInstallUpdate={installSelectedUpdate}
+    onRestartUpdate={restartForUpdate}
     {targetSetting}
   />
 {/if}

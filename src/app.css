@@ -24,6 +24,11 @@ body {
   background: var(--skr-canvas);
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
+  /* The shell's default tier, so chrome text that names no size of its own
+     lands on the control size instead of the browser's 16px document
+     default. The editor sets its own size on `.cm-editor`, and every
+     em-relative value inside the reading surface resolves against that. */
+  font-size: var(--skr-type-control);
 }
 
 * {
@@ -153,7 +158,7 @@ select {
   overflow: hidden;
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   font-weight: 600;
   opacity: 1;
   text-overflow: ellipsis;
@@ -227,7 +232,7 @@ select {
   padding-inline: 0.5rem;
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   font-weight: 600;
 }
 
@@ -329,7 +334,7 @@ select {
   padding: 0;
   list-style: none;
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
 }
 
 .skr-tree-spacer {
@@ -434,7 +439,7 @@ select {
 }
 
 .skr-tree-note-icon {
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   line-height: 1;
 }
 
@@ -498,7 +503,7 @@ select {
   padding: 0.375rem 0.5rem;
   background-color: transparent;
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   text-align: left;
   cursor: pointer;
 }
@@ -537,6 +542,7 @@ select {
 }
 
 .skr-pane-content {
+  position: relative;
   min-width: 0;
   min-height: 0;
   flex: 1;
@@ -606,7 +612,7 @@ select {
   color: var(--skr-text-muted);
   background: transparent;
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   text-align: left;
 }
 
@@ -655,6 +661,32 @@ select {
   content: "";
 }
 
+/* A closed tab's dismissal: a ghost drawn in the slot the tab held, out of
+   the layout flow so it occupies no slot and enters no count or index. */
+.skr-tab-exiting {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  padding: 0 0.25rem 0 0.5rem;
+  color: var(--skr-text-muted);
+  background: var(--skr-surface);
+  font-family: var(--skr-font-interface);
+  font-size: var(--skr-type-control);
+  opacity: 1;
+  pointer-events: none;
+  /* Declared at rest so the one attribute flip below always transitions. */
+  transition: opacity var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+.skr-tab-exiting[data-dismissing="true"] {
+  opacity: 0;
+}
+
 .skr-tab-label {
   min-width: 0;
   overflow: hidden;
@@ -698,6 +730,16 @@ select {
   pointer-events: none;
   transition: opacity var(--skr-motion-state-duration)
     var(--skr-motion-state-easing);
+}
+
+.skr-tab-close::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1.5rem;
+  height: 1.5rem;
+  transform: translate(-50%, -50%);
+  content: "";
 }
 
 .skr-tab-unsaved {
@@ -774,6 +816,30 @@ select {
   background: var(--skr-surface);
 }
 
+.skr-tab-new {
+  display: grid;
+  width: 2.25rem;
+  min-width: 2.25rem;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  color: var(--skr-text-muted);
+  background: var(--skr-surface);
+}
+
+.skr-tab-new svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.25;
+}
+
+.skr-tab-new:hover {
+  background: var(--skr-surface-subtle);
+}
+
 .skr-tab-list-shell {
   position: sticky;
   right: 0;
@@ -785,6 +851,36 @@ select {
    carries its own row chrome (design system section 5.12): no per-menu
    CSS lives here anymore. */
 
+/* One split node: two children and the divider between them. Nesting a
+   split inside a child is how a third and fourth pane are reached. */
+.skr-split {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 100%;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+.skr-split-column {
+  flex-direction: column;
+}
+
+.skr-split-child {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-grow: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+}
+
+/* The pane floors are enforced where they are actually decided: a divider
+   drag stops at them, and a split that cannot honor them for the pane it
+   would create does not happen. They are deliberately not CSS minimums,
+   because a minimum a shrinking window cannot satisfy pushes panes past
+   the editor area's edge instead of shrinking them. */
+
 .skr-split-divider {
   position: relative;
   z-index: 6;
@@ -793,6 +889,16 @@ select {
   margin-inline: -3px;
   cursor: col-resize;
   touch-action: none;
+}
+
+.skr-split-divider-column {
+  width: auto;
+  min-width: 0;
+  height: 6px;
+  min-height: 6px;
+  margin-inline: 0;
+  margin-block: -3px;
+  cursor: row-resize;
 }
 
 .skr-split-divider::after {
@@ -805,6 +911,15 @@ select {
   content: "";
 }
 
+.skr-split-divider-column::after {
+  top: 2px;
+  right: 0;
+  bottom: auto;
+  left: 0;
+  width: auto;
+  height: 1px;
+}
+
 .skr-split-divider:hover::after {
   background: var(--skr-border-strong);
 }
@@ -813,15 +928,30 @@ select {
   background: var(--skr-accent);
 }
 
+/* The drop zone a dragged tab is over: the outer quarter of one edge, or
+   the center region that adds the tab to this pane's own strip. */
 .skr-pane-split-target {
   position: absolute;
   z-index: 5;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 33.333%;
+  inset: 0;
   background: var(--skr-accent-subtle);
   pointer-events: none;
+}
+
+.skr-pane-split-target[data-drop-side="left"] {
+  right: 75%;
+}
+
+.skr-pane-split-target[data-drop-side="right"] {
+  left: 75%;
+}
+
+.skr-pane-split-target[data-drop-side="up"] {
+  bottom: 75%;
+}
+
+.skr-pane-split-target[data-drop-side="down"] {
+  top: 75%;
 }
 
 .skr-unfocused-note {
@@ -845,7 +975,7 @@ select {
   background: var(--skr-surface-subtle);
   color: var(--skr-text-muted);
   font-family: var(--skr-font-mono);
-  font-size: 11px;
+  font-size: var(--skr-type-chip);
   line-height: 1;
 }
 
@@ -868,7 +998,7 @@ select {
   margin: 0;
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
-  font-size: 1rem;
+  font-size: var(--skr-type-title);
   font-weight: 600;
 }
 
@@ -889,7 +1019,7 @@ select {
   color: var(--skr-text);
   background: transparent;
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   text-align: start;
   overflow-wrap: anywhere;
   cursor: pointer;
@@ -905,7 +1035,7 @@ select {
   margin: 0;
   color: var(--skr-text-muted);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
 }
 
 .skr-startup-error {
@@ -944,7 +1074,7 @@ select {
      control must set the interface token explicitly (design system
      section 2.3: interface controls and palette rows, 13px fixed). */
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   text-align: start;
   cursor: pointer;
 }
@@ -976,8 +1106,8 @@ select {
   border-radius: var(--skr-radius-control);
   padding: 0.125rem 0.25rem;
   color: var(--skr-text-muted);
-  font-family: var(--skr-font-interface);
-  font-size: 0.75rem;
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-chip);
 }
 
 html body .settings-backdrop {
@@ -1028,7 +1158,7 @@ html body .settings-dialog {
   padding: 0.5rem 0.875rem;
   color: var(--skr-text);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
   font-weight: 600;
   cursor: pointer;
   transition:
@@ -1087,6 +1217,18 @@ html body .settings-dialog {
 
 .skr-panel-heading {
   border-color: var(--skr-border);
+  font-size: var(--skr-type-label);
+}
+
+/* The interface type scale reached from markup, for elements whose component
+   has no style block of its own. The control tier needs no class: it is the
+   shell's inherited default. */
+.skr-type-label {
+  font-size: var(--skr-type-label);
+}
+
+.skr-type-title {
+  font-size: var(--skr-type-title);
 }
 
 .skr-match {
@@ -1123,6 +1265,76 @@ html body .settings-dialog {
   border-left-color: var(--skr-caret);
 }
 
+/* The caret blink is one of the two continuous indicators outside the motion
+   classes: opacity only, moving nothing. Each edge of the cycle eases over
+   roughly 100ms and the bar holds solid between them, so the caret reads as a
+   presence rather than a strobe. The stops are the cycle's own fractions:
+   500ms solid, 100ms out, 500ms clear, 100ms back in. */
+@keyframes skr-caret-blink {
+  0%,
+  41.67% {
+    opacity: 1;
+  }
+
+  50%,
+  91.67% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes skr-caret-blink-instant {
+  0%,
+  49.99% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* The editor library draws the caret and animates the cursor layer with its
+   own hard-edged blink, restarting it through an inline animation-name that a
+   plain author rule cannot outrank; a running animation also outranks every
+   normal declaration, so holding the caret solid needs the same weight. The
+   name is the only declaration that has to carry it. */
+.cm-editor.cm-focused > .cm-scroller > .cm-cursorLayer {
+  animation-duration: var(--skr-caret-blink-cycle);
+  animation-iteration-count: infinite;
+  animation-timing-function: var(--skr-caret-blink-easing);
+  /* biome-ignore lint/complexity/noImportantStyles: outranks the editor library's inline animation-name */
+  animation-name: skr-caret-blink !important;
+}
+
+/* Solid while the hand is working. Dropping this class restarts the blink
+   from its first keyframe, which is the visible one. */
+.cm-editor.cm-skr-caret-solid > .cm-scroller > .cm-cursorLayer {
+  /* biome-ignore lint/complexity/noImportantStyles: only an important rule outranks a running animation */
+  animation-name: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-editor.cm-focused > .cm-scroller > .cm-cursorLayer {
+    animation-timing-function: step-end;
+    /* biome-ignore lint/complexity/noImportantStyles: outranks the eased blink above, itself important */
+    animation-name: skr-caret-blink-instant !important;
+  }
+}
+
+:root[data-animations="false"]
+  .cm-editor.cm-focused
+  > .cm-scroller
+  > .cm-cursorLayer {
+  animation-timing-function: step-end;
+  /* biome-ignore lint/complexity/noImportantStyles: outranks the eased blink above, itself important */
+  animation-name: skr-caret-blink-instant !important;
+}
+
 .cm-content ::selection,
 .cm-editor .cm-selectionBackground,
 .cm-editor.cm-focused .cm-selectionBackground {
@@ -1141,25 +1353,22 @@ html body .settings-dialog {
 }
 
 /* The marker's reserved width applies with the instant list (no transition
-   ever targets it); only opacity and a compositor translate animate here.
-   The glyph enters with the surface clock and leaves with the state clock,
-   the exit mirroring the entrance transform instead of a bare fade. */
+   ever targets it); only opacity and a compositor translate ever animate
+   here. The two states below are the resting values the glyph animates
+   between: the entrance and the exit themselves are played on the node the
+   view has just built, because a decoration class change replaces that node
+   and a CSS transition would have no starting value to run from. The glyph
+   enters on the surface clock and leaves on the state clock, the exit
+   mirroring the entrance travel rather than a bare fade. */
 .cm-skr-reveal-marker {
   display: inline-block;
   opacity: 0;
   transform: translateX(var(--skr-motion-distance));
-  transition:
-    opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing),
-    transform var(--skr-motion-state-duration) var(--skr-motion-state-easing);
 }
 
 .cm-skr-reveal-marker-active {
   opacity: 1;
   transform: translateX(0);
-  transition:
-    opacity var(--skr-motion-surface-duration) var(--skr-motion-surface-easing),
-    transform var(--skr-motion-surface-duration)
-    var(--skr-motion-surface-easing);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1206,7 +1415,7 @@ html body .settings-dialog {
 .skr-loading-failure-message {
   color: var(--skr-text-muted);
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
 }
 
 .skr-loading-retry {
@@ -1216,7 +1425,7 @@ html body .settings-dialog {
   color: var(--skr-link);
   background: transparent;
   font-family: var(--skr-font-interface);
-  font-size: 13px;
+  font-size: var(--skr-type-control);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1243,13 +1452,19 @@ html body .settings-dialog {
   transition-duration: 0ms;
 }
 
+/* No `will-change` here. A transform hint makes its element the containing
+   block for every fixed-position descendant, and a surface that carries the
+   hint while idle reparents the menus and popovers rendered inside it: the
+   editor pane is a permanently mounted surface, so a menu placed in viewport
+   coordinates painted at the pane's origin instead. The hint is applied by
+   `enterMotionSurface` and `exitMotionSurface` for the length of the motion
+   and released when the surface settles. */
 [data-motion-surface] {
   opacity: 0;
   transition:
     opacity var(--skr-motion-surface-duration) var(--skr-motion-surface-easing),
     transform var(--skr-motion-surface-duration)
     var(--skr-motion-surface-easing);
-  will-change: opacity, transform;
 }
 
 [data-motion-surface="centered"] {
@@ -1454,7 +1669,7 @@ html body .settings-dialog {
   background: var(--skr-surface-raised);
   box-shadow: var(--skr-shadow);
   font-family: var(--skr-font-interface);
-  font-size: 12px;
+  font-size: var(--skr-type-label);
   line-height: 1.2;
   pointer-events: none;
 }
@@ -1465,7 +1680,7 @@ html body .settings-dialog {
   padding: 0.125rem 0.25rem;
   background: var(--skr-surface-subtle);
   font-family: var(--skr-font-mono);
-  font-size: 11px;
+  font-size: var(--skr-type-chip);
 }
 
 /* The note-info sheet body (the narrow-viewport "Note statistics" route). */

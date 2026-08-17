@@ -13,6 +13,7 @@
 // to is a registered command already, so this only ever moves focus.
 import { onMount, type Snippet, tick } from "svelte";
 import {
+  attachHoverCorridor,
   attachMenuDismissal,
   computeAnchoredPosition,
   menuRows,
@@ -29,6 +30,7 @@ let {
   minWidth = "12rem",
   maxWidth = "min(22rem, calc(100vw - 1rem))",
   restoreFocus = true,
+  hoverSummoned = false,
   children,
 }: {
   /** The control this menu opened from; its rect drives placement. */
@@ -39,17 +41,25 @@ let {
   minWidth?: string;
   maxWidth?: string;
   restoreFocus?: boolean;
+  /**
+   * Set by a caller whose menu is summoned by a resting pointer rather than
+   * by a press. Such a menu also closes when the pointer leaves, so it takes
+   * the shared safe-triangle corridor: the reader can travel from the anchor
+   * to the menu without racing it. A pressed menu needs neither.
+   */
+  hoverSummoned?: boolean;
   children?: Snippet;
 } = $props();
 
-let surface = $state<HTMLElement>();
+let surface = $state<HTMLElement | null>();
 let closing = false;
 let stopDismissal: (() => void) | null = null;
 let stopViewport: (() => void) | null = null;
+let stopHoverCorridor: (() => void) | null = null;
 
 function reposition() {
   const element = surface;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
   const viewport = visualViewportRect(
     element.ownerDocument.defaultView ?? window,
   );
@@ -73,8 +83,10 @@ function requestClose() {
   stopDismissal = null;
   stopViewport?.();
   stopViewport = null;
+  stopHoverCorridor?.();
+  stopHoverCorridor = null;
   const element = surface;
-  if (element === undefined) {
+  if (!(element instanceof HTMLElement)) {
     onClose();
     return;
   }
@@ -83,7 +95,7 @@ function requestClose() {
 
 function onKeydown(event: KeyboardEvent) {
   const element = surface;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
   if (moveMenuFocus(element, event.key)) {
     event.preventDefault();
   }
@@ -91,7 +103,7 @@ function onKeydown(event: KeyboardEvent) {
 
 onMount(() => {
   const element = surface;
-  if (element === undefined) return;
+  if (!(element instanceof HTMLElement)) return;
   reposition();
   enterMotionSurface(element);
   stopViewport = observeVisualViewport(
@@ -102,6 +114,14 @@ onMount(() => {
     onDismiss: requestClose,
     ignore: [anchor],
   });
+  if (hoverSummoned) {
+    stopHoverCorridor = attachHoverCorridor({
+      anchor,
+      surface: element,
+      isOpen: () => !closing,
+      close: requestClose,
+    });
+  }
   void tick().then(() => {
     const rows = menuRows(element);
     const active = rows.find(
@@ -114,6 +134,7 @@ onMount(() => {
   return () => {
     stopDismissal?.();
     stopViewport?.();
+    stopHoverCorridor?.();
     if (restoreFocus && anchor.isConnected) anchor.focus();
   };
 });
@@ -152,7 +173,7 @@ onMount(() => {
     box-shadow: var(--skr-shadow);
     color: var(--skr-text);
     font-family: var(--skr-font-interface);
-    font-size: 13px;
+    font-size: var(--skr-type-control);
   }
 
   .skr-anchored-menu :global(button) {

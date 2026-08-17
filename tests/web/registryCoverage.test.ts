@@ -58,6 +58,7 @@ const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
   ["lib/PropertiesPanel.svelte", "ARIA textbox pattern internal editing"],
   ["lib/SettingsView.svelte", "ARIA dialog pattern internal dismissal"],
   ["lib/Statusline.svelte", "ARIA dialog pattern internal dismissal"],
+  ["lib/TabStrip.svelte", "ARIA tabs pattern internal roving focus"],
   ["lib/Sheet.svelte", "ARIA modal dialog focus trapping and dismissal"],
   ["lib/Dialog.svelte", "ARIA modal dialog focus trapping and dismissal"],
   [
@@ -65,6 +66,7 @@ const WIDGET_INTERNAL_ALLOWLIST = new Map<string, string>([
     "task checkbox and listbox internal navigation",
   ],
   ["lib/editor/taskEditing.ts", "task marker editing semantics"],
+  ["lib/editor/quoteEditing.ts", "quote block editing semantics"],
   ["lib/rendering/CanvasView.svelte", "canvas camera internal navigation"],
   ["lib/features/findPanel.ts", "find widget internal keys"],
 ]);

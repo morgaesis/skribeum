@@ -34,7 +34,11 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { tags } from "@lezer/highlight";
-import { attachMenuDismissal } from "../../anchoredMenu";
+import {
+  attachHoverIntent,
+  attachMenuDismissal,
+  pointInMenuCone,
+} from "../../anchoredMenu";
 import { externalHttpUrl } from "../../features/navigation";
 import {
   editTableCell,
@@ -76,8 +80,15 @@ import {
   obsidianMarkdownExtensionsFor,
   skribeumMarkdownParser,
 } from "../markdown/obsidian";
+import { playFormEntrance, playGlyphEntrance, playGlyphExit } from "../motion";
 import { PostPaintScheduler } from "../postPaintScheduler";
 import { calloutIconSvg, parseCallout } from "./callouts";
+import {
+  type ImageSource,
+  imageFileName,
+  resolveImageSource,
+  TEXT_IMAGE_MEDIA_TYPE,
+} from "./images";
 import {
   DECORATION_TABLE,
   type DecorationRule,
@@ -568,6 +579,14 @@ export function openTaskStatusMenuAtMarker(
   return true;
 }
 
+/**
+ * Per-control listener cleanups. A task control attaches window- and
+ * document-level listeners for its hover corridor, so a widget the view
+ * recycles has to release them or every rebuilt checkbox leaves a live
+ * pointer listener behind.
+ */
+const taskControlCleanups = new WeakMap<HTMLElement, () => void>();
+
 class TaskCheckboxWidget extends WidgetType {
   constructor(
     readonly status: TaskStatus,
@@ -591,7 +610,8 @@ class TaskCheckboxWidget extends WidgetType {
     nextTaskPaletteId += 1;
     const paletteId = `cm-skr-task-palette-${nextTaskPaletteId}`;
     const host = document.createElement("span");
-    host.className = "cm-skr-task-control";
+    host.className =
+      "cm-skr-task-control cm-skr-reveal-motion cm-skr-reveal-rendered";
     host.style.setProperty(
       "--skr-task-color",
       `var(${this.status.color_token})`,
@@ -689,10 +709,17 @@ class TaskCheckboxWidget extends WidgetType {
         Math.max(checkboxBounds.left, viewport.left + inset),
         maximumLeft,
       )}px`;
-      const spaceAbove = paletteAnchor.y - fingerGap - viewport.top;
+      // The corridor above the press point, already discounting the inset the
+      // menu must keep clear of the viewport edge, so a menu that "fits" can
+      // never land flush against the top of the screen.
+      const spaceAbove = paletteAnchor.y - fingerGap - (viewport.top + inset);
       if (spaceAbove >= bounds.height) {
         palette.dataset.motionSurface = "anchored-bottom";
-        palette.style.top = `${paletteAnchor.y - fingerGap - bounds.height}px`;
+        palette.style.top = `${Math.max(
+          viewport.top + inset,
+          paletteAnchor.y - fingerGap - bounds.height,
+        )}px`;
+        palette.style.maxHeight = `${Math.max(0, spaceAbove)}px`;
       } else {
         palette.dataset.motionSurface = "anchored-top";
         const top = paletteAnchor.y + fingerGap;
@@ -977,14 +1004,16 @@ class TaskCheckboxWidget extends WidgetType {
       if (keyboard || deliberateOpen) {
         queueMicrotask(() => palette.focus());
       }
-      if (deliberateOpen) {
-        removeOutsidePress?.();
-        removeOutsidePress = attachMenuDismissal(palette, {
-          onDismiss: () => closePalette(true),
-          ignore: [box],
-          escape: false,
-        });
-      }
+      // Every open mode gets the shared dismissal guarantees, not only the
+      // deliberate one: a menu summoned by hover or by the keyboard is just
+      // as capable of outliving the window that owns it. Only the focus
+      // return differs, because only a menu that took focus can give it back.
+      removeOutsidePress?.();
+      removeOutsidePress = attachMenuDismissal(palette, {
+        onDismiss: () => closePalette(keyboardOperable),
+        ignore: [box],
+        escape: false,
+      });
     };
 
     const advance = () => {
@@ -1178,23 +1207,44 @@ class TaskCheckboxWidget extends WidgetType {
         event.preventDefault();
         event.stopPropagation();
         closePalette(true);
+      } else if (event.key === "Tab") {
+        // Tab leaves the menu, and the control it came from is where focus
+        // belongs; without this the browser resolves the next tab stop from
+        // the menu surface and drops focus into the note body instead.
+        event.preventDefault();
+        event.stopPropagation();
+        closePalette(true);
       }
     });
-    host.addEventListener("pointerenter", (event) => {
-      if (event.pointerType !== "touch" && (event.buttons ?? 0) === 0) {
-        openPalette("hover", { x: event.clientX, y: event.clientY });
-      }
-    });
-    host.addEventListener("pointerleave", () => {
-      if (
-        press === null &&
-        !deliberateOpen &&
-        pendingDateStatus === null &&
-        !host.contains(document.activeElement)
-      ) {
-        closePalette(false);
-      }
-    });
+    // Hover is an intent, not a trigger: the menu waits out the shared
+    // pointer-rest delay so a pass across a task line shows nothing, and once
+    // open it survives the travel from the 1em checkbox to the menu through
+    // the shared safe-triangle corridor. Without the corridor the menu dies
+    // in the gap and the reader has to race it.
+    taskControlCleanups.set(
+      host,
+      attachHoverIntent({
+        anchor: box,
+        surface: palette,
+        isOpen: () => !palette.hidden,
+        openDelay: () =>
+          hoverIntentDelay(view.dom.ownerDocument.documentElement),
+        open: (point) => {
+          if (press !== null) return;
+          openPalette("hover", point);
+        },
+        close: () => {
+          if (
+            press === null &&
+            !deliberateOpen &&
+            pendingDateStatus === null &&
+            !host.contains(document.activeElement)
+          ) {
+            closePalette(false);
+          }
+        },
+      }),
+    );
     host.addEventListener("focusout", () => {
       queueMicrotask(() => {
         if (!deliberateOpen && !host.contains(document.activeElement)) {
@@ -1204,6 +1254,11 @@ class TaskCheckboxWidget extends WidgetType {
     });
     host.append(box, palette);
     return host;
+  }
+
+  override destroy(dom: HTMLElement): void {
+    taskControlCleanups.get(dom)?.();
+    taskControlCleanups.delete(dom);
   }
 
   override ignoreEvent(): boolean {
@@ -1227,9 +1282,9 @@ class MathWidget extends WidgetType {
 
   override toDOM(): HTMLElement {
     const host = document.createElement(this.displayMode ? "div" : "span");
-    host.className = this.displayMode
-      ? "cm-skr-math cm-skr-math-block"
-      : "cm-skr-math cm-skr-math-inline";
+    host.className = `cm-skr-math cm-skr-reveal-motion cm-skr-reveal-rendered ${
+      this.displayMode ? "cm-skr-math-block" : "cm-skr-math-inline"
+    }`;
     host.setAttribute("role", "img");
     host.setAttribute(
       "aria-label",
@@ -1258,7 +1313,8 @@ class MermaidWidget extends WidgetType {
   override toDOM(view: EditorView): HTMLElement {
     nextMermaidId += 1;
     const host = document.createElement("div");
-    host.className = "cm-skr-mermaid";
+    host.className =
+      "cm-skr-mermaid cm-skr-reveal-motion cm-skr-reveal-rendered";
     host.setAttribute("role", "img");
     host.setAttribute("aria-label", STRINGS.mermaidDiagramLabel);
     host.textContent = STRINGS.mermaidLoading;
@@ -1647,6 +1703,36 @@ function dispatchTableWidgetCommand(
   );
 }
 
+/**
+ * The cell offset a document-edge or line-edge key addresses.
+ *
+ * A rendered cell is one field, not a line of prose: it declares
+ * `aria-multiline="false"` and holds a single logical line that wraps to
+ * whatever width its column has. Every key here therefore addresses the
+ * cell's own bounds. A key left to the engine is resolved against the
+ * host document instead, because the cell's editable surface is nested
+ * inside the note's: the engine walks its own line boxes, so `End` stops
+ * at a wrap point in a cell wide enough to wrap and `Control-End` leaves
+ * the cell entirely, landing the caret in the note while the cell still
+ * holds the editing session. Engines disagree on all of it, so the cell
+ * resolves these keys itself rather than inheriting one engine's answer.
+ */
+function cellCaretTarget(
+  nested: EditorView,
+  event: KeyboardEvent,
+): number | null {
+  switch (event.key) {
+    case "Home":
+    case "PageUp":
+      return 0;
+    case "End":
+    case "PageDown":
+      return nested.state.doc.length;
+    default:
+      return null;
+  }
+}
+
 function handleTableCellKey(event: KeyboardEvent, nested: EditorView): boolean {
   const owner = nestedTableCellParents.get(nested);
   if (owner === undefined) {
@@ -1676,6 +1762,16 @@ function handleTableCellKey(event: KeyboardEvent, nested: EditorView): boolean {
     event.stopPropagation();
     return true;
   };
+  const caretTarget = cellCaretTarget(nested, event);
+  if (caretTarget !== null) {
+    nested.dispatch({
+      selection: event.shiftKey
+        ? { anchor: selection.anchor, head: caretTarget }
+        : { anchor: caretTarget },
+      scrollIntoView: true,
+    });
+    return stop();
+  }
   if (
     event.shiftKey &&
     ((event.key === "ArrowLeft" && headAtStart) ||
@@ -2288,6 +2384,18 @@ class TableWidget extends WidgetType {
           session?.tableFrom === this.layout.from &&
           session.row === layoutCell.row &&
           session.column === layoutCell.column;
+        // Edge whitespace the user is mid-typing exists in the nested view
+        // but parses as column padding in the document, so the document
+        // round trip reads back without it. While this cell owns the
+        // caret, a trim-equal difference must not rebuild the nested doc
+        // out from under the typed spaces; the next cell write re-emits
+        // the full typed content anyway.
+        if (
+          active &&
+          nested.state.doc.toString().trim() === layoutCell.source
+        ) {
+          continue;
+        }
         const anchor = Math.min(
           layoutCell.source.length,
           active ? session.anchor : nested.state.selection.main.anchor,
@@ -2887,6 +2995,177 @@ class EmbedWidget extends WidgetType {
   }
 }
 
+/**
+ * A rendered Markdown image. Every source, remote or vault-local, reaches
+ * the document only as the `src` of an `<img>`: no image bytes are ever
+ * parsed into the DOM, so an SVG in a note renders in the user agent's
+ * secure static mode and carries no script, external reference, or
+ * interactivity. Vault bytes become a blob typed from the extension
+ * allowlist in `images.ts`, and the object URL is revoked with the widget.
+ *
+ * The frame follows the shared asynchronous-content rules: nothing appears
+ * for the grace period, a placeholder holds the space after it, and a
+ * target that fails or is absent swaps to the failure treatment in place
+ * rather than leaving a gap.
+ */
+class ImageWidget extends WidgetType {
+  private readonly cleanups = new WeakMap<HTMLElement, () => void>();
+
+  constructor(
+    readonly source: ImageSource,
+    readonly alt: string,
+    readonly title: string,
+    readonly context: WikilinkResolutionContext,
+  ) {
+    super();
+  }
+
+  override eq(other: ImageWidget): boolean {
+    return (
+      JSON.stringify(other.source) === JSON.stringify(this.source) &&
+      other.alt === this.alt &&
+      other.title === this.title &&
+      other.context.loadAsset === this.context.loadAsset &&
+      other.context.loadNote === this.context.loadNote
+    );
+  }
+
+  private accessibleName(): string {
+    if (this.alt.length > 0) {
+      return this.alt;
+    }
+    const target =
+      this.source.kind === "vault"
+        ? this.source.path
+        : this.source.kind === "missing"
+          ? this.source.target
+          : this.source.url;
+    return imageFileName(target);
+  }
+
+  /**
+   * Resolves the element source, minting a blob URL for vault bytes. A
+   * vector image is text, so the note loader supplies it where the byte
+   * loader is absent; a raster format has no text reading and reaches the
+   * failure state instead.
+   */
+  private async elementSource(): Promise<{
+    url: string;
+    revoke: boolean;
+  } | null> {
+    if (this.source.kind === "direct") {
+      return { url: this.source.url, revoke: false };
+    }
+    if (this.source.kind === "missing") {
+      return null;
+    }
+    const { path, mediaType } = this.source;
+    const body =
+      this.context.loadAsset !== undefined
+        ? await this.context.loadAsset(path)
+        : mediaType === TEXT_IMAGE_MEDIA_TYPE
+          ? await (this.context.loadNote?.(path) ?? Promise.resolve(null))
+          : null;
+    if (body === null) {
+      return null;
+    }
+    const blob = new Blob([body as BlobPart], { type: mediaType });
+    return { url: URL.createObjectURL(blob), revoke: true };
+  }
+
+  override toDOM(view: EditorView): HTMLElement {
+    const host = document.createElement("span");
+    host.className = "cm-skr-image cm-skr-reveal-motion cm-skr-reveal-rendered";
+    host.dataset.imageSource = this.source.kind;
+    const name = this.accessibleName();
+    const body = document.createElement("span");
+    body.className = "cm-skr-image-body";
+    host.append(body);
+
+    let objectUrl: string | null = null;
+    const releaseObjectUrl = () => {
+      if (objectUrl !== null) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+    };
+    let stopRequest = () => {};
+    const begin = () => {
+      stopRequest();
+      releaseObjectUrl();
+      body.className = "cm-skr-image-body skr-loading-region skr-loading-embed";
+      stopRequest = runAsyncContent<HTMLImageElement | null>({
+        host: body,
+        kind: "embed",
+        load: async () => {
+          const resolved = await this.elementSource();
+          if (resolved === null) {
+            return null;
+          }
+          if (resolved.revoke) {
+            objectUrl = resolved.url;
+          }
+          const element = document.createElement("img");
+          element.className = "cm-skr-image-frame";
+          element.alt = name;
+          if (this.title.length > 0) {
+            element.title = this.title;
+          }
+          element.decoding = "async";
+          element.src = resolved.url;
+          await element.decode();
+          return element;
+        },
+        unavailable: (element) => element === null,
+        onRetry: begin,
+        render: (element) => {
+          if (element === null) {
+            return;
+          }
+          body.className = "cm-skr-image-body";
+          body.replaceChildren(element);
+          view.requestMeasure();
+        },
+      });
+    };
+    begin();
+    this.cleanups.set(host, () => {
+      stopRequest();
+      releaseObjectUrl();
+    });
+    return host;
+  }
+
+  override destroy(dom: HTMLElement): void {
+    this.cleanups.get(dom)?.();
+    this.cleanups.delete(dom);
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/** A thematic break as the rule it stands for, not its source delimiter. */
+class ThematicBreakWidget extends WidgetType {
+  override eq(): boolean {
+    return true;
+  }
+
+  override toDOM(): HTMLElement {
+    const host = document.createElement("div");
+    host.className =
+      "cm-skr-thematic-break cm-skr-reveal-motion cm-skr-reveal-rendered";
+    host.setAttribute("role", "separator");
+    host.setAttribute("aria-label", STRINGS.thematicBreakLabel);
+    return host;
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
 class CalloutIconWidget extends WidgetType {
   constructor(readonly type: string) {
     super();
@@ -2915,7 +3194,8 @@ function isBlockWidgetRule(rule: DecorationRule): boolean {
     rule.presentation.place !== "before" &&
     (rule.presentation.widget === "math-block" ||
       rule.presentation.widget === "mermaid-diagram" ||
-      rule.presentation.widget === "table")
+      rule.presentation.widget === "table" ||
+      rule.presentation.widget === "thematic-break")
   );
 }
 
@@ -3265,6 +3545,38 @@ function dynamicAttributes(
       const date = source.slice(-10);
       return { "data-overdue": date < localIsoDate() ? "true" : "false" };
     }
+    case "inline-image":
+    case "reference-image": {
+      const parsed = imageParts(node, doc);
+      const source =
+        parsed === null ? null : resolveImageSource(parsed.target, wikilinks);
+      if (rule.dynamic === "reference-image") {
+        return source === null ? {} : null;
+      }
+      return source === null ? null : {};
+    }
+    case "footnote-reference": {
+      const label = footnoteLabel(node, doc);
+      return label === null
+        ? null
+        : {
+            "data-footnote": label,
+            "data-footnote-role": "reference",
+            role: "doc-noteref",
+            "aria-label": `${STRINGS.footnoteReferenceLabel} ${label}`,
+          };
+    }
+    case "footnote-definition": {
+      const label = footnoteLabel(node, doc);
+      return label === null
+        ? null
+        : {
+            "data-footnote": label,
+            "data-footnote-role": "definition",
+            role: "doc-backlink",
+            "aria-label": `${STRINGS.footnoteDefinitionLabel} ${label}`,
+          };
+    }
     case "tag-search": {
       const tag = doc.sliceString(node.from + 1, node.to);
       return {
@@ -3418,6 +3730,43 @@ function mermaidSource(node: SyntaxNode, doc: Text): string {
   return lines.join("\n").trim();
 }
 
+type ImageParts = { alt: string; target: string; title: string };
+
+/**
+ * The alt text, target and optional title of an inline image. The alt run
+ * is the source between the opening `![` and the `]` that closes it, which
+ * the tree gives as the first two link marks; a reference-style image has
+ * no URL child and produces null.
+ */
+function imageParts(node: SyntaxNode, doc: Text): ImageParts | null {
+  const url = node.getChild("URL");
+  if (url === null) {
+    return null;
+  }
+  const marks = node.getChildren("LinkMark");
+  const open = marks[0];
+  const close = marks[1];
+  const title = node.getChild("LinkTitle");
+  return {
+    alt:
+      open === undefined || close === undefined
+        ? ""
+        : doc.sliceString(open.to, close.from),
+    target: doc.sliceString(url.from, url.to),
+    title:
+      title === null
+        ? ""
+        : doc.sliceString(title.from, title.to).replace(/^["'(]|["')]$/gu, ""),
+  };
+}
+
+/** The label of a footnote reference or definition node. */
+function footnoteLabel(node: SyntaxNode, doc: Text): string | null {
+  const label =
+    node.name === "FootnoteLabel" ? node : node.getChild("FootnoteLabel");
+  return label === null ? null : doc.sliceString(label.from, label.to);
+}
+
 function widgetFor(
   widget: Extract<Presentation, { present: "widget" }>["widget"],
   node: SyntaxNode,
@@ -3501,6 +3850,31 @@ function widgetFor(
         attributes: { role: "group", "data-target": targetText },
       };
     }
+    case "image": {
+      const parsed = imageParts(node, doc);
+      const source =
+        parsed === null ? null : resolveImageSource(parsed.target, wikilinks);
+      if (parsed === null || source === null) {
+        throw new Error("image widget requires a resolvable target");
+      }
+      return {
+        widget: new ImageWidget(source, parsed.alt, parsed.title, wikilinks),
+        block: false,
+        attributes: {
+          "data-image-source": source.kind,
+          "data-image-target": parsed.target,
+        },
+      };
+    }
+    case "thematic-break":
+      return {
+        widget: new ThematicBreakWidget(),
+        block: true,
+        attributes: {
+          role: "separator",
+          "aria-label": STRINGS.thematicBreakLabel,
+        },
+      };
     case "code-copy":
       return {
         widget: new CodeCopyWidget(fencedCodeSource(node, doc)),
@@ -3649,8 +4023,11 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 activeReveal.to <= ref.to &&
                 line.from >= activeReveal.from &&
                 line.to <= activeReveal.to;
+              // Any line-scope rule the caret can turn into source carries
+              // the motion class, so a block that swaps whole lines between
+              // its rendered and source forms has a node to animate.
               if (
-                rule.dynamic === "rich-callout" &&
+                (rule.dynamic === "rich-callout" || rule.reveal !== "never") &&
                 line.to > line.from &&
                 !nestedActiveLine
               ) {
@@ -3667,7 +4044,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                     to: line.to,
                     decoration: Decoration.mark({
                       class: motionClass,
-                      skr: `motion ${revealedNow ? "source" : "rendered"}=callout`,
+                      skr: `motion ${revealedNow ? "source" : "rendered"}=${rule.node}`,
                     }),
                   });
                 }
@@ -3717,13 +4094,6 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             });
             continue;
           }
-          // A revealed rule emits nothing, so the source shows through. The
-          // exception is a cursor-line reveal, which still emits a marker
-          // carrying its active state so the transition has something to
-          // animate between.
-          if (revealedNow && rule.reveal !== "cursor-line") {
-            continue;
-          }
           if (presentation.present === "hide") {
             let hideFrom = ref.from;
             let hideTo = ref.to;
@@ -3734,21 +4104,35 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 hideFrom -= 1;
               }
             }
-            if (rule.reveal === "cursor-line") {
-              const className = revealedNow
-                ? "cm-skr-reveal-marker cm-skr-reveal-marker-active"
-                : "cm-skr-reveal-marker";
+            // Every revealed marker carries the marker class, whatever
+            // brought it back. The glyph is the thing the reader watches
+            // arrive, so it is the thing that needs a node of its own to
+            // animate; a construct whose marks came back as bare document
+            // text had nothing to animate and popped into place.
+            if (revealedNow) {
               built.push({
                 from: hideFrom,
                 to: hideTo,
                 decoration: Decoration.mark({
-                  class: className,
-                  skr: `${revealedNow ? "reveal" : "hide"} node=${rule.node}`,
+                  class: "cm-skr-reveal-marker cm-skr-reveal-marker-active",
+                  skr: `reveal node=${rule.node}`,
                 }),
               });
               continue;
             }
-            if (revealedNow) {
+            // A line-scope marker keeps its node while hidden, reserving no
+            // width, so the line's geometry is settled before the caret ever
+            // arrives. An inside-scope marker is replaced outright: its
+            // characters must stay out of the caret's path.
+            if (rule.reveal === "cursor-line") {
+              built.push({
+                from: hideFrom,
+                to: hideTo,
+                decoration: Decoration.mark({
+                  class: "cm-skr-reveal-marker",
+                  skr: `hide node=${rule.node}`,
+                }),
+              });
               continue;
             }
             built.push({
@@ -3757,6 +4141,18 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               decoration: Decoration.replace({
                 atomic: true,
                 skr: `hide node=${rule.node}`,
+              }),
+            });
+          } else if (revealedNow) {
+            // A revealed mark or widget emits no presentation of its own, so
+            // the source shows through. It still carries the motion class, so
+            // the form that just arrived can be animated in place.
+            built.push({
+              from: ref.from,
+              to: ref.to,
+              decoration: Decoration.mark({
+                class: "cm-skr-reveal-motion cm-skr-reveal-source",
+                skr: `motion source=${rule.node}`,
               }),
             });
           } else if (presentation.present === "widget") {
@@ -3791,7 +4187,8 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               });
               if (
                 presentation.widget === "embed" ||
-                presentation.widget === "table"
+                presentation.widget === "table" ||
+                presentation.widget === "image"
               ) {
                 // Complete replacements own their syntax subtrees. Descendant
                 // decorations overlap the atomic range and can displace the
@@ -3800,9 +4197,14 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               }
             }
           } else {
-            const motionClass = ["Link", "Image", "Wikilink"].includes(
-              rule.node,
-            )
+            // Any rule the caret can turn into source carries the motion
+            // class in both forms, so whichever form arrives has a node to
+            // animate. A rule the caret never changes carries none: an
+            // element that never swaps has nothing to animate between.
+            const swaps =
+              rule.reveal !== "never" ||
+              ["Link", "Image", "Wikilink"].includes(rule.node);
+            const motionClass = swaps
               ? `cm-skr-reveal-motion ${
                   activeRevealOwns(node)
                     ? "cm-skr-reveal-source"
@@ -3864,14 +4266,7 @@ function buildViewDecorations(view: EditorView): DecorationSet {
   const wikilinks =
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
   const taskStatuses = state.facet(taskStatusConfiguration);
-  const activeReveal = findActiveReveal(
-    state.doc,
-    syntaxTree(state),
-    table,
-    selection,
-    wikilinks,
-    taskStatuses,
-  );
+  const activeReveal = activeRevealIn(state);
   const ranges =
     view.visibleRanges.length > 0
       ? view.visibleRanges.map((range) => ({ from: range.from, to: range.to }))
@@ -3904,14 +4299,7 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
     selection,
     wikilinks,
     taskStatuses,
-    activeReveal: findActiveReveal(
-      state.doc,
-      syntaxTree(state),
-      table,
-      selection,
-      wikilinks,
-      taskStatuses,
-    ),
+    activeReveal: activeRevealIn(state),
     explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
   });
 }
@@ -3964,16 +4352,28 @@ function defersDecorationRebuild(
   );
 }
 
+/**
+ * Resolving the reveal walks the syntax tree around the caret, and several
+ * consumers want the same answer for the same state: the inline plugin, the
+ * block field, the deferred reveal refresh, and the motion driver. The result
+ * is a pure function of the state, and a state is immutable, so it is
+ * computed once and read back by everyone else.
+ */
+const revealRegionCache = new WeakMap<EditorState, RevealRegion | null>();
+
 function activeRevealIn(state: EditorState): RevealRegion | null {
-  const table = state.facet(decorationTable);
-  return findActiveReveal(
+  const cached = revealRegionCache.get(state);
+  if (cached !== undefined) return cached;
+  const region = findActiveReveal(
     state.doc,
     syntaxTree(state),
-    table,
+    state.facet(decorationTable),
     revealSelection(state),
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
     state.facet(taskStatusConfiguration),
   );
+  revealRegionCache.set(state, region);
+  return region;
 }
 
 function mappedReveal(
@@ -4128,6 +4528,171 @@ function deferredUpdateNeedsImmediateRebuild(update: ViewUpdate): boolean {
   return decorationInputsChanged(update.state, update.startState);
 }
 
+/** Whether a change rewrote the whole document rather than edited it. */
+function replacesWholeDocument(update: ViewUpdate): boolean {
+  if (!update.docChanged) return false;
+  let replaced = false;
+  update.changes.iterChangedRanges((fromA, toA) => {
+    if (fromA === 0 && toA === update.startState.doc.length) replaced = true;
+  });
+  return replaced;
+}
+
+/**
+ * Whether an update can have moved the reveal into a different construct.
+ * The motion follows the engine's own rebuilds: an update that only scrolled
+ * or remeasured cannot change what is revealed, and an input the engine
+ * defers has not rebuilt the DOM yet, so there is nothing new to animate
+ * until the deferred refresh lands. Both cases cost this plugin nothing,
+ * which is what keeps a keystroke in a large document off the syntax walk.
+ */
+function observesReveal(update: ViewUpdate): boolean {
+  if (update.transactions.some(refreshRequested)) return true;
+  if (
+    update.transactions.some((transaction) =>
+      defersDecorationRebuild(
+        transaction,
+        update.startState.field(blockEngineField, false)?.decorations,
+      ),
+    )
+  ) {
+    return false;
+  }
+  return (
+    update.docChanged ||
+    update.selectionSet ||
+    syntaxTree(update.state) !== syntaxTree(update.startState) ||
+    decorationInputsChanged(update.state, update.startState)
+  );
+}
+
+/**
+ * The reveal's motion. The decoration engine decides what a reveal looks
+ * like; this decides when it moves, which CSS cannot: CodeMirror builds a new
+ * node for a range whose decoration class changed, so the revealed form is
+ * always a fresh node already in its final state and no transition between
+ * the two forms can run. Watching the reveal region instead of watching
+ * elements is what keeps the motion honest — a node rebuilt for any other
+ * reason (a keystroke inside a revealed construct, a scroll bringing a
+ * heading into view, a note arriving) is not a reveal and must not animate.
+ */
+class RevealMotion {
+  private previous: RevealRegion | null;
+  private pending: {
+    previous: RevealRegion | null;
+    next: RevealRegion | null;
+  } | null = null;
+
+  constructor(view: EditorView) {
+    // The first observation is the view as it already is. A note opens with
+    // its caret wherever it was left, and that is a state, not an act.
+    this.previous = activeRevealIn(view.state);
+  }
+
+  update(update: ViewUpdate): void {
+    // The remembered region is mapped on every change, including the ones
+    // this plugin does no other work for: an input burst the engine defers
+    // still moves the text, and the region has to still describe the same
+    // construct when the deferred refresh finally lands.
+    if (update.docChanged && this.previous !== null) {
+      this.previous = {
+        ...this.previous,
+        from: update.changes.mapPos(this.previous.from, -1),
+        to: update.changes.mapPos(this.previous.to, 1),
+      };
+    }
+    if (!observesReveal(update)) return;
+    const previous = this.previous;
+    const next = activeRevealIn(update.state);
+    this.previous = next;
+    if (
+      (previous?.from === next?.from && previous?.to === next?.to) ||
+      replacesWholeDocument(update)
+    ) {
+      return;
+    }
+    this.pending = { previous, next };
+  }
+
+  /**
+   * Runs once the view has written this update out. A plugin sees an update
+   * before the DOM exists, and the next animation frame is already one paint
+   * too late: the revealed node would show at full strength for a frame and
+   * only then start fading in.
+   */
+  flush(view: EditorView): void {
+    const pending = this.pending;
+    this.pending = null;
+    if (pending === null) return;
+    this.play(view, pending.previous, pending.next);
+  }
+
+  private within(
+    view: EditorView,
+    element: HTMLElement,
+    region: RevealRegion,
+  ): boolean {
+    try {
+      const position = view.posAtDOM(element);
+      return position >= region.from && position <= region.to;
+    } catch {
+      return false;
+    }
+  }
+
+  private play(
+    view: EditorView,
+    previous: RevealRegion | null,
+    next: RevealRegion | null,
+  ): void {
+    if (next !== null) {
+      for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+        ".cm-skr-reveal-marker-active",
+      )) {
+        if (this.within(view, element, next)) playGlyphEntrance(element);
+      }
+      for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+        ".cm-skr-reveal-source",
+      )) {
+        // A construct whose markers are arriving has already said what
+        // changed. Fading the whole form as well would multiply the two
+        // opacities and darken the text that never changed at all.
+        if (
+          element.querySelector(".cm-skr-reveal-marker-active") !== null ||
+          !this.within(view, element, next)
+        ) {
+          continue;
+        }
+        playFormEntrance(element);
+      }
+    }
+    if (previous === null) return;
+    // The construct the caret just left: its markers are hidden again and its
+    // rendered form is back, both as nodes built in this same frame.
+    for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+      ".cm-skr-reveal-marker:not(.cm-skr-reveal-marker-active)",
+    )) {
+      if (this.within(view, element, previous)) playGlyphExit(element);
+    }
+    for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
+      ".cm-skr-reveal-rendered",
+    )) {
+      if (this.within(view, element, previous)) playFormEntrance(element);
+    }
+  }
+}
+
+const revealMotionPlugin = ViewPlugin.fromClass(RevealMotion);
+
+/**
+ * The reveal's motion runs from an update listener rather than from the
+ * plugin's own update, because a plugin is told about an update before the
+ * view has written it to the DOM: the node to animate does not exist yet.
+ */
+const revealMotionDriver = EditorView.updateListener.of((update) => {
+  update.view.plugin(revealMotionPlugin)?.flush(update.view);
+});
+
 const enginePlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
@@ -4239,45 +4804,6 @@ type PreloadedNote = {
   status: "pending" | "settled";
   source: Promise<string | null>;
 };
-
-function triangleArea(
-  a: PreviewPoint,
-  b: PreviewPoint,
-  c: PreviewPoint,
-): number {
-  return Math.abs(
-    (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y)) / 2,
-  );
-}
-
-/** Tests the safe-triangle corridor from a departed link to its preview. */
-export function pointInPreviewCone(
-  point: PreviewPoint,
-  origin: PreviewPoint,
-  panel: Pick<DOMRect, "left" | "right" | "top" | "bottom">,
-): boolean {
-  let first: PreviewPoint;
-  let second: PreviewPoint;
-  if (origin.x <= panel.left) {
-    first = { x: panel.left, y: panel.top - 12 };
-    second = { x: panel.left, y: panel.bottom + 12 };
-  } else if (origin.x >= panel.right) {
-    first = { x: panel.right, y: panel.top - 12 };
-    second = { x: panel.right, y: panel.bottom + 12 };
-  } else if (origin.y <= panel.top) {
-    first = { x: panel.left - 12, y: panel.top };
-    second = { x: panel.right + 12, y: panel.top };
-  } else {
-    first = { x: panel.left - 12, y: panel.bottom };
-    second = { x: panel.right + 12, y: panel.bottom };
-  }
-  const whole = triangleArea(origin, first, second);
-  const parts =
-    triangleArea(point, first, second) +
-    triangleArea(origin, point, second) +
-    triangleArea(origin, first, point);
-  return Math.abs(parts - whole) < 0.75;
-}
 
 class LinkPreviewController {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -4610,7 +5136,7 @@ class LinkPreviewController {
       return;
     }
     if (
-      pointInPreviewCone(
+      pointInMenuCone(
         { x: event.clientX, y: event.clientY },
         this.leavePoint,
         this.panel.getBoundingClientRect(),
@@ -4884,6 +5410,71 @@ const calloutPointerMapping = EditorView.domEventHandlers({
   },
 });
 
+/**
+ * The counterpart of a footnote node: a reference points at its
+ * definition, and a definition points back at the first reference that
+ * cites it. Returns the document position to travel to, or null when the
+ * note has no counterpart.
+ */
+function footnoteCounterpart(
+  state: EditorState,
+  label: string,
+  from: "reference" | "definition",
+): number | null {
+  const wanted =
+    from === "reference" ? "FootnoteDefinition" : "FootnoteReference";
+  let target: number | null = null;
+  syntaxTree(state).iterate({
+    enter(ref) {
+      if (target !== null || ref.name !== wanted) {
+        return undefined;
+      }
+      if (footnoteLabel(ref.node, state.doc) === label) {
+        target = ref.from;
+      }
+      return undefined;
+    },
+  });
+  return target;
+}
+
+/**
+ * A rendered footnote travels to its counterpart on activation, which is
+ * the navigation the construct exists for: a reference jumps to the note
+ * it cites, and the note's own marker returns to the citation. The caret
+ * lands on the counterpart, so the reveal model then shows that construct
+ * as source exactly as arriving by keyboard would.
+ */
+const footnotePointerNavigation = Prec.high(
+  EditorView.domEventHandlers({
+    mousedown(event, view) {
+      if (event.button !== 0 || !(event.target instanceof Element)) {
+        return false;
+      }
+      const element = event.target.closest<HTMLElement>("[data-footnote-role]");
+      const label = element?.dataset.footnote;
+      const role = element?.dataset.footnoteRole;
+      if (
+        element === null ||
+        element === undefined ||
+        label === undefined ||
+        (role !== "reference" && role !== "definition") ||
+        !view.dom.contains(element)
+      ) {
+        return false;
+      }
+      const anchor = footnoteCounterpart(view.state, label, role);
+      if (anchor === null) {
+        return false;
+      }
+      event.preventDefault();
+      view.focus();
+      view.dispatch({ selection: { anchor }, scrollIntoView: true });
+      return true;
+    },
+  }),
+);
+
 function syncTableSelection(view: EditorView): void {
   const selection = view.state.selection.main;
   for (const grid of view.dom.querySelectorAll<HTMLElement>(
@@ -5113,8 +5704,11 @@ const engineTheme = EditorView.baseTheme({
     verticalAlign: "bottom",
     whiteSpace: "pre",
   },
+  // The revealed marker takes its natural width: the space was reserved in
+  // the frame the caret arrived, with no transition on any geometry, so the
+  // text around it has already settled by the time the glyph animates.
   ".cm-skr-reveal-marker-active": {
-    maxWidth: "7ch",
+    maxWidth: "none",
     opacity: "1",
   },
   ".cm-skr-emphasis": { fontStyle: "italic" },
@@ -5163,6 +5757,76 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-embed.cm-skr-embed-failed": {
     borderLeftColor: "var(--skr-danger)",
   },
+  // An image occupies the reading column and never widens it: the frame
+  // scales down to the measure and keeps its intrinsic ratio, so the
+  // shared left edge holds and the page never scrolls sideways.
+  ".cm-skr-image": {
+    boxSizing: "border-box",
+    display: "inline-block",
+    maxWidth: "100%",
+    verticalAlign: "top",
+  },
+  ".cm-skr-image-body": {
+    display: "block",
+  },
+  ".cm-skr-image-frame": {
+    display: "block",
+    maxWidth: "100%",
+    height: "auto",
+    borderRadius: "var(--skr-radius-surface)",
+  },
+  // While the bytes are outstanding the frame holds the shared placeholder
+  // treatment, and a target that fails or is absent keeps that frame with
+  // a danger-tinted leading rule rather than leaving a gap in the prose.
+  ".cm-skr-image-body[data-loading-state='pending'], .cm-skr-image-body[data-loading-state='skeleton'], .cm-skr-image-body[data-loading-state='failure']":
+    {
+      display: "flex",
+      minWidth: "14rem",
+      flexDirection: "column",
+      alignItems: "flex-start",
+      gap: "0.5rem",
+      borderLeftWidth: "3px",
+      borderLeftStyle: "solid",
+      borderLeftColor: "var(--skr-accent)",
+      borderTopRightRadius: "var(--skr-radius-surface)",
+      borderBottomRightRadius: "var(--skr-radius-surface)",
+      backgroundColor: "var(--skr-surface-subtle)",
+    },
+  ".cm-skr-image-body[data-loading-state='failure']": {
+    borderLeftColor: "var(--skr-danger)",
+  },
+  // A thematic break is the rule it stands for. The line reserves the
+  // vertical rhythm and the rule sits on the shared left edge.
+  ".cm-skr-thematic-break": {
+    display: "block",
+    width: "100%",
+    height: "0px",
+    margin: "1rem 0",
+    borderTopWidth: "1px",
+    borderTopStyle: "solid",
+    borderTopColor: "var(--skr-border)",
+  },
+  ".cm-skr-footnote-ref": {
+    color: "var(--skr-link)",
+    cursor: "pointer",
+    fontSize: "0.78em",
+    fontWeight: "600",
+    verticalAlign: "super",
+    lineHeight: "0",
+  },
+  ".cm-line.cm-skr-footnote-definition": {
+    color: "var(--skr-text-muted)",
+    fontSize: "0.875em",
+  },
+  ".cm-skr-footnote-definition-label": {
+    color: "var(--skr-link)",
+    cursor: "pointer",
+    fontWeight: "600",
+  },
+  ".cm-skr-footnote-definition-label::after": {
+    content: "'.'",
+    color: "var(--skr-text-muted)",
+  },
   ".cm-skr-embed-header": {
     display: "block",
     padding: "0.35rem 0.6rem",
@@ -5202,7 +5866,7 @@ const engineTheme = EditorView.baseTheme({
     color: "var(--skr-text-muted)",
     backgroundColor: "var(--skr-surface-raised)",
     fontFamily: "var(--skr-font-interface)",
-    fontSize: "13px",
+    fontSize: "var(--skr-type-control)",
     fontWeight: "400",
   },
   ".cm-skr-link-preview-body": { padding: "0.75rem 1rem" },
@@ -5307,7 +5971,7 @@ const engineTheme = EditorView.baseTheme({
     padding: "0.35rem 0.5rem 0.15rem",
     color: "var(--skr-text-muted)",
     fontFamily: "var(--skr-font-interface)",
-    fontSize: "12px",
+    fontSize: "var(--skr-type-label)",
     fontWeight: "700",
     letterSpacing: "0.08em",
     lineHeight: "1.2",
@@ -5337,7 +6001,7 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-task-option-name": {
     overflow: "hidden",
-    fontSize: "0.82em",
+    fontSize: "0.8125em",
     lineHeight: "1.3",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
@@ -5381,7 +6045,10 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-inline-code": {
     fontFamily: "var(--skr-font-mono)",
-    fontSize: "0.9em",
+    // The code tier is one size: an inline span and a fenced block render
+    // the same concept and must measure the same, so both take 0.875em of
+    // their context rather than one taking a slightly larger ratio.
+    fontSize: "0.875em",
     fontWeight: "400",
     backgroundColor: "var(--skr-code-surface)",
     borderRadius: "var(--skr-radius-control)",
@@ -5667,11 +6334,14 @@ export function decorationEngine(
     explicitTableSourceField,
     blockEngineField,
     enginePlugin,
+    revealMotionPlugin,
+    revealMotionDriver,
     linkPreviewPlugin,
     linkPreviewKeys,
     EditorView.atomicRanges.of(atomicDecorations),
     frontmatterCursorGuard,
     calloutPointerMapping,
+    footnotePointerNavigation,
     tableSessionPlugin,
     engineTheme,
   ];

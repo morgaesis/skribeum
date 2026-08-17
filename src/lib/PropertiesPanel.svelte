@@ -33,9 +33,9 @@ let {
 
 const panelContentId = "skr-properties-content";
 
-let addKeyElement = $state<HTMLElement | undefined>();
-let addValueElement = $state<HTMLElement | undefined>();
-let addRowElement = $state<HTMLElement | undefined>();
+let addKeyElement = $state<HTMLElement | null>();
+let addValueElement = $state<HTMLElement | null>();
+let addRowElement = $state<HTMLElement | null>();
 // Tracked alongside the CSS :hover rule below (real pointer hover keeps
 // working through :hover directly) so the reveal is also driven by an
 // observable pointer event, matching the reveal pattern used elsewhere
@@ -120,7 +120,7 @@ function focusEditable(event: MouseEvent) {
 }
 
 $effect(() => {
-  if (adding && addKeyElement !== undefined) {
+  if (adding && addKeyElement instanceof HTMLElement) {
     addKeyElement.focus();
   }
 });
@@ -158,7 +158,7 @@ function additionKeydown(event: KeyboardEvent, cell: "key" | "value") {
 function additionFocusout(event: FocusEvent) {
   const next = event.relatedTarget;
   if (
-    addRowElement !== undefined &&
+    addRowElement instanceof HTMLElement &&
     next instanceof Node &&
     addRowElement.contains(next)
   ) {
@@ -343,7 +343,7 @@ function additionFocusout(event: FocusEvent) {
     background: transparent;
     color: var(--skr-text-muted);
     font-family: inherit;
-    font-size: 12px;
+    font-size: var(--skr-type-label);
     font-weight: 600;
     letter-spacing: 0.05em;
     line-height: 1.4;
@@ -432,7 +432,7 @@ function additionFocusout(event: FocusEvent) {
     box-sizing: border-box;
     padding-right: 0.75rem;
     color: var(--skr-text-muted);
-    font-size: 13px;
+    font-size: var(--skr-type-control);
     line-height: 1.75rem;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -442,7 +442,7 @@ function additionFocusout(event: FocusEvent) {
     display: flex;
     min-width: 0;
     align-items: center;
-    font-size: 13px;
+    font-size: var(--skr-type-control);
   }
 
   .skr-property-editable {
@@ -544,7 +544,7 @@ function additionFocusout(event: FocusEvent) {
     background: transparent;
     color: var(--skr-text-muted);
     font-family: inherit;
-    font-size: 13px;
+    font-size: var(--skr-type-control);
     font-weight: 400;
     text-align: left;
     cursor: pointer;

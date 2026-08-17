@@ -16,11 +16,17 @@ import {
   vi,
 } from "vitest";
 import Dialog from "../../src/lib/Dialog.svelte";
+import {
+  playFormEntrance,
+  playGlyphEntrance,
+  playGlyphExit,
+} from "../../src/lib/editor/motion";
 import FileTree from "../../src/lib/FileTree.svelte";
 import type { TreeEntry } from "../../src/lib/ipc/bindings";
+import { enterMotionSurface } from "../../src/lib/motion";
 import TabStrip from "../../src/lib/TabStrip.svelte";
 import type { WorkspaceTab } from "../../src/lib/workspaceState";
-import { reactiveProps } from "./helpers/reactiveProps.svelte";
+import { reactiveState } from "./helpers/reactiveState.svelte";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -81,6 +87,51 @@ function loadedDeclarations(selector: string, property: string): string[] {
   };
   for (const sheet of document.styleSheets) visit(sheet.cssRules);
   return values;
+}
+
+/** The `!important` priority of a loaded declaration, for rules that need it. */
+function loadedPriorities(selector: string, property: string): string[] {
+  const priorities: string[] = [];
+  const visit = (rules: CSSRuleList) => {
+    for (const rule of Array.from(rules)) {
+      if (
+        rule instanceof CSSStyleRule &&
+        rule.selectorText
+          .split(",")
+          .map((value) => value.trim())
+          .includes(selector) &&
+        rule.style.getPropertyValue(property).trim() !== ""
+      ) {
+        priorities.push(rule.style.getPropertyPriority(property));
+      }
+      if ("cssRules" in rule) visit((rule as CSSGroupingRule).cssRules);
+    }
+  };
+  for (const sheet of document.styleSheets) visit(sheet.cssRules);
+  return priorities;
+}
+
+/** The stops of a named keyframes rule, in source order. */
+function keyframeStops(name: string): [string, Record<string, string>][] {
+  const stops: [string, Record<string, string>][] = [];
+  for (const sheet of document.styleSheets) {
+    for (const rule of Array.from(sheet.cssRules)) {
+      if (!(rule instanceof CSSKeyframesRule) || rule.name !== name) continue;
+      for (const frame of Array.from(rule.cssRules)) {
+        if (!(frame instanceof CSSKeyframeRule)) continue;
+        const declarations: Record<string, string> = {};
+        for (const property of Array.from(frame.style)) {
+          declarations[property] = frame.style
+            .getPropertyValue(property)
+            .trim();
+        }
+        for (const key of frame.keyText.split(",")) {
+          stops.push([key.trim(), declarations]);
+        }
+      }
+    }
+  }
+  return stops;
 }
 
 function loadedMediaDeclarations(
@@ -281,6 +332,34 @@ describe("transient surface exits", () => {
   });
 });
 
+describe("surface compositor hints", () => {
+  it("never leaves a will-change on an idle surface", () => {
+    // A transform hint promotes its element to the containing block for
+    // fixed-position descendants. A permanently mounted surface carrying one
+    // silently reparents every menu inside it, which paints the menu at the
+    // surface's own origin instead of the viewport's.
+    expect(loadedDeclarations("[data-motion-surface]", "will-change")).toEqual(
+      [],
+    );
+    const probe = surfaceProbe("fade");
+    expect(getComputedStyle(probe).willChange).not.toContain("transform");
+  });
+
+  it("holds the hint only while the surface is moving, and only for what moves", async () => {
+    const fade = surfaceProbe("fade");
+    enterMotionSurface(fade);
+    expect(fade.style.willChange).toBe("opacity");
+
+    const anchored = surfaceProbe("anchored-top");
+    enterMotionSurface(anchored);
+    expect(anchored.style.willChange).toBe("opacity, transform");
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(fade.style.willChange).toBe("");
+    expect(anchored.style.willChange).toBe("");
+  });
+});
+
 describe("reveal marker glyph motion", () => {
   function markerProbe(): HTMLElement {
     const probe = document.createElement("span");
@@ -290,49 +369,199 @@ describe("reveal marker glyph motion", () => {
     return probe;
   }
 
-  it("rests hidden with an opacity and reading-direction translate ready to animate", () => {
+  /**
+   * Records what the driver asks the compositor for. The editor plays these
+   * animations rather than declaring transitions because the view rebuilds a
+   * marker's node whenever its decoration class changes, so the revealed node
+   * is created already in its final state and a transition has no starting
+   * value to run from.
+   */
+  function recordAnimations(): {
+    calls: { keyframes: Keyframe[]; options: KeyframeAnimationOptions }[];
+    restore: () => void;
+  } {
+    const calls: {
+      keyframes: Keyframe[];
+      options: KeyframeAnimationOptions;
+    }[] = [];
+    const target = Element.prototype as unknown as {
+      animate?: (
+        keyframes: Keyframe[],
+        options: KeyframeAnimationOptions,
+      ) => Animation;
+    };
+    const original = target.animate;
+    target.animate = (keyframes, options) => {
+      calls.push({ keyframes, options });
+      return { id: "", cancel: () => {} } as unknown as Animation;
+    };
+    return {
+      calls,
+      restore: () => {
+        if (original === undefined) delete target.animate;
+        else target.animate = original;
+      },
+    };
+  }
+
+  it("rests at the two states the glyph animates between, with no transition of its own", () => {
     const marker = markerProbe();
-    const style = getComputedStyle(marker);
-    expect(style.opacity).toBe("0");
-    expect(style.transform).toBe("translateX(var(--skr-motion-distance))");
-    expect(transitionOf(marker)).toContain(
-      "opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
-    );
-    expect(transitionOf(marker)).toContain(
-      "transform var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
-    );
+    const hidden = getComputedStyle(marker);
+    expect(hidden.opacity).toBe("0");
+    expect(hidden.transform).toBe("translateX(var(--skr-motion-distance))");
+    // Nothing declares a transition here: one would never run, because the
+    // revealed marker is a different node from the hidden one.
+    expect(transitionOf(marker)).toBe("");
+
+    marker.classList.add("cm-skr-reveal-marker-active");
+    const revealed = getComputedStyle(marker);
+    expect(revealed.opacity).toBe("1");
+    expect(revealed.transform).toBe("translateX(0)");
+    expect(transitionOf(marker)).toBe("");
+    // The reserved space is geometry, and geometry never animates: the
+    // revealed marker takes its natural width in the frame it appears.
+    expect(
+      loadedDeclarations(".cm-skr-reveal-marker-active", "max-width"),
+    ).toEqual([]);
   });
 
-  it("enters on the surface clock and leaves on the state clock, mirroring the entrance transform", () => {
+  it("enters a glyph on the surface clock, travelling the shared distance", () => {
     const marker = markerProbe();
+    const recorder = recordAnimations();
+    try {
+      playGlyphEntrance(marker);
+      expect(recorder.calls).toHaveLength(1);
+      const call = recorder.calls[0];
+      expect(call?.options.duration).toBe(120);
+      expect(call?.options.easing?.replace(/\s+/g, "")).toBe(
+        "cubic-bezier(0.2,0,0,1)",
+      );
+      expect(call?.options.fill).toBe("none");
+      expect(call?.keyframes).toEqual([
+        { opacity: "0", transform: "translateX(0.25rem)" },
+        { opacity: "1", transform: "translateX(0)" },
+      ]);
+    } finally {
+      recorder.restore();
+    }
+  });
 
-    // The already-reserved space (the marker's max-width) never carries a
-    // transition of its own; only opacity and the compositor translate do.
-    marker.classList.add("cm-skr-reveal-marker-active");
-    const active = getComputedStyle(marker);
-    expect(active.opacity).toBe("1");
-    expect(active.transform).toBe("translateX(0)");
-    const enterTransition = transitionOf(marker);
-    expect(enterTransition).toContain(
-      "opacity var(--skr-motion-surface-duration) var(--skr-motion-surface-easing)",
-    );
-    expect(enterTransition).toContain(
-      "transform var(--skr-motion-surface-duration) var(--skr-motion-surface-easing)",
-    );
-    expect(enterTransition).not.toContain("max-width");
+  it("leaves a glyph on the state clock, mirroring its own entrance", () => {
+    const marker = markerProbe();
+    const recorder = recordAnimations();
+    try {
+      playGlyphExit(marker);
+      const call = recorder.calls[0];
+      expect(call?.options.duration).toBe(50);
+      expect(call?.options.easing).toBe("linear");
+      expect(call?.keyframes).toEqual([
+        { opacity: "1", transform: "translateX(0)" },
+        { opacity: "0", transform: "translateX(0.25rem)" },
+      ]);
+    } finally {
+      recorder.restore();
+    }
+  });
 
-    marker.classList.remove("cm-skr-reveal-marker-active");
-    const exiting = getComputedStyle(marker);
-    expect(exiting.opacity).toBe("0");
-    expect(exiting.transform).toBe("translateX(var(--skr-motion-distance))");
-    const exitTransition = transitionOf(marker);
-    expect(exitTransition).toContain(
-      "opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
-    );
-    expect(exitTransition).toContain(
-      "transform var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
-    );
-    expect(exitTransition).not.toContain("--skr-motion-surface-duration");
+  it("swaps a construct between its forms with opacity alone", () => {
+    const form = document.createElement("span");
+    form.className = "cm-skr-reveal-motion cm-skr-reveal-source";
+    document.body.append(form);
+    const recorder = recordAnimations();
+    try {
+      playFormEntrance(form);
+      const call = recorder.calls[0];
+      expect(call?.options.duration).toBe(120);
+      // A translate here would move the very text the caret sits in.
+      expect(call?.keyframes).toEqual([{ opacity: "0" }, { opacity: "1" }]);
+    } finally {
+      recorder.restore();
+    }
+  });
+
+  it("plays nothing at all when the animations toggle is off", () => {
+    document.documentElement.dataset.animations = "false";
+    const marker = markerProbe();
+    const recorder = recordAnimations();
+    try {
+      expect(playGlyphEntrance(marker)).toBeNull();
+      expect(playGlyphExit(marker)).toBeNull();
+      expect(playFormEntrance(marker)).toBeNull();
+      expect(recorder.calls).toHaveLength(0);
+    } finally {
+      recorder.restore();
+    }
+  });
+});
+
+describe("caret blink", () => {
+  it("eases each edge of an approximately 1.2s cycle, opacity only", () => {
+    expect(
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--skr-caret-blink-cycle")
+        .trim(),
+    ).toBe("1.2s");
+    expect(
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--skr-caret-blink-resume")
+        .trim(),
+    ).toBe("350ms");
+
+    const stops = keyframeStops("skr-caret-blink");
+    // 41.67% and 91.67% of 1.2s are 500ms and 1100ms: each edge runs the
+    // 100ms to the next stop, and the cycle starts visible.
+    expect(stops).toEqual([
+      ["0%", { opacity: "1" }],
+      ["41.67%", { opacity: "1" }],
+      ["50%", { opacity: "0" }],
+      ["91.67%", { opacity: "0" }],
+      ["100%", { opacity: "1" }],
+    ]);
+    for (const [, declarations] of stops) {
+      expect(Object.keys(declarations)).toEqual(["opacity"]);
+    }
+  });
+
+  it("holds the caret solid while a keystroke owns it", () => {
+    expect(
+      loadedDeclarations(
+        ".cm-editor.cm-skr-caret-solid > .cm-scroller > .cm-cursorLayer",
+        "animation-name",
+      ),
+    ).toEqual(["none"]);
+    // The library sets its own blink through an inline animation-name, which
+    // only an important declaration can outrank.
+    expect(
+      loadedPriorities(
+        ".cm-editor.cm-skr-caret-solid > .cm-scroller > .cm-cursorLayer",
+        "animation-name",
+      ),
+    ).toEqual(["important"]);
+  });
+
+  it("falls back to a hard-edged blink under reduced motion", () => {
+    expect(
+      loadedMediaDeclarations(
+        "(prefers-reduced-motion: reduce)",
+        ".cm-editor.cm-focused > .cm-scroller > .cm-cursorLayer",
+        "animation-name",
+      ),
+    ).toEqual(["skr-caret-blink-instant"]);
+    expect(
+      loadedMediaDeclarations(
+        "(prefers-reduced-motion: reduce)",
+        ".cm-editor.cm-focused > .cm-scroller > .cm-cursorLayer",
+        "animation-timing-function",
+      ),
+    ).toEqual(["step-end"]);
+    // The eased blink it replaces is itself important, so every rule naming
+    // the layer's animation has to be, or the fallback would never win.
+    expect(
+      loadedPriorities(
+        ".cm-editor.cm-focused > .cm-scroller > .cm-cursorLayer",
+        "animation-name",
+      ),
+    ).toEqual(["important", "important"]);
   });
 });
 
@@ -470,7 +699,7 @@ describe("file tree folder reveal", () => {
   });
 
   it("animates auto-expanded folders closed with inert leaving ghosts", async () => {
-    const props = reactiveProps({
+    const props = reactiveState({
       entries: treeEntries,
       selectedPath: "Folder/one.md" as string | null,
       onOpenPath: () => {},
@@ -580,7 +809,7 @@ type HighlightProps = {
 
 describe("file tree active-note highlight", () => {
   it("enters in place on first selection, then travels between rows on the panel clock", async () => {
-    const props = reactiveProps<HighlightProps>({
+    const props = reactiveState<HighlightProps>({
       entries: highlightEntries,
       selectedPath: "alpha.md",
       onOpenPath: () => {},
@@ -632,7 +861,7 @@ describe("file tree active-note highlight", () => {
 
   it("snaps the highlight instantly with no choreography when motion is off", async () => {
     document.documentElement.dataset.animations = "false";
-    const props = reactiveProps<HighlightProps>({
+    const props = reactiveState<HighlightProps>({
       entries: highlightEntries,
       selectedPath: "alpha.md",
       onOpenPath: () => {},
@@ -661,7 +890,7 @@ describe("file tree active-note highlight", () => {
     await unmount(component);
   });
   it("retargets from the highlight's current rendered position", async () => {
-    const props = reactiveProps<HighlightProps>({
+    const props = reactiveState<HighlightProps>({
       entries: highlightEntries,
       selectedPath: "alpha.md",
       onOpenPath: () => {},
@@ -711,9 +940,13 @@ describe("tab strip reorder", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
+        visible: true,
+        paneId: "pane-1",
         onActivate: () => {},
         onClose: () => {},
         onReorder: (from: number, to: number) => reordered.push([from, to]),
+        onNewTab: () => {},
+        onAdopt: () => {},
       },
     });
     flushSync();
@@ -785,9 +1018,13 @@ describe("tab strip reorder", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
+        visible: true,
+        paneId: "pane-1",
         onActivate: () => {},
         onClose: () => {},
         onReorder: () => {},
+        onNewTab: () => {},
+        onAdopt: () => {},
       },
     });
     flushSync();
@@ -845,14 +1082,18 @@ type TabStripProps = {
 };
 
 function tabStripProps(overrides: Partial<TabStripProps> = {}): TabStripProps {
-  return reactiveProps<TabStripProps>({
+  return reactiveState<TabStripProps>({
     tabs: stripTabs(3),
     activePath: "note-1.md",
     titleSources: {},
     focused: true,
+    visible: true,
+    paneId: "pane-1",
     onActivate: () => {},
     onClose: () => {},
     onReorder: () => {},
+    onNewTab: () => {},
+    onAdopt: () => {},
     ...overrides,
   });
 }
@@ -1199,7 +1440,7 @@ describe("motion lifecycle", () => {
   it("cancels scheduled tree and tab callbacks when they unmount", async () => {
     const cancelFrame = vi.spyOn(globalThis, "cancelAnimationFrame");
     const clearTimer = vi.spyOn(globalThis, "clearTimeout");
-    const treeProps = reactiveProps<HighlightProps>({
+    const treeProps = reactiveState<HighlightProps>({
       entries: highlightEntries,
       selectedPath: "alpha.md",
       onOpenPath: () => {},

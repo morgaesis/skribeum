@@ -32,7 +32,7 @@ async function expandTreeFolder(): Promise<void> {
 async function workspaceSnapshot(): Promise<unknown> {
   return browser.execute(() => {
     const key = Object.keys(localStorage).find((candidate) =>
-      candidate.startsWith("skribeum.workspace.v1."),
+      candidate.startsWith("skribeum.workspace."),
     );
     return key === undefined
       ? null
@@ -40,11 +40,21 @@ async function workspaceSnapshot(): Promise<unknown> {
   });
 }
 
+/** Counts the leaves of a persisted pane tree. */
+function paneCountOf(node: unknown): number {
+  if (typeof node !== "object" || node === null) return 0;
+  const candidate = node as { type?: string; children?: unknown[] };
+  if (candidate.type !== "split") return 1;
+  return (candidate.children ?? []).reduce<number>(
+    (total, child) => total + paneCountOf(child),
+    0,
+  );
+}
+
 async function clearWorkspaceStorage(): Promise<void> {
   await browser.execute(() => {
     for (const key of Object.keys(localStorage)) {
-      if (key.startsWith("skribeum.workspace.v1."))
-        localStorage.removeItem(key);
+      if (key.startsWith("skribeum.workspace.")) localStorage.removeItem(key);
     }
   });
 }
@@ -241,6 +251,7 @@ describe("file tree, previews, panels, and workspace tabs", () => {
         () => document.activeElement?.getAttribute("role") === "menuitem",
       ),
     ).toBe(true);
+    await browser.keys(Key.ArrowDown);
     await browser.keys(Key.ArrowDown);
     await browser.keys(Key.ArrowDown);
     await browser.keys(Key.Enter);
@@ -684,10 +695,59 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     });
   });
 
-  it("opens, closes, reorders, splits, and restores tabs with pane history", async () => {
+  it("reuses the active tab for tree opens and adds one only on demand", async () => {
     await expandTreeFolder();
     await openTreePath(TREE_FIRST_NOTE_NAME);
+    // Open in place is the default: a second tree open replaces the active
+    // tab rather than adding one, so the strip stays absent at one note.
     await openTreePath(TREE_SECOND_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await $$('[role="tab"]').length) === 0,
+      {
+        timeoutMsg: "a plain tree open added a tab instead of reusing one",
+      },
+    );
+
+    // Mod-click is one of the explicit new-tab routes.
+    await browser.execute(
+      (element) => {
+        (element as HTMLElement).dispatchEvent(
+          new MouseEvent("click", {
+            bubbles: true,
+            ctrlKey: true,
+            metaKey: true,
+          }),
+        );
+      },
+      await $(
+        `[role="treeitem"][data-path="${TREE_FIRST_NOTE_NAME}"]`,
+      ).getElement(),
+    );
+    await browser.waitUntil(
+      async () => (await $$('[role="tab"]').length) === 2,
+      {
+        timeoutMsg: "mod-click did not open a second tab",
+      },
+    );
+  });
+
+  it("opens, closes, reorders, splits, and restores tabs with a pane tree", async () => {
+    await expandTreeFolder();
+    await openTreePath(TREE_FIRST_NOTE_NAME);
+    for (const path of [TREE_SECOND_NOTE_NAME, PREVIEW_SOURCE_NOTE_NAME]) {
+      await browser.execute(
+        (element) => {
+          (element as HTMLElement).dispatchEvent(
+            new MouseEvent("click", {
+              bubbles: true,
+              ctrlKey: true,
+              metaKey: true,
+            }),
+          );
+        },
+        await $(`[role="treeitem"][data-path="${path}"]`).getElement(),
+      );
+    }
     const tabs = await $$('[role="tab"]');
     expect(tabs.length).toBeGreaterThanOrEqual(3);
 
@@ -753,63 +813,84 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       async () => (await $$(".skr-editor-pane").length) === 2,
       { timeoutMsg: "split command did not create a second pane" },
     );
-    // The DOM reflects the new pane before the workspace snapshot persists
+    // Every pane in a split carries its own strip, including the one the
+    // split just created with a single tab in it.
+    expect(await $$(".skr-tab-strip")).toHaveLength(2);
+
+    await $('[aria-label="More actions"]').click();
+    const splitDown = $('[data-command-id="pane.split-down"]');
+    await splitDown.waitForDisplayed({ timeout: 10000 });
+    await splitDown.click();
+    await browser.waitUntil(
+      async () => (await $$(".skr-editor-pane").length) === 3,
+      { timeoutMsg: "split down did not create a third pane" },
+    );
+    const dividerAxes = await browser.execute(() =>
+      [...document.querySelectorAll(".skr-split-divider")].map((divider) => ({
+        orientation: divider.getAttribute("aria-orientation"),
+        cursor: getComputedStyle(divider).cursor,
+      })),
+    );
+    expect(dividerAxes).toEqual(
+      expect.arrayContaining([
+        { orientation: "vertical", cursor: "col-resize" },
+        { orientation: "horizontal", cursor: "row-resize" },
+      ]),
+    );
+
+    // The DOM reflects the new panes before the workspace snapshot persists
     // to localStorage, so poll rather than reading it once immediately
     // after the pane count settles.
-    let beforeReload: {
-      panes: Array<{ history: unknown[]; tabs: unknown[] }>;
-      focusedPaneId: string;
-    } | null = null;
+    let beforeReload: { layout: unknown; focusedPaneId: string } | null = null;
     await browser.waitUntil(
       async () => {
         beforeReload = (await workspaceSnapshot()) as typeof beforeReload;
-        return beforeReload !== null && beforeReload.panes.length === 2;
+        return beforeReload !== null && paneCountOf(beforeReload.layout) === 3;
       },
       {
         // The persist runs off a Svelte effect queued behind whatever the
         // split itself is doing (opening the new pane's note), which under
         // CPU contention can take much longer than its steady-state flush.
         timeout: 45000,
-        timeoutMsg: "workspace snapshot did not persist the second pane",
+        timeoutMsg: "workspace snapshot did not persist the pane tree",
       },
     );
     if (beforeReload === null) {
       throw new Error("workspace snapshot is unexpectedly null");
     }
-    expect(beforeReload.panes).toHaveLength(2);
-    expect(beforeReload.panes.every((pane) => pane.history.length > 0)).toBe(
-      true,
-    );
 
     await browser.refresh();
     await browser.waitUntil(
-      async () => (await $$(".skr-editor-pane").length) === 2,
+      async () => (await $$(".skr-editor-pane").length) === 3,
       { timeout: 45000, timeoutMsg: "split workspace did not restore" },
     );
-    // The reload reconstructs `workspace` from this same persisted
-    // snapshot and can re-trigger the same debounced persist-on-change
-    // path that required polling above, so read it the same way rather
-    // than once immediately after the pane count settles.
     let afterReload: typeof beforeReload = null;
     await browser.waitUntil(
       async () => {
         afterReload = (await workspaceSnapshot()) as typeof beforeReload;
-        return afterReload !== null && afterReload.panes.length === 2;
+        return afterReload !== null && paneCountOf(afterReload.layout) === 3;
       },
       {
         timeout: 45000,
-        timeoutMsg: "workspace snapshot did not restore the second pane",
+        timeoutMsg: "workspace snapshot did not restore the pane tree",
       },
     );
     if (afterReload === null) {
       throw new Error("workspace snapshot is unexpectedly null");
     }
-    expect(afterReload.panes.map((pane) => pane.tabs)).toEqual(
-      beforeReload.panes.map((pane) => pane.tabs),
-    );
-    expect(afterReload.panes.map((pane) => pane.history)).toEqual(
-      beforeReload.panes.map((pane) => pane.history),
-    );
+    expect(afterReload.layout).toEqual(beforeReload.layout);
     expect(afterReload.focusedPaneId).toBe(beforeReload.focusedPaneId);
+
+    // Closing each pane's last tab collapses it into its sibling until one
+    // pane holds the whole editor area again.
+    await browser.waitUntil(
+      async () => {
+        if ((await $$(".skr-editor-pane").length) === 1) return true;
+        await browser.keys([modifierKey, "w"]);
+        return false;
+      },
+      { timeout: 30000, timeoutMsg: "panes did not collapse as tabs closed" },
+    );
+    expect(await $$(".skr-split-divider")).toHaveLength(0);
   });
 });

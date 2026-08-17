@@ -5,6 +5,7 @@ import {
   DEFAULT_SETTINGS,
   type SettingsState,
 } from "../../src/lib/features/settingsStore";
+import type { UpdateState } from "../../src/lib/features/updates";
 import type { SettingsDocument } from "../../src/lib/ipc/services";
 import SettingsView from "../../src/lib/SettingsView.svelte";
 import { STRINGS } from "../../src/lib/strings";
@@ -747,7 +748,10 @@ describe("settings surface", () => {
     if (checkRow === null) throw new Error("update check row is missing");
     expect(checkRow.closest("fieldset")?.nextElementSibling).toBe(row);
     const style = getComputedStyle(value);
-    expect(style.fontSize).toBe("12px");
+    // The readout is caption-tier text. jsdom does not resolve custom
+    // properties, so the token is what can be observed here; the pixel value
+    // behind it is held to 12px by the interface type scale suite.
+    expect(style.fontSize).toBe("var(--skr-type-label)");
     expect(style.textAlign).toBe("right");
     await unmount(component);
   });
@@ -775,5 +779,193 @@ describe("settings surface", () => {
       )?.disabled,
     ).toBe(true);
     await unmount(component);
+  });
+});
+
+describe("update install and restart", () => {
+  function mountWithUpdateState(
+    updateState: UpdateState,
+    overrides: {
+      desktopAvailable?: boolean;
+      onInstallUpdate?: () => void;
+      onRestartUpdate?: () => void;
+    } = {},
+  ) {
+    const component = mount(SettingsView, {
+      target: document.body,
+      props: {
+        settings: settingsState(),
+        onUpdate: vi.fn(),
+        onClose: vi.fn(),
+        updateState,
+        desktopAvailable: overrides.desktopAvailable ?? true,
+        onInstallUpdate: overrides.onInstallUpdate ?? vi.fn(),
+        onRestartUpdate: overrides.onRestartUpdate ?? vi.fn(),
+        onCheckUpdate: vi.fn(),
+      },
+    });
+    flushSync();
+    return component;
+  }
+
+  it("offers an install action, naming what it does, once an update is available", async () => {
+    const onInstallUpdate = vi.fn();
+    const component = mountWithUpdateState(
+      { kind: "available", version: "9.9.9", notes: "" },
+      { onInstallUpdate },
+    );
+    const install = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-install-update"]',
+    );
+    if (install === null) throw new Error("install button is missing");
+    expect(install.textContent?.trim()).toBe(STRINGS.updateInstall);
+    expect(install.disabled).toBe(false);
+    expect(
+      document.querySelector('[data-testid="settings-restart-update"]'),
+    ).toBeNull();
+    install.click();
+    expect(onInstallUpdate).toHaveBeenCalledTimes(1);
+    await unmount(component);
+  });
+
+  it("disables the install action when the desktop application is unavailable", async () => {
+    const component = mountWithUpdateState(
+      { kind: "available", version: "9.9.9", notes: "" },
+      { desktopAvailable: false },
+    );
+    const install = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-install-update"]',
+    );
+    expect(install?.disabled).toBe(true);
+    await unmount(component);
+  });
+
+  it("shows release notes inline, collapsed under a disclosure", async () => {
+    const component = mountWithUpdateState({
+      kind: "available",
+      version: "9.9.9",
+      notes: "Fixes a rendering bug.\nAdds dark mode polish.",
+    });
+    const details = document.querySelector<HTMLDetailsElement>(".update-notes");
+    if (details === null) throw new Error("release notes are missing");
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toBe(
+      STRINGS.updateNotesSummary,
+    );
+    expect(details.querySelector("p")?.textContent).toBe(
+      "Fixes a rendering bug.\nAdds dark mode polish.",
+    );
+    await unmount(component);
+  });
+
+  it("omits the release notes disclosure when the check returned none", async () => {
+    const component = mountWithUpdateState({
+      kind: "available",
+      version: "9.9.9",
+      notes: "",
+    });
+    expect(document.querySelector(".update-notes")).toBeNull();
+    await unmount(component);
+  });
+
+  it("shows a determinate progress bar while a known-size download runs", async () => {
+    const component = mountWithUpdateState({
+      kind: "downloading",
+      version: "9.9.9",
+      percent: 42,
+    });
+    const bar = document.querySelector<HTMLElement>('[role="progressbar"]');
+    if (bar === null) throw new Error("progress bar is missing");
+    expect(bar.getAttribute("aria-valuenow")).toBe("42");
+    const fill = bar.querySelector<HTMLElement>(".update-progress-fill");
+    expect(fill?.style.width).toBe("42%");
+    await unmount(component);
+  });
+
+  it("shows an honest indeterminate progress bar when no download size is known", async () => {
+    const component = mountWithUpdateState({
+      kind: "downloading",
+      version: "9.9.9",
+      percent: null,
+    });
+    const bar = document.querySelector<HTMLElement>('[role="progressbar"]');
+    if (bar === null) throw new Error("progress bar is missing");
+    // No known value: the ARIA value attribute is absent rather than stuck
+    // at 0, which is what makes this read as indeterminate rather than a
+    // download that froze immediately.
+    expect(bar.hasAttribute("aria-valuenow")).toBe(false);
+    // The unknown-progress fill still animates, so it never reads as an
+    // indicator that simply stopped.
+    const pulsing = bar.querySelector(".skr-skeleton-bar");
+    expect(pulsing).not.toBeNull();
+    await unmount(component);
+  });
+
+  it("offers a restart action once the update is installed and waiting", async () => {
+    const onRestartUpdate = vi.fn();
+    const component = mountWithUpdateState(
+      { kind: "ready", version: "9.9.9" },
+      { onRestartUpdate },
+    );
+    const restart = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-restart-update"]',
+    );
+    if (restart === null) throw new Error("restart button is missing");
+    expect(restart.textContent?.trim()).toBe(STRINGS.updateRestart);
+    expect(restart.disabled).toBe(false);
+    expect(
+      document.querySelector('[data-testid="settings-install-update"]'),
+    ).toBeNull();
+    restart.click();
+    expect(onRestartUpdate).toHaveBeenCalledTimes(1);
+    await unmount(component);
+  });
+
+  it("announces a security failure assertively", async () => {
+    const component = mountWithUpdateState({
+      kind: "failed",
+      message: STRINGS.updateFailedSignature,
+      security: true,
+    });
+    const status = document.querySelector<HTMLElement>(".update-status");
+    if (status === null) throw new Error("update status text is missing");
+    expect(status.getAttribute("role")).toBe("alert");
+    expect(status.textContent).toBe(STRINGS.updateFailedSignature);
+    await unmount(component);
+  });
+
+  it("renders an ordinary update failure as a polite status, not an alert", async () => {
+    const component = mountWithUpdateState({
+      kind: "failed",
+      message: STRINGS.updateFailedNetwork,
+      security: false,
+    });
+    const status = document.querySelector<HTMLElement>(".update-status");
+    expect(status?.getAttribute("role")).toBe("status");
+    await unmount(component);
+  });
+
+  it("visually distinguishes a security failure from an ordinary one", async () => {
+    const securityComponent = mountWithUpdateState({
+      kind: "failed",
+      message: STRINGS.updateFailedSignature,
+      security: true,
+    });
+    const securityColor = getComputedStyle(
+      document.querySelector(".update-status") as Element,
+    ).color;
+    await unmount(securityComponent);
+
+    const ordinaryComponent = mountWithUpdateState({
+      kind: "failed",
+      message: STRINGS.updateFailedNetwork,
+      security: false,
+    });
+    const ordinaryColor = getComputedStyle(
+      document.querySelector(".update-status") as Element,
+    ).color;
+    await unmount(ordinaryComponent);
+
+    expect(securityColor).not.toBe(ordinaryColor);
   });
 });

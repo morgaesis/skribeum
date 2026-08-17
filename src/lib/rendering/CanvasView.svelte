@@ -59,7 +59,15 @@ let cardDrag = $state<{
   moved: boolean;
 } | null>(null);
 let selectedNodeId = $state<string | null>(null);
+let lastCardTap: { nodeId: string; time: number } | null = null;
 let previousUserSelect = "";
+
+/**
+ * The viewport cancels pointerdown to own panning and dragging, which also
+ * suppresses the browser's synthesized click and dblclick events, so the
+ * double-click open gesture is detected from the pointer stream itself.
+ */
+const DOUBLE_TAP_WINDOW_MS = 400;
 
 const nodesById = $derived(
   new Map(canvas.nodes.map((node) => [node.id, node])),
@@ -279,10 +287,23 @@ function endCardDrag(pointerId: number) {
   const { nodeId, moved, currentX, currentY } = cardDrag;
   cardDrag = null;
   if (moved) {
+    lastCardTap = null;
     onMoveNode?.(nodeId, currentX, currentY);
-  } else {
-    selectedNodeId = nodeId;
+    return;
   }
+  selectedNodeId = nodeId;
+  const now = performance.now();
+  if (
+    lastCardTap !== null &&
+    lastCardTap.nodeId === nodeId &&
+    now - lastCardTap.time <= DOUBLE_TAP_WINDOW_MS
+  ) {
+    lastCardTap = null;
+    const node = nodesById.get(nodeId);
+    if (node !== undefined) openNode(node);
+    return;
+  }
+  lastCardTap = { nodeId, time: now };
 }
 
 function onPointerUp(event: PointerEvent) {
@@ -413,7 +434,6 @@ export function focus() {
         aria-label={nodeLabel(node)}
         data-selected={selectedNodeId === node.id}
         tabindex="0"
-        ondblclick={() => openNode(node)}
         style={`left:${geometry.x}px;top:${geometry.y}px;width:${geometry.width}px;height:${geometry.height}px;--canvas-node-color:${node.color ?? "var(--skr-border)"}`}
       >
         {#if node.type === "file"}
@@ -576,7 +596,7 @@ export function focus() {
     border-bottom: 1px solid var(--skr-border);
     color: var(--skr-text-muted);
     background: var(--skr-surface-subtle);
-    font-size: 0.75rem;
+    font-size: var(--skr-type-label);
     text-overflow: ellipsis;
     white-space: nowrap;
   }

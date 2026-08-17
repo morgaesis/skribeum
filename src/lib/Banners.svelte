@@ -27,7 +27,7 @@ let {
 
 {#each banners as banner (banner.id)}
   <aside
-    class="skr-warning flex items-start gap-2 border-b px-3 py-1.5 text-xs"
+    class="skr-type-label skr-warning flex items-start gap-2 border-b px-3 py-1.5"
     role={banner.polite ? "status" : "alert"}
     aria-live={banner.polite ? "polite" : undefined}
   >

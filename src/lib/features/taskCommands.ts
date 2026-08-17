@@ -101,6 +101,18 @@ export function registerTaskStatusCommands(
     registry.register({
       id: TASK_STATUS_MENU_COMMAND,
       title: STRINGS.commandSetTaskStatus,
+      // The status menu is the surface that carries a status's payload
+      // field, so it is the route to a date on a task. Searching for the
+      // payload has to find it rather than the Time statuses, whose names
+      // ("Due", "Scheduled") describe the marker they write and not a date.
+      searchTerms: [
+        "due date",
+        "deadline",
+        "date",
+        "scheduled date",
+        "checkbox",
+        "todo",
+      ],
       pointer: ["command-palette", "overflow-menu"],
       run: (context) => {
         const view = context.view;

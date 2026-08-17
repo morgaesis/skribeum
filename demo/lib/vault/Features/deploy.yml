@@ -1,0 +1,28 @@
+version: 2
+
+# A vault holds more than prose. This file is not a note, and it opens and
+# edits like one: the extension picks the highlighting, and every byte is
+# written back exactly as it was read.
+site:
+  name: Field notes
+  locale: en-GB
+  measure: 72
+
+build:
+  command: skribeum export
+  output: ./public
+  clean: true
+
+deploy:
+  targets:
+    - name: staging
+      host: staging.example.invalid
+      path: /srv/notes
+    - name: production
+      host: notes.example.invalid
+      path: /srv/notes
+  retain: 5
+
+notify:
+  on_failure: true
+  channels: [email]

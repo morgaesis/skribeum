@@ -1,12 +1,12 @@
-// Buffer immutability under decoration, the M1b "decorations are inert"
-// criterion. The decoration engine itself lands at M2, but the enforcement
-// mechanism lands now: every transaction the engine will ever dispatch
-// must be annotated with `decorationOrigin`, and the dispatch wrapper
-// asserts that no such transaction changes the document. The corpus test
-// scaffold in `tests/web/` drives this guard at sampled cursor positions
-// over every corpus file and grows with the engine at M2.
+// The guards around the decoration engine: decorations never change the
+// buffer, and a decoration build never takes the note's rendering with it
+// when it fails. Every transaction the engine dispatches is annotated with
+// `decorationOrigin`, and the dispatch wrapper asserts that no such
+// transaction changes the document. Every decoration build runs through
+// `guardedDecorations`, which keeps the note rendering when a build throws.
 
 import { Annotation, type Transaction } from "@codemirror/state";
+import type { DecorationSet } from "@codemirror/view";
 
 /**
  * Marks a transaction as originating from the decoration engine. Any
@@ -42,5 +42,32 @@ export function assertDecorationsInert(
     ) {
       throw new Error("decoration-originated transaction changed the document");
     }
+  }
+}
+
+/**
+ * Runs a decoration build, answering `fallback` when it fails.
+ *
+ * CodeMirror disables a decoration provider that throws for the life of
+ * the view it belongs to. Without this, one rule computing one impossible
+ * range costs the note every decoration it has — the note renders as raw
+ * source, and repairing the text that caused it does not bring the
+ * rendering back, because the provider is gone. That is a whole note's
+ * presentation resting on the arithmetic of every rule, so a build that
+ * fails is contained here instead: the reader keeps the decorations the
+ * note already had, and the next build that succeeds replaces them.
+ *
+ * The failure is reported rather than swallowed. A build that throws is a
+ * defect in a rule, and the suites that drive the engine assert on it.
+ */
+export function guardedDecorations(
+  build: () => DecorationSet,
+  fallback: DecorationSet,
+): DecorationSet {
+  try {
+    return build();
+  } catch (error) {
+    console.error("decoration build failed", error);
+    return fallback;
   }
 }

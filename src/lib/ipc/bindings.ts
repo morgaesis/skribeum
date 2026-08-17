@@ -61,7 +61,7 @@ export const commands = {
 	 */
 	noteRead: (handle: VaultHandle, relPath: string, content: Channel<number[]>) => typedError<NoteContent, AppError>(__TAURI_INVOKE("note_read", { handle, relPath, content })),
 	/**
-	 *  Reads the creation and modification timestamps of one indexed note. The
+	 *  Reads the creation and modification timestamps of one indexed file. The
 	 *  path resolves through the vault index exactly like `note_read`, so no
 	 *  unindexed path is ever statted.
 	 */

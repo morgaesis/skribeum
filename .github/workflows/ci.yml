@@ -31,15 +31,19 @@ env:
 jobs:
   # The platform matrix is a function of the event. A pull request runs one
   # Linux leg on an arm runner, which is what makes its wall clock roughly
-  # the length of a single Linux job instead of the slowest of three
-  # platforms. Pushes to main run every platform, so the platform-specific
-  # result still exists for every commit that lands, just after the merge
-  # rather than before it. A pull request labelled `full-matrix` opts back in
-  # to all three, for a change that touches platform-specific behaviour.
+  # the length of a single Linux job instead of the slowest of four
+  # platforms. A push to main runs all four, so the platform-specific result
+  # still exists for every commit that lands, just after the merge rather
+  # than before it. A pull request labelled `full-matrix` opts back in to all
+  # four, for a change that touches platform-specific behaviour.
   #
-  # The two events cover different Linux architectures on purpose: releases
-  # ship both linux-x86_64 and linux-aarch64, and between the pull request
-  # leg and the main leg both are exercised.
+  # The arm class is in the main list for the cache, not only for coverage.
+  # The Rust cache key includes the runner architecture, and entries are
+  # written only from pushes to main, so a class that never runs on main
+  # never has an entry written and every pull request on it compiles cold.
+  # Dropping ubuntu-24.04-arm here would make the pull-request leg slower
+  # than the three-platform matrix it replaces, and it would read as arm
+  # being slow rather than as a cache that was never populated.
   matrix:
     name: matrix
     runs-on: ubuntu-latest
@@ -55,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$FULL_MATRIX" = true ]; then
-            platforms='["ubuntu-latest", "macos-latest", "windows-latest"]'
+            platforms='["ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "windows-latest"]'
           else
             platforms='["ubuntu-24.04-arm"]'
           fi
@@ -120,7 +124,18 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install
 
+      # Restored on every event, written only from the default branch: an
+      # entry saved from a pull request is scoped to that pull request's
+      # merge ref, so nothing else can read it, and it duplicates the
+      # default-branch entry under the same key. The condition is written
+      # inline rather than through a workflow variable because the action
+      # hashes every environment variable whose name begins with RUST,
+      # CARGO, CC, CFLAGS, CXX or CMAKE into the cache key, and a variable
+      # holding this condition would key pull requests apart from the
+      # branch they need to restore from. See docs/ci.md.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: cargo fmt --all --check
 
@@ -167,7 +182,11 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install
 
+      # Restored on every event, written only from the default branch;
+      # see the note on the same step in the rust job and docs/ci.md.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run Rust benchmarks and compare baselines
         run: |
@@ -200,7 +219,11 @@ jobs:
       - name: Install MSRV toolchain
         run: rustup toolchain install 1.95 --profile minimal
 
+      # Restored on every event, written only from the default branch;
+      # see the note on the same step in the rust job and docs/ci.md.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml so the build runs on
       # the minimum supported version declared in Cargo.toml.
@@ -270,7 +293,11 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install
 
+      # Restored on every event, written only from the default branch;
+      # see the note on the same step in the rust job and docs/ci.md.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The webdriver feature compiles the embedded WebDriver server into the
       # debug binary; the @wdio/tauri-service embedded provider connects to it

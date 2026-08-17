@@ -9,7 +9,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   BULK_TEXT_INPUT_LENGTH,
   bulkTextInput,
@@ -30,6 +30,17 @@ import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidi
 const PARAGRAPH_ROW: DecorationRule = {
   node: "Paragraph",
   presentation: { present: "mark", class: "cm-test-paragraph" },
+  reveal: "never",
+};
+
+/**
+ * A rule the engine cannot satisfy: an image widget over a node that is not
+ * an image, so building the widget throws where a rule computing an
+ * impossible range would.
+ */
+const FAILING_ROW: DecorationRule = {
+  node: "Paragraph",
+  presentation: { present: "widget", widget: "image" },
   reveal: "never",
 };
 
@@ -113,6 +124,56 @@ describe("data-driven decoration table", () => {
     } finally {
       view.destroy();
       view.dom.remove();
+    }
+  });
+
+  // A rule that fails is a defect in that rule, and it must cost the note
+  // that rule's decoration and nothing else. CodeMirror disables a
+  // decoration provider that throws for the life of the view, so without
+  // containment the note renders as raw source and repairing the text does
+  // not bring it back.
+  it("keeps the note rendered when a rule misbehaves", () => {
+    const reported = vi.spyOn(console, "error").mockImplementation(() => {});
+    const compartment = new Compartment();
+    const view = mountedView(compartment.of([]));
+    document.body.append(view.dom);
+    try {
+      expect(view.contentDOM.querySelector(".cm-skr-emphasis")).not.toBeNull();
+
+      view.dispatch({
+        effects: compartment.reconfigure(
+          decorationTable.of([...DECORATION_TABLE, FAILING_ROW]),
+        ),
+        annotations: decorationOrigin.of(true),
+      });
+
+      // The note keeps the rendering it had, and the failure is reported.
+      expect(view.contentDOM.querySelector(".cm-skr-emphasis")).not.toBeNull();
+      expect(reported).toHaveBeenCalled();
+
+      // The provider is still alive: a later table takes effect.
+      view.dispatch({
+        effects: compartment.reconfigure(
+          decorationTable.of([...DECORATION_TABLE, PARAGRAPH_ROW]),
+        ),
+        annotations: decorationOrigin.of(true),
+      });
+      expect(
+        view.contentDOM.querySelector(".cm-test-paragraph"),
+      ).not.toBeNull();
+      expect(view.contentDOM.querySelector(".cm-skr-emphasis")).not.toBeNull();
+      // Typing after the failure keeps rendering, which is what a reader
+      // repairing the construct that caused it does.
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: "\n# after\n" },
+      });
+      expect(forceParsing(view, view.state.doc.length, 1_000)).toBe(true);
+      view.dispatch({ selection: { anchor: view.state.doc.length } });
+      expect(view.contentDOM.querySelector(".cm-skr-heading")).not.toBeNull();
+    } finally {
+      view.destroy();
+      view.dom.remove();
+      reported.mockRestore();
     }
   });
 

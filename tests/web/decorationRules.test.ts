@@ -281,6 +281,65 @@ describe("cursor-reveal behavior per table row", () => {
     expect(outside).toContain("cm-skr-rich-callout");
   });
 
+  // A construct with no text is a document a reader is part-way through
+  // typing: the alias deleted one character at a time, the bare `|` typed
+  // before the target. A mark or a replacement over an empty range is
+  // rejected by the view, and a rejected range costs the note every
+  // decoration it has, so no row may emit one.
+  describe("a construct with no text between its markers", () => {
+    const EMPTIED = [
+      "# Heading\n\nAn empty alias [[target|]] here.\n\n- [ ] task\n",
+      "# Heading\n\nAn empty target [[|alias]] here.\n\n- [ ] task\n",
+      "# Heading\n\nBoth empty [[|]] here.\n\n- [ ] task\n",
+      "# Heading\n\nNo parts at all [[]] here.\n\n- [ ] task\n",
+      "# Heading\n\nAn embed of nothing ![[|]] here.\n\n- [ ] task\n",
+      "# Heading\n\nEmpty everything **** __ ~~~~ `` [ ]() ![]() here.\n\n- [ ] task\n",
+      "# Heading\n\n| [[a|]] |  |\n| --- | --- |\n|  | [[|b]] |\n\n- [ ] task\n",
+    ];
+
+    it("the corpus really does contain empty decorated nodes", () => {
+      const decorated = new Set(DECORATION_TABLE.map((rule) => rule.node));
+      const empty = new Set<string>();
+      for (const text of EMPTIED) {
+        renderingParser.parse(text).iterate({
+          enter(ref) {
+            if (ref.from === ref.to && decorated.has(ref.name)) {
+              empty.add(ref.name);
+            }
+            return undefined;
+          },
+        });
+      }
+      expect([...empty].sort()).toEqual(["WikilinkAlias", "WikilinkTarget"]);
+    });
+
+    it.each(EMPTIED.map((text) => [JSON.stringify(text), text] as const))(
+      "keeps the rest of the note rendered in %s",
+      (_name, text) => {
+        for (const cursor of [null, text.indexOf("[["), text.length - 1]) {
+          const serialized = serializedAt(text, cursor);
+          // The note's other constructs are untouched by the empty one.
+          expect(serialized).toContain("cm-skr-heading");
+          expect(serialized).toContain("widget task-checkbox");
+          // Nothing is emitted over the empty range itself.
+          for (const line of serialized.split("\n")) {
+            const match = /^(\d+)\.\.(\d+) (.*)$/u.exec(line);
+            if (match === null || match[3]?.startsWith("line class=")) {
+              continue;
+            }
+            if (match[3]?.startsWith("widget ")) {
+              continue;
+            }
+            expect(
+              Number(match[2]),
+              `empty decoration: ${line}`,
+            ).toBeGreaterThan(Number(match[1]));
+          }
+        }
+      },
+    );
+  });
+
   it("keeps every construct rendered for a non-empty selection", () => {
     const text =
       "# Heading\n\n- [ ] Task\n\n> [!note] Callout\n> [inside](target)\n";

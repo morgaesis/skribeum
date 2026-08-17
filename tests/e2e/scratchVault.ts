@@ -48,6 +48,25 @@ export const MIXED_ENDING_NOTE_NAME = "mixed-endings.md";
 export const MIXED_ENDING_NOTE_CONTENT =
   "unix line\ndos line\r\nold mac line\rfinal line\n";
 
+/**
+ * A file the note extensions do not cover, with CRLF terminators and no
+ * final newline: the two things a text editor is most likely to silently
+ * "fix" on save.
+ */
+export const CONFIG_FILE_NAME = ".gitignore";
+export const CONFIG_FILE_CONTENT = "# scratch\r\n.cache/\r\ndrafts/*.tmp";
+
+/**
+ * A 7x3 true-colour PNG. The dimensions are deliberately unequal and
+ * unlike any layout size, so a viewer assertion that reads them back is
+ * reading the decoded image and not a coincidence of the page.
+ */
+export const IMAGE_FILE_NAME = "pixel.png";
+export const IMAGE_FILE_WIDTH = 7;
+export const IMAGE_FILE_HEIGHT = 3;
+const IMAGE_FILE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAcAAAADCAIAAADQoYKSAAAANUlEQVR42g3IMQHAQAzEMCMJkkMSJDcaxSMJwFajAAeDi8WHhxAnJm5sfPHyb52aurX11asfiBgWzwsRwU0AAAAASUVORK5CYII=";
+
 export const TREE_FOLDER_NAME = "Projects";
 export const TREE_FIRST_NOTE_NAME = `${TREE_FOLDER_NAME}/tree-one.md`;
 export const TREE_SECOND_NOTE_NAME = `${TREE_FOLDER_NAME}/tree-two.md`;
@@ -334,6 +353,14 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, MIXED_ENDING_NOTE_NAME),
     MIXED_ENDING_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, CONFIG_FILE_NAME),
+    CONFIG_FILE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, IMAGE_FILE_NAME),
+    Buffer.from(IMAGE_FILE_BASE64, "base64"),
   );
   mkdirSync(path.join(SCRATCH_VAULT_PATH, TREE_FOLDER_NAME), {
     recursive: true,

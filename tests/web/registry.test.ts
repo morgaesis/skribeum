@@ -1,10 +1,14 @@
 // The registration API: id discipline, listing surfaces, dispatch
 // semantics, and the keybinding interpreters commands are wired through.
 
+import { history, redo, undo } from "@codemirror/commands";
+import { EditorState, type Extension, Transaction } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CommandContext } from "../../src/lib/registry";
 import {
   CommandRegistry,
+  editorKeymap,
   formatKeybinding,
   globalKeydownHandler,
   keybindingMatches,
@@ -295,5 +299,128 @@ describe("global keybinding dispatch across platforms", () => {
       expect(runs).toEqual(["test.primary"]);
       expect(command.defaultPrevented).toBe(false);
     }
+  });
+});
+
+// A chord that adds Shift to another chord's key has to reach its own
+// command. The keys are driven as events and the result is read from the
+// document, because that is the whole observation: which way through the
+// history the note moved.
+describe("chords that differ only by Shift", () => {
+  const views: EditorView[] = [];
+
+  afterEach(() => {
+    for (const view of views.splice(0)) {
+      view.destroy();
+    }
+  });
+
+  function mountedEditor(extra: Extension = []): EditorView {
+    const registry = new CommandRegistry();
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "note",
+        selection: { anchor: 4 },
+        extensions: [
+          history(),
+          editorKeymap(registry, contextStub, { undo: runUndo, redo: runRedo }),
+          extra,
+        ],
+      }),
+      parent: document.body,
+    });
+    views.push(view);
+    return view;
+  }
+
+  // The note's own history commands, as the editor supplies them: they
+  // report the key handled whether or not there was a step to take, which
+  // is what makes a shorter chord able to swallow a longer one.
+  const runUndo = (view: EditorView): boolean => {
+    undo(view);
+    return true;
+  };
+  const runRedo = (view: EditorView): boolean => {
+    redo(view);
+    return true;
+  };
+
+  function press(view: EditorView, key: string, init: KeyboardEventInit): void {
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      }),
+    );
+  }
+
+  // Two edits far enough apart in time to be two history steps.
+  function typeGroups(view: EditorView): void {
+    for (const [index, character] of ["1", "2"].entries()) {
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: character },
+        selection: { anchor: view.state.doc.length + 1 },
+        userEvent: "input.type",
+        annotations: Transaction.time.of(Date.now() + index * 5000),
+      });
+    }
+  }
+
+  // A US keyboard reports "Z" for Shift+z; with Caps Lock on it reports
+  // "z", and so does every synthetic event. The chord is the same chord.
+  for (const [name, key] of [
+    ["the shifted letter", "Z"],
+    ["the unshifted letter", "z"],
+  ] as const) {
+    it(`redoes when the platform reports ${name}`, () => {
+      const view = mountedEditor();
+      typeGroups(view);
+      expect(view.state.doc.toString()).toBe("note12");
+
+      press(view, "z", { ctrlKey: true });
+      press(view, "z", { ctrlKey: true });
+      expect(view.state.doc.toString()).toBe("note");
+
+      press(view, key, { ctrlKey: true, shiftKey: true });
+      expect(view.state.doc.toString()).toBe("note1");
+      press(view, key, { ctrlKey: true, shiftKey: true });
+      expect(view.state.doc.toString()).toBe("note12");
+    });
+  }
+
+  it("reaches a registry command whose chord adds Shift", () => {
+    const registry = new CommandRegistry();
+    const ran: string[] = [];
+    for (const [id, binding] of [
+      ["test.plain", "Mod-g"],
+      ["test.shifted", "Mod-Shift-g"],
+    ] as const) {
+      registry.register({
+        id,
+        title: id,
+        keybindings: [binding],
+        scope: "editor",
+        pointer: ["command-palette"],
+        // Reports the key handled either way, as a command that acted does.
+        run: () => {
+          ran.push(id);
+        },
+      });
+    }
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "note",
+        extensions: [editorKeymap(registry, contextStub)],
+      }),
+      parent: document.body,
+    });
+    views.push(view);
+
+    press(view, "g", { ctrlKey: true });
+    press(view, "G", { ctrlKey: true, shiftKey: true });
+    press(view, "g", { ctrlKey: true, shiftKey: true });
+    expect(ran).toEqual(["test.plain", "test.shifted", "test.shifted"]);
   });
 });

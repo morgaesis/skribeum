@@ -73,7 +73,7 @@ import {
   visualViewportRect,
 } from "../../visualViewport";
 import { bulkTextInputAnnotation } from "../bulkInput";
-import { decorationOrigin } from "../decorationGuard";
+import { decorationOrigin, guardedDecorations } from "../decorationGuard";
 import { parseFrontmatter } from "../frontmatter";
 import { codeLanguage } from "../markdown/codeLanguages";
 import {
@@ -158,6 +158,20 @@ export const decorationTable = Facet.define<
   readonly DecorationRule[]
 >({
   combine: (values) => (values.length === 0 ? DECORATION_TABLE : values.flat()),
+});
+
+/**
+ * The note's history, as a rendered table cell needs it. A cell's edits are
+ * the note's edits, so the undo and redo chords belong to the note even
+ * when they are pressed inside a cell; the cell hands the event over rather
+ * than leaving the browser to undo its own editable behind the note's back.
+ * The keymap owns which chord is which and provides the answer here.
+ */
+export const noteHistoryChord = Facet.define<
+  (view: EditorView, event: KeyboardEvent) => boolean,
+  ((view: EditorView, event: KeyboardEvent) => boolean) | null
+>({
+  combine: (values) => values.at(-1) ?? null,
 });
 
 const sourceRevealEnabled = Facet.define<boolean, boolean>({
@@ -1733,6 +1747,47 @@ function cellCaretTarget(
   }
 }
 
+/**
+ * Whether the browser may act on this key, because its action is the cell's
+ * own: it edits or reads the element that holds focus, and that element is
+ * the cell's editable surface.
+ *
+ * Everything else is refused. A rendered cell is an editable surface nested
+ * inside the note's own, so a key the cell neither answers nor refuses is
+ * answered by the browser against the surrounding editable instead: native
+ * select-all reaches out of the cell, takes focus with it, and leaves a DOM
+ * selection the note cannot map back onto the range the table replaced,
+ * after which the next characters typed land scattered through the note.
+ * The contract is written out in `docs/decoration-rules.md`.
+ */
+function browserEditsCell(event: KeyboardEvent): boolean {
+  const primary = event.ctrlKey || event.metaKey;
+  // A character key with the primary modifier held is a chord, not text —
+  // except where the platform composes characters with it (AltGr is
+  // Control and Alt together on several layouts), which types.
+  if (event.key.length === 1) {
+    return !primary || event.getModifierState("AltGraph");
+  }
+  // Composition: the key names an input method's own state, and the
+  // characters it produces arrive as input events, not as key events.
+  if (
+    event.isComposing ||
+    event.key === "Dead" ||
+    event.key === "Process" ||
+    event.key === "Unidentified"
+  ) {
+    return true;
+  }
+  if (event.key === "Backspace" || event.key === "Delete") {
+    return true;
+  }
+  // The clipboard acts on the focused element, which is the cell.
+  if (primary && !event.altKey) {
+    return ["c", "x", "v", "insert"].includes(event.key.toLowerCase());
+  }
+  return event.shiftKey && (event.key === "Insert" || event.key === "Delete");
+}
+
 function handleTableCellKey(event: KeyboardEvent, nested: EditorView): boolean {
   const owner = nestedTableCellParents.get(nested);
   if (owner === undefined) {
@@ -1762,6 +1817,19 @@ function handleTableCellKey(event: KeyboardEvent, nested: EditorView): boolean {
     event.stopPropagation();
     return true;
   };
+  // Select-all inside a field selects the field. Left to the browser it
+  // selects the note's whole editable instead, and takes focus out of the
+  // cell to do it.
+  if (
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    event.key.toLowerCase() === "a"
+  ) {
+    nested.dispatch({
+      selection: { anchor: 0, head: nested.state.doc.length },
+    });
+    return stop();
+  }
   const caretTarget = cellCaretTarget(nested, event);
   if (caretTarget !== null) {
     nested.dispatch({
@@ -1874,7 +1942,21 @@ function handleTableCellKey(event: KeyboardEvent, nested: EditorView): boolean {
   ) {
     return stop();
   }
-  return false;
+  const history = parent.state.facet(noteHistoryChord);
+  if (history?.(parent, event) === true) {
+    return stop();
+  }
+  // The contract closes here: a key the cell has not answered is either the
+  // browser's to run against the cell it is focused in, or refused outright.
+  // Nothing is left to be decided by default, because the default is the
+  // browser editing the note's editable surface around this one. Refusing
+  // consumes the key's own action and nothing else, so a window-level
+  // application shortcut on the same chord still runs.
+  if (browserEditsCell(event)) {
+    return false;
+  }
+  event.preventDefault();
+  return true;
 }
 
 // registry-exempt keydown: rendered table cells own editing and WAI-ARIA grid
@@ -3697,6 +3779,45 @@ type BuiltDecoration = {
   decoration: Decoration;
 };
 
+/**
+ * Collects the decorations a build emits. The two ways in are the two
+ * shapes a decoration can legally have, and neither can express the shape
+ * CodeMirror rejects: `span` covers a run of source text and drops a range
+ * that covers none, `point` sits at one position and takes a single offset.
+ *
+ * The distinction is not academic. A node the table decorates can be empty
+ * in a document a reader is part-way through typing — the target or the
+ * alias either side of a bare `|` in a wikilink, today — and a mark or a
+ * replacement over an empty range throws. A throw from a decoration
+ * provider costs the whole note its rendering for the life of the view, so
+ * the emission path refuses the range instead: a construct with no text has
+ * no presentation, which is what dropping it says. Making that structural
+ * is what keeps the next row over a node that can be empty from repeating
+ * it.
+ */
+type DecorationSink = {
+  readonly items: BuiltDecoration[];
+  /** A mark or replacement over `from`..`to`; dropped when it is empty. */
+  span(from: number, to: number, decoration: Decoration): void;
+  /** A line class or an inserted widget, which sit at one position. */
+  point(at: number, decoration: Decoration): void;
+};
+
+function decorationSink(): DecorationSink {
+  const items: BuiltDecoration[] = [];
+  return {
+    items,
+    span(from, to, decoration) {
+      if (to > from) {
+        items.push({ from, to, decoration });
+      }
+    },
+    point(at, decoration) {
+      items.push({ from: at, to: at, decoration });
+    },
+  };
+}
+
 function markDecoration(
   presentation: Extract<Presentation, { present: "mark" }>,
   dynamic: Record<string, string>,
@@ -3911,7 +4032,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
     options.activeReveal === undefined
       ? findActiveReveal(doc, tree, table, selection, wikilinks, taskStatuses)
       : options.activeReveal;
-  const built: BuiltDecoration[] = [];
+  const built = decorationSink();
   const seenLines = new Set<string>();
   const seenMotionRanges = new Set<string>();
 
@@ -4039,14 +4160,14 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 const motionKey = `${line.from} ${line.to} ${motionClass}`;
                 if (!seenMotionRanges.has(motionKey)) {
                   seenMotionRanges.add(motionKey);
-                  built.push({
-                    from: line.from,
-                    to: line.to,
-                    decoration: Decoration.mark({
+                  built.span(
+                    line.from,
+                    line.to,
+                    Decoration.mark({
                       class: motionClass,
                       skr: `motion ${revealedNow ? "source" : "rendered"}=${rule.node}`,
                     }),
-                  });
+                  );
                 }
               }
               const key = `${line.from} ${lineClass}${serializeAttributes(lineDynamic)}`;
@@ -4062,11 +4183,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 if (Object.keys(lineDynamic).length > 0) {
                   spec.attributes = lineDynamic;
                 }
-                built.push({
-                  from: line.from,
-                  to: line.from,
-                  decoration: Decoration.line(spec),
-                });
+                built.point(line.from, Decoration.line(spec));
               }
               if (line.to >= end) {
                 break;
@@ -4083,15 +4200,15 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             presentation.present === "widget" &&
             presentation.widget === "embed"
           ) {
-            built.push({
-              from: ref.from,
-              to: ref.to,
-              decoration: Decoration.mark({
+            built.span(
+              ref.from,
+              ref.to,
+              Decoration.mark({
                 class:
                   "cm-skr-reveal-motion cm-skr-reveal-source cm-skr-reveal-embed-source",
                 skr: "motion source=embed",
               }),
-            });
+            );
             continue;
           }
           if (presentation.present === "hide") {
@@ -4110,14 +4227,14 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             // animate; a construct whose marks came back as bare document
             // text had nothing to animate and popped into place.
             if (revealedNow) {
-              built.push({
-                from: hideFrom,
-                to: hideTo,
-                decoration: Decoration.mark({
+              built.span(
+                hideFrom,
+                hideTo,
+                Decoration.mark({
                   class: "cm-skr-reveal-marker cm-skr-reveal-marker-active",
                   skr: `reveal node=${rule.node}`,
                 }),
-              });
+              );
               continue;
             }
             // A line-scope marker keeps its node while hidden, reserving no
@@ -4125,36 +4242,36 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             // arrives. An inside-scope marker is replaced outright: its
             // characters must stay out of the caret's path.
             if (rule.reveal === "cursor-line") {
-              built.push({
-                from: hideFrom,
-                to: hideTo,
-                decoration: Decoration.mark({
+              built.span(
+                hideFrom,
+                hideTo,
+                Decoration.mark({
                   class: "cm-skr-reveal-marker",
                   skr: `hide node=${rule.node}`,
                 }),
-              });
+              );
               continue;
             }
-            built.push({
-              from: hideFrom,
-              to: hideTo,
-              decoration: Decoration.replace({
+            built.span(
+              hideFrom,
+              hideTo,
+              Decoration.replace({
                 atomic: true,
                 skr: `hide node=${rule.node}`,
               }),
-            });
+            );
           } else if (revealedNow) {
             // A revealed mark or widget emits no presentation of its own, so
             // the source shows through. It still carries the motion class, so
             // the form that just arrived can be animated in place.
-            built.push({
-              from: ref.from,
-              to: ref.to,
-              decoration: Decoration.mark({
+            built.span(
+              ref.from,
+              ref.to,
+              Decoration.mark({
                 class: "cm-skr-reveal-motion cm-skr-reveal-source",
                 skr: `motion source=${rule.node}`,
               }),
-            });
+            );
           } else if (presentation.present === "widget") {
             const builtWidget = widgetFor(
               presentation.widget,
@@ -4165,26 +4282,25 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
             );
             const skr = `widget ${presentation.widget}${serializeAttributes(builtWidget.attributes)}`;
             if (presentation.place === "before") {
-              built.push({
-                from: ref.from,
-                to: ref.from,
-                decoration: Decoration.widget({
+              built.point(
+                ref.from,
+                Decoration.widget({
                   widget: builtWidget.widget,
                   side: -1,
                   skr,
                 }),
-              });
+              );
             } else {
-              built.push({
-                from: ref.from,
-                to: builtWidget.to ?? ref.to,
-                decoration: Decoration.replace({
+              built.span(
+                ref.from,
+                builtWidget.to ?? ref.to,
+                Decoration.replace({
                   atomic: true,
                   widget: builtWidget.widget,
                   block: builtWidget.block,
                   skr,
                 }),
-              });
+              );
               if (
                 presentation.widget === "embed" ||
                 presentation.widget === "table" ||
@@ -4211,11 +4327,11 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                     : "cm-skr-reveal-rendered"
                 }`
               : "";
-            built.push({
-              from: ref.from,
-              to: ref.to,
-              decoration: markDecoration(presentation, dynamic, motionClass),
-            });
+            built.span(
+              ref.from,
+              ref.to,
+              markDecoration(presentation, dynamic, motionClass),
+            );
           }
         }
         return embedOwnsDescendants ? false : undefined;
@@ -4224,7 +4340,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
   }
 
   return Decoration.set(
-    built.map((item) => item.decoration.range(item.from, item.to)),
+    built.items.map((item) => item.decoration.range(item.from, item.to)),
     true,
   );
 }
@@ -4259,7 +4375,15 @@ function revealSelection(state: EditorState): readonly {
     : [];
 }
 
-function buildViewDecorations(view: EditorView): DecorationSet {
+// Both builds are guarded: a rule that computes an impossible range throws,
+// and an unguarded throw out of a decoration provider costs the note every
+// decoration it has for as long as the view lives. `fallback` is what the
+// reader keeps looking at meanwhile, which is the set the note already had.
+
+function buildViewDecorations(
+  view: EditorView,
+  fallback: DecorationSet,
+): DecorationSet {
   const state = view.state;
   const table = state.facet(decorationTable);
   const selection = revealSelection(state);
@@ -4271,37 +4395,50 @@ function buildViewDecorations(view: EditorView): DecorationSet {
     view.visibleRanges.length > 0
       ? view.visibleRanges.map((range) => ({ from: range.from, to: range.to }))
       : [{ from: view.viewport.from, to: view.viewport.to }];
-  return computeDecorations({
-    doc: state.doc,
-    tree: syntaxTree(state),
-    table: splitTable(table).inline,
-    selection,
-    ranges,
-    wikilinks,
-    taskStatuses,
-    activeReveal,
-    explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
-    suppressRenderedTableDescendants:
-      state.field(explicitTableSourceField, false) === null,
-  });
+  return guardedDecorations(
+    () =>
+      computeDecorations({
+        doc: state.doc,
+        tree: syntaxTree(state),
+        table: splitTable(table).inline,
+        selection,
+        ranges,
+        wikilinks,
+        taskStatuses,
+        activeReveal,
+        explicitTableSource:
+          state.field(explicitTableSourceField, false) ?? null,
+        suppressRenderedTableDescendants:
+          state.field(explicitTableSourceField, false) === null,
+      }),
+    fallback,
+  );
 }
 
-function buildBlockDecorations(state: EditorState): DecorationSet {
+function buildBlockDecorations(
+  state: EditorState,
+  fallback: DecorationSet,
+): DecorationSet {
   const table = state.facet(decorationTable);
   const selection = revealSelection(state);
   const wikilinks =
     state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT;
   const taskStatuses = state.facet(taskStatusConfiguration);
-  return computeDecorations({
-    doc: state.doc,
-    tree: syntaxTree(state),
-    table: splitTable(table).block,
-    selection,
-    wikilinks,
-    taskStatuses,
-    activeReveal: activeRevealIn(state),
-    explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
-  });
+  return guardedDecorations(
+    () =>
+      computeDecorations({
+        doc: state.doc,
+        tree: syntaxTree(state),
+        table: splitTable(table).block,
+        selection,
+        wikilinks,
+        taskStatuses,
+        activeReveal: activeRevealIn(state),
+        explicitTableSource:
+          state.field(explicitTableSourceField, false) ?? null,
+      }),
+    fallback,
+  );
 }
 
 type BlockEngineState = {
@@ -4406,35 +4543,37 @@ function refreshRevealDecorations(
 
   const state = transaction.state;
   const table = splitTable(state.facet(decorationTable))[kind];
-  const replacement = computeDecorations({
-    doc: state.doc,
-    tree: syntaxTree(state),
-    table,
-    selection: revealSelection(state),
-    ranges,
-    wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
-    taskStatuses: state.facet(taskStatusConfiguration),
-    activeReveal: active,
-    explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
-    ...(kind === "inline"
-      ? {
-          suppressRenderedTableDescendants:
-            state.field(explicitTableSourceField, false) === null,
-        }
-      : {}),
-  });
-  const added: ReturnType<Decoration["range"]>[] = [];
-  const cursor = replacement.iter();
-  while (cursor.value !== null) {
-    added.push(cursor.value.range(cursor.from, cursor.to));
-    cursor.next();
-  }
-  return decorations.update({
-    filter: (from, to) =>
-      !ranges.some((range) => from <= range.to && to >= range.from),
-    add: added,
-    sort: true,
-  });
+  return guardedDecorations(() => {
+    const replacement = computeDecorations({
+      doc: state.doc,
+      tree: syntaxTree(state),
+      table,
+      selection: revealSelection(state),
+      ranges,
+      wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
+      taskStatuses: state.facet(taskStatusConfiguration),
+      activeReveal: active,
+      explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
+      ...(kind === "inline"
+        ? {
+            suppressRenderedTableDescendants:
+              state.field(explicitTableSourceField, false) === null,
+          }
+        : {}),
+    });
+    const added: ReturnType<Decoration["range"]>[] = [];
+    const cursor = replacement.iter();
+    while (cursor.value !== null) {
+      added.push(cursor.value.range(cursor.from, cursor.to));
+      cursor.next();
+    }
+    return decorations.update({
+      filter: (from, to) =>
+        !ranges.some((range) => from <= range.to && to >= range.from),
+      add: added,
+      sort: true,
+    });
+  }, decorations);
 }
 
 function decorationInputsChanged(
@@ -4460,25 +4599,25 @@ function decorationInputsChanged(
 
 const blockEngineField = StateField.define<BlockEngineState>({
   create: (state) => ({
-    decorations: buildBlockDecorations(state),
+    decorations: buildBlockDecorations(state, Decoration.none),
     deferred: false,
   }),
   update(value, transaction) {
+    const kept = transaction.docChanged
+      ? value.decorations.map(transaction.changes)
+      : value.decorations;
     if (refreshRequested(transaction)) {
       return {
-        decorations: buildBlockDecorations(transaction.state),
+        decorations: buildBlockDecorations(transaction.state, kept),
         deferred: false,
       };
     }
     if (defersDecorationRebuild(transaction, value.decorations)) {
-      const decorations = transaction.docChanged
-        ? value.decorations.map(transaction.changes)
-        : value.decorations;
       return {
         decorations:
           transaction.selection !== transaction.startState.selection
-            ? refreshRevealDecorations(decorations, transaction, "block")
-            : decorations,
+            ? refreshRevealDecorations(kept, transaction, "block")
+            : kept,
         deferred: true,
       };
     }
@@ -4504,7 +4643,7 @@ const blockEngineField = StateField.define<BlockEngineState>({
       decorationInputsChanged(transaction.state, transaction.startState)
     ) {
       return {
-        decorations: buildBlockDecorations(transaction.state),
+        decorations: buildBlockDecorations(transaction.state, kept),
         deferred: false,
       };
     }
@@ -4701,13 +4840,18 @@ const enginePlugin = ViewPlugin.fromClass(
     private destroyed = false;
 
     constructor(view: EditorView) {
-      this.decorations = buildViewDecorations(view);
+      this.decorations = buildViewDecorations(view, Decoration.none);
     }
 
     update(update: ViewUpdate): void {
+      // The set the reader is looking at, carried through this update's
+      // changes: what the note keeps rendering if the rebuild below fails.
+      const kept = update.docChanged
+        ? this.decorations.map(update.changes)
+        : this.decorations;
       if (update.transactions.some(refreshRequested)) {
         this.deferred = false;
-        this.decorations = this.build(update.view);
+        this.decorations = this.build(update.view, kept);
         return;
       }
       const blockDecorations = update.startState.field(
@@ -4718,14 +4862,11 @@ const enginePlugin = ViewPlugin.fromClass(
         defersDecorationRebuild(transaction, blockDecorations),
       );
       if (deferredInput) {
-        const decorations = update.docChanged
-          ? this.decorations.map(update.changes)
-          : this.decorations;
         const transaction = update.transactions.at(-1);
         this.decorations =
           update.selectionSet && transaction !== undefined
-            ? refreshRevealDecorations(decorations, transaction, "inline")
-            : decorations;
+            ? refreshRevealDecorations(kept, transaction, "inline")
+            : kept;
         this.deferred = true;
         this.scheduleRefresh(update.view);
         return;
@@ -4749,12 +4890,12 @@ const enginePlugin = ViewPlugin.fromClass(
         this.deferred = false;
       }
       if (needsRebuild(update)) {
-        this.decorations = this.build(update.view);
+        this.decorations = this.build(update.view, kept);
       }
     }
 
-    private build(view: EditorView): DecorationSet {
-      return buildViewDecorations(view);
+    private build(view: EditorView, fallback: DecorationSet): DecorationSet {
+      return buildViewDecorations(view, fallback);
     }
 
     private scheduleRefresh(view: EditorView): void {
@@ -5475,6 +5616,56 @@ const footnotePointerNavigation = Prec.high(
   }),
 );
 
+/**
+ * Answers focus arriving at the note while a rendered table holds the caret.
+ *
+ * A rendered table replaces its source, so no position inside it is one the
+ * note's caret can occupy: parked at the table's start it draws as a bar
+ * down the table's whole height, and the next character typed lands
+ * wherever the browser resolves that bar to, which is outside the table.
+ * The note parks the caret there deliberately while a cell holds the
+ * editing session, because that is how it records which table is being
+ * edited — so focus arriving at the note without that session having been
+ * ended is focus that belongs to the cell, and goes back to it. Every
+ * deliberate way out of a cell ends the session first, which is what makes
+ * the two cases distinguishable.
+ */
+function restoreTableCaret(view: EditorView): void {
+  if (document.activeElement !== view.contentDOM) {
+    return;
+  }
+  const session = focusedRenderedTableCell(view);
+  if (session !== null) {
+    focusRenderedTableCell(
+      view,
+      session.tableFrom,
+      session.row,
+      session.column,
+      session.head,
+    );
+    return;
+  }
+  const selection = view.state.selection.main;
+  if (!selection.empty) {
+    return;
+  }
+  for (const grid of view.dom.querySelectorAll<HTMLElement>(
+    ".cm-skr-table-grid[data-table-from][data-table-to]",
+  )) {
+    const from = Number(grid.dataset.tableFrom);
+    const to = Number(grid.dataset.tableTo);
+    if (selection.head < from || selection.head > to) {
+      continue;
+    }
+    const anchor =
+      to >= view.state.doc.length
+        ? view.state.doc.length
+        : view.state.doc.lineAt(Math.min(view.state.doc.length, to + 1)).from;
+    view.dispatch({ selection: { anchor }, scrollIntoView: true });
+    return;
+  }
+}
+
 function syncTableSelection(view: EditorView): void {
   const selection = view.state.selection.main;
   for (const grid of view.dom.querySelectorAll<HTMLElement>(
@@ -5622,6 +5813,10 @@ const tableSessionPlugin = ViewPlugin.fromClass(
         ) {
           blurRenderedTableCell(view);
         }
+        return false;
+      },
+      focus(_event, view) {
+        queueMicrotask(() => restoreTableCaret(view));
         return false;
       },
     },
@@ -6095,7 +6290,11 @@ const engineTheme = EditorView.baseTheme({
     borderRight: "1px solid var(--skr-border)",
   },
   ".cm-skr-table-cell:last-child": { borderRight: "0" },
-  ".cm-skr-table-cell[data-editing=true]": {
+  // The ring says "your keystrokes go here", so it is painted from where
+  // the keystrokes actually go. The editing session outlives a focus move
+  // it did not ask for, and a ring drawn from the session alone keeps
+  // pointing at a cell the caret has already left.
+  ".cm-skr-table-cell[data-editing=true]:focus-within": {
     outline: "2px solid var(--skr-focus)",
     outlineOffset: "-2px",
   },

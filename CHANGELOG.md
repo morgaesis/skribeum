@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The Updates settings section can now act on what it reports: an available
+  update offers an "Install update" button showing its release notes inline,
+  a running download shows progress that reads honestly whether or not the
+  server reports a download size, and an installed update offers "Restart to
+  apply", which confirms first and saves any unsaved work through the same
+  path any other window-closing action uses before restarting.
 - Tag search matches by prefix at path-segment boundaries and groups its
   results in bands: the tag itself, then everything below it in the path,
   then tags a path segment of which starts with the query, then near matches
@@ -25,6 +31,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its empty states name what to do next: how to make the vault's first tag,
   or which query found nothing after the wildcards were removed.
 
+### Changed
+
+- An update failure now reports something a person can act on instead of a
+  raw error object: a signature or authentication failure is called out as a
+  security concern rather than reading like an ordinary network hiccup, and
+  it is announced assertively rather than as routine status text.
+
 ### Fixed
 
 - The inline tag completion menu offers the tag that was typed. It had
@@ -41,7 +54,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The tag completion menu stops at the ends of its list instead of wrapping
   around, matching the command surface, and reopens when a character that
   ended the query is deleted instead of requiring the hash to be retyped.
-
 ## [0.0.8] - 2026-08-15
 
 ### Added

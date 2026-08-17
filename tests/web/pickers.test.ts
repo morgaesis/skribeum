@@ -121,6 +121,37 @@ describe("unified command surface modes", () => {
     expect(items[0]?.actionKind).toBe("setting");
   });
 
+  it("answers a search for a due date with the surface that carries one", () => {
+    const registry = createAppRegistry();
+    // "Time: Due" names the checkbox marker it writes, not a date. The
+    // status menu is where a date-carrying status offers its date field,
+    // so it is what a search for the date has to reach first.
+    for (const query of ["due", "due date", "deadline"]) {
+      expect(commandItems(registry, query, false)[0]?.value, query).toBe(
+        "task.set-status",
+      );
+    }
+    // Searching for the marker itself still reaches the status command.
+    expect(commandItems(registry, "time due", false)[0]?.value).toBe(
+      registry.commands().find((command) => command.title === "Time: Due")
+        ?.id ?? "",
+    );
+  });
+
+  it("finds a list command without knowing what Markdown calls one", () => {
+    const registry = createAppRegistry();
+    for (const [query, expected] of [
+      ["bullet", "insert.bullet-list"],
+      ["bullet list", "insert.bullet-list"],
+      ["numbered list", "insert.numbered-list"],
+      ["checkbox", "insert.task"],
+    ] as const) {
+      expect(commandItems(registry, query, false)[0]?.value, query).toBe(
+        expected,
+      );
+    }
+  });
+
   it("leaves application zoom unregistered in the browser", () => {
     const registry = createAppRegistry();
     const items = commandItems(registry, "Zoom", false).filter((item) =>

@@ -2400,7 +2400,10 @@ describe("skribeum shell", () => {
         const bar = document.querySelector<HTMLElement>(
           ".cm-skr-selection-toolbar",
         );
-        if (bar === null) throw new Error("toolbar missing");
+        const scroller = document.querySelector<HTMLElement>(".cm-scroller");
+        if (bar === null || scroller === null) {
+          throw new Error("toolbar or scroller missing");
+        }
         const box = (bar.closest(".cm-tooltip") ?? bar).getBoundingClientRect();
         let left = Number.POSITIVE_INFINITY;
         let right = Number.NEGATIVE_INFINITY;
@@ -2418,13 +2421,29 @@ describe("skribeum shell", () => {
             lineBox.right - Number.parseFloat(style.paddingRight),
           );
         }
+        // How wide a window has to be for the margin to hold the toolbar
+        // depends on the pane, the sidebar and the prose font, so the
+        // expectation is read from the room this window actually has rather
+        // than assumed from its width.
+        const scrollerBox = scroller.getBoundingClientRect();
+        const room = Math.max(
+          scrollerBox.right - right,
+          left - scrollerBox.left,
+        );
         return {
           placement: bar.dataset.placement,
+          marginHoldsTheToolbar: room >= box.width,
           clearOfColumn: box.left >= right || box.right <= left,
         };
       });
-      expect(wide.placement).toBe("margin");
-      expect(wide.clearOfColumn).toBe(true);
+      // Given the room, the toolbar takes the margin; it only covers prose
+      // when there is nowhere else for it to go.
+      if (wide.marginHoldsTheToolbar) {
+        expect(wide.placement).toBe("margin");
+        expect(wide.clearOfColumn).toBe(true);
+      } else {
+        expect(wide.placement).toBe("over-text");
+      }
 
       // A window with no margin to spare falls back over the text, and buys
       // clearance from the line it covers rather than sitting flush on it.

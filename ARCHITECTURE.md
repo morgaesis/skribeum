@@ -54,6 +54,31 @@ crate contains glue only.
 - Note bytes returned by `note_read` travel as a single raw channel payload
   (an `ArrayBuffer` in the webview), never as JSON, so large files do not
   pay JSON bridge cost.
+- A command whose cost scales with the vault, waits on a lock, or reaches the
+  network is declared `#[tauri::command(async)]` and runs off the event loop:
+  `vault_open`, `vault_close`, `vault_tree`, `vault_tree_refresh`,
+  `watch_subscribe`, `search_query`, `tag_catalog`, `tree_entry_reveal`,
+  `update_check`. Serializing a large tree across the bridge costs as much as
+  walking it, so returning a vault-sized payload counts as scaling work. A
+  synchronous command occupies the thread that draws the window and answers
+  input, so it is reserved for work bounded by a single file or a field of
+  in-memory state. Every command reports its duration through the boundary
+  timing in `diagnostics`, and one exceeding a frame is logged as a warning.
+
+## Diagnostics
+
+Every build writes a rotating log to the operating system log directory,
+never inside a vault: vault indexing, crash-journal replay, full-text index
+generations, and slow IPC. `SKRIBEUM_LOG` raises the level for a run. The
+README documents the per-platform location.
+
+Indexing a vault is linear in its entry count, asserted by a scaling test
+rather than left to review, because a per-entry scan over what indexing has
+already seen is invisible on a sample vault and fatal on a real one.
+
+Watcher-driven tree refreshes coalesce through `CoalescingTreeRefresh`: a
+bulk filesystem change delivers one event per file, and each refresh walks the
+whole vault, so a quiet period bounds the cost to one walk per burst.
 
 ## The editing surface
 

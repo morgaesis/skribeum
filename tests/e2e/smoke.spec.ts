@@ -2393,17 +2393,22 @@ describe("skribeum shell", () => {
     await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
 
     try {
+      // Collapsing the sidebar frees the whole window width for the editor,
+      // so the margin comfortably holds the toolbar rather than sitting on
+      // the boundary where either placement would be correct.
       await setViewportSize(1280, 800);
+      await $('[data-command-id="panel.sidebar.toggle"]').click();
+      await browser.waitUntil(
+        async () => !(await $(".skr-sidebar-header").isExisting()),
+        { timeout: 10000, timeoutMsg: "the sidebar did not collapse" },
+      );
       await selectEditorText("Patient typography");
       await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 10000 });
       const wide = await browser.execute(() => {
         const bar = document.querySelector<HTMLElement>(
           ".cm-skr-selection-toolbar",
         );
-        const scroller = document.querySelector<HTMLElement>(".cm-scroller");
-        if (bar === null || scroller === null) {
-          throw new Error("toolbar or scroller missing");
-        }
+        if (bar === null) throw new Error("toolbar missing");
         const box = (bar.closest(".cm-tooltip") ?? bar).getBoundingClientRect();
         let left = Number.POSITIVE_INFINITY;
         let right = Number.NEGATIVE_INFINITY;
@@ -2421,29 +2426,18 @@ describe("skribeum shell", () => {
             lineBox.right - Number.parseFloat(style.paddingRight),
           );
         }
-        // How wide a window has to be for the margin to hold the toolbar
-        // depends on the pane, the sidebar and the prose font, so the
-        // expectation is read from the room this window actually has rather
-        // than assumed from its width.
-        const scrollerBox = scroller.getBoundingClientRect();
-        const room = Math.max(
-          scrollerBox.right - right,
-          left - scrollerBox.left,
-        );
         return {
           placement: bar.dataset.placement,
-          marginHoldsTheToolbar: room >= box.width,
           clearOfColumn: box.left >= right || box.right <= left,
         };
       });
-      // Given the room, the toolbar takes the margin; it only covers prose
-      // when there is nowhere else for it to go.
-      if (wide.marginHoldsTheToolbar) {
-        expect(wide.placement).toBe("margin");
-        expect(wide.clearOfColumn).toBe(true);
-      } else {
-        expect(wide.placement).toBe("over-text");
-      }
+      expect(wide.placement).toBe("margin");
+      expect(wide.clearOfColumn).toBe(true);
+      await $('[data-command-id="panel.sidebar.toggle"]').click();
+      await browser.waitUntil(
+        async () => await $(".skr-sidebar-header").isExisting(),
+        { timeout: 10000, timeoutMsg: "the sidebar did not restore" },
+      );
 
       // A window with no margin to spare falls back over the text, and buys
       // clearance from the line it covers rather than sitting flush on it.

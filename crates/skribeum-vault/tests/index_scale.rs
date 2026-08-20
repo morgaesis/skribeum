@@ -131,9 +131,12 @@ fn refreshing_a_vault_scales_linearly_with_its_entry_count() {
 }
 
 #[test]
-fn indexing_still_reports_normalization_collisions() {
+fn indexing_reports_a_normalization_collision_the_filesystem_preserved() {
     // The keyed spelling count has to keep surfacing two on-disk spellings
-    // that normalize onto one vault path.
+    // that normalize onto one vault path. A filesystem that normalizes names
+    // itself stores one file for both spellings, so the collision cannot
+    // exist there; which case this run is in is read back from disk rather
+    // than assumed from the platform.
     let root =
         std::env::temp_dir().join(format!("skribeum-index-collision-{}", std::process::id()));
     let _ = RealFs.remove_dir_all(&root);
@@ -147,14 +150,26 @@ fn indexing_still_reports_normalization_collisions() {
         .write_file(&root.join("cafe\u{301}.md"), b"decomposed\n")
         .expect("note is writable");
 
-    let collisions = Vault::open(&RealFs, &root)
-        .expect("vault opens")
-        .collisions()
-        .to_vec();
+    let spellings = RealFs
+        .read_dir(&root)
+        .expect("vault root is readable")
+        .len();
+    let vault = Vault::open(&RealFs, &root).expect("vault opens");
+    let collisions = vault.collisions().to_vec();
+    let entries = vault.tree().len();
     let _ = RealFs.remove_dir_all(&root);
 
-    assert!(
-        !collisions.is_empty(),
-        "two spellings of one normalized path collide"
-    );
+    if spellings == 2 {
+        assert!(
+            !collisions.is_empty(),
+            "two preserved spellings of one normalized path collide"
+        );
+    } else {
+        assert_eq!(
+            spellings, 1,
+            "the filesystem either preserves both spellings or folds them into one"
+        );
+        assert_eq!(entries, 1, "one on-disk file indexes as one entry");
+        assert!(collisions.is_empty(), "one file cannot collide with itself");
+    }
 }

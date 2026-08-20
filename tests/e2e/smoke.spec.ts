@@ -2388,6 +2388,89 @@ describe("skribeum shell", () => {
     }
   });
 
+  it("keeps_the_formatting_toolbar_clear_of_the_prose", async () => {
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+
+    try {
+      // Whichever placement this window's margins allow, the toolbar has to
+      // stay legible: clear of the prose in the margin, and clear of the line
+      // it covers when there is no margin to take. Which one a given width
+      // produces is decided by `toolbarPlacement`, covered by unit tests.
+      await setViewportSize(1280, 800);
+      await selectEditorText("Patient typography");
+      await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 10000 });
+      const wide = await browser.execute(() => {
+        const bar = document.querySelector<HTMLElement>(
+          ".cm-skr-selection-toolbar",
+        );
+        if (bar === null) throw new Error("toolbar missing");
+        const box = (bar.closest(".cm-tooltip") ?? bar).getBoundingClientRect();
+        let left = Number.POSITIVE_INFINITY;
+        let right = Number.NEGATIVE_INFINITY;
+        for (const line of document.querySelectorAll<HTMLElement>(
+          ".cm-content > .cm-line:not(.cm-skr-rich-callout)",
+        )) {
+          const lineBox = line.getBoundingClientRect();
+          const style = window.getComputedStyle(line);
+          left = Math.min(
+            left,
+            lineBox.left + Number.parseFloat(style.paddingLeft),
+          );
+          right = Math.max(
+            right,
+            lineBox.right - Number.parseFloat(style.paddingRight),
+          );
+        }
+        const anchor = [
+          ...document.querySelectorAll<HTMLElement>(".cm-content > .cm-line"),
+        ].find((line) =>
+          (line.textContent ?? "").includes("Patient typography"),
+        );
+        if (anchor === undefined) throw new Error("anchor line missing");
+        return {
+          placement: bar.dataset.placement,
+          clearOfColumn: box.left >= right || box.right <= left,
+          gap: anchor.getBoundingClientRect().top - box.bottom,
+        };
+      });
+      if (wide.placement === "margin") {
+        expect(wide.clearOfColumn).toBe(true);
+      } else {
+        expect(wide.placement).toBe("over-text");
+        expect(wide.gap).toBeGreaterThan(0);
+      }
+
+      // A window with no margin to spare falls back over the text, and buys
+      // clearance from the line it covers rather than sitting flush on it.
+      await setViewportSize(560, 760);
+      await clearEditorSelection();
+      await selectEditorText("Patient typography");
+      await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 10000 });
+      const narrow = await browser.execute(() => {
+        const bar = document.querySelector<HTMLElement>(
+          ".cm-skr-selection-toolbar",
+        );
+        if (bar === null) throw new Error("toolbar missing");
+        const box = (bar.closest(".cm-tooltip") ?? bar).getBoundingClientRect();
+        const anchor = [
+          ...document.querySelectorAll<HTMLElement>(".cm-content > .cm-line"),
+        ].find((line) =>
+          (line.textContent ?? "").includes("Patient typography"),
+        );
+        if (anchor === undefined) throw new Error("anchor line missing");
+        return {
+          placement: bar.dataset.placement,
+          gap: anchor.getBoundingClientRect().top - box.bottom,
+        };
+      });
+      expect(narrow.placement).toBe("over-text");
+      expect(narrow.gap).toBeGreaterThan(0);
+    } finally {
+      await restoreDesktopViewport();
+    }
+  });
+
   it("shares_rendered_column_geometry_within_each_table", async () => {
     await prepareTableGeometryNote();
     await openNoteFromTree(RENDERING_NOTE_NAME);

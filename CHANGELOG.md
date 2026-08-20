@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The formatting toolbar stays out of the way of the note. It sits in the
+  margin beside the selection rather than over the lines above it, level with
+  the line the selection starts on, so every line stays legible while it is
+  open. It waits for the selection to hold still before appearing, so dragging
+  or holding an arrow key no longer pulls a toolbar across the page. A window
+  with no margin to spare still places it over the text, but with clearance
+  above the line it covers and shorter buttons, so it crowds one line instead
+  of three.
+
 ## [0.0.9] - 2026-08-20
 
 ### Added

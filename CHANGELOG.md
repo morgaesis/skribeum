@@ -82,9 +82,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the incremental update after a save and after an external change both skip
   a path a full index rebuild would not have recorded, so a row can no longer
   appear in results until the next rebuild silently removes it.
+- Every build writes a rotating application log to the operating system log
+  directory, outside every vault, recording vault indexing, crash-journal
+  replay, full-text index rebuilds, and any request that held the interface
+  longer than a frame. The README gives the per-platform location, and
+  `SKRIBEUM_LOG` raises the level for a run. The log names vault and note
+  paths, so it is worth a read before sharing.
 
 ### Fixed
 
+- A large vault opens without the application stopping. Indexing a vault
+  walked its tree with a linear scan over every entry already seen, making
+  the cost grow with the square of the entry count, and it ran on the thread
+  that draws the window and answers input, alongside crash-journal replay,
+  edit-history collection, and serializing the whole tree back across the
+  bridge. A vault big enough exhausted that thread, so startup showed its
+  recovery message and then answered nothing: no clicks, no folder
+  expansion, a half-painted tree. Indexing is now linear, and every request
+  whose cost scales with the vault, waits on a lock, or reaches the network
+  runs off the event loop.
+- A bulk filesystem change costs one vault walk rather than one per changed
+  file. Watcher events answered each changed file with a full re-index, so a
+  sync client landing a directory queued thousands of walks; they now
+  coalesce into a single refresh per quiet period.
 - Every block insertion places the caret inside the construct it inserted.
   A heading, task, list, or callout inserted on an empty line left the caret
   in front of the marker, so the first character typed landed before it and

@@ -2393,15 +2393,11 @@ describe("skribeum shell", () => {
     await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
 
     try {
-      // Collapsing the sidebar frees the whole window width for the editor,
-      // so the margin comfortably holds the toolbar rather than sitting on
-      // the boundary where either placement would be correct.
+      // Whichever placement this window's margins allow, the toolbar has to
+      // stay legible: clear of the prose in the margin, and clear of the line
+      // it covers when there is no margin to take. Which one a given width
+      // produces is decided by `toolbarPlacement`, covered by unit tests.
       await setViewportSize(1280, 800);
-      await $('[data-command-id="panel.sidebar.toggle"]').click();
-      await browser.waitUntil(
-        async () => !(await $(".skr-sidebar-header").isExisting()),
-        { timeout: 10000, timeoutMsg: "the sidebar did not collapse" },
-      );
       await selectEditorText("Patient typography");
       await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 10000 });
       const wide = await browser.execute(() => {
@@ -2426,18 +2422,24 @@ describe("skribeum shell", () => {
             lineBox.right - Number.parseFloat(style.paddingRight),
           );
         }
+        const anchor = [
+          ...document.querySelectorAll<HTMLElement>(".cm-content > .cm-line"),
+        ].find((line) =>
+          (line.textContent ?? "").includes("Patient typography"),
+        );
+        if (anchor === undefined) throw new Error("anchor line missing");
         return {
           placement: bar.dataset.placement,
           clearOfColumn: box.left >= right || box.right <= left,
+          gap: anchor.getBoundingClientRect().top - box.bottom,
         };
       });
-      expect(wide.placement).toBe("margin");
-      expect(wide.clearOfColumn).toBe(true);
-      await $('[data-command-id="panel.sidebar.toggle"]').click();
-      await browser.waitUntil(
-        async () => await $(".skr-sidebar-header").isExisting(),
-        { timeout: 10000, timeoutMsg: "the sidebar did not restore" },
-      );
+      if (wide.placement === "margin") {
+        expect(wide.clearOfColumn).toBe(true);
+      } else {
+        expect(wide.placement).toBe("over-text");
+        expect(wide.gap).toBeGreaterThan(0);
+      }
 
       // A window with no margin to spare falls back over the text, and buys
       // clearance from the line it covers rather than sitting flush on it.

@@ -123,6 +123,49 @@ function readingColumn(view: EditorView): { left: number; right: number } {
  * A window too narrow to hold the toolbar clear of the text has no margin to
  * use, and falls back to the position over the text.
  */
+/** Where the toolbar can sit for one measured layout. */
+export type ToolbarPlacement =
+  | { kind: "margin"; left: number }
+  | { kind: "over-text" };
+
+/** The measurements the placement decision reads, in viewport pixels. */
+export type PlacementGeometry = {
+  columnLeft: number;
+  columnRight: number;
+  scrollerLeft: number;
+  scrollerRight: number;
+  toolbarWidth: number;
+  leftToRight: boolean;
+};
+
+/**
+ * Chooses the margin beside the reading column when one is wide enough to
+ * hold the toolbar clear of the text, and reports that there is nowhere to go
+ * when neither is. The trailing margin is preferred, so the toolbar sits on
+ * the side a selection ends.
+ */
+export function toolbarPlacement(
+  geometry: PlacementGeometry,
+): ToolbarPlacement {
+  const trailing = {
+    room: geometry.scrollerRight - geometry.columnRight,
+    left: geometry.columnRight + MARGIN_GAP,
+  };
+  const leading = {
+    room: geometry.columnLeft - geometry.scrollerLeft,
+    left: geometry.columnLeft - MARGIN_GAP - geometry.toolbarWidth,
+  };
+  const ordered = geometry.leftToRight
+    ? [trailing, leading]
+    : [leading, trailing];
+  const side = ordered.find(
+    (candidate) => candidate.room >= geometry.toolbarWidth + MARGIN_GAP,
+  );
+  return side === undefined
+    ? { kind: "over-text" }
+    : { kind: "margin", left: side.left };
+}
+
 function marginAnchor(
   view: EditorView,
   pos: number,
@@ -145,23 +188,15 @@ function marginAnchor(
   if (width === 0 || height === 0) return coords;
   const scroller = view.scrollDOM.getBoundingClientRect();
   const column = readingColumn(view);
-  const trailing = {
-    room: scroller.right - column.right,
-    left: column.right + MARGIN_GAP,
-  };
-  const leading = {
-    room: column.left - scroller.left,
-    left: column.left - MARGIN_GAP - width,
-  };
-  // The trailing margin first, so the toolbar sits where a selection ends.
-  const ordered =
-    view.textDirection === Direction.LTR
-      ? [trailing, leading]
-      : [leading, trailing];
-  const side = ordered.find(
-    (candidate) => candidate.room >= width + MARGIN_GAP,
-  );
-  if (side === undefined) {
+  const placement = toolbarPlacement({
+    columnLeft: column.left,
+    columnRight: column.right,
+    scrollerLeft: scroller.left,
+    scrollerRight: scroller.right,
+    toolbarWidth: width,
+    leftToRight: view.textDirection === Direction.LTR,
+  });
+  if (placement.kind === "over-text") {
     dom.dataset.placement = "over-text";
     return coords;
   }
@@ -169,8 +204,8 @@ function marginAnchor(
   // `above` subtracts the toolbar's height from this top edge, leaving the
   // toolbar level with the line rather than floating above it.
   return {
-    left: side.left,
-    right: side.left,
+    left: placement.left,
+    right: placement.left,
     top: coords.top + height,
     bottom: coords.top + height,
   };

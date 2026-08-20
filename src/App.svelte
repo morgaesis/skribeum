@@ -192,6 +192,7 @@ import {
 } from "./lib/themes/theme";
 import UnifiedCommandSurface from "./lib/UnifiedCommandSurface.svelte";
 import {
+  CoalescingTreeRefresh,
   installNativeOpenListener,
   NativeOpenQueue,
   StartupPathGate,
@@ -2313,6 +2314,19 @@ async function refreshTreeAfterTagCatalog(handle: VaultHandle) {
   }
 }
 
+/**
+ * Watcher-driven refreshes run through here so a bulk filesystem change costs
+ * one vault walk rather than one per file.
+ */
+const watcherTreeRefresh = new CoalescingTreeRefresh(async (kind) => {
+  const activeVault = vault;
+  if (activeVault === null) return;
+  if (kind === "tree") await refreshTree();
+  else if (kind === "tags-then-tree")
+    await refreshTreeAfterTagCatalog(activeVault);
+  else await refreshTreeIndex(kind === "index-with-tags");
+});
+
 function onOverlayPick(item: PickerItem, intent?: { newTab?: boolean }) {
   if (item.kind === "command") {
     // Keep the editor's selection stable until editor-scoped commands have
@@ -3955,12 +3969,13 @@ onMount(() => {
       if (!activeVaultMatchesEvent(event.payload.vault)) {
         return;
       }
-      if (event.payload.change === "overflow") {
-        void refreshTreeIndex(true);
-      } else if (event.payload.change === "removed") {
-        void refreshTreeIndex(true);
+      if (
+        event.payload.change === "overflow" ||
+        event.payload.change === "removed"
+      ) {
+        watcherTreeRefresh.request("index-with-tags");
       } else if (event.payload.change !== "modified") {
-        void refreshTree();
+        watcherTreeRefresh.request("tree");
       }
     }),
     events.externalNoteUpdate.listen((event) => {
@@ -3992,7 +4007,7 @@ onMount(() => {
       ) {
         return;
       }
-      void refreshTreeAfterTagCatalog(activeVault);
+      watcherTreeRefresh.request("tags-then-tree");
       if (event.payload.path === selectedPath) {
         editor?.markRemoved();
         pushBanner({

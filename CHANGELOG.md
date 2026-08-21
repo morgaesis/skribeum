@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- The development dependency tree pins `deepmerge-ts` to 8.0.1, clearing a
+  stack-exhaustion advisory reached through the WebdriverIO toolchain.
+
 ### Changed
 
 - The formatting toolbar stays out of the way of the note. It sits in the

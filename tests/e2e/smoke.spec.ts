@@ -2428,10 +2428,13 @@ describe("skribeum shell", () => {
           (line.textContent ?? "").includes("Patient typography"),
         );
         if (anchor === undefined) throw new Error("anchor line missing");
+        // Ink-relative for the same reason as the narrow case below.
+        const ink = document.createRange();
+        ink.selectNodeContents(anchor);
         return {
           placement: bar.dataset.placement,
           clearOfColumn: box.left >= right || box.right <= left,
-          gap: anchor.getBoundingClientRect().top - box.bottom,
+          gap: ink.getBoundingClientRect().top - box.bottom,
         };
       });
       if (wide.placement === "margin") {
@@ -2459,9 +2462,16 @@ describe("skribeum shell", () => {
           (line.textContent ?? "").includes("Patient typography"),
         );
         if (anchor === undefined) throw new Error("anchor line missing");
+        // Clearance is measured against the glyph ink, not the line box: the
+        // toolbar offsets itself from the rendered text's own top, and the
+        // line box extends above that by the leading, whose share of the
+        // line-height varies with the platform's font metrics.
+        const ink = document.createRange();
+        ink.selectNodeContents(anchor);
+        const inkBox = ink.getBoundingClientRect();
         return {
           placement: bar.dataset.placement,
-          gap: anchor.getBoundingClientRect().top - box.bottom,
+          gap: inkBox.top - box.bottom,
         };
       });
       expect(narrow.placement).toBe("over-text");
@@ -3359,7 +3369,13 @@ describe("skribeum shell", () => {
         TABLE_EDITING_NOTE_NAME,
         original.replace(firstTable, ""),
       );
-      expect(await $$(".cm-skr-table-grid")).toHaveLength(1);
+      // The disk write and the decoration rebuild that drops the deleted
+      // table's grid are two independent effects of the same keystroke; disk
+      // confirmation says nothing about whether the repaint has landed yet.
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 1,
+        { timeout: 10000 },
+      );
     } finally {
       await openNoteFromTree(VISUAL_NOTE_NAME);
       writeFileSync(
@@ -6801,23 +6817,38 @@ describe("skribeum core editing surfaces", () => {
       $('[data-testid="settings-match-system"]').isSelected();
     // The dialog's existence only means the container mounted; the controls
     // inside it commit the persisted document a moment later, so poll for
-    // that committed state rather than asserting immediately on open.
-    await browser.waitUntil(
-      async () =>
-        (await systemToggleSelected()) &&
-        (await $('[data-testid="settings-palette-gazette"]').getAttribute(
-          "aria-checked",
-        )) === "true" &&
-        (
-          await $('[data-testid="settings-palette-signal"]').getAttribute(
-            "class",
-          )
-        ).includes("paired"),
-      {
-        timeout: 10000,
-        timeoutMsg: "settings surface did not commit the persisted document",
-      },
-    );
+    // that committed state rather than asserting immediately on open. The
+    // bound is generous because the commit follows a full reload's vault
+    // reindex on the slowest CI runners; the poll returns the moment the
+    // state lands.
+    const committedState = async () => ({
+      systemToggle: await systemToggleSelected(),
+      gazetteChecked: await $(
+        '[data-testid="settings-palette-gazette"]',
+      ).getAttribute("aria-checked"),
+      signalClass: await $(
+        '[data-testid="settings-palette-signal"]',
+      ).getAttribute("class"),
+    });
+    try {
+      await browser.waitUntil(
+        async () => {
+          const state = await committedState();
+          return (
+            state.systemToggle &&
+            state.gazetteChecked === "true" &&
+            state.signalClass.includes("paired")
+          );
+        },
+        { timeout: 20000 },
+      );
+    } catch {
+      throw new Error(
+        `settings surface did not commit the persisted document; observed ${JSON.stringify(
+          await committedState(),
+        )}`,
+      );
+    }
 
     await browser.execute(() => {
       const testWindow = window as unknown as {

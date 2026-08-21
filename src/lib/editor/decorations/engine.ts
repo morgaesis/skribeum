@@ -6427,18 +6427,27 @@ const engineTheme = EditorView.baseTheme({
     { color: "var(--skr-danger)" },
   '.cm-skr-callout-mark[data-callout="tip"], .cm-skr-callout-mark[data-callout="success"]':
     { color: "var(--skr-success)" },
+  // The tinted background bleeds into the gutter margin the same way a code
+  // block's does (box-shadow copies either side of the line, not a widened
+  // box): CodeMirror's own selection-rectangle drawing reads its horizontal
+  // bounds from the padding of whichever `.cm-line` happens to be first in
+  // the document, so a callout whose own padding widened to fit its bleed
+  // would misdraw every selection in the file, not only its own line.
   ".cm-line.cm-skr-rich-callout": {
     "--skr-callout-color": "var(--skr-callout-blue)",
-    boxSizing: "border-box",
-    width: "calc(100% + 2rem + 3px)",
-    marginLeft: "calc(-1rem - 3px)",
-    marginRight: "-1rem",
-    paddingInline: "1rem",
-    overflow: "hidden",
-    color: "var(--skr-text)",
-    backgroundColor:
+    "--skr-callout-tinted-surface":
       "color-mix(in srgb, var(--skr-callout-color) var(--skr-callout-tint), var(--skr-surface))",
+    boxSizing: "border-box",
     borderLeft: "3px solid var(--skr-callout-color)",
+    // The accent bar sits outside the reading column: pulling the box left
+    // by exactly the border's width keeps the callout's text on the same
+    // left edge as every other block. Width stays automatic, so only the
+    // left edge moves.
+    marginLeft: "-3px",
+    boxShadow:
+      "-1rem 0 0 var(--skr-callout-tinted-surface), 1rem 0 0 var(--skr-callout-tinted-surface)",
+    color: "var(--skr-text)",
+    backgroundColor: "var(--skr-callout-tinted-surface)",
   },
   '.cm-skr-rich-callout[data-accent="cyan"]': {
     "--skr-callout-color": "var(--skr-callout-cyan)",

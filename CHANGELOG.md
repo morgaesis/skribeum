@@ -6,10 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Security
+### Added
 
-- The development dependency tree pins `deepmerge-ts` to 8.0.1, clearing a
-  stack-exhaustion advisory reached through the WebdriverIO toolchain.
+- A design reference page beside the browser demo, at `/design.html`. It
+  renders the palettes, color roles, type scale, radius scale, control
+  specimens, and motion classes from the theme's own tokens, reads every
+  displayed value back from the live cascade, and computes WCAG contrast
+  ratios for the active palette's named pairs, so the page cannot drift from
+  the stylesheet it documents.
 
 ### Changed
 
@@ -20,7 +24,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or holding an arrow key no longer pulls a toolbar across the page. A window
   with no margin to spare still places it over the text, but with clearance
   above the line it covers and shorter buttons, so it crowds one line instead
-  of three.
+  of three. Stacked into a single narrow column, it fits in the margin at
+  window widths that used to force it over the text.
+
+### Fixed
+
+- A selection spanning a wrapped or multi-line block no longer draws its
+  highlight past the edge of the reading column into the margin.
+
+### Security
+
+- The development dependency tree pins `deepmerge-ts` to 8.0.1, clearing a
+  stack-exhaustion advisory reached through the WebdriverIO toolchain.
 
 ## [0.0.9] - 2026-08-20
 

@@ -183,6 +183,11 @@ function marginAnchor(
       bottom: OFFSCREEN,
     };
   }
+  // The margin lays the toolbar out as a single narrow column (see the
+  // theme below), so that is the width the fit decision has to measure:
+  // the row layout it would fall back to is wide enough to rarely fit
+  // beside the reading column at all, which was the point of stacking it.
+  dom.dataset.placement = "margin";
   const width = dom.offsetWidth;
   const height = dom.offsetHeight;
   if (width === 0 || height === 0) return coords;
@@ -200,7 +205,6 @@ function marginAnchor(
     dom.dataset.placement = "over-text";
     return coords;
   }
-  dom.dataset.placement = "margin";
   // `above` subtracts the toolbar's height from this top edge, leaving the
   // toolbar level with the line rather than floating above it.
   return {
@@ -344,6 +348,12 @@ const toolbarTheme = View.theme({
       minHeight: "26px",
       padding: "2px 6px",
     },
+  // The margin rarely has room for the toolbar's full row width beside the
+  // reading column; stacked into one narrow column it very nearly always
+  // does, so a selection almost never has to fall back to sitting over text.
+  '.cm-skr-selection-toolbar[data-placement="margin"]': {
+    flexDirection: "column",
+  },
 });
 
 /** The selection toolbar extension over the registry's format commands. */

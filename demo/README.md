@@ -56,6 +56,13 @@ the tree expansion, tabs, split, and pane histories belong to the vault
 workspace. Narrow viewports keep one pane and expose open notes through the
 command surface.
 
+The build serves a design reference page beside the demo at `/design.html`.
+It renders the theme's palettes, color roles, type scale, radius scale,
+control specimens, and motion classes from the same token stylesheet the
+application consumes, reads every displayed value from the live cascade, and
+computes WCAG contrast ratios for the active palette, so the page cannot
+drift from the tokens it documents.
+
 Run the demo locally with:
 
 ```sh

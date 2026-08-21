@@ -2481,6 +2481,55 @@ describe("skribeum shell", () => {
     }
   });
 
+  it("draws_the_selection_highlight_inside_the_reading_column", async () => {
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+    try {
+      await setViewportSize(1280, 800);
+      // A selection spanning several lines produces at least one full-width
+      // rectangle, the kind that previously ran to the content box's own
+      // unpadded edge and into the gutter. The length reaches well past the
+      // matched phrase, across the following heading and list lines.
+      await dispatchSelectionFromLastMatch("Patient typography", 0, 150);
+      await $(".cm-skr-selectionLayer .cm-selectionBackground").waitForExist({
+        timeout: 10000,
+      });
+      const drawn = await browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(".cm-content");
+        if (content === null) throw new Error("editor content missing");
+        const contentBox = content.getBoundingClientRect();
+        const style = window.getComputedStyle(content);
+        const columnLeft =
+          contentBox.left + Number.parseFloat(style.paddingLeft);
+        const columnRight =
+          contentBox.right - Number.parseFloat(style.paddingRight);
+        const stock = document.querySelector<HTMLElement>(
+          ".cm-layer.cm-selectionLayer",
+        );
+        const rectangles = [
+          ...document.querySelectorAll<HTMLElement>(
+            ".cm-skr-selectionLayer .cm-selectionBackground",
+          ),
+        ].map((element) => element.getBoundingClientRect());
+        return {
+          stockLayerDisplay:
+            stock === null ? "absent" : window.getComputedStyle(stock).display,
+          rectangleCount: rectangles.length,
+          overshoots: rectangles.filter(
+            (box) => box.left < columnLeft - 1 || box.right > columnRight + 1,
+          ).length,
+        };
+      });
+      // The stock layer must not paint a second, unclamped highlight.
+      expect(drawn.stockLayerDisplay).toBe("none");
+      expect(drawn.rectangleCount).toBeGreaterThan(0);
+      expect(drawn.overshoots).toBe(0);
+    } finally {
+      await clearEditorSelection();
+      await restoreDesktopViewport();
+    }
+  });
+
   it("shares_rendered_column_geometry_within_each_table", async () => {
     await prepareTableGeometryNote();
     await openNoteFromTree(RENDERING_NOTE_NAME);
@@ -3789,7 +3838,20 @@ describe("skribeum shell", () => {
         right:
           paragraphBox.right - Number.parseFloat(paragraphStyle.paddingRight),
       };
-      const calloutBox = callout.getBoundingClientRect();
+      // The callout's frame bleed is painted by box-shadow copies beside the
+      // line, so the painted frame is the border box extended by the shadow
+      // offsets; the box rectangle alone no longer describes what the reader
+      // sees.
+      const calloutRect = callout.getBoundingClientRect();
+      const shadowOffsets = [
+        ...getComputedStyle(callout).boxShadow.matchAll(
+          /(-?\d+(?:\.\d+)?)px\s+-?\d+(?:\.\d+)?px/gu,
+        ),
+      ].map((match) => Number.parseFloat(match[1] ?? "0"));
+      const calloutBox = {
+        left: calloutRect.left + Math.min(0, ...shadowOffsets),
+        right: calloutRect.right + Math.max(0, ...shadowOffsets),
+      };
 
       return {
         leftEdges: {

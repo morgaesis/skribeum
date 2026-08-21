@@ -1,0 +1,652 @@
+/* The design reference page. Every color, radius, type size, and motion
+   value comes from the theme's own custom properties; this file may position
+   and compose specimens but never restates a token's value. */
+
+@import "../../src/lib/themes/theme.css";
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--skr-canvas);
+  color: var(--skr-text);
+  font-family: var(--skr-font-interface);
+  font-size: var(--skr-type-control);
+  line-height: 1.5;
+}
+
+.design-shell {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 2rem var(--skr-gutter) 6rem;
+}
+
+/* ---- Page chrome ---- */
+
+.design-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-block: 1rem 2rem;
+}
+
+.design-header img {
+  width: 40px;
+  height: 40px;
+}
+
+.design-header h1 {
+  font-family: var(--skr-font-prose);
+  font-size: 1.25rem;
+  font-weight: 500;
+  color: var(--skr-heading);
+  margin: 0;
+  flex: 1;
+}
+
+.design-section {
+  margin-block: 3rem;
+}
+
+.design-section > h2 {
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-label);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--skr-text-muted);
+  border-bottom: 1px solid var(--skr-border);
+  padding-bottom: 0.5rem;
+  margin: 0 0 1.25rem;
+}
+
+.design-section > p {
+  max-width: 44rem;
+  color: var(--skr-text-muted);
+  margin: 0 0 1.25rem;
+}
+
+/* ---- Appearance switcher (also the segmented-control specimen) ---- */
+
+.design-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--skr-surface-subtle);
+  border-radius: var(--skr-radius-control);
+}
+
+.design-segmented button {
+  border: none;
+  background: transparent;
+  color: var(--skr-text);
+  font: inherit;
+  font-size: var(--skr-type-control);
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--skr-radius-control);
+  cursor: pointer;
+}
+
+.design-segmented button[aria-pressed="true"] {
+  background: var(--skr-surface-raised);
+  color: var(--skr-heading);
+  box-shadow: var(--skr-shadow);
+}
+
+.design-segmented button:focus-visible {
+  outline: 2px solid var(--skr-focus);
+  outline-offset: -2px;
+}
+
+/* ---- Palette cards ---- */
+
+.design-palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 1rem;
+}
+
+.design-palette-card {
+  border: 1px solid var(--skr-border);
+  border-radius: var(--skr-radius-surface);
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  background: var(--skr-surface);
+  color: var(--skr-text);
+}
+
+.design-palette-card:focus-visible {
+  outline: 2px solid var(--skr-focus);
+  outline-offset: 2px;
+}
+
+.design-palette-card[aria-pressed="true"] {
+  outline: 2px solid var(--skr-accent);
+  outline-offset: 2px;
+}
+
+/* The specimen strip inside a palette card paints with the palette's own
+   swatch tokens from theme.css, independent of the page's active palette. */
+.design-palette-strip {
+  display: block;
+  background: var(--skr-surface);
+  color: var(--skr-text);
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--skr-border);
+}
+
+.design-palette-strip .strip-heading {
+  color: var(--skr-heading);
+  font-weight: 600;
+}
+
+.design-palette-strip .strip-muted {
+  color: var(--skr-text-muted);
+}
+
+.design-palette-strip .strip-accent {
+  color: var(--skr-accent);
+}
+
+.design-palette-strip .strip-code {
+  display: inline-block;
+  background: var(--skr-code-surface);
+  border-radius: var(--skr-radius-control);
+  font-family: var(--skr-font-mono);
+  padding: 0 0.3rem;
+}
+
+.design-palette-card .design-palette-name {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  font-size: var(--skr-type-label);
+}
+
+.design-palette-card .design-palette-name span:last-child {
+  color: var(--skr-text-muted);
+}
+
+/* ---- Token rows ---- */
+
+.design-token-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.5rem 1.5rem;
+}
+
+.design-token-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.25rem 0;
+}
+
+.design-token-chip {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: none;
+  border-radius: var(--skr-radius-control);
+  border: 1px solid var(--skr-border);
+}
+
+.design-token-row code {
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-label);
+}
+
+.design-token-row .design-token-value {
+  margin-left: auto;
+  color: var(--skr-text-muted);
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-chip);
+  text-transform: lowercase;
+}
+
+/* ---- Typography specimens ---- */
+
+.design-type-specimen {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.design-type-specimen > div {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.design-type-specimen .design-type-label {
+  width: 11rem;
+  flex: none;
+  color: var(--skr-text-muted);
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-chip);
+}
+
+.specimen-prose {
+  font-family: var(--skr-font-prose);
+  font-size: var(--skr-editor-font-size, 1rem);
+}
+
+.specimen-interface {
+  font-family: var(--skr-font-interface);
+}
+
+.specimen-mono {
+  font-family: var(--skr-font-mono);
+}
+
+.specimen-chip-size {
+  font-size: var(--skr-type-chip);
+}
+
+.specimen-label-size {
+  font-size: var(--skr-type-label);
+}
+
+.specimen-control-size {
+  font-size: var(--skr-type-control);
+}
+
+.specimen-title-size {
+  font-size: var(--skr-type-title);
+}
+
+/* ---- Radius scale ---- */
+
+.design-radius-row {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.design-radius-row figure {
+  margin: 0;
+  text-align: center;
+}
+
+.design-radius-row .radius-box {
+  width: 7rem;
+  height: 4.5rem;
+  background: var(--skr-surface-raised);
+  border: 1px solid var(--skr-border);
+  box-shadow: var(--skr-shadow);
+}
+
+.radius-control {
+  border-radius: var(--skr-radius-control);
+}
+
+.radius-surface {
+  border-radius: var(--skr-radius-surface);
+}
+
+.radius-dialog {
+  border-radius: var(--skr-radius-dialog);
+}
+
+.design-radius-row figcaption {
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-chip);
+  color: var(--skr-text-muted);
+  margin-top: 0.5rem;
+}
+
+/* ---- Control specimens ---- */
+
+.design-control-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-block: 0.75rem;
+}
+
+.design-control-row > span:first-child {
+  width: 11rem;
+  flex: none;
+  color: var(--skr-text-muted);
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-chip);
+}
+
+.skr-button-primary {
+  font: inherit;
+  font-size: var(--skr-type-control);
+  border: none;
+  background: var(--skr-accent);
+  color: var(--skr-canvas);
+  padding: 0.4rem 0.9rem;
+  border-radius: var(--skr-radius-control);
+  cursor: pointer;
+}
+
+.skr-button-secondary {
+  font: inherit;
+  font-size: var(--skr-type-control);
+  background: transparent;
+  color: var(--skr-accent);
+  border: 1px solid var(--skr-border-strong);
+  padding: 0.4rem 0.9rem;
+  border-radius: var(--skr-radius-control);
+  cursor: pointer;
+}
+
+.skr-button-flat {
+  font: inherit;
+  font-size: var(--skr-type-control);
+  background: transparent;
+  color: var(--skr-text-muted);
+  border: none;
+  padding: 0.4rem 0.9rem;
+  border-radius: var(--skr-radius-control);
+  cursor: pointer;
+}
+
+.skr-button-primary:hover {
+  background: color-mix(in srgb, var(--skr-accent) 88%, var(--skr-heading));
+}
+
+.skr-button-secondary:hover,
+.skr-button-flat:hover {
+  background: var(--skr-surface-subtle);
+}
+
+.skr-button-primary:focus-visible,
+.skr-button-secondary:focus-visible,
+.skr-button-flat:focus-visible,
+.design-input:focus-visible,
+.design-slider:focus-visible,
+.design-checkbox:focus-visible {
+  outline: 2px solid var(--skr-focus);
+  outline-offset: 2px;
+}
+
+.design-input {
+  font: inherit;
+  font-size: var(--skr-type-control);
+  background: var(--skr-surface);
+  color: var(--skr-text);
+  border: 1px solid var(--skr-border);
+  border-radius: var(--skr-radius-control);
+  padding: 0.4rem 0.6rem;
+  width: 14rem;
+}
+
+.design-input::placeholder {
+  color: var(--skr-text-muted);
+}
+
+.design-slider {
+  accent-color: var(--skr-accent);
+  width: 14rem;
+}
+
+.design-checkbox {
+  accent-color: var(--skr-accent);
+  width: 1rem;
+  height: 1rem;
+}
+
+.design-kbd {
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-chip);
+  background: var(--skr-surface-subtle);
+  border: 1px solid var(--skr-border);
+  border-radius: var(--skr-radius-control);
+  padding: 0.1rem 0.35rem;
+}
+
+.design-toolbar {
+  display: inline-flex;
+  gap: 3px;
+  padding: 4px;
+  color: var(--skr-text);
+  background-color: var(--skr-surface-raised);
+  border: 1px solid var(--skr-border);
+  border-radius: var(--skr-radius-surface);
+  box-shadow: var(--skr-shadow);
+}
+
+.design-toolbar button {
+  border: none;
+  background: transparent;
+  color: var(--skr-text);
+  border-radius: var(--skr-radius-control);
+  min-width: 30px;
+  min-height: 30px;
+  padding: 3px 7px;
+  cursor: pointer;
+  font-weight: 600;
+  line-height: 1;
+  font-family: var(--skr-font-interface);
+}
+
+.design-toolbar button:hover {
+  background-color: var(--skr-surface-subtle);
+}
+
+.design-menu {
+  display: inline-block;
+  min-width: 13rem;
+  background: var(--skr-surface-raised);
+  border: 1px solid var(--skr-border);
+  border-radius: var(--skr-radius-surface);
+  box-shadow: var(--skr-shadow);
+  padding: 0.25rem;
+}
+
+.design-menu button {
+  display: flex;
+  justify-content: space-between;
+  gap: 1.5rem;
+  width: 100%;
+  font: inherit;
+  font-size: var(--skr-type-control);
+  border: none;
+  background: transparent;
+  color: var(--skr-text);
+  text-align: left;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--skr-radius-control);
+  cursor: pointer;
+}
+
+.design-menu button:hover {
+  background: var(--skr-surface-subtle);
+}
+
+.design-status-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.design-status {
+  display: inline-block;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--skr-radius-control);
+  font-size: var(--skr-type-label);
+}
+
+.design-status[data-tone="danger"] {
+  background: var(--skr-danger-surface);
+  color: var(--skr-danger);
+}
+
+.design-status[data-tone="warning"] {
+  background: var(--skr-warning-surface);
+  color: var(--skr-warning);
+}
+
+.design-status[data-tone="success"] {
+  background: var(--skr-success-surface);
+  color: var(--skr-success);
+}
+
+.design-selection-specimen {
+  font-family: var(--skr-font-prose);
+  font-size: var(--skr-editor-font-size, 1rem);
+  max-width: 34rem;
+}
+
+.design-selection-specimen mark {
+  background: var(--skr-selection-surface);
+  color: var(--skr-selection-text);
+}
+
+.design-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  background: var(--skr-caret);
+  animation: design-caret-blink var(--skr-caret-blink-cycle)
+    var(--skr-caret-blink-easing) infinite;
+}
+
+@keyframes design-caret-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  55%,
+  95% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* ---- Motion specimens ---- */
+
+.design-motion-row {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.design-motion-row figure {
+  margin: 0;
+  text-align: center;
+}
+
+.design-motion-box {
+  width: 9rem;
+  height: 4.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--skr-surface-raised);
+  border: 1px solid var(--skr-border);
+  border-radius: var(--skr-radius-surface);
+  cursor: pointer;
+  font-size: var(--skr-type-label);
+  color: var(--skr-text-muted);
+}
+
+.design-motion-box[data-motion="state"].design-motion-play {
+  animation: design-motion-fade var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+.design-motion-box[data-motion="surface"].design-motion-play {
+  animation: design-motion-enter var(--skr-motion-surface-duration)
+    var(--skr-motion-surface-easing);
+}
+
+.design-motion-box[data-motion="panel"].design-motion-play {
+  animation: design-motion-enter var(--skr-motion-panel-duration)
+    var(--skr-motion-panel-easing);
+}
+
+@keyframes design-motion-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes design-motion-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--skr-motion-distance));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.design-motion-row figcaption {
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-chip);
+  color: var(--skr-text-muted);
+  margin-top: 0.5rem;
+}
+
+/* ---- Contrast table ---- */
+
+.design-contrast-table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 44rem;
+  font-size: var(--skr-type-control);
+}
+
+.design-contrast-table th,
+.design-contrast-table td {
+  text-align: left;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--skr-border);
+}
+
+.design-contrast-table th {
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-chip);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--skr-text-muted);
+  font-weight: 600;
+}
+
+.design-contrast-table code {
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-label);
+}
+
+.design-contrast-sample {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--skr-radius-control);
+}
+
+.design-contrast-table [data-verdict] {
+  font-family: var(--skr-font-mono);
+  font-size: var(--skr-type-label);
+}
+
+.design-contrast-table [data-verdict="pass"] {
+  color: var(--skr-success);
+}
+
+.design-contrast-table [data-verdict="fail"] {
+  color: var(--skr-danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .design-caret,
+  .design-motion-box {
+    animation: none !important;
+  }
+}

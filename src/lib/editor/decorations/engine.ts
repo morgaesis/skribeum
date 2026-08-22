@@ -6307,17 +6307,10 @@ const engineTheme = EditorView.baseTheme({
     fontSize: "0.875em",
     fontWeight: "600",
   },
-  // No `min-width` override here: a grid item's automatic minimum is its
-  // min-content size (the widest token it cannot break, e.g. a column
-  // header), and that is exactly the floor that lets a narrow column push
-  // the row past its container and engage `.cm-skr-table-grid`'s own
-  // `overflow-x: auto` instead of forcing a word to split mid-character to
-  // fit a track it never fits. A cell with several words still wraps at
-  // the spaces between them (the nested cell editor's own line wrapping,
-  // set unconditionally in the table decorations below); only a single
-  // token wider than its column now scrolls instead of breaking.
   ".cm-skr-table-cell": {
     boxSizing: "border-box",
+    minWidth: "0",
+    overflowWrap: "anywhere",
     borderRight: "1px solid var(--skr-border)",
   },
   ".cm-skr-table-cell:last-child": { borderRight: "0" },
@@ -6351,19 +6344,10 @@ const engineTheme = EditorView.baseTheme({
     fontFamily: "inherit",
     lineHeight: "inherit",
     textAlign: "inherit",
-    // Overrides the nested editor's own line-wrapping base theme (`.cm-content`
-    // there sets `white-space: break-spaces` and `overflow-wrap: anywhere`
-    // unconditionally, CodeMirror's own contentWrap theme). A cell reads as
-    // a grid, not a paragraph: content wider than its column pushes the row
-    // past the grid's container and scrolls there, per `.cm-skr-table-grid`'s
-    // own `overflow-x: auto`, the same contract code blocks keep, rather
-    // than wrapping at spaces or breaking a token mid-character to fit.
-    whiteSpace: "pre",
   },
   ".cm-skr-table-cell-editor .cm-line": {
     padding: "0",
     textAlign: "inherit",
-    whiteSpace: "pre",
   },
   ".cm-skr-table-cell-editor .cm-gutters, .cm-skr-table-cell-editor .cm-activeLine":
     { backgroundColor: "transparent" },

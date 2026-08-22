@@ -18,7 +18,7 @@
 //! through the trait, which is what lets the simulator assert that
 //! indexing never writes inside the vault.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 
 use rusqlite::{Connection, Transaction, params};
@@ -77,14 +77,17 @@ pub struct SearchHit {
     pub score: f64,
 }
 
-/// One existing vault tag and its aggregate usage.
+/// One existing vault tag and its aggregate usage, counted over the tag and
+/// everything below it in the path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagFrequency {
     /// Tag text without its leading hash, preserving one vault spelling.
     pub tag: String,
-    /// Number of notes containing the tag.
+    /// Number of notes containing the tag or a tag below it, counted once
+    /// each however many of them a note carries.
     pub note_count: u32,
-    /// Total inline and frontmatter occurrences across indexed notes.
+    /// Inline and frontmatter occurrences of the tag and of every tag below
+    /// it, across indexed notes.
     pub occurrence_count: u32,
 }
 
@@ -96,8 +99,6 @@ const SNIPPET_LEAD_BYTES: usize = 40;
 const MAX_INDEXED_TAG_BYTES: usize = 512;
 /// Maximum number of distinct tags indexed from one note.
 const MAX_INDEXED_TAGS_PER_NOTE: usize = 1000;
-/// Maximum number of distinct tags returned to one catalog consumer.
-const MAX_TAG_CATALOG_ENTRIES: u32 = 1000;
 /// BM25 column weights: title, headings, body.
 const BM25_WEIGHTS: (f64, f64, f64) = (8.0, 3.0, 1.0);
 
@@ -446,40 +447,107 @@ impl SearchIndex {
         self.query_with_options(query, limit, true, false)
     }
 
-    /// Returns the vault's tags with note and occurrence counts.
+    /// Returns every one of the vault's tags with its note and occurrence
+    /// counts, most-used first.
+    ///
+    /// The counts a tag reports are the counts the tag answers with: a tag is
+    /// a path, a query for it includes everything below it, so `work` counts
+    /// the notes tagged `work` together with those tagged `work/meetings`,
+    /// each note once however many of them it carries. A catalog that
+    /// promised one set and a query that produced another would be the same
+    /// defect twice.
+    ///
+    /// The catalog is complete rather than bounded. It is one row per tag a
+    /// person wrote, at a few bytes each, next to a full-text index of the
+    /// same notes' bodies, so it is never the memory that matters; and the
+    /// only bound that fits the data would drop the least-used tags, which
+    /// are exactly the ones nobody can remember and so exactly the ones
+    /// completion has to supply. The number of rows any surface renders is
+    /// bounded where rendering happens.
     ///
     /// # Errors
     ///
     /// Returns [`SearchError::Storage`] when the catalog cannot be read.
     pub fn tag_frequencies(&self) -> Result<Vec<TagFrequency>, SearchError> {
-        let mut statement = self.conn.prepare(
-            "SELECT MIN(display), COUNT(*), SUM(occurrences)
-             FROM note_tags
-             GROUP BY normalized
-             ORDER BY SUM(occurrences) DESC, normalized ASC
-             LIMIT ?1",
-        )?;
-        let rows = statement.query_map([i64::from(MAX_TAG_CATALOG_ENTRIES)], |row| {
-            let note_count = row.get::<_, i64>(1)?;
-            let occurrence_count = row.get::<_, i64>(2)?;
-            Ok(TagFrequency {
-                tag: row.get(0)?,
-                note_count: u32::try_from(note_count).unwrap_or(u32::MAX),
-                occurrence_count: u32::try_from(occurrence_count).unwrap_or(u32::MAX),
-            })
+        let mut statement = self
+            .conn
+            .prepare("SELECT normalized, display, path, occurrences FROM note_tags")?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
         })?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(SearchError::from)
+        let mut notes: BTreeMap<String, u32> = BTreeMap::new();
+        let mut totals: BTreeMap<String, TagTotals> = BTreeMap::new();
+        for row in rows {
+            let (normalized, display, path, occurrences) = row?;
+            let next = u32::try_from(notes.len()).unwrap_or(u32::MAX);
+            let note = *notes.entry(path).or_insert(next);
+            let occurrences = u64::try_from(occurrences).unwrap_or(0);
+            let segments = normalized.matches('/').count() + 1;
+            for depth in 1..=segments {
+                let ancestor = leading_segments(&normalized, depth);
+                let total = totals
+                    .entry(ancestor.to_owned())
+                    .or_insert_with(|| TagTotals {
+                        display: leading_segments(&display, depth).to_owned(),
+                        written: false,
+                        notes: BTreeSet::new(),
+                        occurrences: 0,
+                    });
+                total.written |= depth == segments;
+                total.notes.insert(note);
+                total.occurrences = total.occurrences.saturating_add(occurrences);
+            }
+        }
+        // A parent no note writes on its own is not a catalog entry: it
+        // answers queries by being derived from its children's paths at match
+        // time, so listing it here would invent a tag the vault does not have.
+        let mut catalog: Vec<TagFrequency> = totals
+            .into_iter()
+            .filter(|(_normalized, total)| total.written)
+            .map(|(_normalized, total)| TagFrequency {
+                tag: total.display,
+                note_count: u32::try_from(total.notes.len()).unwrap_or(u32::MAX),
+                occurrence_count: u32::try_from(total.occurrences).unwrap_or(u32::MAX),
+            })
+            .collect();
+        catalog.sort_by(|left, right| {
+            right
+                .occurrence_count
+                .cmp(&left.occurrence_count)
+                .then_with(|| left.tag.to_lowercase().cmp(&right.tag.to_lowercase()))
+        });
+        Ok(catalog)
     }
 
+    /// Notes carrying `tag` or any tag below it in the path.
+    ///
+    /// A tag is a path of `/`-separated segments and a parent query answers
+    /// with its children: `work` includes `work/meetings` and excludes
+    /// `workshop`. The comparison is anchored at a segment boundary, which is
+    /// the whole of the nesting semantics; nothing stores a hierarchy, and a
+    /// parent no note writes on its own still answers, because it is derived
+    /// from its children's paths rather than from a row of its own.
     fn query_tag(&self, tag: &str, limit: u32) -> Result<Vec<SearchHit>, SearchError> {
         let mut statement = self.conn.prepare(
-            "SELECT note_index.path, note_index.title, note_index.body,
-                    note_tags.occurrences, note_tags.first_start, note_tags.first_end
+            // One row per note however many matching tags it carries. The
+            // single min() aggregate makes SQLite take the remaining columns
+            // from the note's earliest matching tag, so the snippet shows
+            // which tag answered.
+            "SELECT note_index.path AS path, note_index.title AS title,
+                    note_index.body AS body, note_tags.occurrences AS uses,
+                    MIN(note_tags.first_start) AS first_start,
+                    note_tags.first_end AS first_end
              FROM note_tags
              JOIN note_index ON note_index.path = note_tags.path
              WHERE note_tags.normalized = ?1
-             ORDER BY note_tags.occurrences DESC, note_index.path ASC
+                OR substr(note_tags.normalized, 1, length(?1) + 1) = ?1 || '/'
+             GROUP BY note_tags.path
+             ORDER BY uses DESC, path ASC
              LIMIT ?2",
         )?;
         let rows = statement.query_map(params![tag.to_lowercase(), i64::from(limit)], |row| {
@@ -621,14 +689,47 @@ impl SearchIndex {
 
 type IndexedTags = BTreeMap<String, (String, u32, usize, usize)>;
 
+/// Subtree aggregates for one tag path while the catalog is being built.
+struct TagTotals {
+    /// The vault's own spelling of this path.
+    display: String,
+    /// Whether some note writes this exact path, rather than only a child.
+    written: bool,
+    /// Notes carrying this tag or any tag below it, counted once each.
+    notes: BTreeSet<u32>,
+    /// Occurrences of this tag and of every tag below it.
+    occurrences: u64,
+}
+
+/// The first `depth` `/`-separated segments of `path`.
+fn leading_segments(path: &str, depth: usize) -> &str {
+    let mut seen = 0;
+    for (index, character) in path.char_indices() {
+        if character == '/' {
+            seen += 1;
+            if seen == depth {
+                return &path[..index];
+            }
+        }
+    }
+    path
+}
+
+/// Whether `character` may appear inside a tag, matching the body the
+/// extractor recognizes in note text so a frontmatter tag and an inline one
+/// are the same vocabulary.
+fn is_tag_character(character: char) -> bool {
+    character.is_alphanumeric()
+        || unicode_normalization::char::is_combining_mark(character)
+        || matches!(character, '-' | '_' | '/')
+}
+
 fn record_tag(tags: &mut IndexedTags, raw: &str, start: usize, end: usize) {
     let display = raw.strip_prefix('#').unwrap_or(raw);
     if display.is_empty()
         || display.len() > MAX_INDEXED_TAG_BYTES
         || display.ends_with('/')
-        || !display
-            .chars()
-            .all(|character| character.is_alphanumeric() || matches!(character, '-' | '_' | '/'))
+        || !display.chars().all(is_tag_character)
         || display.chars().all(|character| character.is_ascii_digit())
     {
         return;

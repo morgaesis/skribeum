@@ -1,5 +1,14 @@
 // Every user-facing string in the shell lives here, so externalization is a
 // file swap rather than a component sweep.
+
+/** How a tag row states its size, in the surface and to a screen reader. */
+function tagNoteCount(count: number): string {
+  return count === 1 ? "1 note" : `${count} notes`;
+}
+
+/** What a row below the answer band says it is, when read on its own. */
+const TAG_NEAR_MATCH_ANNOTATION = "near match";
+
 export const STRINGS = {
   appTitle: "Skribeum",
   openVault: "Open vault",
@@ -239,8 +248,21 @@ export const STRINGS = {
   commandSurfaceVault: "Vault",
   commandSurfaceCommands: "Commands and settings",
   commandSurfaceTags: "Tags",
+  commandSurfaceNearMatches: "Near matches",
+  commandSurfaceMostUsed: "Most used",
   commandSurfaceNoteText: "Note text",
   commandSurfaceSearchTextPrefix: "Search note text for ",
+  tagNoteCount: tagNoteCount,
+  tagMoreMatches: (count: number) =>
+    count === 1 ? "1 more tag matches" : `${count} more tags match`,
+  tagNoMatches: (query: string) => `No tag matches "${query}".`,
+  tagsEmptyVault:
+    "No tags in this vault yet. Write #name anywhere in a note to make one.",
+  tagNearMatchAnnotation: TAG_NEAR_MATCH_ANNOTATION,
+  tagRowName: (tag: string, noteCount: number, nearMatch: boolean) =>
+    nearMatch
+      ? `#${tag}, ${TAG_NEAR_MATCH_ANNOTATION}, ${tagNoteCount(noteCount)}`
+      : `#${tag}, ${tagNoteCount(noteCount)}`,
   settingActionPrefix: "Setting: ",
   commandOpenPalette: "Open command palette",
   quickSwitcherLabel: "Quick switcher",

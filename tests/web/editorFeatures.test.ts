@@ -649,7 +649,32 @@ describe("block authoring commands", () => {
 });
 
 describe("tag affordances", () => {
-  it("ranks fuzzy matches before recency and empty queries by recency and frequency", () => {
+  it("offers the typed tag itself and commits it on Enter", () => {
+    tagCatalog = [
+      { tag: "features", noteCount: 9, occurrenceCount: 9 },
+      { tag: "feature/ui", noteCount: 5, occurrenceCount: 5 },
+      { tag: "feature", noteCount: 3, occurrenceCount: 3 },
+      { tag: "feature/api", noteCount: 2, occurrenceCount: 2 },
+    ];
+    const view = makeView("", 0);
+
+    typeText(view, "#feature");
+
+    const options = [
+      ...(view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]') ?? []),
+    ];
+    expect(options[0]?.textContent).toBe("#feature");
+    expect(
+      view.dom.querySelector('.cm-skr-tag-menu [aria-selected="true"]')
+        ?.textContent,
+    ).toBe("#feature");
+
+    pressEditorKey(view, "Enter");
+
+    expect(view.state.doc.toString()).toBe("#feature");
+  });
+
+  it("ranks by band, then session recency, then how many notes use the tag", () => {
     const catalog = [
       { tag: "rare", noteCount: 1, occurrenceCount: 1 },
       { tag: "notes", noteCount: 4, occurrenceCount: 4 },
@@ -658,30 +683,39 @@ describe("tag affordances", () => {
       { tag: "alpha", noteCount: 3, occurrenceCount: 10 },
     ];
 
+    // Nothing typed: recency first, then the tags most notes use. A tag
+    // written a hundred times in three notes does not outrank a tag written
+    // once in each of four.
     expect(
       filteredTagCompletions(catalog, ["rare"], "").map((item) => item.tag),
-    ).toEqual(["rare", "notes", "occurrence", "alpha", "beta"]);
+    ).toEqual(["rare", "notes", "alpha", "beta", "occurrence"]);
 
-    const fuzzyFirst = filteredTagCompletions(
-      [
-        { tag: "alpha", noteCount: 20, occurrenceCount: 40 },
-        { tag: "aardvark", noteCount: 1, occurrenceCount: 1 },
-        { tag: "missing", noteCount: 100, occurrenceCount: 100 },
-      ],
-      ["alpha"],
-      "aa",
-    );
-    expect(fuzzyFirst.map((item) => item.tag)).toEqual(["aardvark", "alpha"]);
+    // Only characters that actually start the tag or one of its path
+    // segments count, so "aa" no longer reaches "alpha" by skipping.
+    expect(
+      filteredTagCompletions(
+        [
+          { tag: "alpha", noteCount: 20, occurrenceCount: 40 },
+          { tag: "aardvark", noteCount: 1, occurrenceCount: 1 },
+          { tag: "missing", noteCount: 100, occurrenceCount: 100 },
+        ],
+        ["alpha"],
+        "aa",
+      ).map((item) => item.tag),
+    ).toEqual(["aardvark"]);
+
+    // The tag the reader typed is present and leads, ahead of the deeper
+    // path that merely carries it as a segment.
     expect(
       filteredTagCompletions(
         [
           { tag: "ced", noteCount: 1, occurrenceCount: 1 },
-          { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 1 },
+          { tag: "project/cedar-room", noteCount: 9, occurrenceCount: 9 },
         ],
         [],
         "ced",
       ).map((item) => item.tag),
-    ).toEqual(["project/cedar-room"]);
+    ).toEqual(["ced", "project/cedar-room"]);
   });
 
   it("filters while typing and exposes a keyboard-operated listbox", () => {
@@ -692,7 +726,7 @@ describe("tag affordances", () => {
     ];
     const view = makeView("", 0);
 
-    typeText(view, "#pa");
+    typeText(view, "#p");
 
     expect(tagCompletionOpen(view.state)).toBe(true);
     const listbox = view.dom.querySelector('[role="listbox"]');
@@ -754,8 +788,10 @@ describe("tag affordances", () => {
       }),
     );
 
+    // The refreshed catalog contributes an exact match, so the row one below
+    // it is the one the arrow key lands on and the one Enter commits.
     expect(view.dom.querySelector('[aria-selected="true"]')?.textContent).toBe(
-      "#context/outdoors",
+      "#project/cedar-room",
     );
     view.contentDOM.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -766,7 +802,7 @@ describe("tag affordances", () => {
         cancelable: true,
       }),
     );
-    expect(view.state.doc.toString()).toBe("#context/outdoors");
+    expect(view.state.doc.toString()).toBe("#project/cedar-room");
   });
 
   it("leaves Enter to normal editing when no completion matches", () => {
@@ -794,13 +830,257 @@ describe("tag affordances", () => {
   });
 
   it("bounds the rendered completion candidates", () => {
-    const catalog = Array.from({ length: 150 }, (_, index) => ({
+    tagCatalog = Array.from({ length: 150 }, (_, index) => ({
       tag: `tag-${index.toString().padStart(3, "0")}`,
       noteCount: 1,
       occurrenceCount: 1,
     }));
+    const view = makeView("", 0);
 
-    expect(filteredTagCompletions(catalog, [], "")).toHaveLength(100);
+    typeText(view, "#tag");
+
+    // A caret-anchored menu whose tail cannot be read is a menu whose tail
+    // should not be built.
+    expect(
+      view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]'),
+    ).toHaveLength(8);
+  });
+
+  it("keeps the last row selected when Down is pressed on it", () => {
+    tagCatalog = [
+      { tag: "tag/one", noteCount: 3, occurrenceCount: 3 },
+      { tag: "tag/two", noteCount: 2, occurrenceCount: 2 },
+    ];
+    const view = makeView("", 0);
+    typeText(view, "#tag");
+
+    for (let press = 0; press < 5; press += 1) {
+      view.contentDOM.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          code: "ArrowDown",
+          keyCode: 40,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+    expect(view.dom.querySelector('[aria-selected="true"]')?.textContent).toBe(
+      "#tag/two",
+    );
+  });
+
+  it("keeps the menu on a wildcard and reopens it when one is deleted", () => {
+    tagCatalog = [
+      { tag: "feature", noteCount: 3, occurrenceCount: 3 },
+      { tag: "feature/ui", noteCount: 2, occurrenceCount: 2 },
+    ];
+    const view = makeView("", 0);
+
+    typeText(view, "#feature");
+    const withoutStar = [
+      ...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]'),
+    ].map((option) => option.textContent);
+
+    typeText(view, "*");
+
+    expect(tagCompletionOpen(view.state)).toBe(true);
+    expect(
+      [...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]')].map(
+        (option) => option.textContent,
+      ),
+    ).toEqual(withoutStar);
+
+    // A character a tag cannot contain closes the menu; deleting it back out
+    // reopens it rather than requiring the hash to be retyped.
+    typeText(view, ".");
+    expect(tagCompletionOpen(view.state)).toBe(false);
+    const head = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: head - 1, to: head },
+      selection: { anchor: head - 1 },
+      userEvent: "delete.backward",
+    });
+
+    expect(tagCompletionOpen(view.state)).toBe(true);
+    expect(
+      [...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]')].map(
+        (option) => option.textContent,
+      ),
+    ).toEqual(withoutStar);
+  });
+
+  it("never offers a tag that is only a typo away", () => {
+    tagCatalog = [
+      { tag: "feature", noteCount: 9, occurrenceCount: 9 },
+      { tag: "feature/long-document", noteCount: 1, occurrenceCount: 1 },
+    ];
+    const view = makeView("", 0);
+
+    typeText(view, "#featrue");
+
+    expect(
+      [...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]')].map(
+        (option) => option.textContent,
+      ),
+    ).toEqual([]);
+  });
+
+  // The catalog the packaged end-to-end suite's scratch vault produces, read
+  // back from the index rather than assumed: zz-tag-completion-catalog.md
+  // writes #project/cedar-room twice and #context/outdoors once, the two
+  // navigation notes write #shared, and zz-tag-delete.md writes
+  // #delete-only. Keeping the same expectations here means an ordering
+  // regression shows up without a packaged build.
+  describe("the end-to-end vault's tag catalog", () => {
+    const CATALOG: TagCatalogEntry[] = [
+      { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 2 },
+      { tag: "shared", noteCount: 2, occurrenceCount: 2 },
+      { tag: "cedar-notes", noteCount: 1, occurrenceCount: 1 },
+      { tag: "context/outdoors", noteCount: 1, occurrenceCount: 1 },
+      { tag: "delete-only", noteCount: 1, occurrenceCount: 1 },
+    ];
+
+    it("answers ced with the whole-tag match before the segment match", () => {
+      // cedar-notes starts with the query outright; project/cedar-room only
+      // does so from its second path segment, which is the weaker answer.
+      // The one note using cedar-notes against the two occurrences of
+      // project/cedar-room does not enter into it.
+      expect(
+        filteredTagCompletions(CATALOG, [], "ced").map((row) => `#${row.tag}`),
+      ).toEqual(["#cedar-notes", "#project/cedar-room"]);
+    });
+
+    it("answers context with the one tag below it", () => {
+      // context/outdoors is a descendant of the query. Nothing else in the
+      // vault starts with it or comes within an edit of it.
+      expect(
+        filteredTagCompletions(CATALOG, [], "context").map(
+          (row) => `#${row.tag}`,
+        ),
+      ).toEqual(["#context/outdoors"]);
+    });
+
+    it("puts the tag accepted most recently above one used as widely", () => {
+      // Both tags sit in two notes once each has been accepted into the
+      // note being edited, so note count cannot separate them and the
+      // alphabet favours context/outdoors. Only recency can reverse that.
+      const accepted: TagCatalogEntry[] = [
+        { tag: "project/cedar-room", noteCount: 2, occurrenceCount: 3 },
+        { tag: "context/outdoors", noteCount: 2, occurrenceCount: 2 },
+        { tag: "shared", noteCount: 2, occurrenceCount: 2 },
+        { tag: "cedar-notes", noteCount: 1, occurrenceCount: 1 },
+        { tag: "delete-only", noteCount: 1, occurrenceCount: 1 },
+      ];
+      expect(
+        filteredTagCompletions(accepted, [], "").map((row) => `#${row.tag}`),
+      ).toEqual([
+        "#context/outdoors",
+        "#project/cedar-room",
+        "#shared",
+        "#cedar-notes",
+        "#delete-only",
+      ]);
+      expect(
+        filteredTagCompletions(
+          accepted,
+          ["project/cedar-room", "context/outdoors"],
+          "",
+        ).map((row) => `#${row.tag}`),
+      ).toEqual([
+        "#project/cedar-room",
+        "#context/outdoors",
+        "#shared",
+        "#cedar-notes",
+        "#delete-only",
+      ]);
+    });
+
+    it("keeps the closer answer first however recently the other was used", () => {
+      // `cedar-notes` starts with the query outright and `project/cedar-room`
+      // only does so from its second segment, so the query itself separates
+      // them and recency has nothing left to decide. Accepting the weaker
+      // answer must not carry it over the stronger one for the next query:
+      // that would move the row under Enter between one word and the next,
+      // for a reason nothing on screen states.
+      for (const recent of [
+        [],
+        ["project/cedar-room"],
+        ["project/cedar-room", "cedar-notes"],
+        ["cedar-notes", "project/cedar-room"],
+      ]) {
+        expect(
+          filteredTagCompletions(CATALOG, recent, "ced").map(
+            (row) => `#${row.tag}`,
+          ),
+        ).toEqual(["#cedar-notes", "#project/cedar-room"]);
+      }
+    });
+  });
+
+  // The catalog is vault state that refreshes on its own schedule: an
+  // autosave of the half-typed word indexes it and the tag being typed
+  // becomes a tag of the vault while the menu that produced it is still
+  // open. The menu answers the query it was opened with, from the catalog it
+  // read then, and the row Enter commits is a row that was on screen.
+  describe("a catalog that changes while the menu is open", () => {
+    const rowsOf = (view: EditorView) =>
+      [...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]')].map(
+        (option) => option.textContent,
+      );
+
+    function openMenuThenIndexTheQuery(): EditorView {
+      tagCatalog = [
+        { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 2 },
+      ];
+      const view = makeView("", 0);
+      typeText(view, "#ced");
+      expect(rowsOf(view)).toEqual(["#project/cedar-room"]);
+      // What the autosave's reindex does to the catalog: the half-typed
+      // word is now a tag the vault holds.
+      tagCatalog = [
+        ...tagCatalog,
+        { tag: "ced", noteCount: 1, occurrenceCount: 1 },
+      ];
+      return view;
+    }
+
+    it("keeps the rows it drew, through an update that redraws them", () => {
+      const view = openMenuThenIndexTheQuery();
+
+      expect(rowsOf(view)).toEqual(["#project/cedar-room"]);
+      // A redraw with no new query: a caret move, a measure, a viewport
+      // change. Recomputing here would swap the row under the reader's
+      // finger without the reader having touched anything.
+      view.dispatch({ selection: { anchor: view.state.selection.main.head } });
+      expect(rowsOf(view)).toEqual(["#project/cedar-room"]);
+    });
+
+    it("commits the row that was on screen rather than the query itself", () => {
+      const view = openMenuThenIndexTheQuery();
+
+      pressEditorKey(view, "Enter");
+
+      expect(view.state.doc.toString()).toBe("#project/cedar-room");
+      expect(rememberedTags).toEqual(["project/cedar-room"]);
+    });
+
+    it("answers the next keystroke from the catalog it now holds", () => {
+      const view = openMenuThenIndexTheQuery();
+
+      // Deleting back to a query the new entry answers proves the menu
+      // reads the catalog again whenever the query changes, rather than
+      // holding the one it opened with for the life of the menu.
+      const head = view.state.selection.main.head;
+      view.dispatch({
+        changes: { from: head - 1, to: head },
+        userEvent: "delete.backward",
+      });
+      typeText(view, "d");
+
+      expect(rowsOf(view)).toEqual(["#ced", "#project/cedar-room"]);
+    });
   });
 
   it("removes the trigger and query when dismissed with Escape", () => {

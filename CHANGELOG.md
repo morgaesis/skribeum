@@ -8,6 +8,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Tag search matches by prefix at path-segment boundaries and groups its
+  results in bands: the tag itself, then everything below it in the path,
+  then tags a path segment of which starts with the query, then near matches
+  under their own heading. Near matches are tags containing what was typed or
+  a bounded edit distance from it, capped at five rows, drawn muted, never
+  preselected, and never offered while authoring. Every row states how many
+  notes use the tag and orders by it. `*` is removed from a tag query wherever
+  it appears, so `#feat`, `#feat*` and `#*feat` are one query with one result
+  list, and typing one no longer empties the results or closes the completion
+  menu.
+- A tag query returns the notes below it in the path: `#work` lists notes
+  tagged `work/meetings` and not notes tagged `workshop`, and each row's note
+  count covers the same set the row produces.
+- Tag mode ends with a row that re-runs the query as a note-text search, and
+  its empty states name what to do next: how to make the vault's first tag,
+  or which query found nothing after the wildcards were removed.
 - Settings navigation is a persistent rail of the six section names, selecting
   one group at a time, with the current section always answerable; below 42rem
   of surface width it becomes a two-level drill-down with a back control, and
@@ -23,7 +39,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   control shows its consequence instead of naming it. Choosing a palette
   changes only that palette and repaints the cards in the same frame; the
   scheme changes only when a scheme card is chosen.
-
 - The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
   terminators, and the keybinding tests drive the global handler on macOS,
   Windows and Linux platform strings, so both classes are answered wherever
@@ -62,9 +77,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   web lint, type check and test suite, filtered by the file types being
   pushed. `docs/ci.md` describes what runs when, what a Linux-only pull
   request no longer proves, and how to run the packaged end-to-end suite.
+- Revealed markdown markers behave like objects that take up room. A marker
+  grows from no width when the caret enters its construct and is squeezed
+  back to none when the caret leaves, so the text beside it is carried along
+  continuously instead of being displaced and then snapped back. Markers a
+  construct only shows while revealed keep their place through the exit on a
+  stand-in that is never part of the note, is hidden from assistive
+  technology, and is dropped as soon as the motion ends. Reduced motion
+  leaves the two resting widths and no motion between them.
 
 ### Fixed
 
+- The inline tag completion menu offers the tag that was typed, and accepting
+  a row replaces what was typed. It had removed the exact match from its own
+  results, so finishing a tag the vault already holds showed "No matches", and
+  pressing Enter committed a neighbouring tag into the note.
+- The tag catalog holds every tag in the vault. It had been cut to the
+  thousand most-used, so a rarely written tag existed for no surface and
+  nothing said so.
+- A tag written with a decomposed accent is indexed and searchable. The
+  editor rendered, offered and accepted the whole word while the indexer
+  stopped at the combining mark, which the syntax specification already
+  counts as part of the letter it belongs to.
+- The tag completion menu stops at the ends of its list instead of wrapping
+  around, matching the command surface, and reopens when a character that
+  ended the query is deleted instead of requiring the hash to be retyped.
+- A tag accepted a moment ago no longer displaces a closer answer to what is
+  being typed now. Session recency was compared before the rank recording how
+  closely a tag answers the query, so accepting a tag whose second path
+  segment matched carried it above one that matched outright for the rest of
+  the session, moving the row under Enter for a reason nothing on screen
+  stated.
 - A table followed by prose with no blank line renders as a table again: the
   parser's over-extended block is trimmed back to rows that share the
   header's shape, so the following paragraph stops being swallowed as a
@@ -235,13 +278,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The file tree opens every row it shows. A file that is neither a note nor a
   canvas is no longer drawn muted and inert, and the unified command surface
   reaches every indexed file rather than notes and canvases alone.
-- Expanding and collapsing a file tree folder moves the rows it displaces
-  through the positions between their old and new slots, with the tree's own
-  height on the same clock, so a vault taller than the sidebar grows and
-  shrinks under the reader instead of jumping to its new size and animating
-  over it. The rows a folder reveals unfold out of its slot and fold back
-  into it; the fill marking the open note travels on the row it belongs to,
-  and toggling a folder no longer scrolls the sidebar back to the open note.
 - Hovering a file tree row emphasises the entry's own text rather than
   filling the whole row, leaving the filled row to mean one thing: this is
   the note that is open.
@@ -333,12 +369,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Saving works wherever the caret is. `Mod-s` was claimed only while the
   note's own editable surface held focus, so a save pressed while editing a
   rendered table cell did nothing.
-- The application no longer scrolls inside its own window. The page under the
-  shell is bounded rather than merely hidden, so a surface that outgrows the
-  window is cut off at its edge instead of extending the page, and focusing a
-  control outside the viewport, a wheel over the chrome, or an overscroll can
-  no longer slide the application away from the window's own controls. Every
-  region that is meant to scroll still scrolls.
 - The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
   terminators, and the keybinding tests drive the global handler on macOS,
   Windows and Linux platform strings, so both classes are answered wherever

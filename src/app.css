@@ -8,6 +8,36 @@ body,
   margin: 0;
 }
 
+/* An application shell owns its scroll regions explicitly; the document is
+   never one of them. Every engine keeps the page scrollable once anything
+   overflows it, whatever the root's `overflow` says, so the guarantee has
+   to be that nothing can overflow: the body clips (not merely hides, which
+   would leave the body itself scrollable) and gives every absolutely
+   positioned surface its containing block, so one placed past the window's
+   edge is cut off there instead of extending the page. With no page to
+   scroll, focusing a control outside the viewport, a wheel over the chrome
+   and a stray `scrollIntoView` all leave the shell where it is instead of
+   sliding it out from under the window controls. Suppressing overscroll
+   covers the engines that still rubber-band a page with nowhere to go. */
+html {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  position: relative;
+  overflow: hidden;
+}
+
+/* `clip` is the stronger statement: it bounds the body without making the
+   body itself a scroll container, so the shell cannot be displaced one
+   level down either. */
+@supports (overflow: clip) {
+  body {
+    overflow: clip;
+  }
+}
+
 html,
 .cm-scroller {
   scroll-behavior: auto;
@@ -357,10 +387,6 @@ select {
     var(--skr-motion-state-easing);
 }
 
-.skr-tree-row:hover {
-  background: var(--skr-surface-subtle);
-}
-
 .skr-tree-row:focus-visible {
   outline: 2px solid var(--skr-focus);
   outline-offset: -2px;
@@ -396,6 +422,32 @@ select {
   box-shadow: inset 2px 0 var(--skr-accent);
   opacity: 0;
   pointer-events: none;
+}
+
+/* While a folder reveal runs, the rows it displaces travel between their
+   slots and the tree's own height follows them, so the scroll extent grows
+   and shrinks with the list instead of jumping to its new size in one frame.
+   The rows being revealed or hidden carry a clip as well, unfolding out of
+   and back into their folder's slot; only those rows ever hold one, and only
+   while they move, because a clip makes an element the containing block for
+   any fixed-position descendant. Row fills keep the state clock throughout. */
+.skr-file-tree-revealing .skr-tree-row {
+  transition:
+    top var(--skr-motion-panel-duration) var(--skr-motion-panel-easing),
+    clip-path var(--skr-motion-panel-duration) var(--skr-motion-panel-easing),
+    background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+.skr-file-tree-revealing .skr-tree-spacer {
+  transition: height var(--skr-motion-panel-duration)
+    var(--skr-motion-panel-easing);
+}
+
+.skr-file-tree-revealing .skr-tree-active-highlight {
+  transition:
+    top var(--skr-motion-panel-duration) var(--skr-motion-panel-easing),
+    clip-path var(--skr-motion-panel-duration) var(--skr-motion-panel-easing);
 }
 
 .skr-tree-indent-guide {
@@ -434,10 +486,25 @@ select {
   line-height: 1;
 }
 
+/* Hover names the entry, not the row. The filled row belongs to the open
+   note alone, so the pointer's own emphasis is the same subtle surface fill
+   every other control uses for hover, scoped to the entry's text on the 50ms
+   state clock. The padding and its matching negative margin leave the label's
+   text box exactly where it rests, so nothing moves under the pointer. */
 .skr-tree-label {
   min-width: 0;
   overflow: hidden;
+  border-radius: var(--skr-radius-control);
+  margin-inline: -0.25rem;
+  padding-inline: 0.25rem;
   text-overflow: ellipsis;
+  transition: background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+.skr-tree-row:hover .skr-tree-label,
+.skr-tree-row-hovered .skr-tree-label {
+  background-color: var(--skr-surface-subtle);
 }
 
 .skr-tree-suffix {
@@ -1528,23 +1595,21 @@ html body .settings-dialog {
   background: var(--skr-surface-subtle);
 }
 
-/* The marker's reserved width applies with the instant list (no transition
-   ever targets it); only opacity and a compositor translate ever animate
-   here. The two states below are the resting values the glyph animates
-   between: the entrance and the exit themselves are played on the node the
-   view has just built, because a decoration class change replaces that node
-   and a CSS transition would have no starting value to run from. The glyph
-   enters on the surface clock and leaves on the state clock, the exit
-   mirroring the entrance travel rather than a bare fade. */
+/* The two states below are the resting values the glyph animates between: no
+   width and invisible, or its own width and fully there. The entrance and the
+   exit themselves are played on the node the view has just built, because a
+   decoration class change replaces that node and a CSS transition would have
+   no starting value to run from. Width is the motion — the glyph takes room
+   from the text arriving and gives it back leaving — so nothing here declares
+   a transition and nothing translates. The glyph enters on the surface clock
+   and leaves on the state clock. */
 .cm-skr-reveal-marker {
   display: inline-block;
   opacity: 0;
-  transform: translateX(var(--skr-motion-distance));
 }
 
 .cm-skr-reveal-marker-active {
   opacity: 1;
-  transform: translateX(0);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1662,6 +1727,19 @@ html body .settings-dialog {
     var(--skr-motion-surface-easing);
 }
 
+/* A drill-down level arriving from the trailing edge, and the mirrored
+   return to the level that contains it. */
+[data-motion-surface="drill-push"] {
+  transform: translateX(var(--skr-motion-distance));
+}
+
+[data-motion-surface="drill-pop"] {
+  transform: translateX(calc(-1 * var(--skr-motion-distance)));
+  transition:
+    opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing),
+    transform var(--skr-motion-state-duration) var(--skr-motion-state-easing);
+}
+
 [data-motion-surface][data-motion-entered="true"] {
   opacity: 1;
   transform: none;
@@ -1724,16 +1802,6 @@ html body .settings-dialog {
 }
 
 @media (max-width: 60rem) {
-  .settings-jump-menu[data-motion-entered="false"] {
-    transform: translateY(var(--skr-motion-distance));
-  }
-
-  /* On narrow viewports the jump menu rises from the bottom edge, so its
-     exit mirrors that direction instead of the anchored-top default. */
-  .settings-jump-menu[data-motion-exiting="true"] {
-    transform: translateY(var(--skr-motion-distance));
-  }
-
   .skr-app-header {
     box-sizing: border-box;
     display: grid;
@@ -1808,7 +1876,10 @@ html body .settings-dialog {
     min-height: 2.75rem;
   }
 
-  .cm-skr-selection-toolbar .cm-skr-toolbar-button,
+  /* The selection toolbar's own touch-mode floor lives in
+     selectionToolbar.ts next to the sizes it overrides: this rule and that
+     theme both set `min-width`/`min-height` on the same element, and the
+     loser of that specificity tie silently drops below the touch floor. */
   .cm-skr-slash-option,
   .cm-skr-tag-option,
   .cm-skr-task-checkbox,

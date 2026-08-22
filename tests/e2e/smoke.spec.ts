@@ -35,6 +35,7 @@ import {
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
+  MIXED_ENDING_NOTE_NAME,
   NAVIGATION_SOURCE_NOTE_CONTENT,
   NAVIGATION_SOURCE_NOTE_NAME,
   NAVIGATION_TARGET_NOTE_CONTENT,
@@ -384,6 +385,67 @@ async function viewportAfterPaint(): Promise<ViewportSize> {
   });
 }
 
+/** The shared viewport every test starts and ends at. */
+const DESKTOP_VIEWPORT: ViewportSize = { width: 1100, height: 750 };
+
+/**
+ * The smallest edge a resize request may carry.
+ *
+ * The compensation below adds the shortfall between the requested viewport
+ * and the observed one to the next outer size. A reading taken before the
+ * host applied the previous resize reports the old, larger viewport, and for
+ * a large shrink that shortfall exceeds the request itself: 390 + (390 -
+ * 1280) is negative, and the driver rejects a negative window size outright
+ * with an argument error that says nothing about the viewport. The floor
+ * keeps a retry a retry.
+ */
+const MINIMUM_WINDOW_EDGE = 240;
+
+/**
+ * Reads the viewport once the host has finished resizing the window.
+ *
+ * A resize reaches the webview through the display server on its own
+ * schedule, while frames keep being produced throughout, so an elapsed frame
+ * count is not evidence that the new size has landed. This samples the
+ * viewport every frame and reports it once it matches the requested size or
+ * has held still long enough to be settled rather than mid-flight, and
+ * reports whatever it last saw if neither happens inside the bound.
+ */
+async function settledViewport(target: ViewportSize): Promise<ViewportSize> {
+  return browser.executeAsync<ViewportSize, [ViewportSize, number, number]>(
+    (wanted, stableFor, limit, done) => {
+      const start = performance.now();
+      let last = { width: window.innerWidth, height: window.innerHeight };
+      let lastChange = start;
+      const sample = () => {
+        const now = performance.now();
+        const current = {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        };
+        if (current.width !== last.width || current.height !== last.height) {
+          last = current;
+          lastChange = now;
+        }
+        if (
+          (current.width === wanted.width &&
+            current.height === wanted.height) ||
+          now - lastChange >= stableFor ||
+          now - start >= limit
+        ) {
+          done(current);
+          return;
+        }
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    },
+    target,
+    400,
+    5000,
+  );
+}
+
 async function setViewportSize(
   width: number,
   height: number,
@@ -395,7 +457,7 @@ async function setViewportSize(
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     await browser.setWindowSize(outerWidth, outerHeight);
-    actual = await viewportAfterPaint();
+    actual = await settledViewport({ width, height });
     if (actual.width === width && actual.height === height) return actual;
     if (
       attempt > 0 &&
@@ -406,8 +468,17 @@ async function setViewportSize(
     }
 
     previous = actual;
-    outerWidth += width - actual.width;
-    outerHeight += height - actual.height;
+    // The correction is the shortfall between the viewport asked for and
+    // the one the host produced, which is normally positive: window chrome
+    // makes the viewport smaller than the outer size. A host that clamps or
+    // refuses the resize reports a viewport at least as large as the
+    // request, so the correction turns negative and walks the outer size
+    // down on every attempt until WebDriver rejects a non-positive size
+    // with a range error, losing the whole run to a driver error instead of
+    // this helper's own diagnostic below. The outer window can never be
+    // smaller than the viewport it has to contain, so that is the floor.
+    outerWidth = Math.max(width, outerWidth + (width - actual.width));
+    outerHeight = Math.max(height, outerHeight + (height - actual.height));
   }
 
   // Hosted macOS displays cap native window height below 844 pixels. The
@@ -420,15 +491,17 @@ async function setViewportSize(
   );
 }
 
+/**
+ * Returns the window to the shared desktop viewport.
+ *
+ * The wait is for that viewport to have been reached, not merely for a
+ * reading above the narrow breakpoint: every width this runs from is either
+ * already above the breakpoint or on its way past it, so the looser check
+ * returns while the resize is still in flight and hands the next test a
+ * window that is still moving under its measurements.
+ */
 async function restoreDesktopViewport() {
-  await browser.setWindowSize(1100, 750);
-  await browser.waitUntil(
-    async () => (await viewportAfterPaint()).width > 960,
-    {
-      timeout: 10000,
-      timeoutMsg: "viewport did not return above the narrow breakpoint",
-    },
-  );
+  await setViewportSize(DESKTOP_VIEWPORT.width, DESKTOP_VIEWPORT.height);
 }
 
 async function setSimulatedVisualViewport(
@@ -598,6 +671,98 @@ async function renderedTableGeometry(): Promise<TableGeometry[]> {
   });
 }
 
+type EditingCell = { row: string | null; column: string | null };
+
+/** The cell that owns the caret, or null when the caret is outside a table. */
+async function editingCell(): Promise<EditingCell | null> {
+  return browser.execute(() => {
+    const cell = document.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"]',
+    );
+    return cell === null
+      ? null
+      : {
+          row: cell.getAttribute("data-row"),
+          column: cell.getAttribute("data-column"),
+        };
+  });
+}
+
+/**
+ * Waits until nothing in the editing cell follows the caret.
+ *
+ * A pointer press places the caret when the editor answers the event, not when
+ * the driver finishes dispatching it. Travelling out of a cell is conditional
+ * on the caret already sitting at that cell's end, so an arrow key pressed
+ * before the press has been answered moves the selection the editor still held
+ * and stays inside the cell, which reads afterwards as a cell that refused to
+ * hand the caret on.
+ */
+async function waitForCellCaretAtEnd(): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(
+          '.cm-skr-table-cell[data-editing="true"] .cm-content',
+        );
+        const selection = getSelection();
+        if (content === null || selection === null || !selection.isCollapsed) {
+          return false;
+        }
+        const anchor = selection.anchorNode;
+        if (anchor === null || !content.contains(anchor)) return false;
+        const remainder = document.createRange();
+        remainder.setStart(anchor, selection.anchorOffset);
+        remainder.setEnd(content, content.childNodes.length);
+        return remainder.toString() === "";
+      }),
+    {
+      timeout: 10000,
+      timeoutMsg: "the caret did not reach the end of the editing cell",
+    },
+  );
+}
+
+/**
+ * Waits for the caret to settle in the table cell described by `expected`, or
+ * outside every table when `expected` is null.
+ *
+ * A cell move is the settled result of a keystroke that the editor answers by
+ * rewriting the source and rebuilding the table's decorations, and the cell
+ * that reports itself editing partway through that rebuild is not the one the
+ * writer ends up in. Reading the attributes one command after the key samples
+ * whatever the surface was passing through; this waits for the destination and
+ * names the cell it last saw when the caret settles somewhere else.
+ */
+async function expectEditingCell(
+  expected: { row?: string; column?: string } | null,
+): Promise<void> {
+  let seen = await editingCell();
+  const settled = (cell: EditingCell | null) => {
+    if (expected === null) return cell === null;
+    return (
+      cell !== null &&
+      (expected.row === undefined || cell.row === expected.row) &&
+      (expected.column === undefined || cell.column === expected.column)
+    );
+  };
+  try {
+    await browser.waitUntil(
+      async () => {
+        seen = await editingCell();
+        return settled(seen);
+      },
+      { timeout: 10000 },
+    );
+  } catch {
+    throw new Error(
+      `the caret settled in ${JSON.stringify(seen)} rather than ${
+        expected === null ? "outside every table" : JSON.stringify(expected)
+      }`,
+    );
+  }
+}
+
 async function prepareTableGeometryNote(): Promise<void> {
   await openNoteFromTree(VISUAL_NOTE_NAME);
   await browser.waitUntil(
@@ -687,6 +852,13 @@ async function typeTagCompletionQuery(
   // event that triggers the refresh) rather than a fixed duration guessed
   // to outlast the debounce.
   await harness.waitForQuerySaved(position, query);
+  // That save makes the typed query a tag of this note, and the refresh it
+  // triggers does reach the catalog. It does not reach the rows already
+  // drawn: those answer the query as it stood at the last keystroke, and a
+  // catalog that arrives with no keystroke behind it reaches the next query
+  // rather than this one. Every expectation below is therefore the vault's
+  // answer, not the vault's answer plus the word still being typed, and the
+  // row a key commits below is a row asserted on above.
 }
 
 async function saveAndExpectTagCompletionTarget(expected: string) {
@@ -823,6 +995,12 @@ type TagCompletionHarness = {
   expectResult(expected: string): Promise<void>;
   expectDismissedResult(expected: string): Promise<void>;
   /**
+   * The rows this harness's vault answers the query `ced` with, in order.
+   * The two vaults hold different notes, so the answer is a property of the
+   * vault rather than of the matching rule they share.
+   */
+  completionRows: readonly string[];
+  /**
    * Resolves once the autosave carrying the typed query has landed in
    * whichever store the harness persists to.
    */
@@ -834,6 +1012,10 @@ type TagCompletionHarness = {
 
 const packagedTagCompletionHarness: TagCompletionHarness = {
   prepare: prepareTagCompletionTarget,
+  // `cedar-notes` starts with the query outright and leads;
+  // `project/cedar-room` follows because only its second path segment does.
+  // That distinction fixes the order whatever the note counts are.
+  completionRows: ["#cedar-notes", "#project/cedar-room"],
   async expectResult(expected) {
     expect(await editorDocumentText()).toBe(expected);
     await saveAndExpectTagCompletionTarget(expected);
@@ -852,14 +1034,23 @@ const packagedTagCompletionHarness: TagCompletionHarness = {
   },
 };
 
+async function selectedTagCompletionRow(): Promise<string> {
+  return $(".cm-skr-tag-menu [aria-selected=true]").getText();
+}
+
+/**
+ * `context/outdoors` used to answer the query `ced`, and only because the old
+ * matcher would scatter `c`, `e` and `d` across it. It neither contains `ced`
+ * nor comes within one edit of any of its path segments, so a reader could
+ * not say why it was on screen, and neither vault offers it now.
+ */
 async function verifyTagCompletionAcceptance(harness: TagCompletionHarness) {
   for (const position of ["middle", "final"] as const) {
     for (const chord of [[Key.Enter], [Key.Ctrl, Key.Enter]]) {
       await harness.prepare();
       await typeTagCompletionQuery(harness, position);
       expect(await tagCompletionOptionTexts()).toEqual([
-        "#project/cedar-room",
-        "#context/outdoors",
+        ...harness.completionRows,
       ]);
 
       await browser.keys(chord);
@@ -868,7 +1059,7 @@ async function verifyTagCompletionAcceptance(harness: TagCompletionHarness) {
         timeout: 3000,
       });
       await harness.expectResult(
-        tagCompletionResult(position, "#project/cedar-room"),
+        tagCompletionResult(position, harness.completionRows[0] ?? ""),
       );
     }
   }
@@ -877,32 +1068,34 @@ async function verifyTagCompletionAcceptance(harness: TagCompletionHarness) {
 async function verifyTagCompletionArrowSelection(
   harness: TagCompletionHarness,
 ) {
+  const rows = harness.completionRows;
+  const first = rows[0] ?? "";
+  const last = rows[rows.length - 1] ?? "";
+  const press = async (key: string) => {
+    // One press more than there are rows, so the last one lands on a list
+    // that has already ended: it clamps rather than returning to the far
+    // side, and whichever row is shown selected is the row Enter commits.
+    for (let step = 0; step <= rows.length; step += 1) {
+      await browser.keys(key);
+    }
+  };
   for (const position of ["middle", "final"] as const) {
     await harness.prepare();
     await typeTagCompletionQuery(harness, position);
-    await browser.keys(Key.ArrowDown);
-    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
-      "#context/outdoors",
-    );
+    expect(await tagCompletionOptionTexts()).toEqual([...rows]);
+    await press(Key.ArrowDown);
+    expect(await selectedTagCompletionRow()).toBe(last);
     await browser.keys(Key.Enter);
-    await harness.expectResult(
-      tagCompletionResult(position, "#context/outdoors"),
-    );
+    await harness.expectResult(tagCompletionResult(position, last));
 
     await harness.prepare();
     await typeTagCompletionQuery(harness, position);
-    await browser.keys(Key.ArrowDown);
-    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
-      "#context/outdoors",
-    );
-    await browser.keys(Key.ArrowUp);
-    expect(await $(".cm-skr-tag-menu [aria-selected=true]").getText()).toBe(
-      "#project/cedar-room",
-    );
+    await press(Key.ArrowDown);
+    expect(await selectedTagCompletionRow()).toBe(last);
+    await press(Key.ArrowUp);
+    expect(await selectedTagCompletionRow()).toBe(first);
     await browser.keys(Key.Enter);
-    await harness.expectResult(
-      tagCompletionResult(position, "#project/cedar-room"),
-    );
+    await harness.expectResult(tagCompletionResult(position, first));
   }
 }
 
@@ -1054,6 +1247,9 @@ async function prepareDemoTagCompletionTarget(): Promise<void> {
 
 const demoTagCompletionHarness: TagCompletionHarness = {
   prepare: prepareDemoTagCompletionTarget,
+  // The sample vault holds one tag a path segment of which starts with the
+  // query, and nothing that starts with it outright.
+  completionRows: ["#project/cedar-room"],
   async expectResult(expected) {
     expect(await demoTagCompletionTargetText()).toBe(expected);
   },
@@ -1322,6 +1518,71 @@ async function selectSettingsChoice(selector: string, label: string) {
         selector,
       ),
     { timeout: 10000, timeoutMsg: `${label} did not become active` },
+  );
+}
+
+/**
+ * Selects a settings group from the rail. The surface shows one group at a
+ * time and reopens on the group it last showed, so a test that reaches for a
+ * control names the group that holds it.
+ */
+async function openSettingsGroup(name: string) {
+  /** The surface's navigation state and the group it shows, in one pass. */
+  const surfaceState = (group: string) =>
+    browser.execute((target: string) => {
+      const tab = document.querySelector(
+        `[data-testid="settings-rail-${target}"]`,
+      );
+      return {
+        railed: tab !== null,
+        selected: tab?.getAttribute("aria-selected") === "true",
+        listedRow:
+          document.querySelector(
+            `.settings-group-row[data-section="${target}"]`,
+          ) !== null,
+        shown:
+          document.querySelector<HTMLElement>("[data-settings-section]")
+            ?.dataset.settingsSection ?? null,
+      };
+    }, group);
+
+  if ((await surfaceState(name)).railed) {
+    await $(`[data-testid="settings-rail-${name}"]`).click();
+    await browser.waitUntil(
+      async () => {
+        const state = await surfaceState(name);
+        return state.selected && state.shown === name;
+      },
+      { timeout: 5000, timeoutMsg: `${name} group did not open` },
+    );
+    return;
+  }
+
+  // Below the rail's breakpoint the six names are a level of their own, so
+  // leaving the group that is showing is its own act: the list it returns to
+  // arrives in a later frame, and a second click issued in the same document
+  // pass would find nothing to press.
+  if (!(await surfaceState(name)).listedRow) {
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLButtonElement>('[data-testid="settings-back"]')
+        ?.click();
+    });
+    await browser.waitUntil(async () => (await surfaceState(name)).listedRow, {
+      timeout: 5000,
+      timeoutMsg: "the settings group list did not arrive",
+    });
+  }
+  await browser.execute((group: string) => {
+    document
+      .querySelector<HTMLButtonElement>(
+        `.settings-group-row[data-section="${group}"]`,
+      )
+      ?.click();
+  }, name);
+  await browser.waitUntil(
+    async () => (await surfaceState(name)).shown === name,
+    { timeout: 5000, timeoutMsg: `${name} group did not open` },
   );
 }
 
@@ -2482,36 +2743,61 @@ describe("skribeum shell", () => {
       await $(".cm-skr-selectionLayer .cm-selectionBackground").waitForExist({
         timeout: 10000,
       });
-      const drawn = await browser.execute(() => {
-        const content = document.querySelector<HTMLElement>(".cm-content");
-        if (content === null) throw new Error("editor content missing");
-        const contentBox = content.getBoundingClientRect();
-        const style = window.getComputedStyle(content);
-        const columnLeft =
-          contentBox.left + Number.parseFloat(style.paddingLeft);
-        const columnRight =
-          contentBox.right - Number.parseFloat(style.paddingRight);
-        const stock = document.querySelector<HTMLElement>(
-          ".cm-layer.cm-selectionLayer",
+      const drawnHighlight = () =>
+        browser.execute(() => {
+          const content = document.querySelector<HTMLElement>(".cm-content");
+          if (content === null) throw new Error("editor content missing");
+          const contentBox = content.getBoundingClientRect();
+          const style = window.getComputedStyle(content);
+          const columnLeft =
+            contentBox.left + Number.parseFloat(style.paddingLeft);
+          const columnRight =
+            contentBox.right - Number.parseFloat(style.paddingRight);
+          const stock = document.querySelector<HTMLElement>(
+            ".cm-layer.cm-selectionLayer",
+          );
+          const rectangles = [
+            ...document.querySelectorAll<HTMLElement>(
+              ".cm-skr-selectionLayer .cm-selectionBackground",
+            ),
+          ].map((element) => element.getBoundingClientRect());
+          return {
+            stockLayerDisplay:
+              stock === null
+                ? "absent"
+                : window.getComputedStyle(stock).display,
+            rectangleCount: rectangles.length,
+            overshoots: rectangles.filter(
+              (box) => box.left < columnLeft - 1 || box.right > columnRight + 1,
+            ).length,
+          };
+        });
+      // The highlight is redrawn as the resize and the selection reflow the
+      // lines under it, and the first rectangle exists before that settles, so
+      // its width at that moment is the width of a layout still in motion.
+      // The contract is where the highlight comes to rest, and a rectangle
+      // that genuinely escapes the column keeps escaping it.
+      let drawn = await drawnHighlight();
+      try {
+        await browser.waitUntil(
+          async () => {
+            drawn = await drawnHighlight();
+            return (
+              drawn.stockLayerDisplay === "none" &&
+              drawn.rectangleCount > 0 &&
+              drawn.overshoots === 0
+            );
+          },
+          { timeout: 10000 },
         );
-        const rectangles = [
-          ...document.querySelectorAll<HTMLElement>(
-            ".cm-skr-selectionLayer .cm-selectionBackground",
-          ),
-        ].map((element) => element.getBoundingClientRect());
-        return {
-          stockLayerDisplay:
-            stock === null ? "absent" : window.getComputedStyle(stock).display,
-          rectangleCount: rectangles.length,
-          overshoots: rectangles.filter(
-            (box) => box.left < columnLeft - 1 || box.right > columnRight + 1,
-          ).length,
-        };
-      });
-      // The stock layer must not paint a second, unclamped highlight.
-      expect(drawn.stockLayerDisplay).toBe("none");
-      expect(drawn.rectangleCount).toBeGreaterThan(0);
-      expect(drawn.overshoots).toBe(0);
+      } catch {
+        throw new Error(
+          // The stock layer must not paint a second, unclamped highlight.
+          `the selection highlight settled outside the reading column; observed ${JSON.stringify(
+            drawn,
+          )}`,
+        );
+      }
     } finally {
       await clearEditorSelection();
       await restoreDesktopViewport();
@@ -2676,12 +2962,10 @@ describe("skribeum shell", () => {
           (await firstBodyCell?.getAttribute("data-editing")) === "true",
         { timeout: 10000, timeoutMsg: "table cell did not acquire its caret" },
       );
-      expect(
-        await browser.execute(
-          () =>
-            document.activeElement?.classList.contains("cm-content") ?? false,
-        ),
-      ).toBe(true);
+      // Focus custody and the caret it carries land together and land after
+      // the cell reports itself editing, so the poll below is the assertion:
+      // reading focus once before it covers the same property against a
+      // webview that has not delivered the focus event yet.
       await browser.waitUntil(
         () =>
           browser.execute(() => {
@@ -2851,37 +3135,16 @@ describe("skribeum shell", () => {
         },
       ]);
       await browser.releaseActions();
+      await waitForCellCaretAtEnd();
       await pressFocusedKey("ArrowRight");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("1");
+      await expectEditingCell({ row: "1", column: "1" });
       await pressFocusedKey("Tab");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("2");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("0");
+      await expectEditingCell({ row: "2", column: "0" });
       await pressFocusedKey("Tab", true);
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("1");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("1");
+      await expectEditingCell({ row: "1", column: "1" });
 
       await browser.keys([modifierKey, "p"]);
       const commandSurface = $('[data-testid="unified-command-surface"]');
@@ -2900,16 +3163,7 @@ describe("skribeum shell", () => {
         { timeout: 10000 },
       );
       expect(await $(".cm-skr-table-grid").getAttribute("role")).toBe("grid");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("1");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("1");
+      await expectEditingCell({ row: "1", column: "1" });
 
       await browser.keys(Key.Escape);
       await browser.keys([modifierKey, "e"]);
@@ -2928,65 +3182,42 @@ describe("skribeum shell", () => {
       await placeCursorAtLineEnd("Large table follows.");
       await pressFocusedKey("ArrowDown");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(await $$('.cm-skr-table-cell[data-editing="true"]')).toHaveLength(
-        0,
-      );
+      await expectEditingCell(null);
       await pressFocusedKey("ArrowDown");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("0");
+      await expectEditingCell({ row: "0" });
       for (let row = 1; row <= 30; row += 1) {
         await pressFocusedKey("ArrowDown");
-        expect(
-          await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-            "data-row",
-          ),
-        ).toBe(String(row));
+        await expectEditingCell({ row: String(row) });
       }
       await pressFocusedKey("ArrowDown");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(await $$('.cm-skr-table-cell[data-editing="true"]')).toHaveLength(
-        0,
-      );
+      await expectEditingCell(null);
       await pressFocusedKey("ArrowUp");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("30");
+      await expectEditingCell({ row: "30" });
       await browser.keys(Key.Escape);
-      expect(await $$(".cm-skr-table-grid")).toHaveLength(2);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 2,
+        { timeout: 10000 },
+      );
       expect(await editorText()).not.toContain("| --- | --- |");
 
       const renderedTables = await $$(".cm-skr-table-grid");
       await renderedTables[0]
         ?.$('.cm-skr-table-cell[data-row="2"][data-column="1"]')
         .click();
+      // Which cell the Tab travels from is the cell the press landed in, so
+      // the press has to have been answered before the key is sent.
+      await expectEditingCell({ row: "2", column: "1" });
       await pressFocusedKey("Tab");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("3");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("0");
+      await expectEditingCell({ row: "3", column: "0" });
       const tabGrown = edited.replace("| Ada | 10 |", "| Ada | 10 |\n| | |");
       await browser.keys([modifierKey, "s"]);
       await waitForDisk(TABLE_EDITING_NOTE_NAME, tabGrown);
 
       await pressFocusedKey("Enter");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("4");
+      await expectEditingCell({ row: "4" });
       const enterGrown = tabGrown.replace(
         "| Ada | 10 |\n| | |",
         "| Ada | 10 |\n| | |\n| | |",
@@ -3046,15 +3277,37 @@ describe("skribeum shell", () => {
         async () => (await $$(".cm-skr-table-grid")).length === 2,
         { timeout: 15000 },
       );
+      // Two rendered tables is the shape of the note before and after every
+      // case here, so it cannot tell a reset editor from one still holding the
+      // rows the previous case inserted: the write lands on disk, and the
+      // editor adopts it when the watcher reports it. Running the next command
+      // against the buffer that has yet to be replaced applies it on top of the
+      // previous case's edit. The first table's own dimensions are what
+      // distinguishes them.
+      await browser.waitUntil(
+        async () => {
+          const grid = (await $$(".cm-skr-table-grid"))[0];
+          return (
+            grid !== undefined &&
+            (await grid.getAttribute("aria-rowcount")) === "3" &&
+            (await grid.getAttribute("aria-colcount")) === "2"
+          );
+        },
+        {
+          timeout: 15000,
+          timeoutMsg:
+            "the table fixture did not return to its original shape before the next case",
+        },
+      );
     };
     const focusBodyCell = async () => {
       const tables = await $$(".cm-skr-table-grid");
       await tables[0]
         ?.$('.cm-skr-table-cell[data-row="1"][data-column="0"] .cm-content')
         .click();
-      await $('.cm-skr-table-cell[data-editing="true"]').waitForExist({
-        timeout: 10000,
-      });
+      // Where a structure command inserts is where the caret is, so the cell
+      // the press selected has to be holding it before the command runs.
+      await expectEditingCell({ row: "1", column: "0" });
     };
     // A surface is displayed as soon as it is rendered, which is while its
     // entrance is still travelling, so the row's position when WebDriver
@@ -3955,6 +4208,63 @@ describe("skribeum shell", () => {
     await waitForDisk(CRLF_NOTE_NAME, "first\r\nsecond!\r\nthird\r\n");
   });
 
+  it("preserves_each_terminator_of_a_mixed_ending_note", async () => {
+    await openNoteFromTree(MIXED_ENDING_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("old mac line"),
+      { timeout: 15000 },
+    );
+
+    // Every terminator is a line break in the buffer whatever bytes wrote
+    // it, so the four line ends sit at the offsets the LF-normalized text
+    // "unix line\ndos line\nold mac line\nfinal line\n" puts them at. A lone
+    // CR read as an ordinary character would collapse the last two lines
+    // into one and move both later offsets.
+    const lineEnds = [];
+    for (const text of [
+      "unix line",
+      "dos line",
+      "old mac line",
+      "final line",
+    ]) {
+      lineEnds.push(
+        await browser.execute(
+          (lineText: string) =>
+            (
+              window as Window & {
+                __SKRIBEUM_E2E_SET_LINE_END__?: (
+                  lineText: string,
+                ) => number | null;
+              }
+            ).__SKRIBEUM_E2E_SET_LINE_END__?.(lineText) ?? null,
+          text,
+        ),
+      );
+    }
+    expect(lineEnds).toEqual([9, 18, 31, 42]);
+
+    await placeCursorAtLineEnd("dos line");
+    await $(".cm-content").addValue("!");
+    await browser.keys([modifierKey, "s"]);
+
+    await waitForDisk(
+      MIXED_ENDING_NOTE_NAME,
+      "unix line\ndos line!\r\nold mac line\rfinal line\n",
+    );
+
+    // An edit on the far side of the lone CR keeps the terminators before
+    // it: a mapping that resolved every break to one terminator would
+    // rewrite the whole file on the first save.
+    await placeCursorAtLineEnd("final line");
+    await $(".cm-content").addValue("?");
+    await browser.keys([modifierKey, "s"]);
+
+    await waitForDisk(
+      MIXED_ENDING_NOTE_NAME,
+      "unix line\ndos line!\r\nold mac line\rfinal line?\n",
+    );
+  });
+
   it("edits_a_file_that_is_not_a_note_without_rewriting_its_other_bytes", async () => {
     await openNoteFromTree(CONFIG_FILE_NAME);
     await browser.waitUntil(
@@ -4370,36 +4680,63 @@ describe("skribeum shell", () => {
     await verifyTagCompletionArrowSelection(packagedTagCompletionHarness);
   });
 
+  // Accepting a tag has to lift it above one the vault uses at least as
+  // much, or the assertion proves nothing: a single acceptance also adds the
+  // note being edited to that tag's count, which would carry it to the top
+  // on usage alone. Two tags are accepted here for that reason.
+  // `context/outdoors` and `project/cedar-room` each appear once in
+  // zz-tag-completion-catalog.md and once in the note being edited, so they
+  // end level at two notes each, alongside `shared` in the two navigation
+  // notes. Note count cannot separate them and the alphabet puts
+  // `context/outdoors` first, so the only thing that can put
+  // `project/cedar-room` at the top is having been accepted last.
   it("ranks_an_inserted_tag_as_recent", async () => {
     await prepareTagCompletionTarget();
-    await typeTagCompletionQuery(packagedTagCompletionHarness);
+
+    // Only one tag in the vault sits below `context`, so the menu is that
+    // one row and Enter takes it.
+    await typeTagCompletionQuery(
+      packagedTagCompletionHarness,
+      "final",
+      "context",
+    );
+    expect(await tagCompletionOptionTexts()).toEqual(["#context/outdoors"]);
+    await browser.keys(Key.Enter);
+    const firstAccepted = tagCompletionResult("final", "#context/outdoors");
+    expect(await editorDocumentText()).toBe(firstAccepted);
+    await saveAndExpectTagCompletionTarget(firstAccepted);
+
+    await placeCursorAtLineEnd("#context/outdoors");
+    await browser.keys(Key.Enter);
+    await $(".cm-content").addValue("#ced");
+    const cedRows = packagedTagCompletionHarness.completionRows;
+    await browser.waitUntil(
+      async () => (await tagCompletionOptionTexts()).length === cedRows.length,
+      { timeout: 10000, timeoutMsg: "the second query's menu did not open" },
+    );
+    expect(await tagCompletionOptionTexts()).toEqual([...cedRows]);
     await browser.keys(Key.ArrowDown);
     await browser.keys(Key.Enter);
-    const expected = tagCompletionResult("final", "#context/outdoors");
-    expect(await editorDocumentText()).toBe(expected);
-    await saveAndExpectTagCompletionTarget(expected);
-    await placeCursorAtLineEnd("#context/outdoors");
+    const secondAccepted = `${firstAccepted}\n#project/cedar-room`;
+    expect(await editorDocumentText()).toBe(secondAccepted);
+    await saveAndExpectTagCompletionTarget(secondAccepted);
+
+    await placeCursorAtLineEnd("#project/cedar-room");
     await browser.keys(Key.Enter);
     await $(".cm-content").addValue("#");
     await browser.waitUntil(
-      async () => {
-        const options = await tagCompletionOptionTexts();
-        return (
-          options[0] === "#context/outdoors" &&
-          options.includes("#project/cedar-room")
-        );
-      },
-      {
-        timeout: 10000,
-        timeoutMsg: "recent tag did not reach the first menu position",
-      },
+      async () => (await tagCompletionOptionTexts()).length > 0,
+      { timeout: 10000, timeoutMsg: "the empty tag query listed nothing" },
     );
+
     const recentlyOrdered = await tagCompletionOptionTexts();
-    expect(recentlyOrdered[0]).toBe("#context/outdoors");
-    expect(recentlyOrdered).toContain("#project/cedar-room");
-    expect(recentlyOrdered.indexOf("#context/outdoors")).toBeLessThan(
-      recentlyOrdered.indexOf("#project/cedar-room"),
-    );
+    // Reversed against the order the vault alone would give. Recency is
+    // recorded the moment a row is accepted, so this holds whether or not
+    // the catalog has been re-read since: with the newer counts the two tags
+    // tie and the alphabet would put `context/outdoors` first, and with the
+    // older ones `project/cedar-room` would be further down still.
+    expect(recentlyOrdered[0]).toBe("#project/cedar-room");
+    expect(recentlyOrdered[1]).toBe("#context/outdoors");
     await browser.keys(Key.Escape);
   });
 
@@ -4538,9 +4875,24 @@ describe("skribeum shell", () => {
     );
     const beforeArrow = await activeElementDescriptor();
     await browser.keys(Key.ArrowDown);
-    const afterArrow = await activeElementDescriptor();
-    expect(afterArrow).toContain("treeitem");
-    expect(afterArrow).not.toBe(beforeArrow);
+    // The tree moves its roving stop after the render that the arrow key
+    // schedules, so the focus lands a frame later than the key command
+    // returns; reading once here asks whether it has landed yet rather than
+    // whether it lands on another row.
+    let afterArrow = beforeArrow;
+    try {
+      await browser.waitUntil(
+        async () => {
+          afterArrow = await activeElementDescriptor();
+          return afterArrow.includes("treeitem") && afterArrow !== beforeArrow;
+        },
+        { timeout: 5000 },
+      );
+    } catch {
+      throw new Error(
+        `the arrow key left focus on ${afterArrow} rather than moving it to another tree row`,
+      );
+    }
     await browser.execute((noteName: string) => {
       document
         .querySelector<HTMLElement>(
@@ -4554,15 +4906,56 @@ describe("skribeum shell", () => {
       ),
     ).toBe(LF_NOTE_NAME);
     await browser.keys(Key.Enter);
-    await browser.waitUntil(
-      async () =>
-        (await $(".skr-editor-pane-focused .skr-editor-shell").getAttribute(
-          "data-note-path",
-        )) === LF_NOTE_NAME && (await editorText()).includes("alpha"),
-      {
-        timeout: 15000,
-      },
-    );
+    // The note the focused pane holds, read whole so a pane that has not
+    // mounted its shell yet is a reading rather than a thrown selector error,
+    // and so the wait below can say what it settled on. Reporting only that a
+    // condition timed out leaves a failure here indistinguishable between the
+    // row never opening, another row opening in its place, and the note
+    // opening in a pane that is not the focused one.
+    const focusedPaneNote = () =>
+      browser.execute(() => {
+        const shells = [
+          ...document.querySelectorAll<HTMLElement>(".skr-editor-shell"),
+        ].map((shell) => shell.getAttribute("data-note-path"));
+        return {
+          focused:
+            document
+              .querySelector(".skr-editor-pane-focused .skr-editor-shell")
+              ?.getAttribute("data-note-path") ?? null,
+          panes: shells,
+          activePath: document.activeElement?.getAttribute("data-path") ?? null,
+          treeTabStop:
+            document
+              .querySelector('[role="treeitem"][tabindex="0"]')
+              ?.getAttribute("data-path") ?? null,
+          // A switch the shell refused, rather than one that never reached
+          // it, says so here: the shell declines to leave a note whose
+          // pending edits it could not persist.
+          alert:
+            document
+              .querySelector('[role="alert"].skr-error')
+              ?.textContent?.trim() ?? null,
+        };
+      });
+    let openedNote = await focusedPaneNote();
+    try {
+      await browser.waitUntil(
+        async () => {
+          openedNote = await focusedPaneNote();
+          return (
+            openedNote.focused === LF_NOTE_NAME &&
+            (await editorText()).includes("alpha")
+          );
+        },
+        { timeout: 15000 },
+      );
+    } catch {
+      throw new Error(
+        `Enter on the focused tree row did not open ${LF_NOTE_NAME}; observed ${JSON.stringify(
+          openedNote,
+        )}`,
+      );
+    }
 
     // The editor is keyboard-focusable with a visible focus indicator, and
     // typing lands in the document.
@@ -4664,7 +5057,8 @@ describe("skribeum shell", () => {
           active: marker.classList.contains("cm-skr-reveal-marker-active"),
           opacity: style.opacity,
           reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
-          transform: style.transform,
+          maxWidth: style.maxWidth,
+          width: marker.getBoundingClientRect().width,
           // The glyph is played rather than transitioned, because the view
           // rebuilds the node whenever its decoration class changes and a
           // transition would have no starting value to run from.
@@ -4686,9 +5080,10 @@ describe("skribeum shell", () => {
     );
     const hidden = await headingMarkerState();
     expect(hidden?.opacity).toBe("0");
-    // At rest the glyph waits 0.25rem (4px) toward the reading direction,
-    // ready to translate into its reserved space on reveal.
-    expect(hidden?.transform).toBe("matrix(1, 0, 0, 1, 4, 0)");
+    // At rest the glyph is squeezed to no width at all, clipped to the
+    // nothing it occupies, so it reserves no room in the line.
+    expect(hidden?.maxWidth).toBe("0px");
+    expect(hidden?.width).toBe(0);
     const followingPositionBefore = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -4718,9 +5113,11 @@ describe("skribeum shell", () => {
       },
     );
     const revealed = await headingMarkerState();
-    // Settled active glyph: fully opaque and translated home.
+    // Settled active glyph: fully opaque, uncapped, and holding its own
+    // measured width rather than reserving none.
     expect(revealed?.opacity).toBe("1");
-    expect(revealed?.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
+    expect(revealed?.maxWidth).toBe("none");
+    expect(revealed?.width).toBeGreaterThan(0);
     const followingPositionAfter = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -5967,14 +6364,18 @@ describe("skribeum core editing surfaces", () => {
         { timeout: 5000 },
       );
     }
+    // The settings surface swallows application chords while it is open, so a
+    // test that opens it and fails before closing it would otherwise decide
+    // the next test's result rather than its own.
+    await closeIfOpen('[data-testid="settings-view"]');
   }
 
   async function closeIfOpen(selector: string) {
     const surface = $(selector);
     if (!(await surface.isExisting())) return;
-    // Escape can dismiss one nested layer at a time (the settings dialog's
-    // own jump menu, for one), so press it until the surface itself is
-    // gone rather than assuming a single press clears it.
+    // Escape can dismiss one nested layer at a time (the settings surface's
+    // own drill-down level, for one), so press it until the surface itself
+    // is gone rather than assuming a single press clears it.
     await browser.waitUntil(
       async () => {
         if (!(await surface.isExisting())) return true;
@@ -6251,6 +6652,7 @@ describe("skribeum core editing surfaces", () => {
 
   /** Sets the settings font size through the open dialog's input. */
   async function setFontSizeThroughDialog(value: number) {
+    await openSettingsGroup("appearance");
     // WebDriver key input does not assign a predictable value to range
     // controls, so set the native value and exercise their real events.
     await browser.execute((nextValue: number) => {
@@ -6266,6 +6668,7 @@ describe("skribeum core editing surfaces", () => {
 
   /** Sets the text column width through the open dialog's input. */
   async function setLineWidthThroughDialog(value: number) {
+    await openSettingsGroup("appearance");
     await browser.execute((nextValue: number) => {
       const input = document.querySelector<HTMLInputElement>(
         '[data-testid="settings-line-width"]',
@@ -6278,6 +6681,7 @@ describe("skribeum core editing surfaces", () => {
   }
 
   async function linkPreviewsControl() {
+    await openSettingsGroup("editor");
     const checkbox = $('[data-testid="settings-link-previews"]');
     if (!(await checkbox.isExisting())) {
       const search = $('[data-testid="settings-search"]');
@@ -6303,6 +6707,9 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForDisplayed({ timeout: 10000 });
+    // Selection survives a close and reopen within a session, so the group
+    // this test reads from is named rather than assumed.
+    await openSettingsGroup("appearance");
 
     const sectionCounts = await browser.execute(() => {
       const names = [
@@ -6339,9 +6746,12 @@ describe("skribeum core editing surfaces", () => {
         ]),
       );
     });
+    // Each group is named once in the rail and, for the group the pane
+    // shows, once more as that pane's heading: navigation and destination,
+    // exactly as the file tree names a note in the tree and in the title.
     expect(sectionCounts).toEqual({
       About: 1,
-      Appearance: 1,
+      Appearance: 2,
       Editor: 1,
       Files: 1,
       Search: 1,
@@ -6354,76 +6764,112 @@ describe("skribeum core editing surfaces", () => {
     expect(await $('[data-settings-section="appearance"]').isExisting()).toBe(
       false,
     );
+    // A query crosses groups, so the rail drops its selection and reports how
+    // many rows each group contributes to the results.
+    expect(
+      await browser.execute(() => ({
+        selected: document.querySelectorAll(
+          '[role="tab"][aria-selected="true"]',
+        ).length,
+        about: document
+          .querySelector(
+            '[data-testid="settings-rail-about"] .settings-rail-count',
+          )
+          ?.textContent?.trim(),
+        appearance: document
+          .querySelector(
+            '[data-testid="settings-rail-appearance"] .settings-rail-count',
+          )
+          ?.textContent?.trim(),
+      })),
+    ).toEqual({ selected: 0, about: "1", appearance: "0" });
     await search.clearValue();
     await $('[data-settings-section="appearance"]').waitForDisplayed({
       timeout: 5000,
     });
 
+    // The rail is one tab stop with automatic activation: Down selects the
+    // next group and swaps the pane with no second keystroke.
     await browser.execute(() => {
       document
-        .querySelector<HTMLElement>('[data-testid="settings-jump"]')
-        ?.focus();
-    });
-    await pressFocusedKey("Enter");
-    const jumpMenu = $('[data-testid="settings-jump-menu"]');
-    await jumpMenu.waitForDisplayed({ timeout: 5000 });
-    const menuTrap = await browser.execute(() => {
-      const menu = document.querySelector<HTMLElement>(
-        '[data-testid="settings-jump-menu"]',
-      );
-      const controls = [
-        ...(menu?.querySelectorAll<HTMLButtonElement>("button") ?? []),
-      ];
-      const first = controls[0];
-      const last = controls.at(-1);
-      if (first === undefined || last === undefined) return false;
-      last.focus();
-      const event = new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "Tab",
-      });
-      last.dispatchEvent(event);
-      return event.defaultPrevented && document.activeElement === first;
-    });
-    expect(menuTrap).toBe(true);
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>(
-          '[data-testid="settings-jump-menu"] [role="menuitem"]',
-        )
+        .querySelector<HTMLElement>('[data-testid="settings-rail-appearance"]')
         ?.focus();
     });
     await pressFocusedKey("ArrowDown");
-    await pressFocusedKey("Enter");
-    await jumpMenu.waitForExist({ reverse: true, timeout: 5000 });
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () =>
+            document.querySelector<HTMLElement>("[data-settings-section]")
+              ?.dataset.settingsSection ?? "",
+        )) === "editor",
+      { timeout: 5000, timeoutMsg: "the rail did not swap the pane" },
+    );
     expect(
       await browser.execute(() => {
-        const pane = document.querySelector<HTMLElement>(".settings-content");
-        const editorSection = document.querySelector<HTMLElement>(
-          '[data-settings-section="editor"]',
+        const tabs = [
+          ...document.querySelectorAll<HTMLElement>('[role="tab"]'),
+        ];
+        const selected = tabs.filter(
+          (tab) => tab.getAttribute("aria-selected") === "true",
         );
-        if (pane === null || editorSection === null) return false;
-        return (
-          pane.scrollTop > 0 &&
-          Math.abs(
-            editorSection.getBoundingClientRect().top -
-              pane.getBoundingClientRect().top,
-          ) < 1
-        );
+        return {
+          selected: selected.map((tab) => tab.dataset.section),
+          rovingStops: tabs.filter((tab) => tab.tabIndex === 0).length,
+          groups: [
+            ...document.querySelectorAll<HTMLElement>(
+              "[data-settings-section]",
+            ),
+          ].map((group) => group.dataset.settingsSection),
+        };
       }),
-    ).toBe(true);
-
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLButtonElement>('[data-testid="settings-jump"]')
-        ?.click();
+    ).toEqual({ selected: ["editor"], rovingStops: 1, groups: ["editor"] });
+    // Selection wraps at both ends, so the last group is one key away from
+    // the first. Home and End carry the same reachability and are asserted in
+    // the component suite instead: this driver hands those two keys to the
+    // page as an unidentified key with an empty `key` and the raw WebDriver
+    // codepoint in `keyCode`, so no keyboard handler can see them here.
+    const selectedGroup = () =>
+      browser.execute(
+        () =>
+          document.querySelector<HTMLElement>(
+            '[role="tab"][aria-selected="true"]',
+          )?.dataset.section ?? null,
+      );
+    await pressFocusedKey("ArrowUp");
+    await browser.waitUntil(
+      async () => (await selectedGroup()) === "appearance",
+      {
+        timeout: 5000,
+        timeoutMsg: "Up did not select the previous group",
+      },
+    );
+    await pressFocusedKey("ArrowUp");
+    await browser.waitUntil(async () => (await selectedGroup()) === "about", {
+      timeout: 5000,
+      timeoutMsg: "the rail selection did not wrap to the last group",
     });
-    const reopenedJumpMenu = $('[data-testid="settings-jump-menu"]');
-    await reopenedJumpMenu.waitForDisplayed({ timeout: 5000 });
-    await browser.keys(Key.Escape);
-    await reopenedJumpMenu.waitForExist({ reverse: true, timeout: 5000 });
-    expect(await activeElementDescriptor()).toContain("jump-button");
+
+    // Nothing in the surface opens a list of sections behind an icon.
+    expect(
+      await browser.execute(() => {
+        const surface = document.querySelector<HTMLElement>(
+          '[data-testid="settings-view"]',
+        );
+        return {
+          named: [...(surface?.querySelectorAll("*") ?? [])].filter((element) =>
+            /jump to section/i.test(element.getAttribute("aria-label") ?? ""),
+          ).length,
+          ellipsis: [...(surface?.querySelectorAll("*") ?? [])].filter(
+            (element) =>
+              element.children.length === 0 &&
+              element.textContent?.trim() === "⋯",
+          ).length,
+          menus:
+            surface?.querySelectorAll('[aria-haspopup="menu"]').length ?? 0,
+        };
+      }),
+    ).toEqual({ named: 0, ellipsis: 0, menus: 0 });
 
     const dialogGeometry = await browser.execute(() => {
       const settings = document.querySelector<HTMLElement>(
@@ -6435,12 +6881,7 @@ describe("skribeum core editing surfaces", () => {
         height: box.height,
         width: box.width,
         expectedHeight: Math.min(window.innerHeight * 0.85, 48 * 16),
-        expectedWidth: Math.min(48 * 16, window.innerWidth - 2 * 16),
-        versionHomes: [
-          ...settings.querySelectorAll<HTMLElement>(
-            '[data-setting-id$=".version"]',
-          ),
-        ].map(({ dataset }) => dataset.settingId),
+        expectedWidth: Math.min(56 * 16, window.innerWidth - 4 * 16),
       };
     });
     expect(
@@ -6449,7 +6890,34 @@ describe("skribeum core editing surfaces", () => {
     expect(
       Math.abs(dialogGeometry.width - dialogGeometry.expectedWidth),
     ).toBeLessThan(1);
-    expect(dialogGeometry.versionHomes).toEqual(["updates.version"]);
+
+    // The installed version has one home. The pane shows a single group, so
+    // the claim is only worth as much as the sweep behind it: every group is
+    // visited and the version row must appear in exactly one of them.
+    const versionHomes: string[] = [];
+    for (const group of [
+      "appearance",
+      "editor",
+      "files",
+      "search",
+      "updates",
+      "about",
+    ]) {
+      await openSettingsGroup(group);
+      versionHomes.push(
+        ...(await browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              '[data-setting-id$=".version"]',
+            ),
+          ].map((row) => row.dataset.settingId ?? ""),
+        )),
+      );
+    }
+    expect(versionHomes).toEqual(["updates.version"]);
+    // The palette cards below belong to Appearance, and the sweep ended on
+    // the last group.
+    await openSettingsGroup("appearance");
 
     await setViewportSize(390, 844);
     const cardGeometry = await browser.execute(() => {
@@ -6510,6 +6978,12 @@ describe("skribeum core editing surfaces", () => {
 
     const manuscript = $('[data-testid="settings-palette-manuscript"]');
     await manuscript.scrollIntoView();
+    // The palette the resolved scheme displays is the checked one, so the
+    // scheme is named before the palette that belongs to it.
+    await selectSettingsChoice(
+      '[data-testid="settings-theme-light"]',
+      "Light colour scheme",
+    );
     await selectSettingsChoice(
       '[data-testid="settings-palette-manuscript"]',
       "Manuscript palette",
@@ -6554,6 +7028,7 @@ describe("skribeum core editing surfaces", () => {
       ).length,
     ).toBe(7);
 
+    await openSettingsGroup("editor");
     const taskSummary = $(".task-status-editor summary");
     await taskSummary.scrollIntoView();
     await browser.execute(() => {
@@ -6625,6 +7100,7 @@ describe("skribeum core editing surfaces", () => {
     });
     expect(dialogTrap).toBe(true);
 
+    await openSettingsGroup("appearance");
     await selectSettingsChoice(
       '[data-testid="settings-palette-manuscript"]',
       "Manuscript palette",
@@ -6686,6 +7162,7 @@ describe("skribeum core editing surfaces", () => {
 
     await browser.keys([modifierKey, ","]);
     await dialog.waitForExist({ timeout: 10000 });
+    await openSettingsGroup("appearance");
     expect(await $('[data-testid="settings-font-size"]').getValue()).toBe(
       String(target),
     );
@@ -6813,11 +7290,26 @@ describe("skribeum core editing surfaces", () => {
       async () => !(await $('[role="combobox"]').isExisting()),
       { timeout: 5000 },
     );
-    const restoredFocus = await activeElementDescriptor();
-    expect(
-      restoredFocus.includes("cm-content") ||
-        restoredFocus.includes("skr-pane-content"),
-    ).toBe(true);
+    // The webview restores focus a frame after the surface leaves, so this
+    // polls for where it lands rather than asking whether it has landed yet,
+    // and names what it settled on when it never gets there.
+    let restoredFocus = await activeElementDescriptor();
+    try {
+      await browser.waitUntil(
+        async () => {
+          restoredFocus = await activeElementDescriptor();
+          return (
+            restoredFocus.includes("cm-content") ||
+            restoredFocus.includes("skr-pane-content")
+          );
+        },
+        { timeout: 5000 },
+      );
+    } catch {
+      throw new Error(
+        `focus settled on ${restoredFocus} rather than returning to the pane`,
+      );
+    }
 
     // No element anywhere acquired a positive tabindex.
     const positive = await browser.execute(() =>
@@ -6860,34 +7352,66 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    // Each read re-queries: the settings surface re-renders as the document
-    // commits, which detaches any handle held across a poll and turns a
-    // "not settled yet" into a thrown stale-element error.
-    const systemToggleSelected = () =>
-      $('[data-testid="settings-match-system"]').isSelected();
+    await openSettingsGroup("appearance");
+    /** The System card's own state, null while the control is not mounted. */
+    const systemSchemeSelected = () =>
+      browser.execute(() => {
+        const card = document.querySelector(
+          '[data-testid="settings-theme-system"]',
+        );
+        return card === null
+          ? null
+          : card.getAttribute("aria-checked") === "true";
+      });
     // The dialog's existence only means the container mounted; the controls
     // inside it commit the persisted document a moment later, so poll for
     // that committed state rather than asserting immediately on open. The
     // bound is generous because the commit follows a full reload's vault
     // reindex on the slowest CI runners; the poll returns the moment the
     // state lands.
-    const committedState = async () => ({
-      systemToggle: await systemToggleSelected(),
-      gazetteChecked: await $(
-        '[data-testid="settings-palette-gazette"]',
-      ).getAttribute("aria-checked"),
-      signalClass: await $(
-        '[data-testid="settings-palette-signal"]',
-      ).getAttribute("class"),
-    });
+    //
+    // The whole snapshot is read in one document pass, and a control that is
+    // not mounted yet reads as absent rather than raising. Reading each
+    // control through its own element command instead spends the full
+    // implicit-existence wait on every control that has yet to appear, which
+    // turns this bound into two samples and ends the poll on a driver error
+    // naming the selector rather than on the state that was reached. It also
+    // leaves nothing for the diagnosis below to report, because that read
+    // fails the same way. The surface shows one group at a time, so a control
+    // belonging to another group is absent by design and has to read that way.
+    const committedState = () =>
+      browser.execute(() => {
+        const system = document.querySelector(
+          '[data-testid="settings-theme-system"]',
+        );
+        const gazette = document.querySelector(
+          '[data-testid="settings-palette-gazette"]',
+        );
+        const signal = document.querySelector(
+          '[data-testid="settings-palette-signal"]',
+        );
+        return {
+          dialogPresent:
+            document.querySelector('[data-testid="settings-view"]') !== null,
+          shownGroup:
+            document.querySelector<HTMLElement>("[data-settings-section]")
+              ?.dataset.settingsSection ?? null,
+          systemScheme:
+            system === null
+              ? null
+              : system.getAttribute("aria-checked") === "true",
+          gazetteChecked: gazette?.getAttribute("aria-checked") ?? null,
+          signalClass: signal?.getAttribute("class") ?? null,
+        };
+      });
     try {
       await browser.waitUntil(
         async () => {
           const state = await committedState();
           return (
-            state.systemToggle &&
+            state.systemScheme === true &&
             state.gazetteChecked === "true" &&
-            state.signalClass.includes("paired")
+            (state.signalClass ?? "").includes("paired")
           );
         },
         { timeout: 20000 },
@@ -6920,27 +7444,43 @@ describe("skribeum core editing surfaces", () => {
     });
     await browser.waitUntil(
       async () =>
-        (await $('[data-testid="settings-palette-signal"]').getAttribute(
-          "aria-checked",
+        (await browser.execute(
+          () =>
+            document
+              .querySelector('[data-testid="settings-palette-signal"]')
+              ?.getAttribute("aria-checked") ?? null,
         )) === "true",
       {
         timeout: 5000,
         timeoutMsg: "system dark palette did not become active",
       },
     );
-    expect(await systemToggleSelected()).toBe(true);
+    expect(await systemSchemeSelected()).toBe(true);
     expect(
       await browser.execute(() => document.documentElement.dataset.theme),
     ).toBe("system");
 
+    // A click on a palette card is an opinion about that palette, not about
+    // the colour scheme: it writes its own field and leaves the mode alone.
     await selectSettingsChoice(
       '[data-testid="settings-palette-graphite"]',
       "Graphite palette",
     );
-    await browser.waitUntil(async () => !(await systemToggleSelected()), {
-      timeout: 5000,
-      timeoutMsg: "system match toggle stayed enabled",
-    });
+    await browser.waitUntil(
+      async () => {
+        const stored = await persistedSettings();
+        return (
+          typeof stored !== "string" &&
+          stored.theme === "system" &&
+          stored.light_palette === "gazette" &&
+          stored.dark_palette === "graphite"
+        );
+      },
+      { timeout: 10000, timeoutMsg: "dark palette field did not persist" },
+    );
+    // The write the card owns has landed, so the colour scheme it does not
+    // own is read on settled state rather than raced against the same commit.
+    expect(await systemSchemeSelected()).toBe(true);
     expect(
       await browser.execute(() => ({
         theme: document.documentElement.dataset.theme,
@@ -6948,41 +7488,68 @@ describe("skribeum core editing surfaces", () => {
         darkPalette: document.documentElement.dataset.darkPalette,
       })),
     ).toEqual({
-      theme: "dark",
+      theme: "system",
       lightPalette: "gazette",
       darkPalette: "graphite",
     });
-    await browser.waitUntil(
-      async () => {
-        const stored = await persistedSettings();
-        return (
-          typeof stored !== "string" &&
-          stored.theme === "dark" &&
-          stored.light_palette === "gazette" &&
-          stored.dark_palette === "graphite"
-        );
-      },
-      { timeout: 10000, timeoutMsg: "dark palette fields did not persist" },
-    );
 
+    // Each miniature shell paints from the palette its own half previews,
+    // whatever the application is currently showing.
+    expect(
+      await browser.execute(() => {
+        const resolve = (expression: string) => {
+          const probe = document.createElement("div");
+          probe.style.color = expression;
+          document.body.append(probe);
+          const value = getComputedStyle(probe).color;
+          probe.remove();
+          return value;
+        };
+        const pane = (mode: string, index: number) =>
+          document.querySelectorAll<HTMLElement>(
+            `[data-testid="settings-theme-${mode}"] .mode-pane`,
+          )[index];
+        const lightPane = pane("light", 0);
+        const darkPane = pane("dark", 0);
+        const systemPanes = document.querySelectorAll(
+          '[data-testid="settings-theme-system"] .mode-pane',
+        ).length;
+        return {
+          light:
+            lightPane !== undefined &&
+            getComputedStyle(lightPane).backgroundColor ===
+              resolve("var(--skr-preview-gazette-surface)"),
+          dark:
+            darkPane !== undefined &&
+            getComputedStyle(darkPane).backgroundColor ===
+              resolve("var(--skr-preview-graphite-surface)"),
+          systemPanes,
+        };
+      }),
+    ).toEqual({ light: true, dark: true, systemPanes: 2 });
+
+    // A mode card writes the colour scheme and touches neither palette.
+    await selectSettingsChoice(
+      '[data-testid="settings-theme-light"]',
+      "Light colour scheme",
+    );
     await selectSettingsChoice(
       '[data-testid="settings-palette-studio"]',
       "Studio palette",
     );
-    await $('[data-testid="settings-match-system"]').click();
     await browser.waitUntil(
       async () => {
         const stored = await persistedSettings();
         return (
           typeof stored !== "string" &&
-          stored.theme === "system" &&
+          stored.theme === "light" &&
           stored.light_palette === "studio" &&
           stored.dark_palette === "graphite"
         );
       },
       {
         timeout: 10000,
-        timeoutMsg: "system palette fields did not round-trip",
+        timeoutMsg: "the colour scheme and palette fields did not round-trip",
       },
     );
 
@@ -6999,6 +7566,7 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
+    await openSettingsGroup("appearance");
 
     let readout = $('[data-testid="settings-editor-font-size-readout"]');
     await readout.click();
@@ -7199,6 +7767,11 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
+    await openSettingsGroup("appearance");
+    await selectSettingsChoice(
+      '[data-testid="settings-theme-dark"]',
+      "Dark colour scheme",
+    );
     await selectSettingsChoice(
       '[data-testid="settings-palette-signal"]',
       "Signal palette",
@@ -7772,6 +8345,11 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
+    await openSettingsGroup("appearance");
+    await selectSettingsChoice(
+      '[data-testid="settings-theme-dark"]',
+      "Dark colour scheme",
+    );
     await selectSettingsChoice(
       '[data-testid="settings-palette-graphite"]',
       "Graphite palette",

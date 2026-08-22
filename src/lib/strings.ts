@@ -1,5 +1,14 @@
 // Every user-facing string in the shell lives here, so externalization is a
 // file swap rather than a component sweep.
+
+/** How a tag row states its size, in the surface and to a screen reader. */
+function tagNoteCount(count: number): string {
+  return count === 1 ? "1 note" : `${count} notes`;
+}
+
+/** What a row below the answer band says it is, when read on its own. */
+const TAG_NEAR_MATCH_ANNOTATION = "near match";
+
 export const STRINGS = {
   appTitle: "Skribeum",
   openVault: "Open vault",
@@ -248,8 +257,21 @@ export const STRINGS = {
   commandSurfaceVault: "Vault",
   commandSurfaceCommands: "Commands and settings",
   commandSurfaceTags: "Tags",
+  commandSurfaceNearMatches: "Near matches",
+  commandSurfaceMostUsed: "Most used",
   commandSurfaceNoteText: "Note text",
   commandSurfaceSearchTextPrefix: "Search note text for ",
+  tagNoteCount: tagNoteCount,
+  tagMoreMatches: (count: number) =>
+    count === 1 ? "1 more tag matches" : `${count} more tags match`,
+  tagNoMatches: (query: string) => `No tag matches "${query}".`,
+  tagsEmptyVault:
+    "No tags in this vault yet. Write #name anywhere in a note to make one.",
+  tagNearMatchAnnotation: TAG_NEAR_MATCH_ANNOTATION,
+  tagRowName: (tag: string, noteCount: number, nearMatch: boolean) =>
+    nearMatch
+      ? `#${tag}, ${TAG_NEAR_MATCH_ANNOTATION}, ${tagNoteCount(noteCount)}`
+      : `#${tag}, ${tagNoteCount(noteCount)}`,
   settingActionPrefix: "Setting: ",
   commandOpenPalette: "Open command palette",
   quickSwitcherLabel: "Quick switcher",
@@ -274,21 +296,25 @@ export const STRINGS = {
   settingsSearchLabel: "Find a setting",
   settingsSearchPlaceholder: "Search settings",
   settingsSectionsLabel: "Settings sections",
-  settingsJumpSections: "Jump to section",
+  settingsAllSettings: "All settings",
+  settingsResetToDefault: "Reset to default",
   settingsSectionAppearance: "Appearance",
   settingsSectionEditor: "Editor",
   settingsSectionFiles: "Files",
   settingsSectionSearch: "Search",
   settingsSectionUpdates: "Updates",
   settingsSectionAbout: "About",
-  settingsTheme: "Match system appearance",
+  settingsTheme: "Colour scheme",
   settingsThemeDescription:
-    "Follow the system appearance using the last chosen light and dark palettes.",
+    "Show the light palette, the dark palette, or whichever one the system asks for.",
+  settingsThemeSystem: "System",
+  settingsThemeLight: "Light",
+  settingsThemeDark: "Dark",
   settingsPalette: "Colour palette",
   settingsLightPalette: "Light palette",
   settingsDarkPalette: "Dark palette",
   settingsPaletteDescription:
-    "Choose one palette to apply its colours and light or dark appearance.",
+    "Choose the palette each colour scheme paints with. The light and dark choices are kept separately.",
   settingsPaletteManuscript: "Manuscript",
   settingsPaletteManuscriptDescription:
     "Paper and ink in light mode, Night Ink ground with a Jade accent in dark mode.",

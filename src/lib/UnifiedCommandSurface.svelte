@@ -43,13 +43,21 @@ const returnFocusElement =
 
 const LISTBOX_ID = "skr-command-surface-listbox";
 
+// A row that states something about the list rather than offering an action
+// is rendered but never occupies a selection stop, so arrow keys walk only
+// the rows Enter can invoke and no press lands on a dead one.
+const options = $derived(items.filter((item) => item.informational !== true));
+const optionIndexes = $derived(
+  new Map(options.map((item, index) => [item.id, index])),
+);
+
 $effect(() => {
   inputElement?.focus();
 });
 
 $effect(() => {
-  if (active >= items.length) {
-    active = Math.max(0, items.length - 1);
+  if (active >= options.length) {
+    active = Math.max(0, options.length - 1);
   }
 });
 
@@ -84,7 +92,7 @@ function onInput(event: Event & { currentTarget: HTMLInputElement }) {
 }
 
 function pickActive(intent?: { newTab?: boolean }) {
-  const item = items[active];
+  const item = options[active];
   if (item !== undefined && item.unavailableReason === undefined) {
     onPick(item, intent);
   }
@@ -96,7 +104,7 @@ function pickActive(intent?: { newTab?: boolean }) {
 function onKeydown(event: KeyboardEvent) {
   switch (event.key) {
     case "ArrowDown":
-      active = Math.min(active + 1, Math.max(0, items.length - 1));
+      active = Math.min(active + 1, Math.max(0, options.length - 1));
       break;
     case "ArrowUp":
       active = Math.max(active - 1, 0);
@@ -105,7 +113,7 @@ function onKeydown(event: KeyboardEvent) {
       active = 0;
       break;
     case "End":
-      active = Math.max(0, items.length - 1);
+      active = Math.max(0, options.length - 1);
       break;
     case "Enter":
       // Mod-Enter is the file mode's explicit new-tab action; plain Enter
@@ -190,7 +198,7 @@ onDestroy(() => {
         aria-expanded="true"
         aria-haspopup="listbox"
         aria-controls={LISTBOX_ID}
-        aria-activedescendant={items.length > 0 ? `skr-command-option-${active}` : undefined}
+        aria-activedescendant={options.length > 0 ? `skr-command-option-${active}` : undefined}
         aria-label={STRINGS.commandSurfaceLabel}
         placeholder={STRINGS.commandSurfacePlaceholder}
         autocomplete="off"
@@ -222,24 +230,33 @@ onDestroy(() => {
             data-result-kind={item.kind}
           >{item.group}</li>
         {/if}
+        {#if item.informational === true}
+          <li
+            class="command-surface-note skr-muted"
+            role="presentation"
+            data-result-kind={item.kind}
+          >{#each item.titleSegments as segment, segmentIndex (segmentIndex)}{segment.text}{/each}</li>
+        {:else}
         <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard
              operation lives on the combobox input per the ARIA pattern. -->
         <li
-          id={`skr-command-option-${index}`}
+          id={`skr-command-option-${optionIndexes.get(item.id)}`}
           role="option"
           data-result-kind={item.kind}
           data-result-group={item.group ?? ""}
           data-action-kind={item.actionKind}
           data-command-id={item.commandId}
-          aria-selected={index === active}
+          aria-label={item.accessibleName}
+          aria-selected={optionIndexes.get(item.id) === active}
           aria-disabled={item.unavailableReason === undefined ? undefined : true}
           class:command-surface-unavailable={item.unavailableReason !== undefined}
+          class:command-surface-secondary={item.tone === "muted"}
           onclick={(event) => {
             if (item.unavailableReason !== undefined) return;
             onPick(item, { newTab: event.ctrlKey || event.metaKey });
           }}
           onmousemove={() => {
-            active = index;
+            active = optionIndexes.get(item.id) ?? active;
           }}
         >
           <span class="command-surface-title">
@@ -255,6 +272,8 @@ onDestroy(() => {
               <kbd class="command-surface-chip skr-muted shrink-0 rounded border px-1">{item.keybinding}</kbd>
             {:else if item.prefixHint !== undefined}
               <kbd class="command-surface-chip skr-muted shrink-0 rounded border px-1">{item.prefixHint}</kbd>
+            {:else if item.meta !== undefined}
+              <span class="command-surface-meta skr-muted shrink-0">{item.meta}</span>
             {/if}
           </span>
           {#if item.unavailableReason !== undefined}
@@ -267,6 +286,7 @@ onDestroy(() => {
             </span>
           {/if}
         </li>
+        {/if}
       {/each}
     </ul>
     {#if items.length === 0}
@@ -280,6 +300,24 @@ onDestroy(() => {
      reads as unavailable rather than as a row that silently does nothing. */
   .command-surface-unavailable {
     opacity: 0.55;
+  }
+
+  /* A lower-confidence answer costs nothing to skip past: it reads in the
+     muted text colour, so the boundary its heading draws is legible without
+     a rule, a box, or a fill. */
+  .command-surface-results [role="option"].command-surface-secondary {
+    color: var(--skr-text-muted);
+  }
+
+  /* A line that states something about the list rather than offering an
+     action. */
+  .command-surface-note {
+    padding: 0.25rem 0.5rem;
+    font-size: var(--skr-type-label);
+  }
+
+  .command-surface-meta {
+    font-size: var(--skr-type-label);
   }
 
   .command-surface-backdrop {
@@ -347,6 +385,7 @@ onDestroy(() => {
     cursor: pointer;
     border-radius: var(--skr-radius-control);
     padding: 0.25rem 0.5rem;
+    color: var(--skr-text);
   }
 
   .command-surface-title {

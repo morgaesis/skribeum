@@ -414,6 +414,40 @@ describe("table block end over a partial row", () => {
     }
   });
 
+  it("excludes a paragraph the tree folded into the table with no blank line between", () => {
+    // A table's row grammar does not require a pipe on a continuation
+    // line, so with no blank line before the next paragraph the parsed
+    // tree folds that whole paragraph into the table as its own reported
+    // end. The block's real end still has to land after the last genuine
+    // row, or the paragraph stays pinned to source and the table can never
+    // mount as an interactive grid.
+    const source = "| a | b |\n| --- | --- |\n| c | d |\nAfter the table.";
+    const doc = Text.of(source.split("\n"));
+    const tableEnd = source.indexOf("\nAfter");
+    expect(extendedTableDocumentEnd(doc, 0, source.length)).toBe(tableEnd);
+  });
+
+  it("keeps a ragged row inside the block by its outer pipes, not its cell count", () => {
+    // GFM tables allow ragged rows: a row can carry fewer or more cells
+    // than the header. Only the header's own outer-pipe convention, not an
+    // exact cell count, tells a short or long row from a paragraph the
+    // tree folded in beside it.
+    const short = "| a | b | c |\n| --- | --- | --- |\n| x |";
+    expect(
+      extendedTableDocumentEnd(Text.of(short.split("\n")), 0, short.length),
+    ).toBe(short.length);
+
+    const overflow =
+      "| a | b | c |\n| --- | --- | --- |\n| a | b | c | d | e |";
+    expect(
+      extendedTableDocumentEnd(
+        Text.of(overflow.split("\n")),
+        0,
+        overflow.length,
+      ),
+    ).toBe(overflow.length);
+  });
+
   it("never reaches past the first table of the rendered-table fixture", () => {
     // The end-to-end fixture, verbatim: a small table, a paragraph, then a
     // large table. No reported end may resolve into that paragraph, and a

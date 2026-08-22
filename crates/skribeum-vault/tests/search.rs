@@ -500,6 +500,169 @@ fn tag_catalog_bounds_indexed_values_and_result_count() {
     );
 }
 
+/// The catalog lists every tag the vault holds. A bound ordered by usage
+/// would drop the rare tags, which are the ones a reader cannot remember and
+/// so the ones completion exists to supply.
+#[test]
+fn tag_catalog_lists_every_tag_however_rare() {
+    let index = SearchIndex::in_memory().expect("index opens");
+    for note in 0..3 {
+        let mut text = (0..500)
+            .map(|number| format!("#bulk-{note}-{number}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        text.push_str(" #common #common #common\n");
+        index
+            .index_note(&format!("note-{note}.md"), text.as_bytes())
+            .expect("note indexes");
+    }
+    index
+        .index_note("rare.md", b"#written-once\n")
+        .expect("rare note indexes");
+
+    let catalog = index.tag_frequencies().expect("catalog reads");
+
+    assert_eq!(catalog.len(), 3 * 500 + 2);
+    assert!(
+        catalog.iter().any(|entry| entry.tag == "written-once"),
+        "a tag used in one note is still in the catalog"
+    );
+    assert_eq!(
+        catalog.first().map(|entry| entry.tag.as_str()),
+        Some("common"),
+        "the most-used tag still leads the catalog"
+    );
+}
+
+/// A tag is a path and a query for it includes everything below it, anchored
+/// at a segment boundary so `work` reaches `work/meetings` and stops short of
+/// `workshop`.
+#[test]
+fn tag_query_returns_descendants_and_stops_at_segment_boundaries() {
+    let index = SearchIndex::in_memory().expect("index opens");
+    index
+        .index_note("meetings.md", b"Notes from standup #work/meetings\n")
+        .expect("descendant note indexes");
+    index
+        .index_note("deep.md", b"#work/meetings/2024 minutes\n")
+        .expect("grandchild note indexes");
+    index
+        .index_note("own.md", b"Plain #work today\n")
+        .expect("parent note indexes");
+    index
+        .index_note("shop.md", b"Visited the #workshop\n")
+        .expect("unrelated note indexes");
+
+    let hits = index.query("#work", 10).expect("parent tag query runs");
+    let paths = hits
+        .iter()
+        .map(|hit| hit.path.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        paths,
+        BTreeSet::from(["deep.md", "meetings.md", "own.md"]),
+        "a parent query answers with its descendants and not with a longer word"
+    );
+    // A note listed only because of a descendant tag shows which tag matched.
+    let descendant = hits
+        .iter()
+        .find(|hit| hit.path == "meetings.md")
+        .expect("the descendant note is listed");
+    let [start, end] = descendant.match_ranges[0];
+    assert_eq!(
+        &descendant.snippet[start as usize..end as usize],
+        "#work/meetings"
+    );
+
+    // A parent no note writes on its own still answers with its children.
+    let index = SearchIndex::in_memory().expect("index opens");
+    index
+        .index_note("only-child.md", b"#project/cedar\n")
+        .expect("child note indexes");
+    assert_eq!(
+        index
+            .query("#project", 10)
+            .expect("derived parent query runs")
+            .iter()
+            .map(|hit| hit.path.as_str())
+            .collect::<Vec<_>>(),
+        ["only-child.md"]
+    );
+    assert!(
+        index
+            .tag_frequencies()
+            .expect("catalog reads")
+            .iter()
+            .all(|entry| entry.tag != "project"),
+        "a parent no note writes is derived at match time, not stored as a tag"
+    );
+}
+
+/// What a tag row promises is what committing it produces: the count covers
+/// the same notes the query returns, each note once.
+#[test]
+fn tag_catalog_counts_the_notes_the_tag_query_returns() {
+    let index = SearchIndex::in_memory().expect("index opens");
+    index
+        .index_note("both.md", b"#work and #work/meetings together\n")
+        .expect("note with parent and child indexes");
+    index
+        .index_note("child.md", b"#work/meetings alone\n")
+        .expect("child-only note indexes");
+    index
+        .index_note("other.md", b"#work/reviews alone\n")
+        .expect("sibling note indexes");
+    index
+        .index_note("outside.md", b"#workshop alone\n")
+        .expect("unrelated note indexes");
+
+    let catalog = index.tag_frequencies().expect("catalog reads");
+    let work = catalog
+        .iter()
+        .find(|entry| entry.tag == "work")
+        .expect("work is cataloged");
+    let queried = index.query("#work", 100).expect("tag query runs").len();
+
+    assert_eq!(work.note_count, 3);
+    assert_eq!(u32::try_from(queried).unwrap_or(u32::MAX), work.note_count);
+    let meetings = catalog
+        .iter()
+        .find(|entry| entry.tag == "work/meetings")
+        .expect("the child is cataloged");
+    assert_eq!(meetings.note_count, 2);
+}
+
+/// The editor renders, completes, and lets a reader finish a tag written
+/// with a decomposed accent. Refusing to index one produced a tag that
+/// existed on screen and in no search.
+#[test]
+fn decomposed_accented_tag_is_indexed_and_queryable() {
+    let index = SearchIndex::in_memory().expect("index opens");
+    index
+        .index_note("cafe.md", "Met at the #cafe\u{301} today\n".as_bytes())
+        .expect("decomposed tag note indexes");
+
+    let catalog = index.tag_frequencies().expect("catalog reads");
+
+    assert_eq!(
+        catalog
+            .iter()
+            .map(|entry| entry.tag.as_str())
+            .collect::<Vec<_>>(),
+        ["cafe\u{301}"]
+    );
+    assert_eq!(
+        index
+            .query("#cafe\u{301}", 10)
+            .expect("decomposed tag query runs")
+            .iter()
+            .map(|hit| hit.path.as_str())
+            .collect::<Vec<_>>(),
+        ["cafe.md"]
+    );
+}
+
 fn test_config() -> ReconcilerConfig {
     ReconcilerConfig {
         settle: Duration::from_millis(3),

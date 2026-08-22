@@ -224,8 +224,18 @@ fn opener_preceded(text: &str, byte_index: usize) -> bool {
         .is_none_or(char::is_whitespace)
 }
 
+/// Whether `character` belongs to a tag body.
+///
+/// Combining marks count: the specification draws the body from letters in
+/// any script "including combining sequences that form them", and a mark is
+/// part of the grapheme its base character forms. Ending the body at one
+/// truncated a decomposed `café` to `cafe` while the editor rendered, offered
+/// and accepted the whole word, so the tag a reader could see and finish
+/// existed in no index and answered no search.
 fn is_tag_body_char(character: char) -> bool {
-    character.is_alphanumeric() || matches!(character, '-' | '_' | '/')
+    character.is_alphanumeric()
+        || unicode_normalization::char::is_combining_mark(character)
+        || matches!(character, '-' | '_' | '/')
 }
 
 /// Post-pass tag recognition per the specification's `tag` rulings.

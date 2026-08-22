@@ -448,7 +448,7 @@ function typeSection(): HTMLElement {
     [
       "control 13px",
       "specimen-interface specimen-control-size",
-      "Match system appearance",
+      "Show invisible characters",
     ],
     ["title 16px", "specimen-interface specimen-title-size", "Settings"],
   ];

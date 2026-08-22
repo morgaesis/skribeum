@@ -38,6 +38,16 @@ export const LF_NOTE_CONTENT = "alpha\nbeta\ngamma\n";
 export const CRLF_NOTE_NAME = "crlf.md";
 export const CRLF_NOTE_CONTENT = "first\r\nsecond\r\nthird\r\n";
 
+// LF, CRLF and a lone CR in one file. A note written elsewhere arrives with
+// whatever terminators its author's tools produced, and the editor buffer
+// sees only "\n", so every terminator has to be mapped back onto the bytes
+// it came from. The fixture exists so that the packaged application answers
+// for those bytes wherever the suite runs, rather than only where the
+// platform happens to write them.
+export const MIXED_ENDING_NOTE_NAME = "mixed-endings.md";
+export const MIXED_ENDING_NOTE_CONTENT =
+  "unix line\ndos line\r\nold mac line\rfinal line\n";
+
 /**
  * A file the note extensions do not cover, with CRLF terminators and no
  * final newline: the two things a text editor is most likely to silently
@@ -148,8 +158,13 @@ export const TAG_DELETE_PROBE_NOTE_NAME = "zz-tag-delete-probe.md";
 export const TAG_DELETE_PROBE_NOTE_CONTENT = "Tag deletion probe.\n";
 
 export const TAG_COMPLETION_CATALOG_NOTE_NAME = "zz-tag-completion-catalog.md";
+// `cedar-notes` and `project/cedar-room` both answer the query `ced`, the
+// first because the whole tag starts with it and the second because its
+// second path segment does. A whole-tag match is the stronger answer and
+// leads whatever the counts are, so the completion menu has two rows in a
+// fixed order and arrow movement between them means something.
 export const TAG_COMPLETION_CATALOG_NOTE_CONTENT =
-  "#project/cedar-room #project/cedar-room #context/outdoors\n";
+  "#project/cedar-room #project/cedar-room #context/outdoors #cedar-notes\n";
 
 export const TAG_COMPLETION_TARGET_NOTE_NAME = "zz-tag-completion-target.md";
 export const TAG_COMPLETION_MIDDLE_LINE = "Tag completion target.";
@@ -339,6 +354,10 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, CRLF_NOTE_NAME),
     CRLF_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, MIXED_ENDING_NOTE_NAME),
+    MIXED_ENDING_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, CONFIG_FILE_NAME),

@@ -1,3 +1,14 @@
+<script module lang="ts">
+import type { SettingSectionId as SessionSectionId } from "./features/settingsCatalog";
+
+/**
+ * The group the surface was last showing. Selection survives a close and
+ * reopen within one session and is deliberately not written to the settings
+ * document: a fresh session opens on Appearance.
+ */
+let sessionSection: SessionSectionId | null = "appearance";
+</script>
+
 <script lang="ts">
 import { onDestroy, onMount, tick } from "svelte";
 import {
@@ -10,11 +21,7 @@ import {
   type SettingsState,
 } from "./features/settingsStore";
 import { describeUpdateState, type UpdateState } from "./features/updates";
-import {
-  enterMotionSurface,
-  exitMotionSurface,
-  exitMotionSurfaces,
-} from "./motion";
+import { enterMotionSurface, exitMotionSurfaces } from "./motion";
 import { STRINGS } from "./strings";
 import {
   TASK_COLOR_TOKENS,
@@ -69,14 +76,36 @@ const sections: { id: SectionId; label: string }[] = [
   { id: "about", label: STRINGS.settingsSectionAbout },
 ];
 
-const settingSearchText = Object.fromEntries(
-  sections.map((section) => [
-    section.id,
-    SETTINGS_DESCRIPTORS.filter(
-      (setting) => setting.section === section.id,
-    ).map((setting): [string, string] => [setting.label, setting.description]),
-  ]),
-) as Record<SectionId, [string, string][]>;
+/**
+ * The width, measured on the surface itself rather than the viewport, below
+ * which the rail cannot be carved out without pushing rows under their own
+ * floor: 8rem of rail, a hairline, the pane's padding and the 31rem row
+ * minimum below, rounded up to the next whole rem.
+ */
+const RAIL_BREAKPOINT = 672;
+/**
+ * The width a content pane needs before a row can set its copy and its
+ * control side by side: 16rem of copy, 1rem of gap and the 14rem
+ * slider-and-readout block. Keyed to the pane, never to the viewport.
+ */
+const ROW_SIDE_BY_SIDE_WIDTH = 496;
+/** The rail's fixed 8rem plus the hairline that separates it from the pane. */
+const RAIL_AND_HAIRLINE_WIDTH = 129;
+
+/**
+ * Every row the pane renders, in render order, with the settings-document
+ * fields it owns. A row with no fields (the version output, the About links,
+ * the settings file path) has no default to differ from: it never carries a
+ * changed bar, never contributes to a group's dot, and never offers a reset.
+ * The search's match counts and the results view are both driven from here,
+ * so a facet count and the rows it stands for cannot disagree.
+ */
+type SettingRow = {
+  id: string;
+  label: string;
+  description: string;
+  keys: readonly (keyof SettingsDocument)[];
+};
 
 type PaletteCard = {
   value: LightPaletteName | DarkPaletteName;
@@ -115,6 +144,22 @@ const paletteCards: PaletteCard[] = [
     mode: "dark",
     label: STRINGS.settingsPaletteSignal,
   },
+];
+
+type ThemeName = SettingsDocument["theme"];
+
+type ModeCard = { value: ThemeName; label: string };
+
+/**
+ * The three colour schemes, each rendered as the shell the application
+ * resolves to in that scheme rather than as a label naming it. System shows
+ * both halves of its pair at once, so it reads as a first-class choice
+ * instead of a toggle a reader has to know to look for.
+ */
+const modeCards: ModeCard[] = [
+  { value: "system", label: STRINGS.settingsThemeSystem },
+  { value: "light", label: STRINGS.settingsThemeLight },
+  { value: "dark", label: STRINGS.settingsThemeDark },
 ];
 
 const numericSettings: Record<
@@ -220,8 +265,8 @@ let {
 let dialogElement = $state<HTMLElement | null>();
 let backdropElement = $state<HTMLElement | null>();
 let contentElement = $state<HTMLElement | null>();
-let jumpButtonElement = $state<HTMLButtonElement | null>();
-let jumpMenuElement = $state<HTMLElement | null>();
+let railElement = $state<HTMLElement | null>();
+let paneElement = $state<HTMLElement | null>();
 let closing = false;
 const returnFocusElement =
   typeof document !== "undefined" &&
@@ -229,8 +274,25 @@ const returnFocusElement =
     ? document.activeElement
     : null;
 let searchQuery = $state("");
-let jumpMenuOpen = $state(false);
+/**
+ * The surface's own width. It starts at the desktop dialog's geometry so the
+ * first painted frame is the one the reader almost always gets; the observer
+ * below corrects it the moment layout resolves.
+ */
+let surfaceWidth = $state(896);
+let selectedSection = $state<SectionId | null>(sessionSection);
+/** The group the results narrow to while a facet is active. */
+let narrowedSection = $state<SectionId | null>(null);
+let restoreSection: SectionId | null = null;
+let restoreScrollTop = 0;
+let railIndicatorTop = $state(0);
+let railIndicatorHeight = $state(0);
+let paneMotion = $state<"fade" | "drill-push" | "drill-pop">("fade");
+let previewPalette = $state<LightPaletteName | DarkPaletteName | null>(null);
 let previewSettings = $state<Partial<SettingsDocument>>({});
+let enteredPaneKey: string | null = null;
+let scrollAnchor: ScrollAnchor = null;
+let anchorFrame = 0;
 let taskStatusError = $state<string | null>(null);
 let openTaskListbox = $state<string | null>(null);
 let editingNumericSetting = $state<NumericSetting | null>(null);
@@ -252,9 +314,6 @@ const activePalette = $derived<LightPaletteName | DarkPaletteName>(
     (documentSettings.theme === "system" && systemPrefersDark)
     ? (documentSettings.dark_palette as DarkPaletteName)
     : (documentSettings.light_palette as LightPaletteName),
-);
-const activePaletteCard = $derived(
-  paletteCards.find(({ value }) => value === activePalette) ?? paletteCards[0],
 );
 const settingsPathText = $derived(
   desktopAvailable
@@ -287,6 +346,257 @@ const checkUpdatesDescription = $derived(
     : STRINGS.settingsCheckUpdatesDesktopRequired,
 );
 
+const sectionRows = $derived<Record<SectionId, SettingRow[]>>({
+  appearance: [
+    {
+      id: "appearance.theme",
+      label: STRINGS.settingsTheme,
+      description: STRINGS.settingsThemeDescription,
+      keys: ["theme"],
+    },
+    {
+      id: "appearance.palette",
+      label: `${STRINGS.settingsPalette} ${STRINGS.settingsLightPalette} ${STRINGS.settingsDarkPalette}`,
+      description: STRINGS.settingsPaletteDescription,
+      keys: ["light_palette", "dark_palette"],
+    },
+    {
+      id: "appearance.prose-font",
+      label: STRINGS.settingsProseFont,
+      description: STRINGS.settingsProseFontDescription,
+      keys: ["prose_font"],
+    },
+    {
+      id: "appearance.code-font",
+      label: STRINGS.settingsCodeFont,
+      description: STRINGS.settingsCodeFontDescription,
+      keys: ["code_font"],
+    },
+    {
+      id: "appearance.font-size",
+      label: STRINGS.settingsFontSize,
+      description: STRINGS.settingsFontSizeDescription,
+      keys: ["editor_font_size"],
+    },
+    {
+      id: "appearance.line-height",
+      label: STRINGS.settingsLineHeight,
+      description: STRINGS.settingsLineHeightDescription,
+      keys: ["editor_line_height"],
+    },
+    {
+      id: "appearance.line-width",
+      label: STRINGS.settingsLineWidth,
+      description: STRINGS.settingsLineWidthDescription,
+      keys: ["editor_line_width"],
+    },
+    {
+      id: "appearance.animations",
+      label: STRINGS.settingsAnimations,
+      description: STRINGS.settingsAnimationsDescription,
+      keys: ["animations"],
+    },
+  ],
+  editor: [
+    {
+      id: "editor.autosave",
+      label: STRINGS.settingsAutosave,
+      description: STRINGS.settingsAutosaveDescription,
+      keys: ["autosave_delay_ms"],
+    },
+    {
+      id: "editor.spell-check",
+      label: STRINGS.settingsSpellCheck,
+      description: STRINGS.settingsSpellCheckDescription,
+      keys: ["spell_check"],
+    },
+    {
+      id: "editor.indent-style",
+      label: STRINGS.settingsIndentStyle,
+      description: STRINGS.settingsIndentStyleDescription,
+      keys: ["indent_style"],
+    },
+    {
+      id: "editor.indent-width",
+      label: STRINGS.settingsIndentWidth,
+      description: STRINGS.settingsIndentWidthDescription,
+      keys: ["indent_width"],
+    },
+    ...booleanEditorSettings.map((preference) => ({
+      id: preference.id,
+      label: preference.label,
+      description: preference.description,
+      keys: [preference.key] as const,
+    })),
+    {
+      id: "editor.task-statuses",
+      label: STRINGS.settingsTaskStatuses,
+      description: STRINGS.settingsTaskStatusesDescription,
+      keys: ["task_statuses"],
+    },
+  ],
+  files: [
+    {
+      id: "files.default-note-folder",
+      label: STRINGS.settingsDefaultNoteFolder,
+      description: defaultNoteFolderDescription,
+      keys: ["default_note_folder"],
+    },
+    {
+      id: "files.attachment-folder",
+      label: STRINGS.settingsAttachmentFolder,
+      description: attachmentFolderDescription,
+      keys: ["attachment_folder_mode", "attachment_folder_path"],
+    },
+    {
+      id: "files.obsidian-config",
+      label: STRINGS.settingsHonorObsidian,
+      description: obsidianDescription,
+      keys: ["honor_obsidian_config"],
+    },
+  ],
+  search: [
+    {
+      id: "search.result-limit",
+      label: STRINGS.settingsSearchLimit,
+      description: STRINGS.settingsSearchLimitDescription,
+      keys: ["search_result_limit"],
+    },
+    {
+      id: "search.note-text",
+      label: STRINGS.settingsSearchBodies,
+      description: STRINGS.settingsSearchBodiesDescription,
+      keys: ["search_note_bodies"],
+    },
+    {
+      id: "search.case-sensitive",
+      label: STRINGS.settingsSearchCase,
+      description: STRINGS.settingsSearchCaseDescription,
+      keys: ["search_case_sensitive"],
+    },
+  ],
+  updates: [
+    {
+      id: "updates.channel",
+      label: STRINGS.settingsUpdateChannel,
+      description: updateChannelDescription,
+      keys: ["update_channel"],
+    },
+    {
+      id: "updates.check",
+      label: STRINGS.settingsCheckUpdates,
+      description: checkUpdatesDescription,
+      keys: [],
+    },
+    {
+      id: "updates.version",
+      label: STRINGS.settingsVersion,
+      description: STRINGS.settingsVersionDescription,
+      keys: [],
+    },
+  ],
+  about: [
+    {
+      id: "about.license",
+      label: STRINGS.settingsLicense,
+      description: STRINGS.settingsLicenseDescription,
+      keys: [],
+    },
+    {
+      id: "about.repository",
+      label: STRINGS.settingsRepository,
+      description: STRINGS.settingsRepositoryDescription,
+      keys: [],
+    },
+    {
+      id: "about.security-policy",
+      label: STRINGS.settingsThreatModel,
+      description: STRINGS.settingsThreatModelDescription,
+      keys: [],
+    },
+    {
+      id: "about.settings-file",
+      label: STRINGS.settingsFile,
+      description: STRINGS.settingsFileDescription,
+      keys: [],
+    },
+  ],
+});
+
+const searchActive = $derived(searchQuery.trim().length > 0);
+const railVisible = $derived(surfaceWidth >= RAIL_BREAKPOINT);
+/**
+ * The pane takes whatever the rail leaves, so its width is derived from the
+ * one measured quantity rather than observed separately: two observations of
+ * the same resize arrive in different frames, and the row layout would spend
+ * one of them keyed to a pane width that never finished existing.
+ */
+const paneWidth = $derived(
+  surfaceWidth - (railVisible ? RAIL_AND_HAIRLINE_WIDTH : 0),
+);
+const stackedRows = $derived(paneWidth < ROW_SIDE_BY_SIDE_WIDTH);
+/** The group whose rows the pane shows; null only at the drill-down's first level. */
+const shownSection = $derived(railVisible ? (selectedSection ?? "appearance") : selectedSection);
+const backControlVisible = $derived(
+  !railVisible && shownSection !== null && !searchActive,
+);
+const matchedRowIds = $derived(
+  new Set(
+    Object.values(sectionRows)
+      .flat()
+      .filter((row) => matches(row.label, row.description))
+      .map((row) => row.id),
+  ),
+);
+const matchCounts = $derived(
+  Object.fromEntries(
+    sections.map((section) => [
+      section.id,
+      sectionRows[section.id].filter((row) => matchedRowIds.has(row.id)).length,
+    ]),
+  ) as Record<SectionId, number>,
+);
+const changedRowIds = $derived(
+  new Set(
+    Object.values(sectionRows)
+      .flat()
+      .filter((row) => rowIsChanged(row))
+      .map((row) => row.id),
+  ),
+);
+const changedSections = $derived(
+  new Set(
+    sections
+      .filter(({ id }) =>
+        sectionRows[id].some((row) => changedRowIds.has(row.id)),
+      )
+      .map(({ id }) => id),
+  ),
+);
+/** The groups the pane renders, in group order: one, or every matching one. */
+const renderedSections = $derived(
+  searchActive
+    ? sections
+        .filter(({ id }) => matchCounts[id] > 0)
+        .filter(({ id }) => narrowedSection === null || narrowedSection === id)
+        .map(({ id }) => id)
+    : shownSection === null
+      ? []
+      : [shownSection],
+);
+const paneKey = $derived(shownSection ?? "settings-group-list");
+const displayedPalette = $derived(previewPalette ?? activePalette);
+const displayedPaletteCard = $derived(
+  paletteCards.find(({ value }) => value === displayedPalette) ??
+    paletteCards[0],
+);
+const previewLightPalette = $derived(
+  documentSettings.light_palette as LightPaletteName,
+);
+const previewDarkPalette = $derived(
+  documentSettings.dark_palette as DarkPaletteName,
+);
+
 onMount(() => {
   const query = window.matchMedia?.("(prefers-color-scheme: dark)");
   if (query === undefined) return;
@@ -303,6 +613,71 @@ onMount(() => {
   enterMotionSurface(dialogElement);
 });
 
+/**
+ * The rail and the row layout both follow measured widths, never the
+ * viewport's: a 900px window has room for side-by-side rows, and the rule
+ * keyed to the viewport stacked them anyway. Crossing the rail's own
+ * breakpoint re-anchors the pane on the row the reader was reading, because
+ * a reflow changes every row's height and a raw scroll offset would land
+ * somewhere else.
+ */
+onMount(() => {
+  if (typeof ResizeObserver === "undefined") return;
+  const observer = new ResizeObserver((entries) => {
+    const entry = entries.at(-1);
+    if (entry === undefined) return;
+    const width = entry.borderBoxSize[0]?.inlineSize ?? entry.target.clientWidth;
+    if (width >= RAIL_BREAKPOINT === railVisible) {
+      surfaceWidth = width;
+      return;
+    }
+    // A measurement still pending would describe the layout the resize has
+    // already produced, not the one the reader was looking at.
+    if (anchorFrame !== 0) {
+      cancelAnimationFrame(anchorFrame);
+      anchorFrame = 0;
+    }
+    const anchor = scrollAnchor;
+    surfaceWidth = width;
+    void tick().then(() => restoreScrollAnchor(anchor));
+  });
+  if (dialogElement instanceof HTMLElement) observer.observe(dialogElement);
+  return () => observer.disconnect();
+});
+
+/**
+ * A rail with no selection beside an empty pane is not a state the product
+ * has: crossing the breakpoint upward from the group list lands on
+ * Appearance.
+ */
+$effect(() => {
+  if (railVisible && selectedSection === null) selectedSection = "appearance";
+});
+
+/** Keeps the travelling selected-item bar over the tab it belongs to. */
+$effect(() => {
+  const active = railVisible && !searchActive ? selectedSection : null;
+  const selected =
+    active === null
+      ? null
+      : (railElement?.querySelector<HTMLElement>(`[data-section="${active}"]`) ??
+        null);
+  railIndicatorTop = selected?.offsetTop ?? 0;
+  railIndicatorHeight = selected?.offsetHeight ?? 0;
+});
+
+/**
+ * The incoming pane fades in over its fully composed frame. Only a group
+ * change animates: the results view replaces the pane on every keystroke and
+ * is content, not a surface.
+ */
+$effect(() => {
+  const key = paneKey;
+  if (key === enteredPaneKey || !(paneElement instanceof HTMLElement)) return;
+  enteredPaneKey = key;
+  enterMotionSurface(paneElement);
+});
+
 $effect(() => {
   if (targetSetting !== null && focusedTargetSetting !== targetSetting) {
     focusedTargetSetting = targetSetting;
@@ -314,8 +689,64 @@ $effect(() => {
   }
 });
 
+onDestroy(() => {
+  sessionSection = selectedSection;
+});
+
+type ScrollAnchor = { id: string; offset: number } | null;
+
+/**
+ * The reader's position in the pane, held as the topmost visible row and the
+ * distance the pane has scrolled into it: the same content-anchored form the
+ * history restoration uses, so a reflow that changes every row's height still
+ * lands on the same row. It is measured while the reader scrolls rather than
+ * when the surface resizes, because by the time a resize is observable the
+ * rows have already reflowed under the position it would be measuring.
+ */
+function measureScrollAnchor(): ScrollAnchor {
+  if (!(contentElement instanceof HTMLElement)) return null;
+  const top = contentElement.scrollTop;
+  for (const row of contentElement.querySelectorAll<HTMLElement>(
+    "[data-setting-id]",
+  )) {
+    // A row whose last pixel sits on the pane's top edge is the row above,
+    // not the one the reader is reading.
+    if (row.offsetTop + row.offsetHeight <= top + 1) continue;
+    const id = row.dataset.settingId;
+    if (id === undefined) continue;
+    return { id, offset: top - row.offsetTop };
+  }
+  return null;
+}
+
+function onPaneScroll() {
+  if (anchorFrame !== 0) return;
+  anchorFrame = requestAnimationFrame(() => {
+    anchorFrame = 0;
+    scrollAnchor = measureScrollAnchor();
+  });
+}
+
+function restoreScrollAnchor(anchor: ScrollAnchor) {
+  if (anchor === null || !(contentElement instanceof HTMLElement)) return;
+  const row = contentElement.querySelector<HTMLElement>(
+    `[data-setting-id="${CSS.escape(anchor.id)}"]`,
+  );
+  if (row === null) return;
+  contentElement.scrollTop = row.offsetTop + anchor.offset;
+}
+
+function sectionOfSetting(id: string): SectionId | null {
+  return (
+    SETTINGS_DESCRIPTORS.find((setting) => setting.id === id)?.section ?? null
+  );
+}
+
 async function focusSetting(id: string) {
   searchQuery = "";
+  narrowedSection = null;
+  const section = sectionOfSetting(id);
+  if (section !== null) selectedSection = section;
   await tick();
   const row = contentElement?.querySelector<HTMLElement>(
     `[data-setting-id="${CSS.escape(id)}"]`,
@@ -326,9 +757,10 @@ async function focusSetting(id: string) {
     row === undefined
   )
     return;
-  const contentBox = contentElement.getBoundingClientRect();
-  const rowBox = row.getBoundingClientRect();
-  contentElement.scrollTop += rowBox.top - contentBox.top;
+  // Layout coordinates, not viewport rectangles: the dialog is still inside
+  // its entrance scale when a deep link arrives, and a rectangle measured
+  // through that transform scrolls the pane a couple of percent short.
+  contentElement.scrollTop = row.offsetTop;
   const control = row.querySelector<HTMLElement>(
     "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]",
   );
@@ -369,18 +801,216 @@ function paletteIsStoredChoice(card: PaletteCard): boolean {
     : documentSettings.dark_palette === card.value;
 }
 
+/**
+ * A click on a palette card writes that palette's field and nothing else: a
+ * light card writes the light palette, a dark card the dark one, and the
+ * colour scheme never changes. The mode cards repaint in the same frame,
+ * which is where the choice's consequence shows.
+ */
 function choosePalette(card: PaletteCard) {
-  if (card.mode === "light") {
-    update({
-      theme: "light",
-      light_palette: card.value as LightPaletteName,
-    });
-  } else {
-    update({
-      theme: "dark",
-      dark_palette: card.value as DarkPaletteName,
+  previewPalette = card.value;
+  update(
+    card.mode === "light"
+      ? { light_palette: card.value as LightPaletteName }
+      : { dark_palette: card.value as DarkPaletteName },
+  );
+}
+
+function chooseTheme(theme: ThemeName) {
+  update({ theme });
+}
+
+async function modeKeydown(event: KeyboardEvent, card: ModeCard) {
+  const index = modeCards.indexOf(card);
+  let nextIndex: number | null = null;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    nextIndex = (index + 1) % modeCards.length;
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    nextIndex = (index - 1 + modeCards.length) % modeCards.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = modeCards.length - 1;
+  }
+  if (nextIndex === null) return;
+  event.preventDefault();
+  const next = modeCards[nextIndex];
+  if (next === undefined) return;
+  chooseTheme(next.value);
+  await tick();
+  dialogElement
+    ?.querySelector<HTMLButtonElement>(`[data-testid="settings-theme-${next.value}"]`)
+    ?.focus();
+}
+
+/** The preview tokens one miniature shell pane paints from. */
+function modePaneStyle(palette: LightPaletteName | DarkPaletteName): string {
+  return (
+    `--skr-mode-pane-surface: var(--skr-preview-${palette}-surface);` +
+    `--skr-mode-pane-text: var(--skr-preview-${palette}-text);` +
+    `--skr-mode-pane-accent: var(--skr-preview-${palette}-accent)`
+  );
+}
+
+/**
+ * The task statuses compare on the values the editor actually resolves, not
+ * on the shape they were stored in: a document that spells out a default
+ * name, or omits a track the resolver would derive anyway, describes the
+ * same statuses and is not a change the reader made.
+ */
+function canonicalStatuses(value: unknown): string {
+  if (!Array.isArray(value)) return JSON.stringify(value);
+  return JSON.stringify(
+    (value as TaskStatus[]).map((status) => [
+      status.symbol,
+      taskStatusDisplayName(status),
+      status.category,
+      status.glyph,
+      status.color_token,
+      status.next_status,
+      taskStatusTrack(status),
+      taskStatusPayload(status) ?? null,
+    ]),
+  );
+}
+
+function valuesDiffer(
+  key: keyof SettingsDocument,
+  left: unknown,
+  right: unknown,
+): boolean {
+  if (key === "task_statuses") {
+    return canonicalStatuses(left) !== canonicalStatuses(right);
+  }
+  return left !== right;
+}
+
+function rowIsChanged(row: SettingRow): boolean {
+  return row.keys.some((key) =>
+    valuesDiffer(key, documentSettings[key], DEFAULT_SETTINGS[key]),
+  );
+}
+
+function rowOf(id: string): SettingRow | undefined {
+  return Object.values(sectionRows)
+    .flat()
+    .find((row) => row.id === id);
+}
+
+/** Writes one row's defaults back through the ordinary settings path. */
+function resetRow(id: string) {
+  const row = rowOf(id);
+  if (row === undefined || row.keys.length === 0) return;
+  const nextPreview = { ...previewSettings };
+  for (const key of row.keys) delete nextPreview[key];
+  previewSettings = nextPreview;
+  update(
+    Object.fromEntries(
+      row.keys.map((key) => [key, DEFAULT_SETTINGS[key]]),
+    ) as Partial<SettingsDocument>,
+  );
+}
+
+/** True while the row renders: always in its own group, only when matched under a query. */
+function showRow(id: string): boolean {
+  return !searchActive || matchedRowIds.has(id);
+}
+
+function tabId(section: SectionId): string {
+  return `settings-tab-${section}`;
+}
+
+function sectionLabel(section: SectionId): string {
+  return sections.find(({ id }) => id === section)?.label ?? section;
+}
+
+function headingId(section: SectionId): string {
+  return `settings-${section}-heading`;
+}
+
+async function selectSection(section: SectionId, moveFocus = false) {
+  const wasList = shownSection === null;
+  narrowedSection = searchActive ? section : null;
+  selectedSection = section;
+  paneMotion = wasList ? "drill-push" : "fade";
+  if (contentElement instanceof HTMLElement) contentElement.scrollTop = 0;
+  if (!moveFocus && !wasList) return;
+  await tick();
+  // A drill-down push destroys the row that was activated, so focus lands on
+  // the control that leaves the level it just entered rather than on nothing.
+  const target = wasList
+    ? dialogElement?.querySelector<HTMLButtonElement>(
+        "[data-testid='settings-back']",
+      )
+    : railElement?.querySelector<HTMLButtonElement>(`[data-section="${section}"]`);
+  target?.focus();
+}
+
+/** Escape at level two leaves the inner thing first, as everywhere else. */
+async function showGroupList() {
+  const leaving = selectedSection;
+  paneMotion = "drill-pop";
+  selectedSection = null;
+  narrowedSection = null;
+  if (contentElement instanceof HTMLElement) contentElement.scrollTop = 0;
+  await tick();
+  const rows = contentElement?.querySelectorAll<HTMLButtonElement>(
+    ".settings-group-row",
+  );
+  const returning = [...(rows ?? [])].find(
+    (row) => row.dataset.section === leaving,
+  );
+  (returning ?? rows?.[0])?.focus();
+}
+
+function railKeydown(event: KeyboardEvent) {
+  const index = sections.findIndex(({ id }) => id === selectedSection);
+  let nextIndex: number | null = null;
+  if (event.key === "ArrowDown") nextIndex = (index + 1) % sections.length;
+  else if (event.key === "ArrowUp")
+    nextIndex = (index - 1 + sections.length) % sections.length;
+  else if (event.key === "Home") nextIndex = 0;
+  else if (event.key === "End") nextIndex = sections.length - 1;
+  if (nextIndex === null) return;
+  event.preventDefault();
+  const next = sections[nextIndex];
+  if (next === undefined) return;
+  void selectSection(next.id, true);
+}
+
+/**
+ * A query owns the surface: the rail drops its selection and becomes a facet
+ * display. Clearing it restores the group that was showing and the scroll
+ * offset it had, so nothing is lost by searching and changing your mind.
+ */
+function onSearchInput(event: Event) {
+  const wasActive = searchActive;
+  searchQuery = (event.currentTarget as HTMLInputElement).value;
+  const isActive = searchQuery.trim().length > 0;
+  if (isActive && !wasActive) {
+    restoreSection = selectedSection;
+    restoreScrollTop =
+      contentElement instanceof HTMLElement ? contentElement.scrollTop : 0;
+    narrowedSection = null;
+    if (contentElement instanceof HTMLElement) contentElement.scrollTop = 0;
+  } else if (!isActive && wasActive) {
+    selectedSection = restoreSection;
+    narrowedSection = null;
+    const offset = restoreScrollTop;
+    void tick().then(() => {
+      if (contentElement instanceof HTMLElement) {
+        contentElement.scrollTop = offset;
+      }
     });
   }
+}
+
+function focusSearchField() {
+  const field = dialogElement?.querySelector<HTMLInputElement>(
+    "[data-testid='settings-search']",
+  );
+  field?.focus();
+  field?.select();
 }
 
 async function paletteKeydown(event: KeyboardEvent, card: PaletteCard) {
@@ -406,18 +1036,6 @@ async function paletteKeydown(event: KeyboardEvent, card: PaletteCard) {
       `[data-testid="settings-palette-${next.value}"]`,
     )
     ?.focus();
-}
-
-function paletteMatches(): boolean {
-  const paletteSearchTerms: readonly (readonly [string, string])[] = [
-    [STRINGS.settingsPalette, STRINGS.settingsPaletteDescription],
-    [STRINGS.settingsTheme, STRINGS.settingsThemeDescription],
-    [STRINGS.settingsLightPalette, STRINGS.settingsPaletteDescription],
-    [STRINGS.settingsDarkPalette, STRINGS.settingsPaletteDescription],
-  ];
-  return paletteSearchTerms.some(([label, description]) =>
-    matches(label, description),
-  );
 }
 
 async function startNumericEntry(setting: NumericSetting, value: number) {
@@ -769,111 +1387,6 @@ function matches(label: string, description: string): boolean {
   );
 }
 
-function hasMatches(section: SectionId): boolean {
-  if (
-    settingSearchText[section].some(([label, description]) =>
-      matches(label, description),
-    )
-  ) {
-    return true;
-  }
-  if (desktopAvailable) return false;
-  const desktopDescriptions: Partial<Record<SectionId, [string, string][]>> = {
-    files: [
-      [STRINGS.settingsDefaultNoteFolder, defaultNoteFolderDescription],
-      [STRINGS.settingsAttachmentFolder, attachmentFolderDescription],
-      [STRINGS.settingsHonorObsidian, obsidianDescription],
-    ],
-    updates: [
-      [STRINGS.settingsUpdateChannel, updateChannelDescription],
-      [STRINGS.settingsCheckUpdates, checkUpdatesDescription],
-    ],
-  };
-  return (desktopDescriptions[section] ?? []).some(([label, description]) =>
-    matches(label, description),
-  );
-}
-
-async function openJumpMenu() {
-  jumpMenuOpen = true;
-  await tick();
-  enterMotionSurface(jumpMenuElement);
-  jumpMenuElement
-    ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
-    ?.focus();
-}
-
-/** The trigger toggles: a second activation while open closes the menu. */
-function toggleJumpMenu() {
-  if (jumpMenuOpen) {
-    closeJumpMenu();
-  } else {
-    void openJumpMenu();
-  }
-}
-
-function onJumpButtonKeydown(event: KeyboardEvent) {
-  if (event.key !== "Enter" && event.key !== " ") return;
-  event.preventDefault();
-  toggleJumpMenu();
-}
-
-function closeJumpMenu() {
-  const finish = () => {
-    jumpMenuOpen = false;
-    void tick().then(() => jumpButtonElement?.focus());
-  };
-  if (jumpMenuElement != null) {
-    void exitMotionSurface(jumpMenuElement, finish);
-  } else {
-    finish();
-  }
-}
-
-function jumpToSection(section: SectionId) {
-  const finish = () => {
-    jumpMenuOpen = false;
-    void tick().then(() => {
-      const target = contentElement?.querySelector<HTMLElement>(
-        `[data-settings-section="${section}"]`,
-      );
-      if (contentElement != null && target != null) {
-        const contentBox = contentElement.getBoundingClientRect();
-        const targetBox = target.getBoundingClientRect();
-        contentElement.scrollTop += targetBox.top - contentBox.top;
-      }
-      jumpButtonElement?.focus();
-    });
-  };
-  if (jumpMenuElement != null) {
-    void exitMotionSurface(jumpMenuElement, finish);
-  } else {
-    finish();
-  }
-}
-
-function onJumpMenuKeydown(event: KeyboardEvent) {
-  if (!(jumpMenuElement instanceof HTMLElement)) return;
-  const items = [
-    ...jumpMenuElement.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-  ];
-  const index = items.indexOf(event.target as HTMLButtonElement);
-  if ((event.key === "Enter" || event.key === " ") && index >= 0) {
-    event.preventDefault();
-    items[index]?.click();
-    return;
-  }
-  let nextIndex: number | null = null;
-  if (event.key === "ArrowDown") nextIndex = (index + 1) % items.length;
-  else if (event.key === "ArrowUp")
-    nextIndex = (index - 1 + items.length) % items.length;
-  else if (event.key === "Home") nextIndex = 0;
-  else if (event.key === "End") nextIndex = items.length - 1;
-  if (nextIndex === null) return;
-  event.preventDefault();
-  items[nextIndex]?.focus();
-}
-
 function segmentedKeydown<T extends string>(
   event: KeyboardEvent,
   values: readonly T[],
@@ -906,8 +1419,21 @@ function segmentedKeydown<T extends string>(
 function onKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
     event.preventDefault();
-    if (jumpMenuOpen) void closeJumpMenu();
+    if (backControlVisible) void showGroupList();
     else closeSettings();
+    return;
+  }
+  // The editor's find surface is unreachable from a modal dialog, so the
+  // chord every reader already has for "search this thing" has no competitor
+  // here and is the fast route back from deep inside a long group.
+  if (
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    event.key.toLowerCase() === "f"
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    focusSearchField();
     return;
   }
   if (event.metaKey || event.ctrlKey || event.altKey) {
@@ -923,26 +1449,6 @@ function onKeydown(event: KeyboardEvent) {
     return;
   }
   if (event.key !== "Tab" || !(dialogElement instanceof HTMLElement)) {
-    return;
-  }
-  if (jumpMenuOpen && jumpMenuElement instanceof HTMLElement) {
-    const menuFocusable = [
-      ...jumpMenuElement.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), [tabindex]:not([tabindex="-1"])',
-      ),
-    ];
-    const menuFirst = menuFocusable[0];
-    const menuLast = menuFocusable.at(-1);
-    if (menuFirst === undefined || menuLast === undefined) {
-      event.preventDefault();
-      jumpMenuElement.focus();
-    } else if (event.shiftKey && document.activeElement === menuFirst) {
-      event.preventDefault();
-      menuLast.focus();
-    } else if (!event.shiftKey && document.activeElement === menuLast) {
-      event.preventDefault();
-      menuFirst.focus();
-    }
     return;
   }
   const focusable = [
@@ -1001,14 +1507,68 @@ function onKeydown(event: KeyboardEvent) {
   </div>
 {/snippet}
 
+{#snippet rowReset(id: string)}
+  {#if changedRowIds.has(id)}
+    <button
+      class="row-reset"
+      type="button"
+      aria-label={STRINGS.settingsResetToDefault}
+      title={STRINGS.settingsResetToDefault}
+      data-testid={`settings-reset-${id}`}
+      onclick={() => resetRow(id)}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5.5 9 H10 V4.5" />
+        <path d="M5.9 9.2 A7 7 0 1 1 5 13.4" />
+      </svg>
+    </button>
+  {/if}
+{/snippet}
+
+{#snippet modePreviewPane(
+  palette: LightPaletteName | DarkPaletteName,
+  half: boolean,
+)}
+  <span class="mode-pane" class:mode-pane-half={half} style={modePaneStyle(palette)}>
+    <span class="mode-pane-sidebar"></span>
+    <span class="mode-pane-lines">
+      <i></i><i></i><i></i>
+    </span>
+    <span class="mode-pane-accent"></span>
+  </span>
+{/snippet}
+
+{#snippet modeCard(card: ModeCard)}
+  <button
+    type="button"
+    class="mode-card"
+    class:active={documentSettings.theme === card.value}
+    role="radio"
+    aria-checked={documentSettings.theme === card.value}
+    tabindex={documentSettings.theme === card.value ? 0 : -1}
+    data-mode={card.value}
+    data-testid={`settings-theme-${card.value}`}
+    onclick={() => chooseTheme(card.value)}
+    onkeydown={(event) => modeKeydown(event, card)}
+  >
+    <span class="mode-preview" aria-hidden="true">
+      {#if card.value !== "dark"}
+        {@render modePreviewPane(previewLightPalette, false)}
+      {/if}
+      {#if card.value !== "light"}
+        {@render modePreviewPane(previewDarkPalette, card.value === "system")}
+      {/if}
+    </span>
+    <span class="mode-name">{card.label}</span>
+  </button>
+{/snippet}
+
 {#snippet paletteCard(card: PaletteCard)}
   <button
     type="button"
     class="palette-card skr-palette-swatch"
     class:active={activePalette === card.value}
-    class:paired={documentSettings.theme === "system" &&
-      paletteIsStoredChoice(card) &&
-      activePalette !== card.value}
+    class:paired={paletteIsStoredChoice(card) && activePalette !== card.value}
     role="radio"
     aria-checked={activePalette === card.value}
     tabindex={activePalette === card.value ? 0 : -1}
@@ -1076,167 +1636,196 @@ function onKeydown(event: KeyboardEvent) {
     data-motion-surface="centered"
     onkeydown={onKeydown}
   >
-    <div class="settings-header" inert={jumpMenuOpen ? true : undefined}>
+    <div class="settings-header">
       <div class="settings-header-primary">
+        {#if backControlVisible}
+          <button
+            class="icon-button back-button"
+            type="button"
+            aria-label={STRINGS.settingsAllSettings}
+            title={STRINGS.settingsAllSettings}
+            data-btn-role="secondary"
+            data-testid="settings-back"
+            onclick={() => void showGroupList()}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14.5 6 L9 12 L14.5 18" />
+            </svg>
+          </button>
+        {/if}
         <h2>{STRINGS.settingsLabel}</h2>
         <button
-          class="icon-button"
+          class="icon-button close-button"
           type="button"
           aria-label={STRINGS.closeAction}
           data-btn-role="secondary"
           onclick={closeSettings}
         >
-          <span aria-hidden="true">×</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6 L18 18 M18 6 L6 18" />
+          </svg>
         </button>
       </div>
       <div class="settings-header-tools">
         <label class="settings-search">
           <span class="visually-hidden">{STRINGS.settingsSearchLabel}</span>
           <input
-            bind:value={searchQuery}
+            value={searchQuery}
+            oninput={onSearchInput}
             data-testid="settings-search"
             type="search"
             placeholder={STRINGS.settingsSearchPlaceholder}
           />
         </label>
-        <button
-          bind:this={jumpButtonElement}
-          class="jump-button"
-          type="button"
-          aria-label={STRINGS.settingsJumpSections}
-          aria-haspopup="menu"
-          aria-expanded={jumpMenuOpen}
-          data-testid="settings-jump"
-          onclick={toggleJumpMenu}
-          onkeydown={onJumpButtonKeydown}
-        >
-          <span aria-hidden="true">⋯</span>
-        </button>
       </div>
     </div>
 
-    {#if jumpMenuOpen}
-      <div
-        class="settings-jump-layer"
-        role="presentation"
-        onclick={(event) =>
-          event.target === event.currentTarget && void closeJumpMenu()}
-      >
+    <div class="settings-body">
+      {#if railVisible}
         <div
-          bind:this={jumpMenuElement}
-          class="settings-jump-menu"
-          tabindex="-1"
-          data-testid="settings-jump-menu"
-          data-motion-surface="anchored-top"
+          bind:this={railElement}
+          class="settings-rail"
+          role="tablist"
+          aria-orientation="vertical"
+          aria-label={STRINGS.settingsSectionsLabel}
+          data-testid="settings-rail"
         >
-          <div class="settings-jump-heading">
-            <span>{STRINGS.settingsJumpSections}</span>
-            <button type="button" data-btn-role="secondary" onclick={closeJumpMenu}
-              >{STRINGS.closeAction}</button
+          <span
+            class="settings-rail-indicator"
+            class:settings-rail-indicator-hidden={searchActive}
+            aria-hidden="true"
+            style={`height: ${railIndicatorHeight}px; transform: translateY(${railIndicatorTop}px)`}
+          ></span>
+          {#each sections as section (section.id)}
+            {@const selected = !searchActive && selectedSection === section.id}
+            {@const count = matchCounts[section.id]}
+            <button
+              class="settings-rail-item"
+              type="button"
+              role="tab"
+              id={tabId(section.id)}
+              data-section={section.id}
+              data-testid={`settings-rail-${section.id}`}
+              aria-controls="settings-pane"
+              aria-selected={selected}
+              aria-disabled={searchActive && count === 0 ? true : undefined}
+              class:selected
+              class:facet-empty={searchActive && count === 0}
+              tabindex={selected || (searchActive && section.id === sections[0]?.id)
+                ? 0
+                : -1}
+              onclick={() => {
+                if (searchActive && count === 0) return;
+                void selectSection(section.id);
+              }}
+              onkeydown={railKeydown}
             >
-          </div>
-          <div
-            class="settings-jump-items"
-            role="menu"
-            aria-label={STRINGS.settingsSectionsLabel}
-            tabindex="-1"
-            onkeydown={onJumpMenuKeydown}
-          >
-            {#each sections as section}
-              <button
-                type="button"
-                role="menuitem"
-                onclick={() => jumpToSection(section.id)}
-                >{section.label}</button
-              >
-            {/each}
-          </div>
+              <span class="settings-rail-label">{section.label}</span>
+              <span class="settings-rail-slot" aria-hidden="true">
+                {#if searchActive}
+                  <span class="settings-rail-count">{count}</span>
+                {:else if changedSections.has(section.id)}
+                  <span class="settings-rail-dot"></span>
+                {/if}
+              </span>
+            </button>
+          {/each}
         </div>
-      </div>
-    {/if}
+        <div class="settings-rail-hairline" aria-hidden="true"></div>
+      {/if}
 
     <div
       bind:this={contentElement}
       class="settings-content"
-      inert={jumpMenuOpen ? true : undefined}
+      class:stacked={stackedRows}
+      id="settings-pane"
+      role={railVisible ? "tabpanel" : undefined}
+      aria-labelledby={railVisible && !searchActive && shownSection !== null
+        ? tabId(shownSection)
+        : undefined}
+      onscroll={onPaneScroll}
     >
-        {#if hasMatches("appearance")}
-          <section
-            aria-labelledby="settings-appearance-heading"
-            data-settings-section="appearance"
-          >
-            <h3 id="settings-appearance-heading">
-              {STRINGS.settingsSectionAppearance}
-            </h3>
-
-            {#if paletteMatches()}
-              <div class="setting-row palette-setting">
-                <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsPalette}</span>
-                  <p>{STRINGS.settingsPaletteDescription}</p>
-                  {@render settingError(["theme", "light_palette", "dark_palette"])}
-                </div>
-                <div class="palette-picker">
-                  <div
-                    class="palette-options"
-                    role="radiogroup"
-                    aria-label={STRINGS.settingsPalette}
-                    data-testid="settings-palette"
-                  >
-                    <span
-                      class="palette-target"
-                      data-setting-id="appearance.light-palette"
-                    >
-                      {#each paletteCards.filter(({ mode }) => mode === "light") as card}
-                        {@render paletteCard(card)}
-                      {/each}
-                    </span>
-                    <span
-                      class="palette-target"
-                      data-setting-id="appearance.dark-palette"
-                    >
-                      {#each paletteCards.filter(({ mode }) => mode === "dark") as card}
-                        {@render paletteCard(card)}
-                      {/each}
-                    </span>
+        {#snippet appearanceRows()}
+            {#if showRow("appearance.theme")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("appearance.theme")}
+                data-setting-id="appearance.theme"
+              >
+                <div class="setting-row-fields">
+                  <div class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsTheme}</span>
+                    <p>{STRINGS.settingsThemeDescription}</p>
+                    {@render settingError(["theme"])}
                   </div>
-                  <label
-                    class="match-system-setting"
-                    data-setting-id="appearance.theme"
+                  <div
+                    class="mode-cards"
+                    role="radiogroup"
+                    aria-label={STRINGS.settingsTheme}
+                    data-testid="settings-theme"
                   >
-                    <span class="setting-copy">
-                      <span class="setting-label">{STRINGS.settingsTheme}</span>
-                      <span>{STRINGS.settingsThemeDescription}</span>
-                    </span>
-                    <span class="switch">
-                      <input
-                        type="checkbox"
-                        checked={documentSettings.theme === "system"}
-                        data-testid="settings-match-system"
-                        onchange={(event) =>
-                          update({
-                            theme: (
-                              event.currentTarget as HTMLInputElement
-                            ).checked
-                              ? "system"
-                              : systemPrefersDark
-                                ? "dark"
-                                : "light",
-                          })}
-                      />
-                      <span aria-hidden="true"></span>
-                    </span>
-                  </label>
-                  {@render palettePreview(
-                    activePaletteCard?.label ?? STRINGS.settingsPaletteManuscript,
-                    activePalette,
-                  )}
+                    {#each modeCards as card (card.value)}
+                      {@render modeCard(card)}
+                    {/each}
+                  </div>
                 </div>
+                {@render rowReset("appearance.theme")}
               </div>
             {/if}
 
-            {#if matches(STRINGS.settingsProseFont, STRINGS.settingsProseFontDescription)}
-              <div class="setting-row" data-setting-id="appearance.prose-font">
+            {#if showRow("appearance.palette")}
+              <div
+                class="setting-row palette-setting"
+                class:changed={changedRowIds.has("appearance.palette")}
+              >
+                <div class="setting-row-fields">
+                  <div class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsPalette}</span>
+                    <p>{STRINGS.settingsPaletteDescription}</p>
+                    {@render settingError(["light_palette", "dark_palette"])}
+                  </div>
+                  <div class="palette-picker">
+                    <div
+                      class="palette-options"
+                      role="radiogroup"
+                      aria-label={STRINGS.settingsPalette}
+                      data-testid="settings-palette"
+                    >
+                      <span
+                        class="palette-target"
+                        data-setting-id="appearance.light-palette"
+                      >
+                        {#each paletteCards.filter(({ mode }) => mode === "light") as card}
+                          {@render paletteCard(card)}
+                        {/each}
+                      </span>
+                      <span
+                        class="palette-target"
+                        data-setting-id="appearance.dark-palette"
+                      >
+                        {#each paletteCards.filter(({ mode }) => mode === "dark") as card}
+                          {@render paletteCard(card)}
+                        {/each}
+                      </span>
+                    </div>
+                    {@render palettePreview(
+                      displayedPaletteCard?.label ??
+                        STRINGS.settingsPaletteManuscript,
+                      displayedPalette,
+                    )}
+                  </div>
+                </div>
+                {@render rowReset("appearance.palette")}
+              </div>
+            {/if}
+
+            {#if showRow("appearance.prose-font")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("appearance.prose-font")}
+                data-setting-id="appearance.prose-font"
+              >
+                <div class="setting-row-fields">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsProseFont}</span>
                   <p>{STRINGS.settingsProseFontDescription}</p>
@@ -1265,11 +1854,18 @@ function onKeydown(event: KeyboardEvent) {
                     >
                   {/each}
                 </div>
+                </div>
+                {@render rowReset("appearance.prose-font")}
               </div>
             {/if}
 
-            {#if matches(STRINGS.settingsCodeFont, STRINGS.settingsCodeFontDescription)}
-              <div class="setting-row" data-setting-id="appearance.code-font">
+            {#if showRow("appearance.code-font")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("appearance.code-font")}
+                data-setting-id="appearance.code-font"
+              >
+                <div class="setting-row-fields">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsCodeFont}</span>
                   <p>{STRINGS.settingsCodeFontDescription}</p>
@@ -1298,11 +1894,18 @@ function onKeydown(event: KeyboardEvent) {
                     >
                   {/each}
                 </div>
+                </div>
+                {@render rowReset("appearance.code-font")}
               </div>
             {/if}
 
-            {#if matches(STRINGS.settingsFontSize, STRINGS.settingsFontSizeDescription)}
-              <div class="setting-row" data-setting-id="appearance.font-size">
+            {#if showRow("appearance.font-size")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("appearance.font-size")}
+                data-setting-id="appearance.font-size"
+              >
+                <div class="setting-row-fields">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsFontSize}</span>
                   <span>{STRINGS.settingsFontSizeDescription}</span>
@@ -1329,11 +1932,18 @@ function onKeydown(event: KeyboardEvent) {
                     STRINGS.settingsFontSize,
                   )}
                 </div>
+                </div>
+                {@render rowReset("appearance.font-size")}
               </div>
             {/if}
 
-            {#if matches(STRINGS.settingsLineHeight, STRINGS.settingsLineHeightDescription)}
-              <div class="setting-row" data-setting-id="appearance.line-height">
+            {#if showRow("appearance.line-height")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("appearance.line-height")}
+                data-setting-id="appearance.line-height"
+              >
+                <div class="setting-row-fields">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsLineHeight}</span>
                   <span>{STRINGS.settingsLineHeightDescription}</span>
@@ -1359,11 +1969,18 @@ function onKeydown(event: KeyboardEvent) {
                     STRINGS.settingsLineHeight,
                   )}
                 </div>
+                </div>
+                {@render rowReset("appearance.line-height")}
               </div>
             {/if}
 
-            {#if matches(STRINGS.settingsLineWidth, STRINGS.settingsLineWidthDescription)}
-              <div class="setting-row" data-setting-id="appearance.line-width">
+            {#if showRow("appearance.line-width")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("appearance.line-width")}
+                data-setting-id="appearance.line-width"
+              >
+                <div class="setting-row-fields">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsLineWidth}</span>
                   <span>{STRINGS.settingsLineWidthDescription}</span>
@@ -1390,44 +2007,49 @@ function onKeydown(event: KeyboardEvent) {
                     STRINGS.settingsLineWidth,
                   )}
                 </div>
+                </div>
+                {@render rowReset("appearance.line-width")}
               </div>
             {/if}
 
-            {#if matches(STRINGS.settingsAnimations, STRINGS.settingsAnimationsDescription)}
-              <label class="setting-row" data-setting-id="appearance.animations">
-                <span class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsAnimations}</span>
-                  <span>{STRINGS.settingsAnimationsDescription}</span>
-                  {@render settingError(["animations"])}
-                </span>
-                <span class="switch">
-                  <input
-                    type="checkbox"
-                    checked={documentSettings.animations}
-                    onchange={(event) =>
-                      update({
-                        animations: (event.currentTarget as HTMLInputElement)
-                          .checked,
-                      })}
-                  />
-                  <span aria-hidden="true"></span>
-                </span>
-              </label>
+            {#if showRow("appearance.animations")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("appearance.animations")}
+                data-setting-id="appearance.animations"
+              >
+                <label class="setting-row-fields">
+                  <span class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsAnimations}</span>
+                    <span>{STRINGS.settingsAnimationsDescription}</span>
+                    {@render settingError(["animations"])}
+                  </span>
+                  <span class="switch">
+                    <input
+                      type="checkbox"
+                      checked={documentSettings.animations}
+                      onchange={(event) =>
+                        update({
+                          animations: (event.currentTarget as HTMLInputElement)
+                            .checked,
+                        })}
+                    />
+                    <span aria-hidden="true"></span>
+                  </span>
+                </label>
+                {@render rowReset("appearance.animations")}
+              </div>
             {/if}
-          </section>
-        {/if}
+        {/snippet}
 
-        {#if hasMatches("editor")}
-          <section
-            aria-labelledby="settings-editor-heading"
-            data-settings-section="editor"
-          >
-            <h3 id="settings-editor-heading">
-              {STRINGS.settingsSectionEditor}
-            </h3>
-
-            {#if matches(STRINGS.settingsAutosave, STRINGS.settingsAutosaveDescription)}
-              <div class="setting-row" data-setting-id="editor.autosave">
+        {#snippet editorRows()}
+            {#if showRow("editor.autosave")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("editor.autosave")}
+                data-setting-id="editor.autosave"
+              >
+                <div class="setting-row-fields">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsAutosave}</span>
                   <p>{STRINGS.settingsAutosaveDescription}</p>
@@ -1465,33 +2087,47 @@ function onKeydown(event: KeyboardEvent) {
                       )}>+</button
                   >
                 </div>
+                </div>
+                {@render rowReset("editor.autosave")}
               </div>
             {/if}
 
-            {#if matches(STRINGS.settingsSpellCheck, STRINGS.settingsSpellCheckDescription)}
-              <label class="setting-row" data-setting-id="editor.spell-check">
-                <span class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsSpellCheck}</span>
-                  <span>{STRINGS.settingsSpellCheckDescription}</span>
-                  {@render settingError(["spell_check"])}
-                </span>
-                <span class="switch">
-                  <input
-                    type="checkbox"
-                    checked={documentSettings.spell_check}
-                    onchange={(event) =>
-                      update({
-                        spell_check: (event.currentTarget as HTMLInputElement)
-                          .checked,
-                      })}
-                  />
-                  <span aria-hidden="true"></span>
-                </span>
-              </label>
+            {#if showRow("editor.spell-check")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("editor.spell-check")}
+                data-setting-id="editor.spell-check"
+              >
+                <label class="setting-row-fields">
+                  <span class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsSpellCheck}</span>
+                    <span>{STRINGS.settingsSpellCheckDescription}</span>
+                    {@render settingError(["spell_check"])}
+                  </span>
+                  <span class="switch">
+                    <input
+                      type="checkbox"
+                      checked={documentSettings.spell_check}
+                      onchange={(event) =>
+                        update({
+                          spell_check: (event.currentTarget as HTMLInputElement)
+                            .checked,
+                        })}
+                    />
+                    <span aria-hidden="true"></span>
+                  </span>
+                </label>
+                {@render rowReset("editor.spell-check")}
+              </div>
             {/if}
 
-            {#if matches(STRINGS.settingsIndentStyle, STRINGS.settingsIndentStyleDescription)}
-              <div class="setting-row" data-setting-id="editor.indent-style">
+            {#if showRow("editor.indent-style")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("editor.indent-style")}
+                data-setting-id="editor.indent-style"
+              >
+                <div class="setting-row-fields">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsIndentStyle}</span>
                   <p>{STRINGS.settingsIndentStyleDescription}</p>
@@ -1520,11 +2156,18 @@ function onKeydown(event: KeyboardEvent) {
                     >
                   {/each}
                 </div>
+                </div>
+                {@render rowReset("editor.indent-style")}
               </div>
             {/if}
 
-            {#if matches(STRINGS.settingsIndentWidth, STRINGS.settingsIndentWidthDescription)}
-              <div class="setting-row" data-setting-id="editor.indent-width">
+            {#if showRow("editor.indent-width")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("editor.indent-width")}
+                data-setting-id="editor.indent-width"
+              >
+                <div class="setting-row-fields">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsIndentWidth}</span>
                   <p>{STRINGS.settingsIndentWidthDescription}</p>
@@ -1562,41 +2205,57 @@ function onKeydown(event: KeyboardEvent) {
                       )}>+</button
                   >
                 </div>
+                </div>
+                {@render rowReset("editor.indent-width")}
               </div>
             {/if}
 
             {#each booleanEditorSettings as preference}
-              {#if matches(preference.label, preference.description)}
-                <label class="setting-row" data-setting-id={preference.id}>
-                  <span class="setting-copy">
-                    <span class="setting-label">{preference.label}</span>
-                    <span>{preference.description}</span>
-                    {@render settingError([preference.key])}
-                  </span>
-                  <span class="switch">
-                    <input
-                      type="checkbox"
-                      data-testid={`settings-${preference.key.replaceAll("_", "-")}`}
-                      checked={documentSettings[preference.key]}
-                      onchange={(event) =>
-                        update({
-                          [preference.key]: (
-                            event.currentTarget as HTMLInputElement
-                          ).checked,
-                        })}
-                    />
-                    <span aria-hidden="true"></span>
-                  </span>
-                </label>
+              {#if showRow(preference.id)}
+                <div
+                  class="setting-row"
+                  class:changed={changedRowIds.has(preference.id)}
+                  data-setting-id={preference.id}
+                >
+                  <label class="setting-row-fields">
+                    <span class="setting-copy">
+                      <span class="setting-label">{preference.label}</span>
+                      <span>{preference.description}</span>
+                      {@render settingError([preference.key])}
+                    </span>
+                    <span class="switch">
+                      <input
+                        type="checkbox"
+                        data-testid={`settings-${preference.key.replaceAll("_", "-")}`}
+                        checked={documentSettings[preference.key]}
+                        onchange={(event) =>
+                          update({
+                            [preference.key]: (
+                              event.currentTarget as HTMLInputElement
+                            ).checked,
+                          })}
+                      />
+                      <span aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  {@render rowReset(preference.id)}
+                </div>
               {/if}
             {/each}
 
-            {#if matches(STRINGS.settingsTaskStatuses, STRINGS.settingsTaskStatusesDescription)}
-              <div class="task-status-setting" data-setting-id="editor.task-statuses">
-                <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsTaskStatuses}</span>
-                  <p>{STRINGS.settingsTaskStatusesDescription}</p>
-                  {@render settingError(["task_statuses"])}
+            {#if showRow("editor.task-statuses")}
+              <div
+                class="task-status-setting setting-row-marked"
+                class:changed={changedRowIds.has("editor.task-statuses")}
+                data-setting-id="editor.task-statuses"
+              >
+                <div class="task-status-copy">
+                  <div class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsTaskStatuses}</span>
+                    <p>{STRINGS.settingsTaskStatusesDescription}</p>
+                    {@render settingError(["task_statuses"])}
+                  </div>
+                  {@render rowReset("editor.task-statuses")}
                 </div>
                 <details class="task-status-editor">
                   <summary>{STRINGS.settingsTaskEdit}</summary>
@@ -1879,43 +2538,47 @@ function onKeydown(event: KeyboardEvent) {
                 </details>
               </div>
             {/if}
-          </section>
-        {/if}
+        {/snippet}
 
-        {#if hasMatches("files")}
-          <section
-            aria-labelledby="settings-files-heading"
-            data-settings-section="files"
-          >
-            <h3 id="settings-files-heading">
-              {STRINGS.settingsSectionFiles}
-            </h3>
+        {#snippet filesRows()}
             <fieldset disabled={!desktopAvailable}>
-              {#if matches(STRINGS.settingsDefaultNoteFolder, defaultNoteFolderDescription)}
-                <label class="setting-row" data-setting-id="files.default-note-folder">
-                  <span class="setting-copy">
-                    <span class="setting-label">{STRINGS.settingsDefaultNoteFolder}</span>
-                    <span>{defaultNoteFolderDescription}</span>
-                    {@render settingError(["default_note_folder"])}
-                  </span>
-                  <input
-                    class="text-control"
-                    type="text"
-                    value={documentSettings.default_note_folder}
-                    data-testid="settings-default-note-folder"
-                    disabled={!desktopAvailable}
-                    onchange={(event) =>
-                      update({
-                        default_note_folder: (
-                          event.currentTarget as HTMLInputElement
-                        ).value,
-                      })}
-                  />
-                </label>
+              {#if showRow("files.default-note-folder")}
+                <div
+                  class="setting-row"
+                  class:changed={changedRowIds.has("files.default-note-folder")}
+                  data-setting-id="files.default-note-folder"
+                >
+                  <label class="setting-row-fields">
+                    <span class="setting-copy">
+                      <span class="setting-label">{STRINGS.settingsDefaultNoteFolder}</span>
+                      <span>{defaultNoteFolderDescription}</span>
+                      {@render settingError(["default_note_folder"])}
+                    </span>
+                    <input
+                      class="text-control"
+                      type="text"
+                      value={documentSettings.default_note_folder}
+                      data-testid="settings-default-note-folder"
+                      disabled={!desktopAvailable}
+                      onchange={(event) =>
+                        update({
+                          default_note_folder: (
+                            event.currentTarget as HTMLInputElement
+                          ).value,
+                        })}
+                    />
+                  </label>
+                  {@render rowReset("files.default-note-folder")}
+                </div>
               {/if}
 
-              {#if matches(STRINGS.settingsAttachmentFolder, attachmentFolderDescription)}
-                <div class="setting-row attachment-setting" data-setting-id="files.attachment-folder">
+              {#if showRow("files.attachment-folder")}
+                <div
+                  class="setting-row attachment-setting"
+                  class:changed={changedRowIds.has("files.attachment-folder")}
+                  data-setting-id="files.attachment-folder"
+                >
+                  <div class="setting-row-fields">
                   <div class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsAttachmentFolder}</span>
                     <p>{attachmentFolderDescription}</p>
@@ -1965,46 +2628,52 @@ function onKeydown(event: KeyboardEvent) {
                       />
                     {/if}
                   </div>
+                  </div>
+                  {@render rowReset("files.attachment-folder")}
                 </div>
               {/if}
 
-              {#if matches(STRINGS.settingsHonorObsidian, obsidianDescription)}
-                <label class="setting-row" data-setting-id="files.obsidian-config">
-                  <span class="setting-copy">
-                    <span class="setting-label">{STRINGS.settingsHonorObsidian}</span>
-                    <span>{obsidianDescription}</span>
-                    {@render settingError(["honor_obsidian_config"])}
-                  </span>
-                  <span class="switch">
-                    <input
-                      type="checkbox"
-                      checked={documentSettings.honor_obsidian_config}
-                      disabled={!desktopAvailable}
-                      onchange={(event) =>
-                        update({
-                          honor_obsidian_config: (
-                            event.currentTarget as HTMLInputElement
-                          ).checked,
-                        })}
-                    />
-                    <span aria-hidden="true"></span>
-                  </span>
-                </label>
+              {#if showRow("files.obsidian-config")}
+                <div
+                  class="setting-row"
+                  class:changed={changedRowIds.has("files.obsidian-config")}
+                  data-setting-id="files.obsidian-config"
+                >
+                  <label class="setting-row-fields">
+                    <span class="setting-copy">
+                      <span class="setting-label">{STRINGS.settingsHonorObsidian}</span>
+                      <span>{obsidianDescription}</span>
+                      {@render settingError(["honor_obsidian_config"])}
+                    </span>
+                    <span class="switch">
+                      <input
+                        type="checkbox"
+                        checked={documentSettings.honor_obsidian_config}
+                        disabled={!desktopAvailable}
+                        onchange={(event) =>
+                          update({
+                            honor_obsidian_config: (
+                              event.currentTarget as HTMLInputElement
+                            ).checked,
+                          })}
+                      />
+                      <span aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  {@render rowReset("files.obsidian-config")}
+                </div>
               {/if}
             </fieldset>
-          </section>
-        {/if}
+        {/snippet}
 
-        {#if hasMatches("search")}
-          <section
-            aria-labelledby="settings-search-heading"
-            data-settings-section="search"
-          >
-            <h3 id="settings-search-heading">
-              {STRINGS.settingsSectionSearch}
-            </h3>
-            {#if matches(STRINGS.settingsSearchLimit, STRINGS.settingsSearchLimitDescription)}
-              <div class="setting-row" data-setting-id="search.result-limit">
+        {#snippet searchRows()}
+            {#if showRow("search.result-limit")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("search.result-limit")}
+                data-setting-id="search.result-limit"
+              >
+                <div class="setting-row-fields">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsSearchLimit}</span>
                   <p>{STRINGS.settingsSearchLimitDescription}</p>
@@ -2045,11 +2714,18 @@ function onKeydown(event: KeyboardEvent) {
                       )}>+</button
                   >
                 </div>
+                </div>
+                {@render rowReset("search.result-limit")}
               </div>
             {/if}
 
-            {#if matches(STRINGS.settingsSearchBodies, STRINGS.settingsSearchBodiesDescription)}
-              <div class="setting-row" data-setting-id="search.note-text">
+            {#if showRow("search.note-text")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("search.note-text")}
+                data-setting-id="search.note-text"
+              >
+                <div class="setting-row-fields">
                 <div class="setting-copy">
                   <span class="setting-label">{STRINGS.settingsSearchBodies}</span>
                   <p>{STRINGS.settingsSearchBodiesDescription}</p>
@@ -2080,45 +2756,51 @@ function onKeydown(event: KeyboardEvent) {
                     >
                   {/each}
                 </div>
+                </div>
+                {@render rowReset("search.note-text")}
               </div>
             {/if}
 
-            {#if matches(STRINGS.settingsSearchCase, STRINGS.settingsSearchCaseDescription)}
-              <label class="setting-row" data-setting-id="search.case-sensitive">
-                <span class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsSearchCase}</span>
-                  <span>{STRINGS.settingsSearchCaseDescription}</span>
-                  {@render settingError(["search_case_sensitive"])}
-                </span>
-                <span class="switch">
-                  <input
-                    type="checkbox"
-                    checked={documentSettings.search_case_sensitive}
-                    onchange={(event) =>
-                      update({
-                        search_case_sensitive: (
-                          event.currentTarget as HTMLInputElement
-                        ).checked,
-                      })}
-                  />
-                  <span aria-hidden="true"></span>
-                </span>
-              </label>
+            {#if showRow("search.case-sensitive")}
+              <div
+                class="setting-row"
+                class:changed={changedRowIds.has("search.case-sensitive")}
+                data-setting-id="search.case-sensitive"
+              >
+                <label class="setting-row-fields">
+                  <span class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsSearchCase}</span>
+                    <span>{STRINGS.settingsSearchCaseDescription}</span>
+                    {@render settingError(["search_case_sensitive"])}
+                  </span>
+                  <span class="switch">
+                    <input
+                      type="checkbox"
+                      checked={documentSettings.search_case_sensitive}
+                      onchange={(event) =>
+                        update({
+                          search_case_sensitive: (
+                            event.currentTarget as HTMLInputElement
+                          ).checked,
+                        })}
+                    />
+                    <span aria-hidden="true"></span>
+                  </span>
+                </label>
+                {@render rowReset("search.case-sensitive")}
+              </div>
             {/if}
-          </section>
-        {/if}
+        {/snippet}
 
-        {#if hasMatches("updates")}
-          <section
-            aria-labelledby="settings-updates-heading"
-            data-settings-section="updates"
-          >
-            <h3 id="settings-updates-heading">
-              {STRINGS.settingsSectionUpdates}
-            </h3>
+        {#snippet updatesRows()}
             <fieldset disabled={!desktopAvailable}>
-              {#if matches(STRINGS.settingsUpdateChannel, updateChannelDescription)}
-                <div class="setting-row" data-setting-id="updates.channel">
+              {#if showRow("updates.channel")}
+                <div
+                  class="setting-row"
+                  class:changed={changedRowIds.has("updates.channel")}
+                  data-setting-id="updates.channel"
+                >
+                  <div class="setting-row-fields">
                   <div class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsUpdateChannel}</span>
                     <p>{updateChannelDescription}</p>
@@ -2148,11 +2830,14 @@ function onKeydown(event: KeyboardEvent) {
                       >
                     {/each}
                   </div>
+                  </div>
+                  {@render rowReset("updates.channel")}
                 </div>
               {/if}
 
-              {#if matches(STRINGS.settingsCheckUpdates, checkUpdatesDescription)}
+              {#if showRow("updates.check")}
                 <div class="setting-row" data-setting-id="updates.check">
+                  <div class="setting-row-fields">
                   <div class="setting-copy">
                     <span class="setting-label">{STRINGS.settingsCheckUpdates}</span>
                     <p>{checkUpdatesDescription}</p>
@@ -2226,84 +2911,143 @@ function onKeydown(event: KeyboardEvent) {
                     onclick={onCheckUpdate}
                     >{STRINGS.updateCheck}</button
                   >
+                  </div>
                 </div>
               {/if}
             </fieldset>
-            {#if matches(STRINGS.settingsVersion, STRINGS.settingsVersionDescription)}
+            {#if showRow("updates.version")}
               <div class="setting-row" data-setting-id="updates.version">
-                <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsVersion}</span>
-                  <p>{STRINGS.settingsVersionDescription}</p>
+                <div class="setting-row-fields">
+                  <div class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsVersion}</span>
+                    <p>{STRINGS.settingsVersionDescription}</p>
+                  </div>
+                  <output tabindex="-1">{currentVersion}</output>
                 </div>
-                <output tabindex="-1">{currentVersion}</output>
               </div>
             {/if}
-          </section>
-        {/if}
+        {/snippet}
 
-        {#if hasMatches("about")}
-          <section
-            aria-labelledby="settings-about-heading"
-            data-settings-section="about"
-          >
-            <h3 id="settings-about-heading">
-              {STRINGS.settingsSectionAbout}
-            </h3>
-            {#if matches(STRINGS.settingsLicense, STRINGS.settingsLicenseDescription)}
+        {#snippet aboutRows()}
+            {#if showRow("about.license")}
               <div class="setting-row" data-setting-id="about.license">
-                <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsLicense}</span>
-                  <p>{STRINGS.settingsLicenseDescription}</p>
+                <div class="setting-row-fields">
+                  <div class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsLicense}</span>
+                    <p>{STRINGS.settingsLicenseDescription}</p>
+                  </div>
+                  <a href="https://github.com/morgaesis/skribeum#license" target="_blank" rel="noreferrer">
+                    {STRINGS.settingsLicenseLink}
+                  </a>
                 </div>
-                <a href="https://github.com/morgaesis/skribeum#license" target="_blank" rel="noreferrer">
-                  {STRINGS.settingsLicenseLink}
-                </a>
               </div>
             {/if}
-            {#if matches(STRINGS.settingsRepository, STRINGS.settingsRepositoryDescription)}
+            {#if showRow("about.repository")}
               <div class="setting-row" data-setting-id="about.repository">
-                <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsRepository}</span>
-                  <p>{STRINGS.settingsRepositoryDescription}</p>
+                <div class="setting-row-fields">
+                  <div class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsRepository}</span>
+                    <p>{STRINGS.settingsRepositoryDescription}</p>
+                  </div>
+                  <a href="https://github.com/morgaesis/skribeum" target="_blank" rel="noreferrer">
+                    {STRINGS.settingsRepositoryLink}
+                  </a>
                 </div>
-                <a href="https://github.com/morgaesis/skribeum" target="_blank" rel="noreferrer">
-                  {STRINGS.settingsRepositoryLink}
-                </a>
               </div>
             {/if}
-            {#if matches(STRINGS.settingsThreatModel, STRINGS.settingsThreatModelDescription)}
+            {#if showRow("about.security-policy")}
               <div class="setting-row" data-setting-id="about.security-policy">
-                <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsThreatModel}</span>
-                  <p>{STRINGS.settingsThreatModelDescription}</p>
+                <div class="setting-row-fields">
+                  <div class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsThreatModel}</span>
+                    <p>{STRINGS.settingsThreatModelDescription}</p>
+                  </div>
+                  <a href="https://github.com/morgaesis/skribeum/blob/main/SECURITY.md" target="_blank" rel="noreferrer">
+                    {STRINGS.settingsThreatModelLink}
+                  </a>
                 </div>
-                <a href="https://github.com/morgaesis/skribeum/blob/main/SECURITY.md" target="_blank" rel="noreferrer">
-                  {STRINGS.settingsThreatModelLink}
-                </a>
               </div>
             {/if}
-            {#if matches(STRINGS.settingsFile, STRINGS.settingsFileDescription)}
+            {#if showRow("about.settings-file")}
               <div class="setting-row" data-setting-id="about.settings-file">
-                <div class="setting-copy">
-                  <span class="setting-label">{STRINGS.settingsFile}</span>
-                  <p>{STRINGS.settingsFileDescription}</p>
+                <div class="setting-row-fields">
+                  <div class="setting-copy">
+                    <span class="setting-label">{STRINGS.settingsFile}</span>
+                    <p>{STRINGS.settingsFileDescription}</p>
+                  </div>
+                  <output
+                    class="settings-path"
+                    class:desktop-unavailable={!desktopAvailable}
+                    tabindex="-1"
+                    >{settingsPathText}</output
+                  >
                 </div>
-                <output
-                  class="settings-path"
-                  class:desktop-unavailable={!desktopAvailable}
-                  tabindex="-1"
-                  >{settingsPathText}</output
-                >
               </div>
             {/if}
             <p class="prealpha-note">{STRINGS.settingsPreAlphaNote}</p>
-          </section>
-        {/if}
+        {/snippet}
+
+        {#snippet groupBody(section: SectionId)}
+          {#if section === "appearance"}
+            {@render appearanceRows()}
+          {:else if section === "editor"}
+            {@render editorRows()}
+          {:else if section === "files"}
+            {@render filesRows()}
+          {:else if section === "search"}
+            {@render searchRows()}
+          {:else if section === "updates"}
+            {@render updatesRows()}
+          {:else}
+            {@render aboutRows()}
+          {/if}
+        {/snippet}
+
+        {#key paneKey}
+          <div
+            bind:this={paneElement}
+            class="settings-pane"
+            data-motion-surface={paneMotion}
+          >
+            {#if shownSection === null && !searchActive}
+              <div class="settings-group-list" data-testid="settings-group-list">
+                {#each sections as section (section.id)}
+                  <button
+                    class="settings-group-row"
+                    type="button"
+                    data-section={section.id}
+                    onclick={() => void selectSection(section.id)}
+                  >
+                    <span>{section.label}</span>
+                    <span class="settings-group-slot" aria-hidden="true">
+                      {#if changedSections.has(section.id)}
+                        <span class="settings-rail-dot"></span>
+                      {/if}
+                      <svg class="settings-group-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9.5 6 L15 12 L9.5 18" />
+                      </svg>
+                    </span>
+                  </button>
+                {/each}
+              </div>
+            {:else}
+              {#each renderedSections as section (section)}
+                <section
+                  aria-labelledby={headingId(section)}
+                  data-settings-section={section}
+                >
+                  <h3 id={headingId(section)}>{sectionLabel(section)}</h3>
+                  {@render groupBody(section)}
+                </section>
+              {/each}
+            {/if}
+          </div>
+        {/key}
+    </div>
     </div>
 
     <footer
       class="settings-footer"
-      inert={jumpMenuOpen ? true : undefined}
     >
       <button
         type="button"
@@ -2339,9 +3083,15 @@ function onKeydown(event: KeyboardEvent) {
 
   .settings-dialog {
     background: var(--skr-surface-raised);
-    border: 1px solid var(--skr-border);
+    border: 0;
     border-radius: var(--skr-radius-dialog);
-    box-shadow: var(--skr-shadow);
+    /* The surface's 1px edge is painted inside its own box rather than laid
+       out as a border, so the full 56rem is available to the rail and the
+       pane: the pane must keep the row width it had without a rail, and the
+       two pixels a border would take are exactly the two it would lose. */
+    box-shadow:
+      inset 0 0 0 1px var(--skr-border),
+      var(--skr-shadow);
     color: var(--skr-text);
     display: flex;
     flex-direction: column;
@@ -2355,7 +3105,168 @@ function onKeydown(event: KeyboardEvent) {
     outline: none;
     overflow: hidden;
     position: relative;
-    width: min(48rem, calc(100vw - 2rem));
+    /* Wide enough to seat the rail beside a pane no narrower than the one
+       the surface had without it, and narrow enough that the scrim band on
+       each side still reads as a dialog over the editor. */
+    width: min(56rem, calc(100vw - 4rem));
+  }
+
+  /* The rail, its hairline and the pane; the header and footer above and
+     below it continue to span the dialog's full width. */
+  .settings-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .settings-rail {
+    box-sizing: border-box;
+    display: flex;
+    flex: 0 0 8rem;
+    flex-direction: column;
+    gap: 0.125rem;
+    padding: 0.5rem 0.25rem;
+    position: relative;
+    width: 8rem;
+  }
+
+  .settings-rail-hairline {
+    background: var(--skr-border);
+    flex: 0 0 1px;
+    width: 1px;
+  }
+
+  .settings-rail-item {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: var(--skr-radius-control);
+    box-sizing: border-box;
+    color: var(--skr-text-muted);
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    font-weight: 400;
+    gap: 0.25rem;
+    justify-content: space-between;
+    min-height: 2rem;
+    padding: 0 0.75rem;
+    position: relative;
+    text-align: left;
+    transition:
+      background-color var(--skr-motion-state-duration)
+        var(--skr-motion-state-easing),
+      color var(--skr-motion-state-duration) var(--skr-motion-state-easing);
+  }
+
+  .settings-rail-item:hover:not(.facet-empty):not(.selected) {
+    background: var(--skr-surface-subtle);
+  }
+
+  /* The same claim the file tree's open note makes: this is the thing you
+     are looking at. */
+  .settings-rail-item.selected {
+    background: var(--skr-accent-subtle);
+    color: var(--skr-text);
+    font-weight: 600;
+  }
+
+  .settings-rail-item:focus-visible {
+    outline: 2px solid var(--skr-focus);
+    outline-offset: 2px;
+  }
+
+  .settings-rail-item.facet-empty {
+    cursor: default;
+    opacity: 0.4;
+  }
+
+  /* One bar that travels between items on the panel clock, the treatment
+     the tab strip's active indicator already uses, rather than a per-item
+     bar that pops on the newly selected one. */
+  .settings-rail-indicator {
+    background: var(--skr-accent);
+    inset-block-start: 0;
+    inset-inline-start: 0.25rem;
+    pointer-events: none;
+    position: absolute;
+    transition: transform var(--skr-motion-panel-duration)
+      var(--skr-motion-panel-easing);
+    width: 2px;
+  }
+
+  .settings-rail-indicator-hidden {
+    opacity: 0;
+  }
+
+  .settings-rail-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .settings-rail-slot {
+    align-items: center;
+    display: flex;
+    flex: 0 0 1rem;
+    justify-content: flex-end;
+  }
+
+  .settings-rail-count {
+    color: var(--skr-text-muted);
+    font-size: var(--skr-type-label);
+  }
+
+  .settings-rail-dot {
+    background: var(--skr-accent);
+    border-radius: var(--skr-radius-control);
+    display: block;
+    height: 0.25rem;
+    width: 0.25rem;
+  }
+
+  /* The drill-down's first level: a list of destinations, not a composite
+     widget, so its rows are ordinary tab stops. */
+  .settings-group-list {
+    display: grid;
+  }
+
+  .settings-group-row {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--skr-border);
+    color: var(--skr-text);
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    justify-content: space-between;
+    min-height: 2.75rem;
+    padding: 0 0.25rem;
+    text-align: left;
+    transition: background-color var(--skr-motion-state-duration)
+      var(--skr-motion-state-easing);
+  }
+
+  .settings-group-row:hover {
+    background: var(--skr-surface-subtle);
+  }
+
+  .settings-group-slot {
+    align-items: center;
+    color: var(--skr-text-muted);
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .settings-group-chevron {
+    height: 1rem;
+    width: 1rem;
+  }
+
+  .settings-pane {
+    min-width: 0;
   }
 
   .settings-footer {
@@ -2372,15 +3283,20 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   .settings-header-primary,
-  .settings-header-tools,
-  .settings-jump-heading {
+  .settings-header-tools {
     align-items: center;
     display: flex;
     justify-content: space-between;
   }
 
   .settings-header-primary {
+    gap: 0.25rem;
     min-height: 2.75rem;
+  }
+
+  .settings-header-primary h2 {
+    flex: 1;
+    min-width: 0;
   }
 
   .settings-header-primary .icon-button {
@@ -2391,8 +3307,11 @@ function onKeydown(event: KeyboardEvent) {
     width: 2.75rem;
   }
 
+  /* A query crosses groups, so the field spans the rail and the pane both
+     rather than sitting inside the header's own inline padding. */
   .settings-header-tools {
     gap: 0.5rem;
+    margin-inline: -1.125rem;
   }
 
   .settings-header h2 {
@@ -2404,6 +3323,11 @@ function onKeydown(event: KeyboardEvent) {
   .setting-copy p,
   .setting-copy > span:last-child {
     color: var(--skr-text-muted);
+    /* The description sits beneath the label, never beside it: sharing the
+       label's line box makes a row's height depend on how far the label
+       pushes the description along, which is what doubled these rows the
+       moment the pane narrowed. */
+    display: block;
     font-size: var(--skr-type-label);
     line-height: 1.4;
     margin: 0.2rem 0 0;
@@ -2506,6 +3430,10 @@ function onKeydown(event: KeyboardEvent) {
   .setting-label {
     font-size: var(--skr-type-control);
     font-weight: 600;
+    /* A one-line control label sets its own line box rather than inheriting
+       the document's looser default, which otherwise adds four pixels to
+       every row in the surface. */
+    line-height: 1.2;
   }
 
   .settings-search input,
@@ -2532,12 +3460,12 @@ function onKeydown(event: KeyboardEvent) {
     width: 100%;
   }
 
-  .jump-button,
-  .settings-jump-menu button,
   .icon-button,
+  .row-reset,
   .secondary-button,
   .segmented button,
   .palette-options button,
+  .mode-cards button,
   .numeric-readout,
   .stepper button {
     background: transparent;
@@ -2554,87 +3482,58 @@ function onKeydown(event: KeyboardEvent) {
     font: inherit;
   }
 
-  .jump-button {
-    align-items: center;
-    border-radius: var(--skr-radius-control);
-    display: flex;
-    flex: 0 0 2.75rem;
-    font-size: 1rem;
-    height: 2.75rem;
-    justify-content: center;
-    padding: 0;
-    width: 2.75rem;
-  }
-
-  .jump-button:hover,
-  .settings-jump-menu button:hover,
   .icon-button:hover,
+  .row-reset:hover,
   .secondary-button:hover {
     background: var(--skr-surface-subtle);
   }
 
-  .settings-jump-layer {
-    inset: 0;
-    position: absolute;
-    z-index: 3;
+  /* Both header controls are drawn by one mechanism: inline SVG on the
+     product's 24-unit grid, stroked in the chrome icon colour. */
+  .icon-button svg,
+  .row-reset svg,
+  .settings-group-chevron {
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2;
   }
 
-  .settings-jump-menu {
-    background: var(--skr-surface-raised);
-    border: 1px solid var(--skr-border);
-    border-radius: var(--skr-radius-surface);
-    box-shadow: var(--skr-shadow-surface);
-    display: grid;
-    padding: 0.5rem;
-    position: absolute;
-    right: 1.125rem;
-    top: 6.75rem;
-    width: 14rem;
+  .settings-header-primary .icon-button svg {
+    height: 1rem;
+    width: 1rem;
   }
 
-  .settings-jump-items {
-    display: grid;
-  }
-
-  .settings-jump-heading {
+  .settings-header-primary .icon-button {
     color: var(--skr-text-muted);
-    font-size: var(--skr-type-label);
-    font-weight: 600;
-    padding: 0 0 0.5rem 0.5rem;
   }
 
-  .settings-jump-heading button,
-  .settings-jump-items > button {
-    border: 0;
-    /* Menu rows are flat full-width rows: no rounded row cards (design
-       system section 5.12). */
-    border-radius: 0;
-    min-height: 2.75rem;
-  }
-
-  .settings-jump-heading button {
-    padding-inline: 0.75rem;
-  }
-
-  .settings-jump-items > button {
-    padding: 0.5rem 0.75rem;
-    text-align: left;
+  .settings-header-primary .icon-button:active {
+    color: var(--skr-text);
   }
 
   .settings-content {
     flex: 1;
     min-height: 0;
     min-width: 0;
+    /* The pane keeps its own content anchor across a breakpoint crossing, so
+       the browser's must not correct the same reflow a second time. */
+    overflow-anchor: none;
     overflow-y: auto;
     padding: 1rem 1.125rem 1.5rem;
+    /* The pane is the offset parent its rows are measured against, so a
+       deep link scrolls in layout coordinates rather than through whatever
+       transform the surface is carrying at the time. */
+    position: relative;
     scrollbar-gutter: stable;
   }
 
-  .settings-content section + section {
+  .settings-pane section + section {
     margin-top: 1.5rem;
   }
 
-  .settings-content h3 {
+  .settings-pane h3 {
     color: var(--skr-text-muted);
     font-size: var(--skr-type-label);
     font-weight: 700;
@@ -2647,13 +3546,77 @@ function onKeydown(event: KeyboardEvent) {
     align-items: center;
     border-bottom: 1px solid var(--skr-border);
     display: grid;
+    /* The reset slot is reserved on every row, changed or not, so a value
+       moving off its default never shifts the control the hand is on. */
+    grid-template-columns: minmax(0, 1fr) 1.5rem;
+    min-height: 2.75rem;
+    padding: 0.625rem 0;
+    position: relative;
+  }
+
+  /* Copy and control, side by side or stacked; a label wrapping this pair
+     keeps its click-to-activate behaviour while the reset button beside it
+     stays outside the label. */
+  .setting-row-fields {
+    align-items: center;
+    display: grid;
     gap: 1rem;
     grid-template-columns: minmax(0, 1fr) auto;
-    min-height: 2.75rem;
-    padding: 0.75rem 0;
+    min-width: 0;
+  }
+
+  /* The changed mark: the same 2px accent bar the file tree gives the open
+     note and the rail gives the selected group, drawn inside the pane's
+     padding so it never shifts the row's text. */
+  .setting-row.changed::before,
+  .setting-row-marked.changed::before {
+    background: var(--skr-accent);
+    content: "";
+    inset-block: 0;
+    inset-inline-start: -0.5rem;
+    position: absolute;
+    transition: opacity var(--skr-motion-state-duration)
+      var(--skr-motion-state-easing);
+    width: 2px;
+  }
+
+  .row-reset {
+    align-items: center;
+    border-radius: var(--skr-radius-control);
+    color: var(--skr-text-muted);
+    display: flex;
+    height: 1.5rem;
+    justify-content: center;
+    opacity: 0;
+    padding: 0;
+    transition: opacity var(--skr-motion-state-duration)
+      var(--skr-motion-state-easing);
+    width: 1.5rem;
+  }
+
+  .row-reset svg {
+    height: 1rem;
+    width: 1rem;
+  }
+
+  .setting-row:hover .row-reset,
+  .setting-row:focus-within .row-reset,
+  .task-status-setting:hover .row-reset,
+  .task-status-setting:focus-within .row-reset {
+    opacity: 1;
+  }
+
+  .row-reset:focus-visible {
+    opacity: 1;
+    outline: 2px solid var(--skr-focus);
+    outline-offset: 2px;
   }
 
   .setting-copy {
+    /* The block's own strut, not the document's looser default: an inline
+       label cannot shrink the line box its container establishes, so the
+       rule belongs here. */
+    line-height: 1.2;
     min-width: 0;
   }
 
@@ -2687,8 +3650,117 @@ function onKeydown(event: KeyboardEvent) {
     font-weight: 600;
   }
 
-  .palette-setting {
+  .palette-setting .setting-row-fields {
     grid-template-columns: 1fr;
+  }
+
+  /* Each card renders the shell the application resolves to in that scheme,
+     painted from the palettes currently chosen, so the control displays its
+     consequence instead of naming it. */
+  .mode-cards {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .mode-card {
+    background: var(--skr-surface);
+    border: 1px solid var(--skr-border);
+    border-radius: var(--skr-radius-surface);
+    box-sizing: border-box;
+    display: grid;
+    gap: 0.3rem;
+    justify-items: center;
+    padding: 0.4rem 0.4rem 0.3rem;
+  }
+
+  .mode-card.active {
+    border-color: var(--skr-accent);
+    border-width: 2px;
+    padding: calc(0.4rem - 1px) calc(0.4rem - 1px) calc(0.3rem - 1px);
+  }
+
+  .mode-card:focus-visible {
+    outline: 2px solid var(--skr-focus);
+    outline-offset: 2px;
+  }
+
+  .mode-name {
+    color: var(--skr-text-muted);
+    font-size: var(--skr-type-control);
+  }
+
+  .mode-card.active .mode-name {
+    color: var(--skr-text);
+    font-weight: 600;
+  }
+
+  .mode-preview {
+    border-radius: var(--skr-radius-control);
+    display: block;
+    height: 3.25rem;
+    overflow: hidden;
+    position: relative;
+    width: 5.5rem;
+  }
+
+  .mode-pane {
+    background: var(--skr-mode-pane-surface);
+    display: block;
+    inset: 0;
+    position: absolute;
+  }
+
+  /* The system card shows both halves at once: the dark pane overlays the
+     light one, clipped to the trailing half along a slanted seam. */
+  .mode-pane-half {
+    clip-path: polygon(58% 0, 100% 0, 100% 100%, 42% 100%);
+  }
+
+  .mode-pane-sidebar {
+    background: color-mix(
+      in srgb,
+      var(--skr-mode-pane-text) 8%,
+      var(--skr-mode-pane-surface)
+    );
+    inset: 0 auto 0 0;
+    position: absolute;
+    width: 26%;
+  }
+
+  .mode-pane-lines {
+    display: grid;
+    gap: 0.3rem;
+    inset: 18% 12% auto 34%;
+    position: absolute;
+  }
+
+  .mode-pane-lines i {
+    background: color-mix(
+      in srgb,
+      var(--skr-mode-pane-text) 55%,
+      var(--skr-mode-pane-surface)
+    );
+    border-radius: 0.1rem;
+    display: block;
+    height: 0.2rem;
+  }
+
+  .mode-pane-lines i:nth-child(2) {
+    width: 72%;
+  }
+
+  .mode-pane-lines i:nth-child(3) {
+    width: 48%;
+  }
+
+  .mode-pane-accent {
+    background: var(--skr-mode-pane-accent);
+    border-radius: 50%;
+    bottom: 14%;
+    height: 0.5rem;
+    position: absolute;
+    right: 12%;
+    width: 0.5rem;
   }
 
   .palette-options {
@@ -2759,16 +3831,6 @@ function onKeydown(event: KeyboardEvent) {
     gap: 0.5rem;
     margin-top: 0.5rem;
     padding: 1rem;
-  }
-
-  .match-system-setting {
-    align-items: center;
-    border-bottom: 1px solid var(--skr-border);
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: minmax(0, 1fr) auto;
-    min-height: 2.75rem;
-    padding: 0.75rem 0;
   }
 
   .palette-live-heading {
@@ -3002,6 +4064,13 @@ function onKeydown(event: KeyboardEvent) {
     display: grid;
     gap: 0.65rem;
     padding: 0.75rem 0;
+    position: relative;
+  }
+
+  .task-status-copy {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(0, 1fr) 1.5rem;
   }
 
   .task-status-editor {
@@ -3185,14 +4254,27 @@ function onKeydown(event: KeyboardEvent) {
     white-space: nowrap;
   }
 
+  /* A row sets its copy and its control side by side whenever its own pane
+     has the room, never on the viewport's width: a 900px window has 854px
+     of row and stacking it there doubles the row's height for nothing. */
+  .settings-content.stacked .setting-row-fields {
+    align-items: start;
+    grid-template-columns: 1fr;
+  }
+
+  .settings-content.stacked .slider-control {
+    grid-template-columns: minmax(0, 1fr) 5.5rem;
+    width: 100%;
+  }
+
   @media (max-width: 60rem) {
     .settings-backdrop {
       padding: 0;
     }
 
     .settings-dialog {
-      border: 0;
       border-radius: 0;
+      box-shadow: none;
       height: 100%;
       max-height: none;
       width: 100%;
@@ -3200,37 +4282,6 @@ function onKeydown(event: KeyboardEvent) {
 
     .settings-header {
       padding-top: calc(0.625rem + env(safe-area-inset-top));
-    }
-
-    .settings-jump-layer {
-      background: var(--skr-overlay);
-    }
-
-    .settings-jump-menu {
-      border-bottom: 0;
-      border-radius: var(--skr-radius-dialog) var(--skr-radius-dialog) 0 0;
-      bottom: 0;
-      left: 0;
-      max-height: 80%;
-      overflow-y: auto;
-      padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
-      right: 0;
-      top: auto;
-      width: auto;
-    }
-
-    .setting-row {
-      align-items: start;
-      grid-template-columns: 1fr;
-    }
-
-    .match-system-setting {
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-
-    .slider-control {
-      grid-template-columns: minmax(0, 1fr) 5.5rem;
-      width: 100%;
     }
 
     .settings-footer span {
@@ -3259,7 +4310,11 @@ function onKeydown(event: KeyboardEvent) {
     .task-status-actions {
       grid-column: 1 / -1;
     }
+  }
 
+  /* Touch targets follow the input, not the window's width: a 900px desktop
+     window is still a pointer surface. */
+  @media (pointer: coarse) {
     button,
     input:not([type="range"]),
     a {
@@ -3272,6 +4327,14 @@ function onKeydown(event: KeyboardEvent) {
 
     input[type="range"] {
       min-height: 2.75rem;
+    }
+
+    .settings-rail-item {
+      min-height: 2.75rem;
+    }
+
+    .row-reset {
+      opacity: 1;
     }
   }
 </style>

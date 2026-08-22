@@ -218,7 +218,11 @@ describe("cursor-reveal behavior per table row", () => {
     ).toBe(true);
 
     const cursor =
-      rule.reveal === "never" ? located.text.length : located.node.from;
+      rule.reveal === "never"
+        ? located.text.length
+        : rule.reveal === "cursor-inside-after-start"
+          ? located.node.to
+          : located.node.from;
     const at = serializedAt(located.text, cursor);
     const stillThere = present(at, rule, located.doc, located.node);
     if (rule.reveal === "never" || rule.revealDescendants === true) {
@@ -228,6 +232,22 @@ describe("cursor-reveal behavior per table row", () => {
         false,
       );
     }
+  });
+
+  it("a table stays source while the caret composes it and keeps its widget for a parked caret", () => {
+    const text = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+    // A caret typing at the end of the table's own source must see source:
+    // mounting the replacement mid-composition swallows the keystrokes that
+    // follow it.
+    const composing = serializedAt(text, text.indexOf("| 1 | 2 |") + 9);
+    expect(composing).not.toContain("widget table");
+    // Focusing a rendered cell parks the host selection exactly at the
+    // table's start; that parked caret must not tear down the widget.
+    const parked = serializedAt(text, 0);
+    expect(parked).toContain("widget table");
+    // A caret past the table leaves the replacement in place.
+    const outside = serializedAt(text, text.length);
+    expect(outside).toContain("widget table");
   });
 
   it("cursor on the heading line reveals the marker; the line above does not", () => {
@@ -451,7 +471,11 @@ describe("docs/decoration-rules.md mirrors the table", () => {
     );
     const documentRows = documentText
       .split("\n")
-      .filter((line) => /\| (?:cursor-inside|cursor-line|never) \|$/.test(line))
+      .filter((line) =>
+        /\| (?:cursor-inside(?:-after-start)?|cursor-line|never) \|$/.test(
+          line,
+        ),
+      )
       .map((line) => {
         const cells = line
           .split("|")

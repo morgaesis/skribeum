@@ -435,7 +435,7 @@ const tagTheme = View.baseTheme({
     backgroundColor: "var(--skr-surface-raised)",
     border: "1px solid var(--skr-border)",
     borderRadius: "var(--skr-radius-surface)",
-    boxShadow: "var(--skr-shadow)",
+    boxShadow: "var(--skr-shadow-surface)",
   },
   ".cm-skr-tag-option": {
     padding: "2px 8px",

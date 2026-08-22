@@ -460,6 +460,14 @@ function additionFocusout(event: FocusEvent) {
     border-bottom-color: var(--skr-border-strong);
   }
 
+  /* Pointer focus keeps the quiet edit-state rule above; keyboard focus
+     needs the same visible ring every other control answers Tab with. */
+  .skr-property-editable:focus-visible {
+    outline: 2px solid var(--skr-focus);
+    outline-offset: 2px;
+    border-radius: var(--skr-radius-control);
+  }
+
   .skr-property-chips {
     display: flex;
     flex-wrap: wrap;

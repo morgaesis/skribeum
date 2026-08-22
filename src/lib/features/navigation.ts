@@ -5,7 +5,12 @@
 // keyboard, browser, and desktop entry points cannot drift apart.
 
 import { syntaxTree } from "@codemirror/language";
-import { type EditorState, Facet } from "@codemirror/state";
+import {
+  type EditorState,
+  type Extension,
+  Facet,
+  StateField,
+} from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 import { openSystemUrl } from "../ipc/services";
@@ -743,15 +748,21 @@ export function createNoteNavigator(options: {
     },
     async open(address) {
       history.updateViewState(options.capture?.() ?? null);
-      const loaded = await enqueue(address, null, "fresh");
-      if (!loaded) {
-        options.changed?.(state());
-        return;
-      }
-      if (sameAddress(history.current(), address)) {
+      // The history entry commits before the load, not after: the shell
+      // reports the note it shows through `syncAddress` the moment the load
+      // lands, so a push decided afterwards would find the address already
+      // rewritten to its own destination and degrade into a replace,
+      // leaving every navigation without a history entry. A load that then
+      // fails walks the committed entry back.
+      const revisit = sameAddress(history.current(), address);
+      if (revisit) {
         history.replace(address, null);
       } else {
         history.push(address);
+      }
+      const loaded = await enqueue(address, null, "fresh");
+      if (!loaded && !revisit) {
+        history.back();
       }
       options.changed?.(state());
     },
@@ -1123,6 +1134,44 @@ export function followLinkUnderCursor(
   return followLinkAt(view, focused ?? view.state.selection.main.head, options);
 }
 
+/**
+ * The document position immediately after the most recent plain-typing
+ * transaction, or null once anything else — a click, an arrow key, an
+ * undo, a non-typing edit — moves on from it. `Enter` binds to "follow the
+ * link under the cursor" so a caret merely resting on an existing link can
+ * still be opened by keyboard without first tabbing to it; the same
+ * binding must not fire while the caret is sitting there only because
+ * typing just landed it there, mid-sentence, on the closing character of a
+ * URL it just finished composing.
+ */
+const justTypedPosition = StateField.define<number | null>({
+  create: () => null,
+  update(value, tr) {
+    if (!tr.docChanged) {
+      return value;
+    }
+    if (!tr.isUserEvent("input.type") && !tr.isUserEvent("input.complete")) {
+      return null;
+    }
+    const head = tr.state.selection.main.head;
+    let typedToHead = false;
+    tr.changes.iterChanges((_fromA, _toA, _fromB, toB) => {
+      typedToHead = typedToHead || toB === head;
+    });
+    return typedToHead ? head : null;
+  },
+});
+
+/** Registers the state field that backs the follow-link typing guard. */
+export function navigationEditorExtensions(): Extension {
+  return justTypedPosition;
+}
+
+function wasJustTypedTo(state: EditorState): boolean {
+  const position = state.field(justTypedPosition, false);
+  return position !== null && position === state.selection.main.head;
+}
+
 /** Registers history movement and cursor-link following through the registry. */
 export function registerNavigation(registry: CommandRegistry): void {
   registry.register({
@@ -1142,9 +1191,28 @@ export function registerNavigation(registry: CommandRegistry): void {
   registry.register({
     id: "navigation.follow-link",
     title: STRINGS.commandFollowLink,
-    keybindings: ["Mod-Enter", "Enter"],
+    keybindings: ["Mod-Enter"],
     scope: "editor",
     pointer: ["command-palette", "editor-link"],
     run: (context) => context.followLink?.(context.view) ?? false,
+  });
+  registry.register({
+    id: "navigation.follow-link-enter",
+    // Same action, reached by the bare key instead of the modified chord:
+    // a separate command so the two can disagree about a caret that just
+    // arrived by typing. The modified chord above still fires regardless —
+    // an explicit Mod-Enter always means "follow" — and already carries
+    // the command palette surface, so this one only needs the editor.
+    title: STRINGS.commandFollowLink,
+    keybindings: ["Enter"],
+    scope: "editor",
+    pointer: ["editor-link"],
+    palette: false,
+    run: (context) => {
+      if (context.view !== null && wasJustTypedTo(context.view.state)) {
+        return false;
+      }
+      return context.followLink?.(context.view) ?? false;
+    },
   });
 }

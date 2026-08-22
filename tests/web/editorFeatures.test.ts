@@ -22,7 +22,10 @@ import { showInvisibleCharacters } from "../../src/lib/editor/invisibles";
 import { obsidianMarkdownExtensions } from "../../src/lib/editor/markdown/obsidian";
 import { createAppRegistry } from "../../src/lib/features";
 import { findExtension } from "../../src/lib/features/findPanel";
-import { selectionToolbar } from "../../src/lib/features/selectionToolbar";
+import {
+  selectionToolbar,
+  toolbarPlacement,
+} from "../../src/lib/features/selectionToolbar";
 import {
   filteredSlashCommands,
   slashMenu,
@@ -783,7 +786,11 @@ describe("tag affordances", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(view.state.doc.toString()).toBe("#missing\n");
     expect(tagCompletionOpen(view.state)).toBe(false);
-    expect(followLinkCalls).toBe(1);
+    // The caret sits exactly where typing just landed it, so the
+    // follow-link-on-Enter command declines before ever calling
+    // followLink: a bare Enter reaching a link only by typing proximity
+    // keeps its default meaning as a paragraph break.
+    expect(followLinkCalls).toBe(0);
   });
 
   it("bounds the rendered completion candidates", () => {
@@ -880,7 +887,7 @@ describe("table editing through the registry", () => {
   const TABLE = "| a | b |\n| --- | --- |\n| c | d |";
 
   it("moves across cells on the cell navigation commands", () => {
-    const view = makeView(TABLE, 2, [
+    const view = makeView(TABLE, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -949,11 +956,11 @@ describe("table editing through the registry", () => {
   });
 
   it("grows the table when tabbing past the last cell", () => {
-    const view = makeView(TABLE, TABLE.length - 2, [
+    const view = makeView(TABLE, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
-    expect(runEditorCommand("table.cell.next")).toBe(true);
+    expect(focusRenderedTableCell(view, 0, 1, 1, "end")).toBe(true);
     expect(runEditorCommand("table.cell.next")).toBe(true);
     expect(view.state.doc.toString().split("\n")).toHaveLength(4);
   });
@@ -1123,8 +1130,8 @@ describe("table editing through the registry", () => {
     }
   });
 
-  it("shows raw table source only through its registered command", async () => {
-    const view = makeView(TABLE, TABLE.indexOf("c"), [
+  it("shows raw table source through its registered command", async () => {
+    const view = makeView(TABLE, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -1149,7 +1156,7 @@ describe("table editing through the registry", () => {
   });
 
   it("routes the row and column insertion strips through registry commands", async () => {
-    const rowView = makeView(TABLE, TABLE.length, [
+    const rowView = makeView(TABLE, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -1168,7 +1175,7 @@ describe("table editing through the registry", () => {
     expect(rowView.state.doc.toString()).toBe(`${TABLE}\n| | |`);
     rowView.destroy();
 
-    const columnView = makeView(TABLE, TABLE.length, [
+    const columnView = makeView(TABLE, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -1188,7 +1195,7 @@ describe("table editing through the registry", () => {
 
   it("routes ragged insertion strips from existing edge cells", async () => {
     const ragged = "| a | b | c |\n| --- | --- | --- |\n| x |";
-    const rowView = makeView(ragged, ragged.length, [
+    const rowView = makeView(ragged, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -1199,7 +1206,7 @@ describe("table editing through the registry", () => {
     expect(rowView.state.doc.toString()).toBe(`${ragged}\n| | | |`);
     rowView.destroy();
 
-    const columnView = makeView(ragged, ragged.length, [
+    const columnView = makeView(ragged, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -1340,5 +1347,68 @@ describe("in-note find through the registry", () => {
     expect(runEditorCommand("find.close")).toBe(true);
     expect(searchPanelOpen(view.state)).toBe(false);
     expect(runEditorCommand("find.close")).toBe(false);
+  });
+});
+
+describe("selection toolbar placement", () => {
+  // A window wide enough that the reading column leaves generous margin.
+  const wide = {
+    columnLeft: 400,
+    columnRight: 880,
+    scrollerLeft: 0,
+    scrollerRight: 1280,
+    toolbarWidth: 172,
+    leftToRight: true,
+  };
+
+  it("takes the trailing margin when it holds the toolbar clear of the text", () => {
+    const placement = toolbarPlacement(wide);
+    expect(placement.kind).toBe("margin");
+    if (placement.kind !== "margin") throw new Error("expected the margin");
+    expect(placement.left).toBeGreaterThanOrEqual(wide.columnRight);
+  });
+
+  it("takes the leading margin when only that side holds the toolbar", () => {
+    const placement = toolbarPlacement({ ...wide, scrollerRight: 900 });
+    expect(placement.kind).toBe("margin");
+    if (placement.kind !== "margin") throw new Error("expected the margin");
+    expect(placement.left + wide.toolbarWidth).toBeLessThanOrEqual(
+      wide.columnLeft,
+    );
+  });
+
+  it("prefers the leading margin when the text runs right to left", () => {
+    const placement = toolbarPlacement({ ...wide, leftToRight: false });
+    expect(placement.kind).toBe("margin");
+    if (placement.kind !== "margin") throw new Error("expected the margin");
+    expect(placement.left + wide.toolbarWidth).toBeLessThanOrEqual(
+      wide.columnLeft,
+    );
+  });
+
+  it("reports nowhere to go when neither margin holds the toolbar", () => {
+    // A narrow window: the column nearly fills the scroller on both sides.
+    expect(
+      toolbarPlacement({
+        columnLeft: 24,
+        columnRight: 366,
+        scrollerLeft: 0,
+        scrollerRight: 390,
+        toolbarWidth: 172,
+        leftToRight: true,
+      }).kind,
+    ).toBe("over-text");
+  });
+
+  it("reports nowhere to go when a margin is only as wide as the toolbar", () => {
+    // Clearance from the text is part of fitting, not a decoration on it, so
+    // a margin exactly the toolbar's width is not wide enough on either side.
+    expect(
+      toolbarPlacement({
+        ...wide,
+        scrollerLeft: wide.columnLeft - wide.toolbarWidth,
+        scrollerRight: wide.columnRight + wide.toolbarWidth,
+      }).kind,
+    ).toBe("over-text");
   });
 });

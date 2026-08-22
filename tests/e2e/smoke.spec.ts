@@ -1522,6 +1522,71 @@ async function selectSettingsChoice(selector: string, label: string) {
   );
 }
 
+/**
+ * Selects a settings group from the rail. The surface shows one group at a
+ * time and reopens on the group it last showed, so a test that reaches for a
+ * control names the group that holds it.
+ */
+async function openSettingsGroup(name: string) {
+  /** The surface's navigation state and the group it shows, in one pass. */
+  const surfaceState = (group: string) =>
+    browser.execute((target: string) => {
+      const tab = document.querySelector(
+        `[data-testid="settings-rail-${target}"]`,
+      );
+      return {
+        railed: tab !== null,
+        selected: tab?.getAttribute("aria-selected") === "true",
+        listedRow:
+          document.querySelector(
+            `.settings-group-row[data-section="${target}"]`,
+          ) !== null,
+        shown:
+          document.querySelector<HTMLElement>("[data-settings-section]")
+            ?.dataset.settingsSection ?? null,
+      };
+    }, group);
+
+  if ((await surfaceState(name)).railed) {
+    await $(`[data-testid="settings-rail-${name}"]`).click();
+    await browser.waitUntil(
+      async () => {
+        const state = await surfaceState(name);
+        return state.selected && state.shown === name;
+      },
+      { timeout: 5000, timeoutMsg: `${name} group did not open` },
+    );
+    return;
+  }
+
+  // Below the rail's breakpoint the six names are a level of their own, so
+  // leaving the group that is showing is its own act: the list it returns to
+  // arrives in a later frame, and a second click issued in the same document
+  // pass would find nothing to press.
+  if (!(await surfaceState(name)).listedRow) {
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLButtonElement>('[data-testid="settings-back"]')
+        ?.click();
+    });
+    await browser.waitUntil(async () => (await surfaceState(name)).listedRow, {
+      timeout: 5000,
+      timeoutMsg: "the settings group list did not arrive",
+    });
+  }
+  await browser.execute((group: string) => {
+    document
+      .querySelector<HTMLButtonElement>(
+        `.settings-group-row[data-section="${group}"]`,
+      )
+      ?.click();
+  }, name);
+  await browser.waitUntil(
+    async () => (await surfaceState(name)).shown === name,
+    { timeout: 5000, timeoutMsg: `${name} group did not open` },
+  );
+}
+
 async function waitForPersistedDemoSetting(field: string, value: string) {
   await browser.waitUntil(
     () =>
@@ -6311,14 +6376,18 @@ describe("skribeum core editing surfaces", () => {
         { timeout: 5000 },
       );
     }
+    // The settings surface swallows application chords while it is open, so a
+    // test that opens it and fails before closing it would otherwise decide
+    // the next test's result rather than its own.
+    await closeIfOpen('[data-testid="settings-view"]');
   }
 
   async function closeIfOpen(selector: string) {
     const surface = $(selector);
     if (!(await surface.isExisting())) return;
-    // Escape can dismiss one nested layer at a time (the settings dialog's
-    // own jump menu, for one), so press it until the surface itself is
-    // gone rather than assuming a single press clears it.
+    // Escape can dismiss one nested layer at a time (the settings surface's
+    // own drill-down level, for one), so press it until the surface itself
+    // is gone rather than assuming a single press clears it.
     await browser.waitUntil(
       async () => {
         if (!(await surface.isExisting())) return true;
@@ -6595,6 +6664,7 @@ describe("skribeum core editing surfaces", () => {
 
   /** Sets the settings font size through the open dialog's input. */
   async function setFontSizeThroughDialog(value: number) {
+    await openSettingsGroup("appearance");
     // WebDriver key input does not assign a predictable value to range
     // controls, so set the native value and exercise their real events.
     await browser.execute((nextValue: number) => {
@@ -6610,6 +6680,7 @@ describe("skribeum core editing surfaces", () => {
 
   /** Sets the text column width through the open dialog's input. */
   async function setLineWidthThroughDialog(value: number) {
+    await openSettingsGroup("appearance");
     await browser.execute((nextValue: number) => {
       const input = document.querySelector<HTMLInputElement>(
         '[data-testid="settings-line-width"]',
@@ -6622,6 +6693,7 @@ describe("skribeum core editing surfaces", () => {
   }
 
   async function linkPreviewsControl() {
+    await openSettingsGroup("editor");
     const checkbox = $('[data-testid="settings-link-previews"]');
     if (!(await checkbox.isExisting())) {
       const search = $('[data-testid="settings-search"]');
@@ -6647,6 +6719,9 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForDisplayed({ timeout: 10000 });
+    // Selection survives a close and reopen within a session, so the group
+    // this test reads from is named rather than assumed.
+    await openSettingsGroup("appearance");
 
     const sectionCounts = await browser.execute(() => {
       const names = [
@@ -6683,9 +6758,12 @@ describe("skribeum core editing surfaces", () => {
         ]),
       );
     });
+    // Each group is named once in the rail and, for the group the pane
+    // shows, once more as that pane's heading: navigation and destination,
+    // exactly as the file tree names a note in the tree and in the title.
     expect(sectionCounts).toEqual({
       About: 1,
-      Appearance: 1,
+      Appearance: 2,
       Editor: 1,
       Files: 1,
       Search: 1,
@@ -6698,76 +6776,112 @@ describe("skribeum core editing surfaces", () => {
     expect(await $('[data-settings-section="appearance"]').isExisting()).toBe(
       false,
     );
+    // A query crosses groups, so the rail drops its selection and reports how
+    // many rows each group contributes to the results.
+    expect(
+      await browser.execute(() => ({
+        selected: document.querySelectorAll(
+          '[role="tab"][aria-selected="true"]',
+        ).length,
+        about: document
+          .querySelector(
+            '[data-testid="settings-rail-about"] .settings-rail-count',
+          )
+          ?.textContent?.trim(),
+        appearance: document
+          .querySelector(
+            '[data-testid="settings-rail-appearance"] .settings-rail-count',
+          )
+          ?.textContent?.trim(),
+      })),
+    ).toEqual({ selected: 0, about: "1", appearance: "0" });
     await search.clearValue();
     await $('[data-settings-section="appearance"]').waitForDisplayed({
       timeout: 5000,
     });
 
+    // The rail is one tab stop with automatic activation: Down selects the
+    // next group and swaps the pane with no second keystroke.
     await browser.execute(() => {
       document
-        .querySelector<HTMLElement>('[data-testid="settings-jump"]')
-        ?.focus();
-    });
-    await pressFocusedKey("Enter");
-    const jumpMenu = $('[data-testid="settings-jump-menu"]');
-    await jumpMenu.waitForDisplayed({ timeout: 5000 });
-    const menuTrap = await browser.execute(() => {
-      const menu = document.querySelector<HTMLElement>(
-        '[data-testid="settings-jump-menu"]',
-      );
-      const controls = [
-        ...(menu?.querySelectorAll<HTMLButtonElement>("button") ?? []),
-      ];
-      const first = controls[0];
-      const last = controls.at(-1);
-      if (first === undefined || last === undefined) return false;
-      last.focus();
-      const event = new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "Tab",
-      });
-      last.dispatchEvent(event);
-      return event.defaultPrevented && document.activeElement === first;
-    });
-    expect(menuTrap).toBe(true);
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>(
-          '[data-testid="settings-jump-menu"] [role="menuitem"]',
-        )
+        .querySelector<HTMLElement>('[data-testid="settings-rail-appearance"]')
         ?.focus();
     });
     await pressFocusedKey("ArrowDown");
-    await pressFocusedKey("Enter");
-    await jumpMenu.waitForExist({ reverse: true, timeout: 5000 });
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () =>
+            document.querySelector<HTMLElement>("[data-settings-section]")
+              ?.dataset.settingsSection ?? "",
+        )) === "editor",
+      { timeout: 5000, timeoutMsg: "the rail did not swap the pane" },
+    );
     expect(
       await browser.execute(() => {
-        const pane = document.querySelector<HTMLElement>(".settings-content");
-        const editorSection = document.querySelector<HTMLElement>(
-          '[data-settings-section="editor"]',
+        const tabs = [
+          ...document.querySelectorAll<HTMLElement>('[role="tab"]'),
+        ];
+        const selected = tabs.filter(
+          (tab) => tab.getAttribute("aria-selected") === "true",
         );
-        if (pane === null || editorSection === null) return false;
-        return (
-          pane.scrollTop > 0 &&
-          Math.abs(
-            editorSection.getBoundingClientRect().top -
-              pane.getBoundingClientRect().top,
-          ) < 1
-        );
+        return {
+          selected: selected.map((tab) => tab.dataset.section),
+          rovingStops: tabs.filter((tab) => tab.tabIndex === 0).length,
+          groups: [
+            ...document.querySelectorAll<HTMLElement>(
+              "[data-settings-section]",
+            ),
+          ].map((group) => group.dataset.settingsSection),
+        };
       }),
-    ).toBe(true);
-
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLButtonElement>('[data-testid="settings-jump"]')
-        ?.click();
+    ).toEqual({ selected: ["editor"], rovingStops: 1, groups: ["editor"] });
+    // Selection wraps at both ends, so the last group is one key away from
+    // the first. Home and End carry the same reachability and are asserted in
+    // the component suite instead: this driver hands those two keys to the
+    // page as an unidentified key with an empty `key` and the raw WebDriver
+    // codepoint in `keyCode`, so no keyboard handler can see them here.
+    const selectedGroup = () =>
+      browser.execute(
+        () =>
+          document.querySelector<HTMLElement>(
+            '[role="tab"][aria-selected="true"]',
+          )?.dataset.section ?? null,
+      );
+    await pressFocusedKey("ArrowUp");
+    await browser.waitUntil(
+      async () => (await selectedGroup()) === "appearance",
+      {
+        timeout: 5000,
+        timeoutMsg: "Up did not select the previous group",
+      },
+    );
+    await pressFocusedKey("ArrowUp");
+    await browser.waitUntil(async () => (await selectedGroup()) === "about", {
+      timeout: 5000,
+      timeoutMsg: "the rail selection did not wrap to the last group",
     });
-    const reopenedJumpMenu = $('[data-testid="settings-jump-menu"]');
-    await reopenedJumpMenu.waitForDisplayed({ timeout: 5000 });
-    await browser.keys(Key.Escape);
-    await reopenedJumpMenu.waitForExist({ reverse: true, timeout: 5000 });
-    expect(await activeElementDescriptor()).toContain("jump-button");
+
+    // Nothing in the surface opens a list of sections behind an icon.
+    expect(
+      await browser.execute(() => {
+        const surface = document.querySelector<HTMLElement>(
+          '[data-testid="settings-view"]',
+        );
+        return {
+          named: [...(surface?.querySelectorAll("*") ?? [])].filter((element) =>
+            /jump to section/i.test(element.getAttribute("aria-label") ?? ""),
+          ).length,
+          ellipsis: [...(surface?.querySelectorAll("*") ?? [])].filter(
+            (element) =>
+              element.children.length === 0 &&
+              element.textContent?.trim() === "⋯",
+          ).length,
+          menus:
+            surface?.querySelectorAll('[aria-haspopup="menu"]').length ?? 0,
+        };
+      }),
+    ).toEqual({ named: 0, ellipsis: 0, menus: 0 });
 
     const dialogGeometry = await browser.execute(() => {
       const settings = document.querySelector<HTMLElement>(
@@ -6779,12 +6893,7 @@ describe("skribeum core editing surfaces", () => {
         height: box.height,
         width: box.width,
         expectedHeight: Math.min(window.innerHeight * 0.85, 48 * 16),
-        expectedWidth: Math.min(48 * 16, window.innerWidth - 2 * 16),
-        versionHomes: [
-          ...settings.querySelectorAll<HTMLElement>(
-            '[data-setting-id$=".version"]',
-          ),
-        ].map(({ dataset }) => dataset.settingId),
+        expectedWidth: Math.min(56 * 16, window.innerWidth - 4 * 16),
       };
     });
     expect(
@@ -6793,7 +6902,34 @@ describe("skribeum core editing surfaces", () => {
     expect(
       Math.abs(dialogGeometry.width - dialogGeometry.expectedWidth),
     ).toBeLessThan(1);
-    expect(dialogGeometry.versionHomes).toEqual(["updates.version"]);
+
+    // The installed version has one home. The pane shows a single group, so
+    // the claim is only worth as much as the sweep behind it: every group is
+    // visited and the version row must appear in exactly one of them.
+    const versionHomes: string[] = [];
+    for (const group of [
+      "appearance",
+      "editor",
+      "files",
+      "search",
+      "updates",
+      "about",
+    ]) {
+      await openSettingsGroup(group);
+      versionHomes.push(
+        ...(await browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              '[data-setting-id$=".version"]',
+            ),
+          ].map((row) => row.dataset.settingId ?? ""),
+        )),
+      );
+    }
+    expect(versionHomes).toEqual(["updates.version"]);
+    // The palette cards below belong to Appearance, and the sweep ended on
+    // the last group.
+    await openSettingsGroup("appearance");
 
     await setViewportSize(390, 844);
     const cardGeometry = await browser.execute(() => {
@@ -6854,6 +6990,12 @@ describe("skribeum core editing surfaces", () => {
 
     const manuscript = $('[data-testid="settings-palette-manuscript"]');
     await manuscript.scrollIntoView();
+    // The palette the resolved scheme displays is the checked one, so the
+    // scheme is named before the palette that belongs to it.
+    await selectSettingsChoice(
+      '[data-testid="settings-theme-light"]',
+      "Light colour scheme",
+    );
     await selectSettingsChoice(
       '[data-testid="settings-palette-manuscript"]',
       "Manuscript palette",
@@ -6898,6 +7040,7 @@ describe("skribeum core editing surfaces", () => {
       ).length,
     ).toBe(7);
 
+    await openSettingsGroup("editor");
     const taskSummary = $(".task-status-editor summary");
     await taskSummary.scrollIntoView();
     await browser.execute(() => {
@@ -6969,6 +7112,7 @@ describe("skribeum core editing surfaces", () => {
     });
     expect(dialogTrap).toBe(true);
 
+    await openSettingsGroup("appearance");
     await selectSettingsChoice(
       '[data-testid="settings-palette-manuscript"]',
       "Manuscript palette",
@@ -7030,6 +7174,7 @@ describe("skribeum core editing surfaces", () => {
 
     await browser.keys([modifierKey, ","]);
     await dialog.waitForExist({ timeout: 10000 });
+    await openSettingsGroup("appearance");
     expect(await $('[data-testid="settings-font-size"]').getValue()).toBe(
       String(target),
     );
@@ -7157,11 +7302,26 @@ describe("skribeum core editing surfaces", () => {
       async () => !(await $('[role="combobox"]').isExisting()),
       { timeout: 5000 },
     );
-    const restoredFocus = await activeElementDescriptor();
-    expect(
-      restoredFocus.includes("cm-content") ||
-        restoredFocus.includes("skr-pane-content"),
-    ).toBe(true);
+    // The webview restores focus a frame after the surface leaves, so this
+    // polls for where it lands rather than asking whether it has landed yet,
+    // and names what it settled on when it never gets there.
+    let restoredFocus = await activeElementDescriptor();
+    try {
+      await browser.waitUntil(
+        async () => {
+          restoredFocus = await activeElementDescriptor();
+          return (
+            restoredFocus.includes("cm-content") ||
+            restoredFocus.includes("skr-pane-content")
+          );
+        },
+        { timeout: 5000 },
+      );
+    } catch {
+      throw new Error(
+        `focus settled on ${restoredFocus} rather than returning to the pane`,
+      );
+    }
 
     // No element anywhere acquired a positive tabindex.
     const positive = await browser.execute(() =>
@@ -7204,14 +7364,17 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    /** The switch's own state, null while the control is not mounted. */
-    const systemToggleSelected = () =>
-      browser.execute(
-        () =>
-          document.querySelector<HTMLInputElement>(
-            '[data-testid="settings-match-system"]',
-          )?.checked ?? null,
-      );
+    await openSettingsGroup("appearance");
+    /** The System card's own state, null while the control is not mounted. */
+    const systemSchemeSelected = () =>
+      browser.execute(() => {
+        const card = document.querySelector(
+          '[data-testid="settings-theme-system"]',
+        );
+        return card === null
+          ? null
+          : card.getAttribute("aria-checked") === "true";
+      });
     // The dialog's existence only means the container mounted; the controls
     // inside it commit the persisted document a moment later, so poll for
     // that committed state rather than asserting immediately on open. The
@@ -7226,11 +7389,12 @@ describe("skribeum core editing surfaces", () => {
     // turns this bound into two samples and ends the poll on a driver error
     // naming the selector rather than on the state that was reached. It also
     // leaves nothing for the diagnosis below to report, because that read
-    // fails the same way.
+    // fails the same way. The surface shows one group at a time, so a control
+    // belonging to another group is absent by design and has to read that way.
     const committedState = () =>
       browser.execute(() => {
-        const toggle = document.querySelector<HTMLInputElement>(
-          '[data-testid="settings-match-system"]',
+        const system = document.querySelector(
+          '[data-testid="settings-theme-system"]',
         );
         const gazette = document.querySelector(
           '[data-testid="settings-palette-gazette"]',
@@ -7241,7 +7405,13 @@ describe("skribeum core editing surfaces", () => {
         return {
           dialogPresent:
             document.querySelector('[data-testid="settings-view"]') !== null,
-          systemToggle: toggle === null ? null : toggle.checked,
+          shownGroup:
+            document.querySelector<HTMLElement>("[data-settings-section]")
+              ?.dataset.settingsSection ?? null,
+          systemScheme:
+            system === null
+              ? null
+              : system.getAttribute("aria-checked") === "true",
           gazetteChecked: gazette?.getAttribute("aria-checked") ?? null,
           signalClass: signal?.getAttribute("class") ?? null,
         };
@@ -7251,7 +7421,7 @@ describe("skribeum core editing surfaces", () => {
         async () => {
           const state = await committedState();
           return (
-            state.systemToggle === true &&
+            state.systemScheme === true &&
             state.gazetteChecked === "true" &&
             (state.signalClass ?? "").includes("paired")
           );
@@ -7286,30 +7456,43 @@ describe("skribeum core editing surfaces", () => {
     });
     await browser.waitUntil(
       async () =>
-        (await $('[data-testid="settings-palette-signal"]').getAttribute(
-          "aria-checked",
+        (await browser.execute(
+          () =>
+            document
+              .querySelector('[data-testid="settings-palette-signal"]')
+              ?.getAttribute("aria-checked") ?? null,
         )) === "true",
       {
         timeout: 5000,
         timeoutMsg: "system dark palette did not become active",
       },
     );
-    expect(await systemToggleSelected()).toBe(true);
+    expect(await systemSchemeSelected()).toBe(true);
     expect(
       await browser.execute(() => document.documentElement.dataset.theme),
     ).toBe("system");
 
+    // A click on a palette card is an opinion about that palette, not about
+    // the colour scheme: it writes its own field and leaves the mode alone.
     await selectSettingsChoice(
       '[data-testid="settings-palette-graphite"]',
       "Graphite palette",
     );
     await browser.waitUntil(
-      async () => (await systemToggleSelected()) === false,
-      {
-        timeout: 5000,
-        timeoutMsg: "system match toggle stayed enabled",
+      async () => {
+        const stored = await persistedSettings();
+        return (
+          typeof stored !== "string" &&
+          stored.theme === "system" &&
+          stored.light_palette === "gazette" &&
+          stored.dark_palette === "graphite"
+        );
       },
+      { timeout: 10000, timeoutMsg: "dark palette field did not persist" },
     );
+    // The write the card owns has landed, so the colour scheme it does not
+    // own is read on settled state rather than raced against the same commit.
+    expect(await systemSchemeSelected()).toBe(true);
     expect(
       await browser.execute(() => ({
         theme: document.documentElement.dataset.theme,
@@ -7317,41 +7500,68 @@ describe("skribeum core editing surfaces", () => {
         darkPalette: document.documentElement.dataset.darkPalette,
       })),
     ).toEqual({
-      theme: "dark",
+      theme: "system",
       lightPalette: "gazette",
       darkPalette: "graphite",
     });
-    await browser.waitUntil(
-      async () => {
-        const stored = await persistedSettings();
-        return (
-          typeof stored !== "string" &&
-          stored.theme === "dark" &&
-          stored.light_palette === "gazette" &&
-          stored.dark_palette === "graphite"
-        );
-      },
-      { timeout: 10000, timeoutMsg: "dark palette fields did not persist" },
-    );
 
+    // Each miniature shell paints from the palette its own half previews,
+    // whatever the application is currently showing.
+    expect(
+      await browser.execute(() => {
+        const resolve = (expression: string) => {
+          const probe = document.createElement("div");
+          probe.style.color = expression;
+          document.body.append(probe);
+          const value = getComputedStyle(probe).color;
+          probe.remove();
+          return value;
+        };
+        const pane = (mode: string, index: number) =>
+          document.querySelectorAll<HTMLElement>(
+            `[data-testid="settings-theme-${mode}"] .mode-pane`,
+          )[index];
+        const lightPane = pane("light", 0);
+        const darkPane = pane("dark", 0);
+        const systemPanes = document.querySelectorAll(
+          '[data-testid="settings-theme-system"] .mode-pane',
+        ).length;
+        return {
+          light:
+            lightPane !== undefined &&
+            getComputedStyle(lightPane).backgroundColor ===
+              resolve("var(--skr-preview-gazette-surface)"),
+          dark:
+            darkPane !== undefined &&
+            getComputedStyle(darkPane).backgroundColor ===
+              resolve("var(--skr-preview-graphite-surface)"),
+          systemPanes,
+        };
+      }),
+    ).toEqual({ light: true, dark: true, systemPanes: 2 });
+
+    // A mode card writes the colour scheme and touches neither palette.
+    await selectSettingsChoice(
+      '[data-testid="settings-theme-light"]',
+      "Light colour scheme",
+    );
     await selectSettingsChoice(
       '[data-testid="settings-palette-studio"]',
       "Studio palette",
     );
-    await $('[data-testid="settings-match-system"]').click();
     await browser.waitUntil(
       async () => {
         const stored = await persistedSettings();
         return (
           typeof stored !== "string" &&
-          stored.theme === "system" &&
+          stored.theme === "light" &&
           stored.light_palette === "studio" &&
           stored.dark_palette === "graphite"
         );
       },
       {
         timeout: 10000,
-        timeoutMsg: "system palette fields did not round-trip",
+        timeoutMsg: "the colour scheme and palette fields did not round-trip",
       },
     );
 
@@ -7368,6 +7578,7 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
+    await openSettingsGroup("appearance");
 
     let readout = $('[data-testid="settings-editor-font-size-readout"]');
     await readout.click();
@@ -7568,6 +7779,11 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
+    await openSettingsGroup("appearance");
+    await selectSettingsChoice(
+      '[data-testid="settings-theme-dark"]',
+      "Dark colour scheme",
+    );
     await selectSettingsChoice(
       '[data-testid="settings-palette-signal"]',
       "Signal palette",
@@ -8141,6 +8357,11 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
+    await openSettingsGroup("appearance");
+    await selectSettingsChoice(
+      '[data-testid="settings-theme-dark"]',
+      "Dark colour scheme",
+    );
     await selectSettingsChoice(
       '[data-testid="settings-palette-graphite"]',
       "Graphite palette",

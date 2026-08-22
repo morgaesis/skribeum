@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { flushSync, mount, unmount } from "svelte";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SETTINGS_DESCRIPTORS } from "../../src/lib/features/settingsCatalog";
 import {
   DEFAULT_SETTINGS,
@@ -50,6 +53,12 @@ function settingsState(): SettingsState {
   };
 }
 
+// The surface remembers the group it was showing across a close and reopen
+// within one session, so each test starts from a known one.
+afterEach(() => {
+  document.body.innerHTML = "";
+});
+
 function renderSettings(targetSetting: string | null = null) {
   const updates: Partial<SettingsDocument>[] = [];
   const component = mount(SettingsView, {
@@ -62,6 +71,7 @@ function renderSettings(targetSetting: string | null = null) {
     },
   });
   flushSync();
+  if (targetSetting === null) openSection(STRINGS.settingsSectionAppearance);
   return { component, updates };
 }
 
@@ -75,23 +85,43 @@ function button(label: string): HTMLButtonElement {
   return candidate;
 }
 
+/** Selects a group from the rail, which is the surface's only navigation. */
 function openSection(label: string) {
-  document
-    .querySelector<HTMLButtonElement>('[data-testid="settings-jump"]')
+  [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    .find((tab) => tab.textContent?.trim().startsWith(label))
     ?.click();
   flushSync();
-  [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-    .find(({ textContent }) => textContent === label)
-    ?.click();
-  flushSync();
+}
+
+function selectedTab(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    '[role="tab"][aria-selected="true"]',
+  );
+}
+
+function railTabs(): HTMLButtonElement[] {
+  return [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
 }
 
 describe("task status settings", () => {
   it("renders one stable target row for every registered setting action", async () => {
     const { component } = renderSettings();
-    const rowIds = [
-      ...document.querySelectorAll<HTMLElement>("[data-setting-id]"),
-    ].map((row) => row.dataset.settingId);
+    const rowIds: (string | undefined)[] = [];
+    for (const label of [
+      STRINGS.settingsSectionAppearance,
+      STRINGS.settingsSectionEditor,
+      STRINGS.settingsSectionFiles,
+      STRINGS.settingsSectionSearch,
+      STRINGS.settingsSectionUpdates,
+      STRINGS.settingsSectionAbout,
+    ]) {
+      openSection(label);
+      rowIds.push(
+        ...[...document.querySelectorAll<HTMLElement>("[data-setting-id]")].map(
+          (row) => row.dataset.settingId,
+        ),
+      );
+    }
     const visibleSettingIds = SETTINGS_DESCRIPTORS.map((setting) => setting.id);
     expect(new Set(rowIds)).toEqual(new Set(visibleSettingIds));
     expect(rowIds).toHaveLength(visibleSettingIds.length);
@@ -135,53 +165,7 @@ describe("task status settings", () => {
     await unmount(component);
   });
 
-  it("reopens the section menu after a jump", async () => {
-    const { component } = renderSettings();
-    const jump = document.querySelector<HTMLButtonElement>(
-      '[data-testid="settings-jump"]',
-    );
-    jump?.click();
-    flushSync();
-    document.querySelector<HTMLButtonElement>('[role="menuitem"]')?.click();
-    flushSync();
-
-    expect(jump?.closest(".settings-header")?.hasAttribute("inert")).toBe(
-      false,
-    );
-    jump?.click();
-    flushSync();
-    expect(
-      document.querySelector('[data-testid="settings-jump-menu"]'),
-    ).not.toBeNull();
-
-    await unmount(component);
-  });
-
-  it("toggles the section menu: a second click on the same trigger closes it", async () => {
-    const { component } = renderSettings();
-    const jump = document.querySelector<HTMLButtonElement>(
-      '[data-testid="settings-jump"]',
-    );
-    expect(jump?.getAttribute("aria-expanded")).toBe("false");
-
-    jump?.click();
-    flushSync();
-    expect(
-      document.querySelector('[data-testid="settings-jump-menu"]'),
-    ).not.toBeNull();
-    expect(jump?.getAttribute("aria-expanded")).toBe("true");
-
-    jump?.click();
-    flushSync();
-    expect(
-      document.querySelector('[data-testid="settings-jump-menu"]'),
-    ).toBeNull();
-    expect(jump?.getAttribute("aria-expanded")).toBe("false");
-
-    await unmount(component);
-  });
-
-  it("updates palette and link preview preferences", () => {
+  it("writes only the palette field a card owns, never the colour scheme", () => {
     const { component, updates } = renderSettings();
     document
       .querySelector<HTMLButtonElement>(
@@ -198,14 +182,9 @@ describe("task status settings", () => {
       .querySelector<HTMLInputElement>('[data-testid="settings-link-previews"]')
       ?.click();
 
-    expect(updates).toContainEqual({
-      theme: "light",
-      light_palette: "studio",
-    });
-    expect(updates).toContainEqual({
-      theme: "dark",
-      dark_palette: "signal",
-    });
+    expect(updates).toContainEqual({ light_palette: "studio" });
+    expect(updates).toContainEqual({ dark_palette: "signal" });
+    expect(updates.some((patch) => "theme" in patch)).toBe(false);
     expect(updates).toContainEqual({ link_previews: false });
     unmount(component);
   });
@@ -373,20 +352,17 @@ describe("task status settings", () => {
 });
 
 describe("settings surface", () => {
-  it("names every section once in one scrolling pane", async () => {
+  it("shows one group at a time and names it once", async () => {
     const { component } = renderSettings();
-    const headings = [
-      ...document.querySelectorAll<HTMLElement>("[data-settings-section] > h3"),
-    ].map(({ textContent }) => textContent?.trim());
-    expect(headings).toEqual([
-      STRINGS.settingsSectionAppearance,
-      STRINGS.settingsSectionEditor,
-      STRINGS.settingsSectionFiles,
-      STRINGS.settingsSectionSearch,
-      STRINGS.settingsSectionUpdates,
-      STRINGS.settingsSectionAbout,
-    ]);
-    expect(document.querySelector(".settings-nav")).toBeNull();
+    const headings = () =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          "[data-settings-section] > h3",
+        ),
+      ].map(({ textContent }) => textContent?.trim());
+    expect(headings()).toEqual([STRINGS.settingsSectionAppearance]);
+    openSection(STRINGS.settingsSectionUpdates);
+    expect(headings()).toEqual([STRINGS.settingsSectionUpdates]);
     expect(
       [
         ...document.querySelectorAll<HTMLElement>(
@@ -397,7 +373,7 @@ describe("settings surface", () => {
     await unmount(component);
   });
 
-  it("applies a palette and its mode with arrow keys", async () => {
+  it("applies a palette with arrow keys without touching the colour scheme", async () => {
     const { component, updates } = renderSettings();
     const manuscript = document.querySelector<HTMLButtonElement>(
       '[data-testid="settings-palette-manuscript"]',
@@ -410,10 +386,7 @@ describe("settings surface", () => {
       new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
     );
     await vi.waitFor(() => {
-      expect(updates.at(-1)).toEqual({
-        theme: "light",
-        light_palette: "studio",
-      });
+      expect(updates.at(-1)).toEqual({ light_palette: "studio" });
       expect(document.activeElement).toBe(studio);
     });
     await unmount(component);
@@ -518,15 +491,16 @@ describe("settings surface", () => {
 
   it("provides typed entry for every numeric readout", async () => {
     const { component } = renderSettings();
-    const settings = [
-      "editor-font-size",
-      "editor-line-height",
-      "editor-line-width",
-      "autosave-delay-ms",
-      "indent-width",
-      "search-result-limit",
+    const settings: [string, string][] = [
+      [STRINGS.settingsSectionAppearance, "editor-font-size"],
+      [STRINGS.settingsSectionAppearance, "editor-line-height"],
+      [STRINGS.settingsSectionAppearance, "editor-line-width"],
+      [STRINGS.settingsSectionEditor, "autosave-delay-ms"],
+      [STRINGS.settingsSectionEditor, "indent-width"],
+      [STRINGS.settingsSectionSearch, "search-result-limit"],
     ];
-    for (const setting of settings) {
+    for (const [section, setting] of settings) {
+      openSection(section);
       const readout = document.querySelector<HTMLButtonElement>(
         `[data-testid="settings-${setting}-readout"]`,
       );
@@ -726,6 +700,7 @@ describe("settings surface", () => {
       },
     });
     flushSync();
+    openSection(STRINGS.settingsSectionUpdates);
     const row = document.querySelector<HTMLElement>(
       '[data-setting-id="updates.version"]',
     );
@@ -768,6 +743,7 @@ describe("settings surface", () => {
       },
     });
     flushSync();
+    openSection(STRINGS.settingsSectionUpdates);
     const value = document.querySelector<HTMLOutputElement>(
       '[data-setting-id="updates.version"] output',
     );
@@ -778,6 +754,347 @@ describe("settings surface", () => {
         '[data-testid="settings-check-updates"]',
       )?.disabled,
     ).toBe(true);
+    await unmount(component);
+  });
+});
+
+describe("settings navigation rail", () => {
+  it("names the six groups as a vertical tablist with one selected", async () => {
+    const { component } = renderSettings();
+    const list = document.querySelector('[role="tablist"]');
+    expect(list?.getAttribute("aria-orientation")).toBe("vertical");
+    expect(list?.getAttribute("aria-label")).toBe(
+      STRINGS.settingsSectionsLabel,
+    );
+    expect(railTabs().map((tab) => tab.textContent?.trim())).toEqual([
+      STRINGS.settingsSectionAppearance,
+      STRINGS.settingsSectionEditor,
+      STRINGS.settingsSectionFiles,
+      STRINGS.settingsSectionSearch,
+      STRINGS.settingsSectionUpdates,
+      STRINGS.settingsSectionAbout,
+    ]);
+    expect(
+      railTabs().filter((tab) => tab.getAttribute("aria-selected") === "true"),
+    ).toHaveLength(1);
+    const pane = document.querySelector<HTMLElement>(".settings-content");
+    expect(pane?.getAttribute("role")).toBe("tabpanel");
+    expect(pane?.getAttribute("aria-labelledby")).toBe(selectedTab()?.id);
+    await unmount(component);
+  });
+
+  it("keeps one rail stop in the tab order and swaps the pane on the arrow keys", async () => {
+    const { component } = renderSettings();
+    expect(
+      railTabs()
+        .filter((tab) => tab.getAttribute("aria-selected") !== "true")
+        .every((tab) => tab.getAttribute("tabindex") === "-1"),
+    ).toBe(true);
+    expect(selectedTab()?.getAttribute("tabindex")).toBe("0");
+
+    selectedTab()?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    await vi.waitFor(() => {
+      expect(selectedTab()?.dataset.section).toBe("editor");
+      expect(
+        document.querySelector<HTMLElement>("[data-settings-section]")?.dataset
+          .settingsSection,
+      ).toBe("editor");
+    });
+
+    selectedTab()?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "End", bubbles: true }),
+    );
+    await vi.waitFor(() => {
+      expect(selectedTab()?.dataset.section).toBe("about");
+    });
+    selectedTab()?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Home", bubbles: true }),
+    );
+    await vi.waitFor(() => {
+      expect(selectedTab()?.dataset.section).toBe("appearance");
+    });
+
+    // The list is vertical, so the horizontal keys have no meaning in it.
+    selectedTab()?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    flushSync();
+    expect(selectedTab()?.dataset.section).toBe("appearance");
+    await unmount(component);
+  });
+
+  it("renders one group's rows and nothing belonging to another", async () => {
+    const { component } = renderSettings();
+    openSection(STRINGS.settingsSectionFiles);
+    const groups = new Set(
+      [...document.querySelectorAll<HTMLElement>("[data-setting-id]")].map(
+        (row) => row.dataset.settingId?.split(".")[0],
+      ),
+    );
+    expect([...groups]).toEqual(["files"]);
+    await unmount(component);
+  });
+
+  it("turns the rail into a facet display while a query is active", async () => {
+    const { component } = renderSettings();
+    const search = document.querySelector<HTMLInputElement>(
+      '[data-testid="settings-search"]',
+    );
+    if (search === null) throw new Error("settings search is missing");
+    search.value = "width";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+
+    expect(selectedTab()).toBeNull();
+    const counts = Object.fromEntries(
+      railTabs().map((tab) => [
+        tab.dataset.section,
+        Number(
+          tab.querySelector(".settings-rail-count")?.textContent?.trim() ??
+            "-1",
+        ),
+      ]),
+    );
+    const rendered = Object.fromEntries(
+      [
+        ...document.querySelectorAll<HTMLElement>("[data-settings-section]"),
+      ].map((section) => [
+        section.dataset.settingsSection,
+        section.querySelectorAll("[data-setting-id]").length,
+      ]),
+    );
+    for (const [section, count] of Object.entries(counts)) {
+      expect(count, `${section} facet count`).toBe(rendered[section] ?? 0);
+    }
+    expect(
+      railTabs()
+        .filter((tab) => counts[tab.dataset.section ?? ""] === 0)
+        .every((tab) => tab.getAttribute("aria-disabled") === "true"),
+    ).toBe(true);
+
+    search.value = "";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    expect(selectedTab()?.dataset.section).toBe("appearance");
+    await unmount(component);
+  });
+
+  it("marks a changed row, its group, and offers that row a reset", async () => {
+    const updates: Partial<SettingsDocument>[] = [];
+    const component = mount(SettingsView, {
+      target: document.body,
+      props: {
+        // Every other value at its default, so the marks below can only come
+        // from the one setting this test moved.
+        settings: {
+          loaded: true,
+          error: null,
+          errorSetting: null,
+          document: { ...DEFAULT_SETTINGS, editor_font_size: 20 },
+        },
+        onUpdate: (patch: Partial<SettingsDocument>) => updates.push(patch),
+        onClose: vi.fn(),
+      },
+    });
+    flushSync();
+    openSection(STRINGS.settingsSectionAppearance);
+
+    const changed = [
+      ...document.querySelectorAll<HTMLElement>("[data-setting-id].changed"),
+    ].map((row) => row.dataset.settingId);
+    expect(changed).toEqual(["appearance.font-size"]);
+    expect(
+      railTabs()
+        .filter((tab) => tab.querySelector(".settings-rail-dot") !== null)
+        .map((tab) => tab.dataset.section),
+    ).toEqual(["appearance"]);
+
+    const reset = document.querySelector<HTMLButtonElement>(
+      '[data-setting-id="appearance.font-size"] [aria-label="Reset to default"]',
+    );
+    expect(reset?.getAttribute("title")).toBe(STRINGS.settingsResetToDefault);
+    reset?.click();
+    flushSync();
+    expect(updates.at(-1)).toEqual({
+      editor_font_size: DEFAULT_SETTINGS.editor_font_size,
+    });
+    await unmount(component);
+  });
+
+  it("gives rows that carry no setting no mark and no reset", async () => {
+    const { component } = renderSettings();
+    openSection(STRINGS.settingsSectionAbout);
+    expect(document.querySelectorAll("[data-setting-id].changed")).toHaveLength(
+      0,
+    );
+    expect(
+      document.querySelectorAll('[aria-label="Reset to default"]'),
+    ).toHaveLength(0);
+    await unmount(component);
+  });
+
+  it("deletes the jump control and its glyph outright", async () => {
+    const { component } = renderSettings();
+    const dialog = document.querySelector<HTMLElement>(
+      '[data-testid="settings-view"]',
+    );
+    expect(
+      [...(dialog?.querySelectorAll("*") ?? [])].filter((element) =>
+        /jump to section/i.test(element.getAttribute("aria-label") ?? ""),
+      ),
+    ).toHaveLength(0);
+    expect(
+      [...(dialog?.querySelectorAll("*") ?? [])].filter(
+        (element) =>
+          element.children.length === 0 && element.textContent?.trim() === "⋯",
+      ),
+    ).toHaveLength(0);
+    expect(dialog?.querySelector('[aria-haspopup="menu"]')).toBeNull();
+    await unmount(component);
+  });
+
+  it("draws both header controls as inline SVG on the 24-unit grid", async () => {
+    const { component } = renderSettings();
+    const close = button(STRINGS.closeAction);
+    const glyph = close.querySelector("svg");
+    expect(glyph?.getAttribute("viewBox")).toBe("0 0 24 24");
+    expect(glyph?.getAttribute("aria-hidden")).toBe("true");
+    expect(close.textContent?.trim()).toBe("");
+    await unmount(component);
+  });
+});
+
+describe("appearance chooser", () => {
+  it("offers three mode cards that write only the colour scheme", async () => {
+    const { component, updates } = renderSettings();
+    const group = document.querySelector<HTMLElement>(
+      '[data-testid="settings-theme"]',
+    );
+    expect(group?.getAttribute("role")).toBe("radiogroup");
+    expect(group?.getAttribute("aria-label")).toBe(STRINGS.settingsTheme);
+    expect(
+      [...(group?.querySelectorAll<HTMLElement>(".mode-card") ?? [])].map(
+        (card) => card.dataset.mode,
+      ),
+    ).toEqual(["system", "light", "dark"]);
+
+    document
+      .querySelector<HTMLButtonElement>('[data-testid="settings-theme-dark"]')
+      ?.click();
+    flushSync();
+    expect(updates.at(-1)).toEqual({ theme: "dark" });
+    expect(updates.every((patch) => Object.keys(patch).length === 1)).toBe(
+      true,
+    );
+    await unmount(component);
+  });
+
+  it("moves the colour scheme with the radiogroup's arrow keys", async () => {
+    const { component, updates } = renderSettings();
+    const system = document.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-theme-system"]',
+    );
+    expect(system?.getAttribute("aria-checked")).toBe("true");
+    system?.focus();
+    system?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    await vi.waitFor(() => {
+      expect(updates.at(-1)).toEqual({ theme: "light" });
+      expect(document.activeElement).toBe(
+        document.querySelector('[data-testid="settings-theme-light"]'),
+      );
+    });
+    await unmount(component);
+  });
+
+  it("paints every miniature pane from the chosen palettes' preview tokens", async () => {
+    const { component } = renderSettings();
+    const panes = (mode: string) => [
+      ...document.querySelectorAll<HTMLElement>(
+        `[data-testid="settings-theme-${mode}"] .mode-pane`,
+      ),
+    ];
+    const surfaceOf = (pane: HTMLElement) =>
+      pane.style.getPropertyValue("--skr-mode-pane-surface");
+
+    expect(panes("light")).toHaveLength(1);
+    expect(panes("dark")).toHaveLength(1);
+    expect(surfaceOf(panes("light")[0] as HTMLElement)).toBe(
+      `var(--skr-preview-${DEFAULT_SETTINGS.light_palette}-surface)`,
+    );
+    expect(surfaceOf(panes("dark")[0] as HTMLElement)).toBe(
+      `var(--skr-preview-${DEFAULT_SETTINGS.dark_palette}-surface)`,
+    );
+
+    // The System card holds both halves at once, the dark one clipped to the
+    // trailing side of the slanted seam.
+    const system = panes("system");
+    expect(system).toHaveLength(2);
+    expect(system[0]?.classList.contains("mode-pane-half")).toBe(false);
+    expect(system[1]?.classList.contains("mode-pane-half")).toBe(true);
+    expect(
+      readFileSync(
+        path.join(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "..",
+          "..",
+          "src",
+          "lib",
+          "SettingsView.svelte",
+        ),
+        "utf8",
+      ),
+    ).toContain("clip-path: polygon(58% 0, 100% 0, 100% 100%, 42% 100%)");
+
+    // Every pane carries the sidebar strip, three bars and the accent dot.
+    for (const pane of [
+      ...panes("system"),
+      ...panes("light"),
+      ...panes("dark"),
+    ]) {
+      expect(pane.querySelector(".mode-pane-sidebar")).not.toBeNull();
+      expect(pane.querySelectorAll(".mode-pane-lines i")).toHaveLength(3);
+      expect(pane.querySelector(".mode-pane-accent")).not.toBeNull();
+    }
+    await unmount(component);
+  });
+
+  it("repaints the previews in the frame a palette choice changes", async () => {
+    const updates: Partial<SettingsDocument>[] = [];
+    const state = settingsState();
+    state.document = { ...state.document, light_palette: "gazette" };
+    const component = mount(SettingsView, {
+      target: document.body,
+      props: {
+        settings: state,
+        onUpdate: (patch: Partial<SettingsDocument>) => updates.push(patch),
+        onClose: vi.fn(),
+      },
+    });
+    flushSync();
+    openSection(STRINGS.settingsSectionAppearance);
+    for (const mode of ["light", "system"]) {
+      const pane = document.querySelector<HTMLElement>(
+        `[data-testid="settings-theme-${mode}"] .mode-pane`,
+      );
+      expect(pane?.style.getPropertyValue("--skr-mode-pane-surface")).toBe(
+        "var(--skr-preview-gazette-surface)",
+      );
+      expect(pane?.style.getPropertyValue("--skr-mode-pane-accent")).toBe(
+        "var(--skr-preview-gazette-accent)",
+      );
+    }
+    await unmount(component);
+  });
+
+  it("no longer offers a match-system switch", async () => {
+    const { component } = renderSettings();
+    expect(
+      document.querySelector('[data-testid="settings-match-system"]'),
+    ).toBeNull();
     await unmount(component);
   });
 });
@@ -805,6 +1122,7 @@ describe("update install and restart", () => {
       },
     });
     flushSync();
+    openSection(STRINGS.settingsSectionUpdates);
     return component;
   }
 

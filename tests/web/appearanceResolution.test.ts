@@ -307,6 +307,42 @@ describe("appearance resolution", () => {
     expect(listed("CODE_FONTS")).toEqual([...CODE_FONT_NAMES]);
   });
 
+  // The appearance chooser's miniature shells paint from the preview tokens
+  // rather than from the app's active palette, which is the only way a Light
+  // card can render light while the app is dark. That indirection is also how
+  // a snapshot drifts away from the palette it claims to preview, so each
+  // triple is held against the palette's own published values.
+  it("keeps every palette's preview tokens equal to its published values", () => {
+    const swatches = new Map(
+      rules.flatMap((rule) =>
+        rule.selectors
+          .map((selector) =>
+            /^\.skr-palette-swatch\[data-palette="([\w-]+)"\]$/u.exec(selector),
+          )
+          .filter((match): match is RegExpExecArray => match !== null)
+          .map((match) => [match[1] ?? "", rule.declarations] as const),
+      ),
+    );
+    const root = rules.find((rule) => rule.selectors.includes(":root"));
+    expect(root, "the root token block is missing").not.toBeUndefined();
+    expect([...swatches.keys()].sort()).toEqual(
+      [...LIGHT_PALETTE_NAMES, ...DARK_PALETTE_NAMES].sort(),
+    );
+    for (const [palette, declarations] of swatches) {
+      for (const role of ["surface", "text", "accent"] as const) {
+        const published = declarations.get(`skr-${role}`);
+        expect(
+          published,
+          `${palette} publishes no ${role} value`,
+        ).not.toBeUndefined();
+        expect(
+          root?.declarations.get(`skr-preview-${palette}-${role}`),
+          `preview ${role} for ${palette}`,
+        ).toBe(published);
+      }
+    }
+  });
+
   it("keeps every mode-specific palette rule behind its own scheme guard", () => {
     for (const rule of rules) {
       for (const selector of rule.selectors) {

@@ -1553,6 +1553,19 @@ html body .settings-dialog {
     var(--skr-motion-surface-easing);
 }
 
+/* A drill-down level arriving from the trailing edge, and the mirrored
+   return to the level that contains it. */
+[data-motion-surface="drill-push"] {
+  transform: translateX(var(--skr-motion-distance));
+}
+
+[data-motion-surface="drill-pop"] {
+  transform: translateX(calc(-1 * var(--skr-motion-distance)));
+  transition:
+    opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing),
+    transform var(--skr-motion-state-duration) var(--skr-motion-state-easing);
+}
+
 [data-motion-surface][data-motion-entered="true"] {
   opacity: 1;
   transform: none;
@@ -1615,16 +1628,6 @@ html body .settings-dialog {
 }
 
 @media (max-width: 60rem) {
-  .settings-jump-menu[data-motion-entered="false"] {
-    transform: translateY(var(--skr-motion-distance));
-  }
-
-  /* On narrow viewports the jump menu rises from the bottom edge, so its
-     exit mirrors that direction instead of the anchored-top default. */
-  .settings-jump-menu[data-motion-exiting="true"] {
-    transform: translateY(var(--skr-motion-distance));
-  }
-
   .skr-app-header {
     box-sizing: border-box;
     display: grid;

@@ -124,6 +124,26 @@ function seededVault(): DemoVault {
   };
 }
 
+/**
+ * The identity the `?empty-notes-vault` demo query opens (design spec
+ * section 13, state B): a vault with no notes in it, distinct from a real
+ * local folder pick, so the empty-pane surface has a scriptable path to
+ * reach without going through the browser's own folder picker.
+ */
+export const EMPTY_DEMO_VAULT_PATH = "skribeum-demo-empty";
+
+function emptyVault(): DemoVault {
+  return {
+    files: new Map(),
+    directories: new Set(),
+    fileHandles: new Map(),
+    readOnlyPaths: new Set(),
+    directoryHandle: null,
+    folderWrites: false,
+    skippedFiles: 0,
+  };
+}
+
 let nextVaultId = 0;
 let nextFolderSelectionId = 0;
 let activeVault: DemoVault | null = null;
@@ -465,7 +485,9 @@ function indexedTree(vault: DemoVault): TreeEntry[] {
 }
 
 export async function openVaultResult(path: string): Promise<VaultOpenResult> {
-  const vault = folderSelections.get(path) ?? seededVault();
+  const vault =
+    folderSelections.get(path) ??
+    (path === EMPTY_DEMO_VAULT_PATH ? emptyVault() : seededVault());
   folderSelections.delete(path);
   activeVault = vault;
   if (vault.directoryHandle === null) {
@@ -837,14 +859,39 @@ export async function writeVaultFile(
   vault.files.set(relPath, next);
 }
 
-/**
- * The seeded browser vault has no filesystem timestamps; the statusline
- * degrades to save-time tracking in the shell.
- */
+// The seeded browser vault has no real filesystem timestamps, so every seed
+// file carries a deterministic synthetic age instead: a stable per-path
+// bucket, spread across the statusline's and the empty pane's own relative-
+// time bands (minutes, hours, "yesterday", and past the seven-day window),
+// computed relative to the moment it is read so it never goes stale.
+const SYNTHETIC_AGE_BUCKETS_MS = [
+  4 * 60_000,
+  55 * 60_000,
+  2 * 3_600_000,
+  20 * 3_600_000,
+  1.5 * 86_400_000,
+  4 * 86_400_000,
+  10 * 86_400_000,
+  30 * 86_400_000,
+];
+
+function syntheticAgeMs(relPath: string): number {
+  let hash = 2_166_136_261;
+  for (const character of relPath) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16_777_619);
+  }
+  const bucket =
+    SYNTHETIC_AGE_BUCKETS_MS[(hash >>> 0) % SYNTHETIC_AGE_BUCKETS_MS.length];
+  return bucket ?? 0;
+}
+
+/** Synthesizes filesystem timestamps for the seeded browser vault. */
 export async function readNoteStat(
   handle: VaultHandle,
   relPath: string,
 ): Promise<NoteStat> {
   cachedFileBytes(vaultFor(handle), relPath);
-  return { modified_ms: null, created_ms: null };
+  const modifiedMs = Date.now() - syntheticAgeMs(relPath);
+  return { modified_ms: modifiedMs, created_ms: modifiedMs };
 }

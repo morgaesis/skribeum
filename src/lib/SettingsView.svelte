@@ -3096,8 +3096,8 @@ function onKeydown(event: KeyboardEvent) {
     display: flex;
     flex-direction: column;
     /* The surface's own tier. Controls that carry `font: inherit` (the
-       search field, the text controls, the jump-menu rows) resolve their
-       size from here rather than from the browser's dialog font. */
+       search field, the text controls, the rail's items) resolve their size
+       from here rather than from the browser's dialog font. */
     font-family: var(--skr-font-interface);
     font-size: var(--skr-type-control);
     height: min(85vh, 48rem);

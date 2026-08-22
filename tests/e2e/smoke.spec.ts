@@ -6011,9 +6011,9 @@ describe("skribeum core editing surfaces", () => {
   async function closeIfOpen(selector: string) {
     const surface = $(selector);
     if (!(await surface.isExisting())) return;
-    // Escape can dismiss one nested layer at a time (the settings dialog's
-    // own jump menu, for one), so press it until the surface itself is
-    // gone rather than assuming a single press clears it.
+    // Escape can dismiss one nested layer at a time (the settings surface's
+    // own drill-down level, for one), so press it until the surface itself
+    // is gone rather than assuming a single press clears it.
     await browser.waitUntil(
       async () => {
         if (!(await surface.isExisting())) return true;

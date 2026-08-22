@@ -187,12 +187,17 @@ let lastSwitchKind: PaneSwitchKind = "note";
  * exact CodeMirror state (undo history included) every time a different
  * note initializes, and consumed only when switching back to an already
  * open tab: the tab strip's own tabs, per section 6.4, keep their own live
- * view state rather than replaying the byte-offset-approximated history
- * restoration used for fresh opens and history travel.
+ * view state rather than replaying the history restoration used for fresh
+ * opens and history travel. The reading position is kept as a content
+ * anchor (a line and its offset from the viewport top), not a raw scrollTop:
+ * `setState` forces CodeMirror to remeasure, and a pixel value captured
+ * against the old measurement can land on the wrong line once the new one
+ * settles.
  */
 type TabSnapshot = {
   state: EditorState;
-  scrollTop: number;
+  scrollAnchor: number;
+  scrollOffset: number;
   propertiesExpanded: boolean;
 };
 const tabSnapshots = new Map<string, TabSnapshot>();
@@ -1120,6 +1125,31 @@ export function forgetTab(path: string): void {
   tabSnapshots.delete(path);
 }
 
+/**
+ * The line the viewport shows whole and how far below the viewport's top
+ * edge it starts, as a character offset into `target.state.doc`. Shared by
+ * history capture, which converts the position to bytes for persistence,
+ * and tab-cache capture, which keeps it as characters because the cached
+ * state's own document never changes underneath it.
+ */
+function readingAnchor(target: EditorView): {
+  position: number;
+  offset: number;
+} {
+  const viewportTop = Math.max(
+    0,
+    target.scrollDOM.scrollTop - target.documentPadding.top,
+  );
+  const reading = scrollAnchorForViewport({
+    viewportTop,
+    documentLength: target.state.doc.length,
+    devicePixelRatio: window.devicePixelRatio,
+    lineBlockAtHeight: (height) => target.lineBlockAtHeight(height),
+    lineBlockAt: (position) => target.lineBlockAt(position),
+  });
+  return { position: reading.line.from, offset: reading.offset };
+}
+
 /** Captures byte-exact selection offsets and the current reading position. */
 export function captureHistoryState(): NoteViewState | null {
   const target = view;
@@ -1142,21 +1172,11 @@ export function captureHistoryState(): NoteViewState | null {
       );
     }
   }
-  const viewportTop = Math.max(
-    0,
-    target.scrollDOM.scrollTop - target.documentPadding.top,
-  );
-  const reading = scrollAnchorForViewport({
-    viewportTop,
-    documentLength: target.state.doc.length,
-    devicePixelRatio: window.devicePixelRatio,
-    lineBlockAtHeight: (height) => target.lineBlockAtHeight(height),
-    lineBlockAt: (position) => target.lineBlockAt(position),
-  });
+  const reading = readingAnchor(target);
   return {
     anchor: byteOffsetForCharacter(content, selection.anchor),
     head: byteOffsetForCharacter(content, selection.head),
-    scrollAnchor: byteOffsetForCharacter(content, reading.line.from),
+    scrollAnchor: byteOffsetForCharacter(content, reading.position),
     scrollOffset: reading.offset,
     propertiesExpanded,
   };
@@ -1200,10 +1220,12 @@ async function rereadAndReconcile(): Promise<void> {
 /** Snapshots the outgoing tab's live state before its note is replaced. */
 function captureOutgoingTabState(): void {
   if (view === undefined || renderedPath === null) return;
+  const reading = readingAnchor(view);
   tabSnapshots.delete(renderedPath);
   tabSnapshots.set(renderedPath, {
     state: view.state,
-    scrollTop: view.scrollDOM.scrollTop,
+    scrollAnchor: reading.position,
+    scrollOffset: reading.offset,
     propertiesExpanded,
   });
   while (tabSnapshots.size > TAB_SNAPSHOT_LIMIT) {
@@ -1235,15 +1257,41 @@ function consumeCachedTabState(
 /**
  * Swaps a tab's own live `EditorState` back in, undo history and all: the
  * same `EditorView`, no rebuilt document, no visibility hide-and-correct
- * dance, since the cached state and scroll offset are already exact.
+ * dance, since the cached content anchor is already exact. `setState`
+ * still forces CodeMirror to remeasure the document, the same as a fresh
+ * open, so the position is applied by scrolling the anchor into view and
+ * then re-anchoring across the same bounded settle window `replaceEditorState`
+ * uses for a restored history entry, rather than by assigning a scrollTop
+ * that was only ever correct for the measurement in effect when it was
+ * captured.
  */
 function restoreCachedState(cached: TabSnapshot): void {
   const target = view;
   if (target === undefined) return;
+  const generation = ++restorationGeneration;
   target.setState(cached.state);
   target.scrollDOM.style.scrollBehavior = "auto";
-  target.scrollDOM.scrollTop = cached.scrollTop;
+  target.dispatch({
+    effects: EditorView.scrollIntoView(cached.scrollAnchor, {
+      y: "start",
+      yMargin: Math.max(0, cached.scrollOffset),
+    }),
+  });
   queueMicrotask(finishPreparedArrival);
+  const correctScrollOffset = () => {
+    if (view !== target || restorationGeneration !== generation) return;
+    const line = target.lineBlockAt(cached.scrollAnchor);
+    const viewportTop = Math.max(
+      0,
+      target.scrollDOM.scrollTop - target.documentPadding.top,
+    );
+    const actualOffset = line.top - viewportTop;
+    target.scrollDOM.scrollTop += actualOffset - cached.scrollOffset;
+  };
+  requestAnimationFrame(() => {
+    correctScrollOffset();
+    requestAnimationFrame(correctScrollOffset);
+  });
 }
 
 function initializeForNote(current: LoadedNote | null) {

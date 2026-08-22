@@ -176,7 +176,9 @@ function openRecentAux(event: MouseEvent, path: string) {
       </div>
       {#if recent.length > 0}
         <div class="skr-empty-pane-recent">
-          <h2 class="skr-panel-heading skr-empty-pane-recent-label">{STRINGS.commandSurfaceRecent}</h2>
+          <h2 class="skr-panel-heading skr-empty-pane-recent-label uppercase tracking-wide font-semibold">
+            {STRINGS.commandSurfaceRecent}
+          </h2>
           <ul class="skr-empty-pane-recent-list">
             {#each recent as row (row.path)}
               <li>

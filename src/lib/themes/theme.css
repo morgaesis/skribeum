@@ -48,6 +48,11 @@
   --skr-syntax-operator: #565664;
   --skr-overlay: rgb(0 0 0 / 30%);
   --skr-shadow: 0 12px 32px rgb(0 0 0 / 20%);
+  /* The elevation scale follows the radius scale: window-scale surfaces
+     (dialogs, sheets) take the shadow above; small floating surfaces on
+     the surface radius (menus, popovers, completion menus, the selection
+     toolbar, tooltips, canvas cards) take this lighter one. */
+  --skr-shadow-surface: 0 4px 12px rgb(0 0 0 / 12%);
   /* The section 5.12 radius scale: three values, nothing else. Controls and
      chips (icon-button hover fills, kbd and payload chips, tooltips,
      statusline hover fills); floating surfaces and content blocks (menus,
@@ -303,6 +308,7 @@
   --skr-syntax-operator: #a5a5b5;
   --skr-overlay: rgb(0 0 0 / 55%);
   --skr-shadow: 0 12px 32px rgb(0 0 0 / 55%);
+  --skr-shadow-surface: 0 4px 12px rgb(0 0 0 / 40%);
 }
 
 .skr-palette-swatch[data-palette="nightroom"] {
@@ -419,6 +425,7 @@
     --skr-syntax-operator: #a5a5b5;
     --skr-overlay: rgb(0 0 0 / 55%);
     --skr-shadow: 0 12px 32px rgb(0 0 0 / 55%);
+    --skr-shadow-surface: 0 4px 12px rgb(0 0 0 / 40%);
   }
 
   :root[data-theme="system"][data-dark-palette="graphite"] {

@@ -59,5 +59,11 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        demo: resolve(demoRoot, "index.html"),
+        design: resolve(demoRoot, "design.html"),
+      },
+    },
   },
 });

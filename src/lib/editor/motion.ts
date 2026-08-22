@@ -17,7 +17,15 @@
 // zero every CSS transition in the product.
 
 import type { Extension } from "@codemirror/state";
-import { drawSelection, type EditorView, ViewPlugin } from "@codemirror/view";
+import {
+  Direction,
+  drawSelection,
+  type EditorView,
+  layer,
+  RectangleMarker,
+  EditorView as View,
+  ViewPlugin,
+} from "@codemirror/view";
 import {
   motionDistance,
   motionDurationMilliseconds,
@@ -160,9 +168,108 @@ const caretTypingPlugin = ViewPlugin.fromClass(
 );
 
 /**
+ * CodeMirror derives a selection rectangle's "open" edge — where a range
+ * continues past the end of a wrapped or multi-line row — from `.cm-line`'s
+ * own padding added to `.cm-content`'s unpadded box. This editor's reading
+ * column is inset on `.cm-content` itself, so a bled construct (a code
+ * block, a callout) can escape it without every line carrying its own
+ * padding; CodeMirror's geometry has no way to see that inset, and draws
+ * the open edge at the unpadded content edge instead, spilling the
+ * highlight into the gutter. This layer replaces the stock selection layer:
+ * it takes CodeMirror's own rectangles for each range and clamps their
+ * horizontal extent to the reading column. Clamping only ever narrows a
+ * rectangle, so within-line edges, which come from correct per-glyph
+ * coordinates, pass through untouched.
+ */
+const SELECTION_MARKER_CLASS = "cm-selectionBackground";
+
+/** The reading column's viewport edges: the content box inset by its own
+ * padding, scaled the way marker coordinates are. */
+function readingColumn(view: EditorView): { left: number; right: number } {
+  const content = view.contentDOM.getBoundingClientRect();
+  const style = window.getComputedStyle(view.contentDOM);
+  return {
+    left:
+      content.left + Number.parseFloat(style.paddingLeft || "0") * view.scaleX,
+    right:
+      content.right -
+      Number.parseFloat(style.paddingRight || "0") * view.scaleX,
+  };
+}
+
+/** The origin marker coordinates are relative to, per CodeMirror's own
+ * layer geometry: the scroller's scrolled-back leading edge. */
+function markerBaseLeft(view: EditorView): number {
+  const rect = view.scrollDOM.getBoundingClientRect();
+  const left =
+    view.textDirection === Direction.LTR
+      ? rect.left
+      : rect.right - view.scrollDOM.clientWidth * view.scaleX;
+  return left - view.scrollDOM.scrollLeft * view.scaleX;
+}
+
+function clampToColumn(
+  marker: RectangleMarker,
+  column: { left: number; right: number },
+  baseLeft: number,
+): RectangleMarker {
+  if (marker.width === null) return marker;
+  const left = baseLeft + marker.left;
+  const right = left + marker.width;
+  const clampedLeft = Math.max(left, column.left);
+  const clampedRight = Math.min(right, column.right);
+  if (clampedLeft === left && clampedRight === right) return marker;
+  return new RectangleMarker(
+    SELECTION_MARKER_CLASS,
+    clampedLeft - baseLeft,
+    marker.top,
+    Math.max(0, clampedRight - clampedLeft),
+    marker.height,
+  );
+}
+
+const columnSelectionLayer = layer({
+  above: false,
+  class: "cm-skr-selectionLayer",
+  update: (update) =>
+    update.docChanged ||
+    update.selectionSet ||
+    update.viewportChanged ||
+    update.geometryChanged,
+  markers(view) {
+    const column = readingColumn(view);
+    const baseLeft = markerBaseLeft(view);
+    const markers: RectangleMarker[] = [];
+    for (const range of view.state.selection.ranges) {
+      if (range.empty) continue;
+      for (const marker of RectangleMarker.forRange(
+        view,
+        SELECTION_MARKER_CLASS,
+        range,
+      )) {
+        markers.push(clampToColumn(marker, column, baseLeft));
+      }
+    }
+    return markers;
+  },
+});
+
+/** The stock selection layer still runs under `drawSelection`, which owns
+ * the cursor layer and the native-selection hiding this editor keeps; only
+ * its selection rectangles are replaced, so they are not painted. */
+const columnSelectionTheme = View.theme({
+  ".cm-layer.cm-selectionLayer": { display: "none" },
+});
+
+/**
  * The caret: a drawn 2px bar in the caret token, blinking smoothly. The
  * platform caret cannot be styled or eased, so the editor draws its own.
  */
 export function caretMotion(): Extension {
-  return [drawSelection(), caretTypingPlugin];
+  return [
+    drawSelection(),
+    caretTypingPlugin,
+    columnSelectionLayer,
+    columnSelectionTheme,
+  ];
 }

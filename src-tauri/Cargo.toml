@@ -30,6 +30,8 @@ tauri-plugin-dialog = "2.7.2"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-process = "2.3.1"
+tauri-plugin-log = "2.9.0"
+log = "0.4.33"
 
 # Native Maximize-button hit-testing and the real system window menu
 # (design system section 4.13) are Windows-only; this pins the same version

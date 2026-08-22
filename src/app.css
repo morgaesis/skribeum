@@ -1634,7 +1634,10 @@ html body .settings-dialog {
     min-height: 2.75rem;
   }
 
-  .cm-skr-selection-toolbar .cm-skr-toolbar-button,
+  /* The selection toolbar's own touch-mode floor lives in
+     selectionToolbar.ts next to the sizes it overrides: this rule and that
+     theme both set `min-width`/`min-height` on the same element, and the
+     loser of that specificity tie silently drops below the touch floor. */
   .cm-skr-slash-option,
   .cm-skr-tag-option,
   .cm-skr-task-checkbox,

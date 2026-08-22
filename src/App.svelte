@@ -2402,8 +2402,14 @@ function onOverlayPick(item: PickerItem, intent?: { newTab?: boolean }) {
     openPath(item.value, { newTab: intent?.newTab === true });
   } else if (item.kind === "tag") {
     rememberTag(item.value);
-    overlayQuery = `?#${item.value}`;
-    void runVaultSearch(`#${item.value}`);
+    // The surface runs the query it displays: one string, shown in the input
+    // and handed to the search, so the tag term is a visible part of the
+    // query rather than a rewrite the reader cannot see. The search answers
+    // it with the notes carrying that tag or any tag below it in the path,
+    // which is what the row's note count promised.
+    const query = `#${item.value}`;
+    overlayQuery = `?${query}`;
+    void runVaultSearch(query);
   } else if (item.kind === "text") {
     closeOverlay();
     void openSearchResult(item.value);

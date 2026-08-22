@@ -8,6 +8,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Tag search matches by prefix at path-segment boundaries and groups its
+  results in bands: the tag itself, then everything below it in the path,
+  then tags a path segment of which starts with the query, then near matches
+  under their own heading. Near matches are tags containing what was typed or
+  a bounded edit distance from it, capped at five rows, drawn muted, never
+  preselected, and never offered while authoring. Every row states how many
+  notes use the tag and orders by it. `*` is removed from a tag query wherever
+  it appears, so `#feat`, `#feat*` and `#*feat` are one query with one result
+  list, and typing one no longer empties the results or closes the completion
+  menu.
+- A tag query returns the notes below it in the path: `#work` lists notes
+  tagged `work/meetings` and not notes tagged `workshop`, and each row's note
+  count covers the same set the row produces.
+- Tag mode ends with a row that re-runs the query as a note-text search, and
+  its empty states name what to do next: how to make the vault's first tag,
+  or which query found nothing after the wildcards were removed.
 - The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
   terminators, and the keybinding tests drive the global handler on macOS,
   Windows and Linux platform strings, so both classes are answered wherever
@@ -57,6 +73,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The inline tag completion menu offers the tag that was typed, and accepting
+  a row replaces what was typed. It had removed the exact match from its own
+  results, so finishing a tag the vault already holds showed "No matches", and
+  pressing Enter committed a neighbouring tag into the note.
+- The tag catalog holds every tag in the vault. It had been cut to the
+  thousand most-used, so a rarely written tag existed for no surface and
+  nothing said so.
+- A tag written with a decomposed accent is indexed and searchable. The
+  editor rendered, offered and accepted the whole word while the indexer
+  stopped at the combining mark, which the syntax specification already
+  counts as part of the letter it belongs to.
+- The tag completion menu stops at the ends of its list instead of wrapping
+  around, matching the command surface, and reopens when a character that
+  ended the query is deleted instead of requiring the hash to be retyped.
+- A tag accepted a moment ago no longer displaces a closer answer to what is
+  being typed now. Session recency was compared before the rank recording how
+  closely a tag answers the query, so accepting a tag whose second path
+  segment matched carried it above one that matched outright for the rest of
+  the session, moving the row under Enter for a reason nothing on screen
+  stated.
 - A table followed by prose with no blank line renders as a table again: the
   parser's over-extended block is trimmed back to rows that share the
   header's shape, so the following paragraph stops being swallowed as a

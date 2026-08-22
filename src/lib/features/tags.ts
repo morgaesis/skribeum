@@ -18,7 +18,7 @@ import {
   EditorView as View,
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
-import { fuzzyMatch } from "../fuzzy";
+import { matchTags, segmentByPositions } from "../fuzzy";
 import { enterMotionSurface } from "../motion";
 import type { CommandRegistry } from "../registry";
 import { STRINGS } from "../strings";
@@ -26,9 +26,12 @@ import { STRINGS } from "../strings";
 export type TagCatalogEntry = {
   /** Tag text without the leading hash. */
   tag: string;
-  /** Number of notes containing the tag. */
+  /**
+   * Notes containing the tag or a tag below it in the path, counted once
+   * each: the same set a query for the tag returns.
+   */
   noteCount: number;
-  /** Total number of tag occurrences across the vault. */
+  /** Occurrences of the tag and of every tag below it, across the vault. */
   occurrenceCount: number;
 };
 
@@ -46,7 +49,21 @@ export type TagAffordanceOptions = {
 type TagMenuState = {
   /** Position of the hash character. */
   from: number;
-  /** Index into the filtered completion list. */
+  /** The query text the offered rows answer, without the leading hash. */
+  query: string;
+  /**
+   * The rows the menu offers, in order.
+   *
+   * They are computed once, when the query changes, and then held. The
+   * catalog is vault state that refreshes on its own schedule, outside the
+   * editor's transactions, so recomputing per render let the list the reader
+   * sees and the list a keystroke acts on come from two different catalogs:
+   * an indexing pass landing between the last keystroke and Enter silently
+   * redirected Enter to a tag that was never on screen. Holding one snapshot
+   * makes the offered row and the committed row the same row by construction.
+   */
+  items: readonly TagCompletion[];
+  /** Index into `items`. */
   selected: number;
 };
 
@@ -60,9 +77,17 @@ const tagConfig = Facet.define<TagConfig, TagConfig | null>({
 
 const setSelected = StateEffect.define<number>();
 const closeMenu = StateEffect.define<null>();
-const TAG_QUERY = /^[\p{L}\p{N}\p{M}_/-]*$/u;
+// `*` is accepted and then stripped, so a reader who reaches for a wildcard
+// keeps the menu they already had instead of losing it mid-word.
+const TAG_QUERY = /^[\p{L}\p{N}\p{M}_/*-]*$/u;
 const TAG_QUERY_LIMIT = 512;
-const TAG_COMPLETION_LIMIT = 100;
+/**
+ * Rows the menu ever renders. A caret-anchored menu is capped at 12rem of
+ * height regardless, so a longer list has a tail nobody can read, and the
+ * answer to "there are more" here is that the reader is mid-word and about
+ * to narrow it anyway.
+ */
+const TAG_COMPLETION_LIMIT = 8;
 
 function triggerAt(state: EditorState, position: number): boolean {
   if (position === 0) {
@@ -71,18 +96,57 @@ function triggerAt(state: EditorState, position: number): boolean {
   return /\s/u.test(state.doc.sliceString(position - 1, position));
 }
 
-function queryOf(state: EditorState, open: TagMenuState): string | null {
+/**
+ * The hash position of the tag query the cursor currently sits inside, or
+ * null. Scanning back from the cursor is what lets the menu re-open after a
+ * character that ended the query is deleted; arming only on a typed `#` left
+ * the reader having to delete past the hash and type it again.
+ */
+function queryStartBefore(state: EditorState): number | null {
   const head = state.selection.main.head;
-  if (!state.selection.main.empty || head < open.from + 1) {
+  if (!state.selection.main.empty) {
     return null;
   }
-  if (state.doc.sliceString(open.from, open.from + 1) !== "#") {
+  const from = Math.max(0, head - (TAG_QUERY_LIMIT + 1));
+  const text = state.doc.sliceString(from, head);
+  const hash = text.lastIndexOf("#");
+  if (hash < 0) {
     return null;
   }
-  const query = state.doc.sliceString(open.from + 1, head);
+  const start = from + hash;
+  return triggerAt(state, start) && TAG_QUERY.test(text.slice(hash + 1))
+    ? start
+    : null;
+}
+
+function queryOf(state: EditorState, from: number): string | null {
+  const head = state.selection.main.head;
+  if (!state.selection.main.empty || head < from + 1) {
+    return null;
+  }
+  if (state.doc.sliceString(from, from + 1) !== "#") {
+    return null;
+  }
+  const query = state.doc.sliceString(from + 1, head);
   return query.length <= TAG_QUERY_LIMIT && TAG_QUERY.test(query)
     ? query
     : null;
+}
+
+/** The menu state for a query that starts at `from`, or null when there is none. */
+function menuAt(
+  state: EditorState,
+  from: number,
+  previous: TagMenuState | null,
+): TagMenuState | null {
+  const query = queryOf(state, from);
+  if (query === null) {
+    return null;
+  }
+  if (previous !== null && previous.query === query) {
+    return { ...previous, from };
+  }
+  return { from, query, items: offeredTags(state, query), selected: 0 };
 }
 
 export const tagCompletionState = StateField.define<TagMenuState | null>({
@@ -90,29 +154,21 @@ export const tagCompletionState = StateField.define<TagMenuState | null>({
   update(value, transaction) {
     let next = value;
     if (next !== null) {
-      next = {
-        from: transaction.changes.mapPos(next.from, 1),
-        selected: transaction.docChanged ? 0 : next.selected,
-      };
-      if (queryOf(transaction.state, next) === null) {
-        next = null;
-      }
+      next = menuAt(
+        transaction.state,
+        transaction.changes.mapPos(next.from, 1),
+        next,
+      );
     }
     if (
       next === null &&
       transaction.docChanged &&
-      transaction.isUserEvent("input.type")
+      (transaction.isUserEvent("input.type") ||
+        transaction.isUserEvent("delete"))
     ) {
-      transaction.changes.iterChanges((_fromA, _toA, fromB, _toB, inserted) => {
-        if (
-          inserted.toString() === "#" &&
-          triggerAt(transaction.state, fromB)
-        ) {
-          next = { from: fromB, selected: 0 };
-        }
-      });
-      if (next !== null && queryOf(transaction.state, next) === null) {
-        next = null;
+      const from = queryStartBefore(transaction.state);
+      if (from !== null) {
+        next = menuAt(transaction.state, from, null);
       }
     }
     for (const effect of transaction.effects) {
@@ -135,69 +191,50 @@ function normalizedTag(tag: string): string {
   return tag.startsWith("#") ? tag.slice(1) : tag;
 }
 
+/** One completion row: the tag and the span of it the query matched. */
+export type TagCompletion = TagCatalogEntry & {
+  /** `[from, to)` over the tag text, or null when nothing is marked. */
+  highlight: readonly [number, number] | null;
+};
+
 /**
- * Filters and ranks tag completions. Fuzzy score is the primary order,
- * followed by recent usage, note count, occurrence count, and locale. An
- * empty query gives every tag the same fuzzy score, so recency and frequency
- * surface established tags before rare ones.
+ * Filters and ranks tag completions, sharing the command surface's band
+ * ordering with two divergences the menu's job requires.
+ *
+ * The exact match is present and is the first row. Accepting it is not a
+ * no-op: it normalizes to the vault's existing spelling and confirms the tag
+ * exists. Excluding it reported that a correctly typed, heavily used tag did
+ * not exist, and left Enter committing whichever neighbouring tag happened to
+ * sort first.
+ *
+ * Near matches are excluded entirely. Offering a typo-adjacent tag to someone
+ * who is authoring invites inserting the wrong tag into a note, which is a
+ * durable error rather than a wasted keystroke: search tolerates typos,
+ * authoring must not propose them.
+ *
+ * Recency separates tags a band ranks equally, so a tag used in this session
+ * comes before an equally relevant one that was not, and a tag accepted a
+ * moment ago never displaces a closer answer to what is being typed now.
  */
 export function filteredTagCompletions(
   catalog: readonly TagCatalogEntry[],
   recentTags: readonly string[],
   query: string,
-): TagCatalogEntry[] {
-  const normalizedQuery = normalizedTag(query).toLocaleLowerCase();
+): TagCompletion[] {
   const recentRanks = new Map(
-    recentTags.map((tag, index) => [
-      normalizedTag(tag).toLocaleLowerCase(),
-      index,
-    ]),
+    recentTags.map((tag, index) => [normalizedTag(tag).toLowerCase(), index]),
   );
-  const seen = new Set<string>();
-  return catalog
-    .map((entry) => {
-      const tag = normalizedTag(entry.tag);
-      const normalized = tag.toLocaleLowerCase();
-      const match = fuzzyMatch(query, tag);
-      return {
-        entry: { ...entry, tag },
-        match,
-        recentRank: recentRanks.get(normalized) ?? Number.POSITIVE_INFINITY,
-        normalized,
-      };
-    })
-    .filter((ranked) => {
-      if (
-        ranked.match === null ||
-        ranked.normalized === normalizedQuery ||
-        seen.has(ranked.normalized)
-      ) {
-        return false;
-      }
-      seen.add(ranked.normalized);
-      return true;
-    })
-    .sort((left, right) => {
-      const score = (right.match?.score ?? 0) - (left.match?.score ?? 0);
-      if (score !== 0) {
-        return score;
-      }
-      if (left.recentRank !== right.recentRank) {
-        return left.recentRank < right.recentRank ? -1 : 1;
-      }
-      const notes = right.entry.noteCount - left.entry.noteCount;
-      if (notes !== 0) {
-        return notes;
-      }
-      const occurrences =
-        right.entry.occurrenceCount - left.entry.occurrenceCount;
-      if (occurrences !== 0) {
-        return occurrences;
-      }
-      return left.entry.tag.localeCompare(right.entry.tag);
-    })
-    .slice(0, TAG_COMPLETION_LIMIT)
-    .map((ranked) => ranked.entry);
+  const { primary } = matchTags(
+    catalog.map((entry) => ({ ...entry, tag: normalizedTag(entry.tag) })),
+    query,
+    {
+      nearMatches: false,
+      limit: TAG_COMPLETION_LIMIT,
+      recencyOf: (tag) =>
+        recentRanks.get(tag.toLowerCase()) ?? Number.POSITIVE_INFINITY,
+    },
+  );
+  return primary.map(({ entry, highlight }) => ({ ...entry, highlight }));
 }
 
 /** Whether the tag completion menu is open. */
@@ -205,20 +242,16 @@ export function tagCompletionOpen(state: EditorState): boolean {
   return state.field(tagCompletionState, false) != null;
 }
 
-function completionItems(
+function offeredTags(
   state: EditorState,
-  open: TagMenuState,
-): readonly TagCatalogEntry[] {
+  query: string,
+): readonly TagCompletion[] {
   const config = state.facet(tagConfig);
   if (config === null) {
     return [];
   }
   const options = config.options();
-  return filteredTagCompletions(
-    options.catalog(),
-    options.recentTags(),
-    queryOf(state, open) ?? "",
-  );
+  return filteredTagCompletions(options.catalog(), options.recentTags(), query);
 }
 
 function acceptItem(view: EditorView): boolean {
@@ -227,8 +260,7 @@ function acceptItem(view: EditorView): boolean {
   if (open == null || config === null) {
     return false;
   }
-  const items = completionItems(view.state, open);
-  const item = items[Math.min(open.selected, items.length - 1)];
+  const item = open.items[Math.min(open.selected, open.items.length - 1)];
   if (item === undefined) {
     return false;
   }
@@ -250,11 +282,16 @@ function moveSelection(view: EditorView, delta: number): boolean {
   if (open == null) {
     return false;
   }
-  const count = completionItems(view.state, open).length;
+  const count = open.items.length;
   if (count === 0) {
     return true;
   }
-  const selected = (open.selected + delta + count) % count;
+  // Clamping rather than wrapping, so the same gesture behaves the same way
+  // here and in the command surface.
+  const selected = Math.max(
+    0,
+    Math.min(Math.min(open.selected, count - 1) + delta, count - 1),
+  );
   view.dispatch({ effects: setSelected.of(selected) });
   return true;
 }
@@ -383,7 +420,7 @@ function tagTooltip(open: TagMenuState): Tooltip {
         if (current == null) {
           return;
         }
-        const items = completionItems(state, current);
+        const items = current.items;
         if (items.length === 0) {
           const empty = document.createElement("li");
           empty.className = "cm-skr-tag-empty";
@@ -404,7 +441,28 @@ function tagTooltip(open: TagMenuState): Tooltip {
             index === selected
               ? "cm-skr-tag-option cm-skr-tag-option-active"
               : "cm-skr-tag-option";
-          option.textContent = `#${item.tag}`;
+          // Marking the typed span answers "why is this row here", and the
+          // segments are real text nodes so no markup can be injected.
+          const positions: number[] = [];
+          if (item.highlight !== null) {
+            for (
+              let offset = item.highlight[0];
+              offset < item.highlight[1];
+              offset += 1
+            ) {
+              positions.push(offset + 1);
+            }
+          }
+          for (const segment of segmentByPositions(`#${item.tag}`, positions)) {
+            if (segment.highlighted) {
+              const mark = document.createElement("mark");
+              mark.className = "skr-match";
+              mark.textContent = segment.text;
+              option.append(mark);
+            } else {
+              option.append(document.createTextNode(segment.text));
+            }
+          }
           option.addEventListener("pointerdown", (event) => {
             event.preventDefault();
             view.dispatch({ effects: setSelected.of(index) });

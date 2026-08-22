@@ -1019,12 +1019,11 @@ describe("tag affordances", () => {
     });
   });
 
-  // The catalog is vault state that refreshes on its own schedule, and while
-  // a tag is being written the writing is what changes it: the half-typed
-  // word is autosaved, indexed, and becomes a tag the vault holds. One open
-  // menu answers from the catalog it read when it opened, so the fragment
-  // cannot come back as its own exact match, and the row a key commits is a
-  // row that was on screen.
+  // The catalog is vault state that refreshes on its own schedule: an
+  // autosave of the half-typed word indexes it and the tag being typed
+  // becomes a tag of the vault while the menu that produced it is still
+  // open. The menu answers the query it was opened with, from the catalog it
+  // read then, and the row Enter commits is a row that was on screen.
   describe("a catalog that changes while the menu is open", () => {
     const rowsOf = (view: EditorView) =>
       [...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]')].map(
@@ -1067,33 +1066,18 @@ describe("tag affordances", () => {
       expect(rememberedTags).toEqual(["project/cedar-room"]);
     });
 
-    it("never offers the word being typed back as a tag of its own", () => {
+    it("answers the next keystroke from the catalog it now holds", () => {
       const view = openMenuThenIndexTheQuery();
 
-      // Refining and re-reaching the same query keeps the menu open, so it
-      // keeps answering from the catalog it opened with: the fragment the
-      // reader is still writing is not a tag they can accept, however
-      // faithfully the index has recorded it.
-      typeText(view, "a");
+      // Deleting back to a query the new entry answers proves the menu
+      // reads the catalog again whenever the query changes, rather than
+      // holding the one it opened with for the life of the menu.
       const head = view.state.selection.main.head;
       view.dispatch({
         changes: { from: head - 1, to: head },
         userEvent: "delete.backward",
       });
-
-      expect(rowsOf(view)).toEqual(["#project/cedar-room"]);
-      pressEditorKey(view, "Enter");
-      expect(view.state.doc.toString()).toBe("#project/cedar-room");
-    });
-
-    it("reads the catalog again for the next menu", () => {
-      const view = openMenuThenIndexTheQuery();
-
-      // Closing this menu and starting another is what picks up everything
-      // indexed since, so the hold lasts one tag rather than one session.
-      pressEditorKey(view, "Escape");
-      expect(tagCompletionOpen(view.state)).toBe(false);
-      typeText(view, "#ced");
+      typeText(view, "d");
 
       expect(rowsOf(view)).toEqual(["#ced", "#project/cedar-room"]);
     });

@@ -119,7 +119,11 @@ let {
   wikilinkNavigationOptions,
   tagAffordanceOptions,
 }: {
-  /** Fallback document when no note is open (the scaffold fixture). */
+  /**
+   * Fallback document when no note is open. The shell never mounts this
+   * component without a note (the pane shows the empty-pane surface
+   * instead); a bare `<Editor>` mounted directly by a test uses this.
+   */
   doc?: string;
   note?: LoadedNote | null;
   vault?: VaultHandle | null;

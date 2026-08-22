@@ -43,6 +43,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   terminators, and the keybinding tests drive the global handler on macOS,
   Windows and Linux platform strings, so both classes are answered wherever
   the suite runs rather than only on the platform that produces the input.
+- A pane with no note open shows one of three states, none of them
+  editable: "No note is open" offers New note, Find a note, and Search note
+  text, each with its keybinding, followed by up to five recently opened
+  notes; "This vault is empty" replaces that when the vault holds no notes;
+  "No vault is open" is unchanged. The development scaffold it used to
+  render as a fully editable document, typable and indistinguishable from a
+  real note, is gone. Closing the last open tab moves focus to the primary
+  action with its focus ring drawn, whether the tab closed by keyboard or
+  pointer.
 
 ### Changed
 

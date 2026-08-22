@@ -1157,7 +1157,6 @@ async function openBrowserDemo(url: string | URL): Promise<void> {
           content !== null &&
           content.getClientRects().length > 0 &&
           text.trim().length > 0 &&
-          !text.includes("scaffold fixture") &&
           typeof harness.__SKRIBEUM_E2E_CURRENT_PATH__ === "function" &&
           harness.__SKRIBEUM_E2E_CURRENT_PATH__() !== null &&
           typeof harness.__SKRIBEUM_E2E_SET_FROM_LAST_MATCH__ === "function" &&
@@ -1874,27 +1873,28 @@ window.axe.run()
 }
 
 describe("skribeum shell", () => {
-  it("launches_and_renders_fixture", async () => {
+  it("launches_and_renders_the_empty_pane", async () => {
     expect(await browser.getTitle()).toBe("Skribeum");
 
-    const editorContent = $(".cm-content");
-    await editorContent.waitForExist({ timeout: 15000 });
-
-    // The fixture renders decorated: emphasis asterisks are hidden and
-    // the task marker is a checkbox widget, so the assertions cover the
-    // rendered text, not the raw source. The heading marker is exempt
-    // here: the initial cursor sits at offset zero, on the heading line,
-    // where cursor-line reveal legitimately shows it; the dedicated
-    // live-preview spec covers marker hiding.
-    const renderedText = await editorContent.getText();
-    expect(renderedText).toContain("Skribeum");
-    expect(renderedText).toContain(
-      "Byte-faithful editing of plain Markdown, rendered by CodeMirror 6.",
+    // The scratch vault auto-opens at launch (SKRIBEUM_E2E_VAULT) with a
+    // reset workspace and no note selected: the pane holds no note in a
+    // vault that has notes, the empty pane's state A (design spec section
+    // 12). No CodeMirror instance mounts behind it. Both facts are read
+    // from one snapshot, so the heading and the absent editor are never
+    // read a frame apart.
+    await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          const headingShown = [...document.querySelectorAll("h1")].some(
+            (element) => element.textContent?.trim() === "No note is open",
+          );
+          return headingShown && document.querySelector(".cm-content") === null;
+        }),
+      {
+        timeout: 15000,
+        timeoutMsg: "the empty pane's state A did not settle",
+      },
     );
-    expect(renderedText).toContain(
-      "scaffold fixture, replaced when vaults open",
-    );
-    expect(renderedText).not.toContain("*plain*");
 
     mkdirSync(screenshotDirectory, { recursive: true });
     await browser.saveScreenshot(path.join(screenshotDirectory, "smoke.png"));

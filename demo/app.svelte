@@ -4,6 +4,7 @@ import Skribeum from "../src/App.svelte";
 import { formatString } from "../src/lib/strings";
 import {
   demoVaultStatus,
+  EMPTY_DEMO_VAULT_PATH,
   localFolderAccessSupported,
   subscribeDemoVaultStatus,
 } from "./lib/ipc/vault";
@@ -19,6 +20,12 @@ const unsupportedReason = folderAccessSupported
 const initialEmptyVaultDemo =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).has("empty-vault");
+// A vault that is open and holds no notes (design spec section 13, state
+// B), distinct from `empty-vault` above, which tests no vault being open
+// at all (state C).
+const initialEmptyNotesVaultDemo =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).has("empty-notes-vault");
 let emptyVaultDemo = $state(initialEmptyVaultDemo);
 const storageMessage = $derived.by(() => {
   if (sourceStatus.source === "folder") {
@@ -67,6 +74,11 @@ if (typeof window !== "undefined") {
     configureDemoVault(true);
     emptyVaultDemo = true;
   };
+  if (!initialEmptyVaultDemo && initialEmptyNotesVaultDemo) {
+    delete demoWindow.__SKRIBEUM_E2E_VAULT_PICKER_CALLS__;
+    demoWindow.__SKRIBEUM_E2E_VAULT__ = EMPTY_DEMO_VAULT_PATH;
+    delete demoWindow.__SKRIBEUM_E2E_NOTE__;
+  }
 }
 </script>
 

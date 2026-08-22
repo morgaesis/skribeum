@@ -52,7 +52,7 @@ $effect(() => {
     </p>
   {:else if surface.kind === "chooser"}
     <section class="skr-startup-chooser" aria-labelledby="startup-vault-heading">
-      <h1 id="startup-vault-heading">{STRINGS.vaultRecoveryHeading}</h1>
+      <h1 id="startup-vault-heading" class="skr-startup-heading">{STRINGS.vaultRecoveryHeading}</h1>
       {#if surface.error !== undefined}
         <p class="skr-startup-error" role="alert">{surface.error}</p>
       {/if}
@@ -86,7 +86,9 @@ $effect(() => {
       </button>
     </section>
   {:else}
-    <div class="skr-startup-empty">
+    <section class="skr-startup-empty" aria-labelledby="startup-empty-heading">
+      <h1 id="startup-empty-heading" class="skr-startup-heading">{STRINGS.noVaultHeading}</h1>
+      <p class="skr-startup-body">{STRINGS.noVaultBody}</p>
       {#if surface.error !== undefined}
         <p class="skr-startup-error" role="alert">{surface.error}</p>
       {/if}
@@ -102,7 +104,6 @@ $effect(() => {
       >
         {STRINGS.openVault}
       </button>
-      <p class="sr-only">{STRINGS.emptyStateHint}</p>
-    </div>
+    </section>
   {/if}
 </div>

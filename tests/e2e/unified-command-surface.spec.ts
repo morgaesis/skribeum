@@ -134,22 +134,30 @@ describe("work package 1 browser behavior", () => {
     const openVault = $('.skr-empty-vault [data-command-id="vault.open"]');
     await openVault.waitForDisplayed({ timeout: 15000 });
     expect(await openVault.getText()).toBe("Open vault");
+    // The state-C surface is a heading, a body line, then the action (design
+    // spec section 14), not the bare button the geometry used to centre
+    // directly: the column that holds all three is what's centred now,
+    // shifted slightly above the pane's optical centre rather than sitting
+    // on it.
     const centered = await browser.execute(() => {
+      const column = document.querySelector<HTMLElement>(
+        ".skr-empty-vault .skr-startup-empty",
+      );
+      const area = document.querySelector<HTMLElement>(".skr-empty-vault");
       const button = document.querySelector<HTMLElement>(
         '.skr-empty-vault [data-command-id="vault.open"]',
       );
-      if (button === null) return null;
-      const bounds = button.getBoundingClientRect();
+      if (column === null || area === null || button === null) return null;
+      const columnBounds = column.getBoundingClientRect();
+      const areaBounds = area.getBoundingClientRect();
+      const buttonBounds = button.getBoundingClientRect();
       return {
-        horizontal: bounds.left + bounds.width / 2,
-        vertical: bounds.top + bounds.height / 2,
+        horizontal: columnBounds.left + columnBounds.width / 2,
         viewport: window.innerWidth / 2,
-        readingArea: (() => {
-          const area = button
-            .closest(".skr-empty-vault")
-            ?.getBoundingClientRect();
-          return area === undefined ? null : area.top + area.height / 2;
-        })(),
+        columnVertical: columnBounds.top + columnBounds.height / 2,
+        areaVertical: areaBounds.top + areaBounds.height / 2,
+        buttonInView:
+          buttonBounds.top >= 0 && buttonBounds.bottom <= window.innerHeight,
         headings: [...document.querySelectorAll("h1, h2")].map(
           (heading) => heading.textContent?.trim() ?? "",
         ),
@@ -158,10 +166,11 @@ describe("work package 1 browser behavior", () => {
     expect(
       Math.abs((centered?.horizontal ?? 0) - (centered?.viewport ?? 1)),
     ).toBeLessThan(2);
-    expect(
-      Math.abs((centered?.vertical ?? 0) - (centered?.readingArea ?? 1)),
-    ).toBeLessThan(2);
-    expect(centered?.headings).toEqual(["Skribeum"]);
+    expect(centered?.columnVertical ?? 0).toBeLessThan(
+      centered?.areaVertical ?? 0,
+    );
+    expect(centered?.buttonInView).toBe(true);
+    expect(centered?.headings).toEqual(["Skribeum", "No vault is open"]);
 
     await $('button[aria-label="More actions"]').click();
     const overflowOpenVault = $(

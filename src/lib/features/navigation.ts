@@ -416,6 +416,11 @@ interface NavigationHistory {
   push(address: NoteAddress, viewState?: NoteViewState | null): void;
   updateViewState(viewState: NoteViewState | null): void;
   reset(address: NoteAddress): void;
+  /**
+   * Drops the current entry's address without touching the back/forward
+   * stack: the pane it named has emptied, so nothing addresses it any more.
+   */
+  clear(): void;
   back(): boolean;
   forward(): boolean;
   canGoBack(): boolean;
@@ -459,6 +464,9 @@ class MemoryNavigationHistory implements NavigationHistory {
     this.entries = [{ address, viewState: null }];
     this.index = 0;
   }
+
+  // No visible address bar in desktop mode: nothing to clear.
+  clear(): void {}
 
   back(): boolean {
     if (this.index <= 0) {
@@ -606,6 +614,26 @@ class BrowserNavigationHistory implements NavigationHistory {
     this.replace(address);
   }
 
+  // The pane this entry addressed emptied: the parameter it named is no
+  // longer true of anything on screen, so it is dropped in place, the same
+  // `replaceState` the rest of this adapter uses to keep the address bar
+  // honest without minting a new history entry.
+  clear(): void {
+    if (this.current() === null) return;
+    const url = new URL(this.browserWindow.location.href);
+    url.searchParams.delete(NOTE_ADDRESS_PARAMETER);
+    url.hash = "";
+    this.browserWindow.history.replaceState(
+      {
+        ...(this.browserWindow.history.state ?? {}),
+        [BROWSER_HISTORY_KEY]: this.index,
+        [BROWSER_VIEW_STATE_KEY]: null,
+      },
+      "",
+      url,
+    );
+  }
+
   back(): boolean {
     if (this.index <= this.minimumIndex) {
       return false;
@@ -683,6 +711,8 @@ export type NoteNavigator = {
    * is looking at without being navigations, and the address has to follow.
    */
   syncAddress(address: NoteAddress | null): void;
+  /** Drops the current address: the pane it named holds no note any more. */
+  clearAddress(): void;
   reset(address: NoteAddress): Promise<void>;
   back(): boolean;
   forward(): boolean;
@@ -772,6 +802,10 @@ export function createNoteNavigator(options: {
     syncAddress(address) {
       if (address === null || sameAddress(history.current(), address)) return;
       history.replace(address, null);
+      options.changed?.(state());
+    },
+    clearAddress() {
+      history.clear();
       options.changed?.(state());
     },
     async reset(address) {

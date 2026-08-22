@@ -3189,15 +3189,37 @@ describe("skribeum shell", () => {
         async () => (await $$(".cm-skr-table-grid")).length === 2,
         { timeout: 15000 },
       );
+      // Two rendered tables is the shape of the note before and after every
+      // case here, so it cannot tell a reset editor from one still holding the
+      // rows the previous case inserted: the write lands on disk, and the
+      // editor adopts it when the watcher reports it. Running the next command
+      // against the buffer that has yet to be replaced applies it on top of the
+      // previous case's edit. The first table's own dimensions are what
+      // distinguishes them.
+      await browser.waitUntil(
+        async () => {
+          const grid = (await $$(".cm-skr-table-grid"))[0];
+          return (
+            grid !== undefined &&
+            (await grid.getAttribute("aria-rowcount")) === "3" &&
+            (await grid.getAttribute("aria-colcount")) === "2"
+          );
+        },
+        {
+          timeout: 15000,
+          timeoutMsg:
+            "the table fixture did not return to its original shape before the next case",
+        },
+      );
     };
     const focusBodyCell = async () => {
       const tables = await $$(".cm-skr-table-grid");
       await tables[0]
         ?.$('.cm-skr-table-cell[data-row="1"][data-column="0"] .cm-content')
         .click();
-      await $('.cm-skr-table-cell[data-editing="true"]').waitForExist({
-        timeout: 10000,
-      });
+      // Where a structure command inserts is where the caret is, so the cell
+      // the press selected has to be holding it before the command runs.
+      await expectEditingCell({ row: "1", column: "0" });
     };
     // A surface is displayed as soon as it is rendered, which is while its
     // entrance is still travelling, so the row's position when WebDriver

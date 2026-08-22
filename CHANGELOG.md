@@ -8,6 +8,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Settings navigation is a persistent rail of the six section names, selecting
+  one group at a time, with the current section always answerable; below 42rem
+  of surface width it becomes a two-level drill-down with a back control, and
+  the collapsed jump menu is gone. Search spans the full surface, renders
+  matches from every group operable in place, and turns the rail into per-group
+  match counts while a query is active. A setting changed from its default
+  carries a leading accent bar and its own reset control, and its group's rail
+  item carries a dot, so "what have I changed" has an answer without opening
+  each group.
+- The appearance section chooses the color scheme with three cards — System,
+  Light, Dark — each a miniature shell painted from the palettes currently
+  chosen, the System card split between its light and dark halves, so the
+  control shows its consequence instead of naming it. Choosing a palette
+  changes only that palette and repaints the cards in the same frame; the
+  scheme changes only when a scheme card is chosen.
+
 - The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
   terminators, and the keybinding tests drive the global handler on macOS,
   Windows and Linux platform strings, so both classes are answered wherever

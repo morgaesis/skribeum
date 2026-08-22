@@ -672,7 +672,10 @@ class BrowserNavigationHistory implements NavigationHistory {
 export type NavigationMode = "browser" | "desktop";
 
 export type NoteNavigator = {
-  start(fallback: NoteAddress | null): Promise<void>;
+  start(
+    fallback: NoteAddress | null,
+    restoration?: NoteViewState | null,
+  ): Promise<void>;
   open(address: NoteAddress): Promise<void>;
   /**
    * Points the current history entry at an address the shell already shows,
@@ -736,14 +739,14 @@ export function createNoteNavigator(options: {
     });
   });
   return {
-    async start(fallback) {
+    async start(fallback, restoration = null) {
       const current = history.current();
       const address = current ?? fallback;
       if (address === null) {
         return;
       }
-      history.replace(address);
-      await enqueue(address, null, "fresh");
+      history.replace(address, restoration);
+      await enqueue(address, restoration, "fresh");
       options.changed?.(state());
     },
     async open(address) {

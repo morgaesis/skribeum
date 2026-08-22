@@ -49,6 +49,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The reading position survives: a reload lands on the line the reader left,
+  and switching to another tab and back returns to the same place instead of
+  drifting, because tab snapshots anchor to content rather than a pixel
+  offset measured before the editor settled.
 - A tab drag that ended anywhere but a pane body no longer leaves the
   split-preview overlay painted over the top quarter of the note for the
   rest of the session.

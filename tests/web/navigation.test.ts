@@ -792,6 +792,34 @@ describe("note addressing and desktop history", () => {
     navigator.dispose();
     window.history.replaceState({}, "", "/");
   });
+
+  it("carries a restoration into the initial load, not just a fallback address", async () => {
+    // A reload's own address (from the URL, or from `?note=`) outranks a
+    // restored workspace's last-shown note, but the reading position that
+    // workspace persisted for that note must not be discarded along with
+    // it: `start` is the one entry point a reload's own address travels
+    // through, so it is the one place that reading position can be lost.
+    window.history.replaceState({}, "", "/skribeum/");
+    const first = { path: "first.md" };
+    const restoration = {
+      anchor: 3,
+      head: 3,
+      scrollAnchor: 12,
+      scrollOffset: 9,
+      propertiesExpanded: false,
+    };
+    const load = vi.fn(async () => {});
+    const navigator = createNoteNavigator({
+      mode: "browser",
+      browserWindow: window,
+      load,
+    });
+
+    await navigator.start(first, restoration);
+    expect(load).toHaveBeenCalledWith(first, restoration, "fresh");
+    navigator.dispose();
+    window.history.replaceState({}, "", "/");
+  });
 });
 
 describe("stored reading positions", () => {

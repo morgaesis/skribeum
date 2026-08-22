@@ -6988,34 +6988,56 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
-    // Each read re-queries: the settings surface re-renders as the document
-    // commits, which detaches any handle held across a poll and turns a
-    // "not settled yet" into a thrown stale-element error.
+    /** The switch's own state, null while the control is not mounted. */
     const systemToggleSelected = () =>
-      $('[data-testid="settings-match-system"]').isSelected();
+      browser.execute(
+        () =>
+          document.querySelector<HTMLInputElement>(
+            '[data-testid="settings-match-system"]',
+          )?.checked ?? null,
+      );
     // The dialog's existence only means the container mounted; the controls
     // inside it commit the persisted document a moment later, so poll for
     // that committed state rather than asserting immediately on open. The
     // bound is generous because the commit follows a full reload's vault
     // reindex on the slowest CI runners; the poll returns the moment the
     // state lands.
-    const committedState = async () => ({
-      systemToggle: await systemToggleSelected(),
-      gazetteChecked: await $(
-        '[data-testid="settings-palette-gazette"]',
-      ).getAttribute("aria-checked"),
-      signalClass: await $(
-        '[data-testid="settings-palette-signal"]',
-      ).getAttribute("class"),
-    });
+    //
+    // The whole snapshot is read in one document pass, and a control that is
+    // not mounted yet reads as absent rather than raising. Reading each
+    // control through its own element command instead spends the full
+    // implicit-existence wait on every control that has yet to appear, which
+    // turns this bound into two samples and ends the poll on a driver error
+    // naming the selector rather than on the state that was reached. It also
+    // leaves nothing for the diagnosis below to report, because that read
+    // fails the same way.
+    const committedState = () =>
+      browser.execute(() => {
+        const toggle = document.querySelector<HTMLInputElement>(
+          '[data-testid="settings-match-system"]',
+        );
+        const gazette = document.querySelector(
+          '[data-testid="settings-palette-gazette"]',
+        );
+        const signal = document.querySelector(
+          '[data-testid="settings-palette-signal"]',
+        );
+        return {
+          dialogPresent:
+            document.querySelector('[data-testid="settings-view"]') !== null,
+          systemToggle: toggle === null ? null : toggle.checked,
+          gazetteChecked: gazette?.getAttribute("aria-checked") ?? null,
+          signalClass: signal?.getAttribute("class") ?? null,
+        };
+      });
     try {
       await browser.waitUntil(
         async () => {
           const state = await committedState();
           return (
-            state.systemToggle &&
+            state.systemToggle === true &&
             state.gazetteChecked === "true" &&
-            state.signalClass.includes("paired")
+            (state.signalClass ?? "").includes("paired")
           );
         },
         { timeout: 20000 },
@@ -7065,10 +7087,13 @@ describe("skribeum core editing surfaces", () => {
       '[data-testid="settings-palette-graphite"]',
       "Graphite palette",
     );
-    await browser.waitUntil(async () => !(await systemToggleSelected()), {
-      timeout: 5000,
-      timeoutMsg: "system match toggle stayed enabled",
-    });
+    await browser.waitUntil(
+      async () => (await systemToggleSelected()) === false,
+      {
+        timeout: 5000,
+        timeoutMsg: "system match toggle stayed enabled",
+      },
+    );
     expect(
       await browser.execute(() => ({
         theme: document.documentElement.dataset.theme,

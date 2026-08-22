@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Pull requests run the `rust` and `e2e` jobs on one arm64 Linux runner
+  instead of on Linux, macOS and Windows. The full matrix, x64 Linux, arm64
+  Linux, macOS and Windows, runs on every push to `main`, and on a pull
+  request labelled `full-matrix` for a change that touches platform-specific
+  behaviour. Both matrices come from one job that emits the platform list for
+  the event, so the jobs stay defined once. The benchmark regression gate is
+  now its own job, pinned to the x64 runner class its committed baselines
+  were measured on.
+- A push to `main` that fails CI opens an issue labelled `broken-main` naming
+  the commit and linking each failing job, comments on it for each further
+  failure, and closes it when `main` is green again.
+- The pre-push hook runs the Rust format, lint and workspace tests and the
+  web lint, type check and test suite, filtered by the file types being
+  pushed. `docs/ci.md` describes what runs when, what a Linux-only pull
+  request no longer proves, and how to run the packaged end-to-end suite.
+
 ## [0.0.10] - 2026-08-22
 
 ### Added
@@ -248,6 +266,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   control outside the viewport, a wheel over the chrome, or an overscroll can
   no longer slide the application away from the window's own controls. Every
   region that is meant to scroll still scrolls.
+- The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
+  terminators, and the keybinding tests drive the global handler on macOS,
+  Windows and Linux platform strings, so both classes are answered wherever
+  the suite runs rather than only on the platform that produces the input.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

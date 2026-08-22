@@ -786,7 +786,11 @@ describe("tag affordances", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(view.state.doc.toString()).toBe("#missing\n");
     expect(tagCompletionOpen(view.state)).toBe(false);
-    expect(followLinkCalls).toBe(1);
+    // The caret sits exactly where typing just landed it, so the
+    // follow-link-on-Enter command declines before ever calling
+    // followLink: a bare Enter reaching a link only by typing proximity
+    // keeps its default meaning as a paragraph break.
+    expect(followLinkCalls).toBe(0);
   });
 
   it("bounds the rendered completion candidates", () => {

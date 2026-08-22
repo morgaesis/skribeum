@@ -6,8 +6,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
+  terminators, and the keybinding tests drive the global handler on macOS,
+  Windows and Linux platform strings, so both classes are answered wherever
+  the suite runs rather than only on the platform that produces the input.
+
 ### Changed
 
+- The application no longer scrolls inside its own window. The page under the
+  shell is bounded rather than merely hidden, so a surface that outgrows the
+  window is cut off at its edge instead of extending the page, and focusing a
+  control outside the viewport, a wheel over the chrome, or an overscroll can
+  no longer slide the application away from the window's own controls. Every
+  region that is meant to scroll still scrolls.
+- Expanding and collapsing a file tree folder moves the rows it displaces
+  through the positions between their old and new slots, with the tree's own
+  height on the same clock, so a vault taller than the sidebar grows and
+  shrinks under the reader instead of jumping to its new size and animating
+  over it. The rows a folder reveals unfold out of its slot and fold back
+  into it; the fill marking the open note travels on the row it belongs to,
+  and toggling a folder no longer scrolls the sidebar back to the open note.
+- Hovering a file tree row emphasises the entry's own text rather than
+  filling the whole row, leaving the filled row to mean one thing: this is
+  the note that is open.
 - Pull requests run the `rust` and `e2e` jobs on one arm64 Linux runner
   instead of on Linux, macOS and Windows. The full matrix, x64 Linux, arm64
   Linux, macOS and Windows, runs on every push to `main`, and on a pull
@@ -23,6 +46,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   web lint, type check and test suite, filtered by the file types being
   pushed. `docs/ci.md` describes what runs when, what a Linux-only pull
   request no longer proves, and how to run the packaged end-to-end suite.
+
+### Fixed
+
+- A tab drag that ended anywhere but a pane body no longer leaves the
+  split-preview overlay painted over the top quarter of the note for the
+  rest of the session.
+- Pressing Enter immediately after typing a link inserts the paragraph break
+  instead of following the link, swallowing the newline and dropping focus.
+  A link reached by click, arrow keys or Tab still follows on Enter, and
+  Mod-Enter always follows.
+- Canvas and image files carry the full navigation model: reached by URL
+  they render their real viewers instead of raw text, and they get a tab,
+  the address bar, a history entry, and restoration after a reload.
+- Collapsing the folder that holds the selected note stays collapsed
+  instead of snapping back open, and collapsing a scrolled tree no longer
+  stacks the hidden rows over the surviving ones as duplicates.
+- Dragging a selection across a table or a code fence copies the content
+  without the insert buttons' glyphs or the copy button's label.
+- The selection toolbar keeps its full touch-target size on phones, and
+  long code lines scroll inside the code block's own frame instead of
+  wrapping.
 
 ## [0.0.10] - 2026-08-22
 

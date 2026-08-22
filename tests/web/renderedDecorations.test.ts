@@ -980,6 +980,23 @@ describe("rendered decoration DOM", () => {
     expect(first?.textContent).toBe("bold");
   });
 
+  it("keeps the row and column insertion strips out of a drag-selection", () => {
+    // The strips sit right past the grid's last row and column, exactly
+    // where a selection that ends at or past the table naturally sweeps.
+    // Without `user-select: none` their own "+" glyph joins whatever text
+    // the drag selected, and from there whatever gets copied.
+    const source = "| a | b |\n| --- | --- |\n| c | d |";
+    const view = mountedView(source, 0);
+    const strips = [
+      ...view.dom.querySelectorAll<HTMLButtonElement>(".cm-skr-table-insert"),
+    ];
+    expect(strips).toHaveLength(2);
+    expect(strips.every((button) => button.textContent === "+")).toBe(true);
+    expect(
+      strips.every((button) => getComputedStyle(button).userSelect === "none"),
+    ).toBe(true);
+  });
+
   it("rejects stale cross-table writes and normalizes pasted newlines", async () => {
     const source =
       "| a | b |\n| --- | --- |\n| c | d |\n\n| e | f |\n| --- | --- |\n| g | h |";
@@ -1834,6 +1851,23 @@ describe("rendered decoration DOM", () => {
       expect(writeText).toHaveBeenCalledWith("const value = 1;\n  \n");
     });
     expect(button?.textContent).toBe("Code copied");
+  });
+
+  it("keeps the copy-code button's own label out of a drag-selection", () => {
+    // The button sits right over the fence's info line, exactly where a
+    // selection spanning the block passes through. Without
+    // `user-select: none` its own "Copy code" label would join the
+    // fence's actual content in the selection, and from there in
+    // whatever gets copied.
+    const source = "```ts\nconst value = 1;\n```";
+    const view = mountedView(source);
+    const button = view.dom.querySelector<HTMLButtonElement>(
+      'button[aria-label="Copy code"]',
+    );
+    expect(button).not.toBeNull();
+    expect(getComputedStyle(button as HTMLButtonElement).userSelect).toBe(
+      "none",
+    );
   });
 
   it("recedes fence markers away from the block and restores plain source inside", () => {

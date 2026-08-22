@@ -786,7 +786,11 @@ describe("tag affordances", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(view.state.doc.toString()).toBe("#missing\n");
     expect(tagCompletionOpen(view.state)).toBe(false);
-    expect(followLinkCalls).toBe(1);
+    // The caret sits exactly where typing just landed it, so the
+    // follow-link-on-Enter command declines before ever calling
+    // followLink: a bare Enter reaching a link only by typing proximity
+    // keeps its default meaning as a paragraph break.
+    expect(followLinkCalls).toBe(0);
   });
 
   it("bounds the rendered completion candidates", () => {
@@ -949,6 +953,23 @@ describe("table editing through the registry", () => {
     makeView("plain text", 3);
     expect(runEditorCommand("table.cell.next")).toBe(false);
     expect(runEditorCommand("table.cell.previous")).toBe(false);
+  });
+
+  it("mounts the interactive grid for a table followed by prose with no blank line", () => {
+    // A table's row grammar folds a directly-following paragraph in as an
+    // extra row when there is no blank line to separate them, so a cursor
+    // in that paragraph reads as still inside the table unless the reveal
+    // range is clamped to the table's real, ragged-row-aware end.
+    const source = `${TABLE}\nafter table`;
+    const view = makeView(source, source.length, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    expect(view.dom.querySelector('[role="grid"]')).not.toBeNull();
+    expect(
+      view.dom.querySelector('[aria-label="Append table row"]'),
+    ).not.toBeNull();
+    expect(view.state.doc.toString()).toBe(source);
   });
 
   it("grows the table when tabbing past the last cell", () => {

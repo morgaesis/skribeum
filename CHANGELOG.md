@@ -6,6 +6,81 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
+  terminators, and the keybinding tests drive the global handler on macOS,
+  Windows and Linux platform strings, so both classes are answered wherever
+  the suite runs rather than only on the platform that produces the input.
+
+### Changed
+
+- The application no longer scrolls inside its own window. The page under the
+  shell is bounded rather than merely hidden, so a surface that outgrows the
+  window is cut off at its edge instead of extending the page, and focusing a
+  control outside the viewport, a wheel over the chrome, or an overscroll can
+  no longer slide the application away from the window's own controls. Every
+  region that is meant to scroll still scrolls.
+- Expanding and collapsing a file tree folder moves the rows it displaces
+  through the positions between their old and new slots, with the tree's own
+  height on the same clock, so a vault taller than the sidebar grows and
+  shrinks under the reader instead of jumping to its new size and animating
+  over it. The rows a folder reveals unfold out of its slot and fold back
+  into it; the fill marking the open note travels on the row it belongs to,
+  and toggling a folder no longer scrolls the sidebar back to the open note.
+- Hovering a file tree row emphasises the entry's own text rather than
+  filling the whole row, leaving the filled row to mean one thing: this is
+  the note that is open.
+- Pull requests run the `rust` and `e2e` jobs on one arm64 Linux runner
+  instead of on Linux, macOS and Windows. The full matrix, x64 Linux, arm64
+  Linux, macOS and Windows, runs on every push to `main`, and on a pull
+  request labelled `full-matrix` for a change that touches platform-specific
+  behaviour. Both matrices come from one job that emits the platform list for
+  the event, so the jobs stay defined once. The benchmark regression gate is
+  now its own job, pinned to the x64 runner class its committed baselines
+  were measured on.
+- A push to `main` that fails CI opens an issue labelled `broken-main` naming
+  the commit and linking each failing job, comments on it for each further
+  failure, and closes it when `main` is green again.
+- The pre-push hook runs the Rust format, lint and workspace tests and the
+  web lint, type check and test suite, filtered by the file types being
+  pushed. `docs/ci.md` describes what runs when, what a Linux-only pull
+  request no longer proves, and how to run the packaged end-to-end suite.
+
+### Fixed
+
+- A table followed by prose with no blank line renders as a table again: the
+  parser's over-extended block is trimmed back to rows that share the
+  header's shape, so the following paragraph stops being swallowed as a
+  bogus row that kept the grid from mounting.
+- Typing a nested quote marker keeps every `>` typed: the paste
+  deduplication that folds pre-quoted content into a continuation line no
+  longer runs on single keystrokes.
+- New tab opens a new tab: the command shared the new-note path's in-place
+  navigation and replaced the current tab instead of adding one.
+- The reading position survives: a reload lands on the line the reader left,
+  and switching to another tab and back returns to the same place instead of
+  drifting, because tab snapshots anchor to content rather than a pixel
+  offset measured before the editor settled.
+- A tab drag that ended anywhere but a pane body no longer leaves the
+  split-preview overlay painted over the top quarter of the note for the
+  rest of the session.
+- Pressing Enter immediately after typing a link inserts the paragraph break
+  instead of following the link, swallowing the newline and dropping focus.
+  A link reached by click, arrow keys or Tab still follows on Enter, and
+  Mod-Enter always follows.
+- Canvas and image files carry the full navigation model: reached by URL
+  they render their real viewers instead of raw text, and they get a tab,
+  the address bar, a history entry, and restoration after a reload.
+- Collapsing the folder that holds the selected note stays collapsed
+  instead of snapping back open, and collapsing a scrolled tree no longer
+  stacks the hidden rows over the surviving ones as duplicates.
+- Dragging a selection across a table or a code fence copies the content
+  without the insert buttons' glyphs or the copy button's label.
+- The selection toolbar keeps its full touch-target size on phones, and
+  long code lines scroll inside the code block's own frame instead of
+  wrapping.
+
 ## [0.0.10] - 2026-08-22
 
 ### Added
@@ -144,6 +219,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The file tree opens every row it shows. A file that is neither a note nor a
   canvas is no longer drawn muted and inert, and the unified command surface
   reaches every indexed file rather than notes and canvases alone.
+- Expanding and collapsing a file tree folder moves the rows it displaces
+  through the positions between their old and new slots, with the tree's own
+  height on the same clock, so a vault taller than the sidebar grows and
+  shrinks under the reader instead of jumping to its new size and animating
+  over it. The rows a folder reveals unfold out of its slot and fold back
+  into it; the fill marking the open note travels on the row it belongs to,
+  and toggling a folder no longer scrolls the sidebar back to the open note.
+- Hovering a file tree row emphasises the entry's own text rather than
+  filling the whole row, leaving the filled row to mean one thing: this is
+  the note that is open.
 - A file that is neither an image nor valid UTF-8 opens read-only with the
   non-UTF-8 notice, the same treatment a non-UTF-8 note gets, so no editing
   pass can write a lossy re-encoding over a binary file.
@@ -205,6 +290,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A failure inside one panel of the shell now takes down only that panel,
   which reports the failure in place and offers to rebuild itself, while the
   rest of the workspace keeps rendering and responding.
+- Collapsing a folder in a scrolled file tree no longer leaves the rows it
+  hid behind as duplicates stacked over the surviving rows.
 - Emptying a wikilink alias no longer costs the note every decoration it has.
   A construct with no text between its markers now has no presentation
   instead of an impossible one, and a decoration build that fails for any
@@ -230,6 +317,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Saving works wherever the caret is. `Mod-s` was claimed only while the
   note's own editable surface held focus, so a save pressed while editing a
   rendered table cell did nothing.
+- The application no longer scrolls inside its own window. The page under the
+  shell is bounded rather than merely hidden, so a surface that outgrows the
+  window is cut off at its edge instead of extending the page, and focusing a
+  control outside the viewport, a wheel over the chrome, or an overscroll can
+  no longer slide the application away from the window's own controls. Every
+  region that is meant to scroll still scrolls.
+- The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
+  terminators, and the keybinding tests drive the global handler on macOS,
+  Windows and Linux platform strings, so both classes are answered wherever
+  the suite runs rather than only on the platform that produces the input.
 
 ## [0.0.8] - 2026-08-15
 

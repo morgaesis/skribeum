@@ -5,15 +5,20 @@ on:
     branches: [main]
     paths-ignore: ["**.md", "docs/**"]
   pull_request:
+    # `labeled` is in the list so that adding `full-matrix` to an open pull
+    # request starts a run that reads it; the platform selection below comes
+    # from the event payload, which a re-run of an earlier event would not
+    # carry.
+    types: [opened, synchronize, reopened, labeled]
     paths-ignore: ["**.md", "docs/**"]
 
 permissions:
   contents: read
 
-# A superseded push to the same branch cancels the in-flight run: the matrix
-# is eleven jobs, and only the newest head's result matters on a pull
-# request. Runs on main always complete, since each merge's result is the
-# record of what landed.
+# A superseded push to the same branch cancels the in-flight run: only the
+# newest head's result matters on a pull request. Runs on main always
+# complete, since each merge's result is the record of what landed, and main
+# is the only place the full platform matrix runs.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
@@ -24,6 +29,43 @@ env:
     libayatana-appindicator3-dev libssl-dev patchelf
 
 jobs:
+  # The platform matrix is a function of the event. A pull request runs one
+  # Linux leg on an arm runner, which is what makes its wall clock roughly
+  # the length of a single Linux job instead of the slowest of four
+  # platforms. A push to main runs all four, so the platform-specific result
+  # still exists for every commit that lands, just after the merge rather
+  # than before it. A pull request labelled `full-matrix` opts back in to all
+  # four, for a change that touches platform-specific behaviour.
+  #
+  # The arm class is in the main list for the cache, not only for coverage.
+  # The Rust cache key includes the runner architecture, and entries are
+  # written only from pushes to main, so a class that never runs on main
+  # never has an entry written and every pull request on it compiles cold.
+  # Dropping ubuntu-24.04-arm here would make the pull-request leg slower
+  # than the three-platform matrix it replaces, and it would read as arm
+  # being slow rather than as a cache that was never populated.
+  matrix:
+    name: matrix
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.select.outputs.platforms }}
+    steps:
+      - name: Select platforms for this event
+        id: select
+        env:
+          FULL_MATRIX: >-
+            ${{ github.event_name != 'pull_request'
+            || contains(github.event.pull_request.labels.*.name, 'full-matrix') }}
+        run: |
+          set -euo pipefail
+          if [ "$FULL_MATRIX" = true ]; then
+            platforms='["ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "windows-latest"]'
+          else
+            platforms='["ubuntu-24.04-arm"]'
+          fi
+          echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
+          echo "Platform matrix: $platforms" >> "$GITHUB_STEP_SUMMARY"
+
   release-metadata:
     name: release metadata
     runs-on: ubuntu-latest
@@ -36,10 +78,11 @@ jobs:
 
   rust:
     name: rust (${{ matrix.os }})
+    needs: matrix
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.matrix.outputs.platforms) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -105,18 +148,6 @@ jobs:
 
       - run: cargo test --workspace --locked
 
-      - name: Run Rust benchmarks and compare baselines
-        if: runner.os == 'Linux'
-        run: |
-          cargo bench -p skribeum-core --bench parse_extract --locked -- --noplot
-          cargo bench -p skribeum-vault --bench vault_operations --locked -- --noplot
-          bun scripts/compare-benchmarks.ts \
-            --baseline crates/skribeum-core/benches/baselines/core.json \
-            --criterion-dir target/criterion
-          bun scripts/compare-benchmarks.ts \
-            --baseline crates/skribeum-vault/benches/baselines/vault.json \
-            --criterion-dir target/criterion
-
       # Two-parser conformance gate (permanent): the Rust extractor and the
       # TypeScript decoration engine must produce identical
       # (kind, start_byte, end_byte) sets over tests/corpus/, per
@@ -132,6 +163,41 @@ jobs:
       # committed src/lib/ipc/bindings.ts must match what the code generates.
       - name: IPC allowlist and bindings check
         run: cargo test -p skribeum-app --locked --test ipc_contract
+
+  # The committed baselines are medians for the Linux x64 runner class, so the
+  # comparison is only meaningful on that runner. It is its own job rather
+  # than a step of the Linux `rust` leg because the Linux leg's architecture
+  # varies with the event, and because the benchmark crates carry no Tauri
+  # dependency and so need neither the webkit packages nor a frontend build.
+  benchmarks:
+    name: benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      # Restored on every event, written only from the default branch;
+      # see the note on the same step in the rust job and docs/ci.md.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run Rust benchmarks and compare baselines
+        run: |
+          cargo bench -p skribeum-core --bench parse_extract --locked -- --noplot
+          cargo bench -p skribeum-vault --bench vault_operations --locked -- --noplot
+          bun scripts/compare-benchmarks.ts \
+            --baseline crates/skribeum-core/benches/baselines/core.json \
+            --criterion-dir target/criterion
+          bun scripts/compare-benchmarks.ts \
+            --baseline crates/skribeum-vault/benches/baselines/vault.json \
+            --criterion-dir target/criterion
 
   msrv:
     name: msrv (1.95)
@@ -205,10 +271,11 @@ jobs:
 
   e2e:
     name: e2e (${{ matrix.os }})
+    needs: matrix
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.matrix.outputs.platforms) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -254,6 +321,83 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: e2e-screenshot-${{ runner.os }}
+          name: e2e-screenshot-${{ matrix.os }}
           path: tests/e2e/screenshots/
           if-no-files-found: ignore
+
+  # A pull request no longer runs macOS or Windows, so main is where a
+  # platform-specific failure surfaces. Main going red therefore has to be
+  # visible without anyone opening the Actions tab. This job holds a single
+  # latching issue: it opens one when a push to main fails, adds a comment
+  # naming the failing jobs for each subsequent failure, and closes it when a
+  # push to main is green again.
+  main-status:
+    name: main status
+    needs:
+      - matrix
+      - release-metadata
+      - rust
+      - benchmarks
+      - msrv
+      - gitleaks
+      - cargo-deny
+      - javascript-audit
+      - e2e
+    if: ${{ always() && github.event_name == 'push' }}
+    permissions:
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    env:
+      FAILED: ${{ contains(needs.*.result, 'failure') }}
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_LABEL: broken-main
+    steps:
+      - name: Ensure the tracking label exists
+        run: |
+          set -euo pipefail
+          if ! gh label list --repo "$GITHUB_REPOSITORY" --limit 200 --json name \
+            --jq '.[].name' | grep -qxF "$ISSUE_LABEL"; then
+            gh label create "$ISSUE_LABEL" --repo "$GITHUB_REPOSITORY" \
+              --color b60205 \
+              --description "CI on main is failing; the next release ships from a broken tree"
+          fi
+
+      - name: Report the failure
+        if: ${{ env.FAILED == 'true' }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/body.md"
+          {
+            printf 'CI failed on `main` at %s.\n\n' "$GITHUB_SHA"
+            printf 'Run: %s/%s/actions/runs/%s\n\n' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf 'Failing jobs:\n\n'
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+              --paginate \
+              --jq '.jobs[] | select(.conclusion == "failure") | "- [\(.name)](\(.html_url))"'
+            printf '\nThe commit is on `main` already. Either fix it forward or revert it:'
+            printf ' a release tagged from this tree ships the failure.\n'
+          } > "$body"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --label "$ISSUE_LABEL" --state open --limit 1 --json number --jq '.[0].number // ""')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "CI on main is failing" \
+              --label "$ISSUE_LABEL" \
+              --body-file "$body"
+          fi
+
+      - name: Close the notice once main is green
+        if: ${{ env.FAILED != 'true' }}
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --label "$ISSUE_LABEL" --state open --limit 1 --json number --jq '.[0].number // ""')"
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
+              --comment "CI on \`main\` is green again at $GITHUB_SHA."
+          fi

@@ -228,6 +228,11 @@ describe("registration coverage (criterion 1)", () => {
       "vault-search.open",
       "navigation.back",
       "navigation.forward",
+      // Same action as the palette-visible navigation.follow-link, reached
+      // by the bare Enter key on a link instead of the Mod-Enter chord: not
+      // its own palette entry, since the chord above already covers that
+      // surface for the identical command.
+      "navigation.follow-link-enter",
       "find.close",
     ]);
     const unreachable = registry

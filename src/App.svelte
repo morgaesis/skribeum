@@ -812,6 +812,20 @@ function ensurePaneTab(pane: WorkspaceLeaf, path: string): WorkspaceTab {
 }
 
 /**
+ * Gives a canvas or an image the same tab and pane bookkeeping a note gets
+ * from `openNote`. Without it the tab strip, the active-tab highlight, and
+ * workspace persistence keep pointing at whatever note was open before, and
+ * the browser address never has a document to sync to (`focusedWorkspacePane().activePath`
+ * is what the address effect and the outline both key off).
+ */
+function trackOpenedPaneTab(path: string): void {
+  const pane = focusedWorkspacePane();
+  ensurePaneTab(pane, path);
+  pane.emptyTab = false;
+  pane.activePath = path;
+}
+
+/**
  * Open in place: the focused pane's active tab becomes this note instead of
  * the pane gaining one more tab. An empty pane, or one showing the empty
  * tab, gains its first tab here rather than carrying a special case.
@@ -887,7 +901,7 @@ async function activateWorkspaceTab(path: string | null) {
   const tab = ensurePaneTab(pane, path);
   pane.emptyTab = false;
   pane.activePath = path;
-  await openNote(path, tab.viewState, "tab");
+  await reopenPath(path, tab.viewState, "tab");
   updatePaneNavigationState();
 }
 
@@ -924,7 +938,7 @@ async function adoptFocusedPane(id: string) {
     currentNoteSource = "";
   } else {
     const tab = ensurePaneTab(pane, pane.activePath);
-    await openNote(pane.activePath, tab.viewState, "tab");
+    await reopenPath(pane.activePath, tab.viewState, "tab");
   }
   updatePaneNavigationState();
 }
@@ -1331,6 +1345,19 @@ function updateTabDropZone(event: DragEvent, paneId: string) {
   splitDropZone = { paneId, side };
 }
 
+/**
+ * The drop zone only ever describes a drag in flight, so it ends with the
+ * drag rather than with the drop that happens to conclude it. A pane clears
+ * its own zone when the pointer leaves it or drops on it, but neither
+ * happens when the tab is carried back to a strip, when the drag is
+ * cancelled with Escape, or when the pointer is released outside the
+ * window: `dragend` is the one event every ending delivers, so it is what
+ * takes the overlay down.
+ */
+function endTabDrag() {
+  splitDropZone = null;
+}
+
 async function dropTabOnPane(event: DragEvent, paneId: string) {
   const origin = currentTabDrag();
   const zone = splitDropZone;
@@ -1573,7 +1600,7 @@ async function refreshTreeIndex(refreshTags = false) {
   }
 }
 
-async function createNewNote() {
+async function createNewNote(intent: "in-place" | "new-tab" = "in-place") {
   const activeVault = vault;
   if (activeVault === null) {
     return;
@@ -1596,7 +1623,7 @@ async function createNewNote() {
     tree = await vaultTreeRefresh(activeVault);
     void loadTreeTitles(activeVault, tree);
     refreshLinkContext();
-    await navigateToNote(path);
+    await navigateToNote(path, undefined, intent);
   } catch (error) {
     errorText = describeError(STRINGS.noteCreateFailed, error);
   }
@@ -1769,7 +1796,7 @@ async function deleteTreeEntry(path: string, restoreFocus?: () => void) {
         currentNoteSource = "";
       } else {
         const tab = ensurePaneTab(focusedWorkspacePane(), nextPath);
-        await openNote(nextPath, tab.viewState, "tab");
+        await reopenPath(nextPath, tab.viewState, "tab");
       }
     }
     await tick();
@@ -1917,7 +1944,7 @@ function commandContext(): CommandContext {
     copyTreeNoteLink: (path) => writeLink({ path }),
     revealTreeEntry,
     togglePanel,
-    createTab: createNewNote,
+    createTab: () => createNewNote("new-tab"),
     closeTab: () => closeWorkspaceTab(),
     reopenClosedTab: reopenClosedWorkspaceTab,
     cycleTab: cycleWorkspaceTab,
@@ -2143,12 +2170,22 @@ $effect(() => {
 $effect(() => {
   if (navigationSurface !== "browser") return;
   const path = focusedWorkspacePane().activePath;
-  // The address reports the note the shell is showing, so it follows only
-  // once the pane's active tab has actually loaded. A restored workspace
-  // names its note, and restores the selected path, before anything opens;
-  // until the note itself is loaded the address is still an input, naming
-  // the note a `?note=` link asked for.
-  if (path === null || note === null || selectedPath !== path) return;
+  // The address reports the document the shell is showing, so it follows
+  // only once the pane's active tab has actually loaded. A restored
+  // workspace names its document, and restores the selected path, before
+  // anything opens; until that document is loaded the address is still an
+  // input, naming the document a `?note=` link asked for. A canvas or an
+  // image clears `note` rather than populating it, so the readiness check
+  // has to recognize their own loaded (or failed) states too, or the
+  // address, copy-link output, and history never follow a canvas or image
+  // tab at all.
+  const contentReady =
+    note !== null ||
+    canvas !== null ||
+    canvasError !== null ||
+    imageDocument !== null ||
+    imageError !== null;
+  if (path === null || !contentReady || selectedPath !== path) return;
   const current = navigation?.state().address ?? null;
   if (current?.path === path) return;
   navigation?.syncAddress({ path });
@@ -2874,13 +2911,15 @@ async function openVaultAtPath(
     } else if (
       navigationSurface === "desktop" &&
       focusedWorkspacePane().activePath !== null &&
-      notePathsOf(tree).includes(focusedWorkspacePane().activePath ?? "")
+      commandSurfacePathsOf(tree).includes(
+        focusedWorkspacePane().activePath ?? "",
+      )
     ) {
       const pane = focusedWorkspacePane();
       const path = pane.activePath;
       if (path !== null) {
         const tab = ensurePaneTab(pane, path);
-        await openNote(path, tab.viewState);
+        await reopenPath(path, tab.viewState);
         updatePaneNavigationState();
       }
     } else if (addressed !== null) {
@@ -2888,11 +2927,23 @@ async function openVaultAtPath(
       // as much as on a first visit, so it outranks whatever the restored
       // workspace last showed. The note joins the focused pane's strip
       // instead of replacing a restored tab, so nothing persisted is lost.
-      await navigation?.start(addressed);
+      // Reading position is not lost with it: the addressed note is very
+      // often the tab the workspace already carried a reading position for,
+      // and that persisted position, not a fresh top-of-document open, is
+      // what "restored" means for a reload.
+      const tab = ensurePaneTab(focusedWorkspacePane(), addressed.path);
+      // Reactive state is not structured-cloneable, and `start` threads this
+      // through `history.replaceState`, so the browser history entry needs
+      // its own plain copy rather than the workspace's live proxy.
+      const restoration =
+        tab.viewState === null ? null : $state.snapshot(tab.viewState);
+      await navigation?.start(addressed, restoration);
     } else if (
       navigationSurface === "browser" &&
       focusedWorkspacePane().activePath !== null &&
-      notePathsOf(tree).includes(focusedWorkspacePane().activePath ?? "")
+      commandSurfacePathsOf(tree).includes(
+        focusedWorkspacePane().activePath ?? "",
+      )
     ) {
       // With no note in the address, the restored workspace decides what the
       // focused pane shows and the address bar follows it.
@@ -2900,7 +2951,7 @@ async function openVaultAtPath(
       const path = pane.activePath;
       if (path !== null) {
         const tab = ensurePaneTab(pane, path);
-        await openNote(path, tab.viewState);
+        await reopenPath(path, tab.viewState);
         navigation?.syncAddress({ path });
         updatePaneNavigationState();
       }
@@ -3273,7 +3324,13 @@ async function openNoteAddress(
 ): Promise<boolean> {
   const editorWasFocused = editor?.getView()?.hasFocus === true;
   if (editorWasFocused || source === "history") focusReadingSurface();
-  const opened = await openNote(
+  // The navigator's address model names every vault document, not only
+  // notes, so a `?note=` URL, a resolved permalink, and browser history
+  // replay have to land a canvas or an image on the same surface a tree
+  // click or the quick switcher would (`openPath`): `reopenPath` carries the
+  // same kind dispatch, and a fragment (a heading or block target) only
+  // ever applies to the note surface below.
+  const opened = await reopenPath(
     address.path,
     restoration,
     source === "history" ? "history" : "note",
@@ -3461,6 +3518,7 @@ async function openCanvas(path: string) {
     imageError = null;
     contentView = VIEW_CANVAS;
     selectedPath = path;
+    trackOpenedPaneTab(path);
     outlineOpen = false;
     await tick();
     canvasViewer?.focus();
@@ -3478,6 +3536,7 @@ async function openCanvas(path: string) {
     imageError = null;
     contentView = VIEW_CANVAS;
     selectedPath = path;
+    trackOpenedPaneTab(path);
   }
 }
 
@@ -3518,6 +3577,7 @@ async function openImage(path: string) {
   missingAddress = null;
   outlineOpen = false;
   selectedPath = path;
+  trackOpenedPaneTab(path);
   if (bytes === null) {
     imageDocument = null;
     imageError = describeError(STRINGS.fileOpenFailed, failure);
@@ -3663,37 +3723,48 @@ async function addCanvasNode() {
   }
 }
 
-/** Re-opens a path on the surface its kind belongs to. */
+/**
+ * (Re)loads a path on the surface its kind belongs to: a canvas or an
+ * image gets its own viewer, everything else gets the note editor. Every
+ * caller that switches to a path already tracked by a tab — restoring a
+ * pane's active tab, resuming after a delete or a vault reopen, replaying
+ * navigation history — goes through here rather than `openNote` directly,
+ * so a canvas or an image opened this way never falls back to the editor
+ * showing its raw bytes.
+ */
 async function reopenPath(
   path: string,
   restoration: NoteViewState | null = null,
-): Promise<void> {
+  switchKind: PaneSwitchKind = "note",
+): Promise<boolean> {
   const kind = vaultDocumentKind(path);
   if (kind === "canvas") {
     await openCanvas(path);
-  } else if (kind === "image") {
-    await openImage(path);
-  } else {
-    await openNote(path, restoration);
+    return selectedPath === path;
   }
+  if (kind === "image") {
+    await openImage(path);
+    return selectedPath === path;
+  }
+  return openNote(path, restoration, switchKind);
 }
 
+/**
+ * Tree-click and quick-switcher entry point: places the tab first, exactly
+ * as `navigateToNote` does for a note, and lets the shared address model
+ * (`navigateToNote` → `openNoteAddress` → `reopenPath`) decide which
+ * surface the path opens on. Every document kind gets the same tab and
+ * history bookkeeping as a note; only the loader they land on differs.
+ */
 function openPath(path: string, options?: { newTab?: boolean }) {
   if (activeSheet === "file-tree") {
     closeSheet();
   }
-  const kind = vaultDocumentKind(path);
-  if (kind === "canvas") {
-    void openCanvas(path);
-  } else if (kind === "image") {
-    void openImage(path);
-  } else {
-    void navigateToNote(
-      path,
-      undefined,
-      options?.newTab === true ? "new-tab" : "in-place",
-    );
-  }
+  void navigateToNote(
+    path,
+    undefined,
+    options?.newTab === true ? "new-tab" : "in-place",
+  );
 }
 
 /**
@@ -4157,7 +4228,7 @@ onMount(() => {
 <!-- registry-exempt keydown: the window handler is the registry's own
      global dispatcher; every chord it recognizes is a registered
      keybinding. -->
-<svelte:window onkeydown={onGlobalKeydown} />
+<svelte:window onkeydown={onGlobalKeydown} ondragend={endTabDrag} />
 
 <div
   class="skr-shell flex h-screen flex-col overflow-hidden"

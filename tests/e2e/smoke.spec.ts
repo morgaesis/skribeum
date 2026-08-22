@@ -35,6 +35,7 @@ import {
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
+  MIXED_ENDING_NOTE_NAME,
   NAVIGATION_SOURCE_NOTE_CONTENT,
   NAVIGATION_SOURCE_NOTE_NAME,
   NAVIGATION_TARGET_NOTE_CONTENT,
@@ -384,6 +385,67 @@ async function viewportAfterPaint(): Promise<ViewportSize> {
   });
 }
 
+/** The shared viewport every test starts and ends at. */
+const DESKTOP_VIEWPORT: ViewportSize = { width: 1100, height: 750 };
+
+/**
+ * The smallest edge a resize request may carry.
+ *
+ * The compensation below adds the shortfall between the requested viewport
+ * and the observed one to the next outer size. A reading taken before the
+ * host applied the previous resize reports the old, larger viewport, and for
+ * a large shrink that shortfall exceeds the request itself: 390 + (390 -
+ * 1280) is negative, and the driver rejects a negative window size outright
+ * with an argument error that says nothing about the viewport. The floor
+ * keeps a retry a retry.
+ */
+const MINIMUM_WINDOW_EDGE = 240;
+
+/**
+ * Reads the viewport once the host has finished resizing the window.
+ *
+ * A resize reaches the webview through the display server on its own
+ * schedule, while frames keep being produced throughout, so an elapsed frame
+ * count is not evidence that the new size has landed. This samples the
+ * viewport every frame and reports it once it matches the requested size or
+ * has held still long enough to be settled rather than mid-flight, and
+ * reports whatever it last saw if neither happens inside the bound.
+ */
+async function settledViewport(target: ViewportSize): Promise<ViewportSize> {
+  return browser.executeAsync<ViewportSize, [ViewportSize, number, number]>(
+    (wanted, stableFor, limit, done) => {
+      const start = performance.now();
+      let last = { width: window.innerWidth, height: window.innerHeight };
+      let lastChange = start;
+      const sample = () => {
+        const now = performance.now();
+        const current = {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        };
+        if (current.width !== last.width || current.height !== last.height) {
+          last = current;
+          lastChange = now;
+        }
+        if (
+          (current.width === wanted.width &&
+            current.height === wanted.height) ||
+          now - lastChange >= stableFor ||
+          now - start >= limit
+        ) {
+          done(current);
+          return;
+        }
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    },
+    target,
+    400,
+    5000,
+  );
+}
+
 async function setViewportSize(
   width: number,
   height: number,
@@ -395,7 +457,7 @@ async function setViewportSize(
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     await browser.setWindowSize(outerWidth, outerHeight);
-    actual = await viewportAfterPaint();
+    actual = await settledViewport({ width, height });
     if (actual.width === width && actual.height === height) return actual;
     if (
       attempt > 0 &&
@@ -406,8 +468,17 @@ async function setViewportSize(
     }
 
     previous = actual;
-    outerWidth += width - actual.width;
-    outerHeight += height - actual.height;
+    // The correction is the shortfall between the viewport asked for and
+    // the one the host produced, which is normally positive: window chrome
+    // makes the viewport smaller than the outer size. A host that clamps or
+    // refuses the resize reports a viewport at least as large as the
+    // request, so the correction turns negative and walks the outer size
+    // down on every attempt until WebDriver rejects a non-positive size
+    // with a range error, losing the whole run to a driver error instead of
+    // this helper's own diagnostic below. The outer window can never be
+    // smaller than the viewport it has to contain, so that is the floor.
+    outerWidth = Math.max(width, outerWidth + (width - actual.width));
+    outerHeight = Math.max(height, outerHeight + (height - actual.height));
   }
 
   // Hosted macOS displays cap native window height below 844 pixels. The
@@ -420,15 +491,17 @@ async function setViewportSize(
   );
 }
 
+/**
+ * Returns the window to the shared desktop viewport.
+ *
+ * The wait is for that viewport to have been reached, not merely for a
+ * reading above the narrow breakpoint: every width this runs from is either
+ * already above the breakpoint or on its way past it, so the looser check
+ * returns while the resize is still in flight and hands the next test a
+ * window that is still moving under its measurements.
+ */
 async function restoreDesktopViewport() {
-  await browser.setWindowSize(1100, 750);
-  await browser.waitUntil(
-    async () => (await viewportAfterPaint()).width > 960,
-    {
-      timeout: 10000,
-      timeoutMsg: "viewport did not return above the narrow breakpoint",
-    },
-  );
+  await setViewportSize(DESKTOP_VIEWPORT.width, DESKTOP_VIEWPORT.height);
 }
 
 async function setSimulatedVisualViewport(
@@ -596,6 +669,98 @@ async function renderedTableGeometry(): Promise<TableGeometry[]> {
     }
     return tables;
   });
+}
+
+type EditingCell = { row: string | null; column: string | null };
+
+/** The cell that owns the caret, or null when the caret is outside a table. */
+async function editingCell(): Promise<EditingCell | null> {
+  return browser.execute(() => {
+    const cell = document.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"]',
+    );
+    return cell === null
+      ? null
+      : {
+          row: cell.getAttribute("data-row"),
+          column: cell.getAttribute("data-column"),
+        };
+  });
+}
+
+/**
+ * Waits until nothing in the editing cell follows the caret.
+ *
+ * A pointer press places the caret when the editor answers the event, not when
+ * the driver finishes dispatching it. Travelling out of a cell is conditional
+ * on the caret already sitting at that cell's end, so an arrow key pressed
+ * before the press has been answered moves the selection the editor still held
+ * and stays inside the cell, which reads afterwards as a cell that refused to
+ * hand the caret on.
+ */
+async function waitForCellCaretAtEnd(): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(
+          '.cm-skr-table-cell[data-editing="true"] .cm-content',
+        );
+        const selection = getSelection();
+        if (content === null || selection === null || !selection.isCollapsed) {
+          return false;
+        }
+        const anchor = selection.anchorNode;
+        if (anchor === null || !content.contains(anchor)) return false;
+        const remainder = document.createRange();
+        remainder.setStart(anchor, selection.anchorOffset);
+        remainder.setEnd(content, content.childNodes.length);
+        return remainder.toString() === "";
+      }),
+    {
+      timeout: 10000,
+      timeoutMsg: "the caret did not reach the end of the editing cell",
+    },
+  );
+}
+
+/**
+ * Waits for the caret to settle in the table cell described by `expected`, or
+ * outside every table when `expected` is null.
+ *
+ * A cell move is the settled result of a keystroke that the editor answers by
+ * rewriting the source and rebuilding the table's decorations, and the cell
+ * that reports itself editing partway through that rebuild is not the one the
+ * writer ends up in. Reading the attributes one command after the key samples
+ * whatever the surface was passing through; this waits for the destination and
+ * names the cell it last saw when the caret settles somewhere else.
+ */
+async function expectEditingCell(
+  expected: { row?: string; column?: string } | null,
+): Promise<void> {
+  let seen = await editingCell();
+  const settled = (cell: EditingCell | null) => {
+    if (expected === null) return cell === null;
+    return (
+      cell !== null &&
+      (expected.row === undefined || cell.row === expected.row) &&
+      (expected.column === undefined || cell.column === expected.column)
+    );
+  };
+  try {
+    await browser.waitUntil(
+      async () => {
+        seen = await editingCell();
+        return settled(seen);
+      },
+      { timeout: 10000 },
+    );
+  } catch {
+    throw new Error(
+      `the caret settled in ${JSON.stringify(seen)} rather than ${
+        expected === null ? "outside every table" : JSON.stringify(expected)
+      }`,
+    );
+  }
 }
 
 async function prepareTableGeometryNote(): Promise<void> {
@@ -1332,25 +1497,48 @@ async function selectSettingsChoice(selector: string, label: string) {
  * control names the group that holds it.
  */
 async function openSettingsGroup(name: string) {
-  const tab = $(`[data-testid="settings-rail-${name}"]`);
-  if (await tab.isExisting()) {
-    await tab.click();
+  /** The rail's state and the group the pane shows, in one document pass. */
+  const railState = (group: string) =>
+    browser.execute((target: string) => {
+      const tab = document.querySelector(
+        `[data-testid="settings-rail-${target}"]`,
+      );
+      return {
+        railed: tab !== null,
+        selected: tab?.getAttribute("aria-selected") === "true",
+        shown:
+          document.querySelector<HTMLElement>("[data-settings-section]")
+            ?.dataset.settingsSection ?? null,
+      };
+    }, group);
+
+  if ((await railState(name)).railed) {
+    await $(`[data-testid="settings-rail-${name}"]`).click();
     await browser.waitUntil(
-      async () => (await tab.getAttribute("aria-selected")) === "true",
+      async () => {
+        const state = await railState(name);
+        return state.selected && state.shown === name;
+      },
       { timeout: 5000, timeoutMsg: `${name} group did not open` },
     );
     return;
   }
-  // Below the rail's breakpoint the same names are a list of destinations.
-  const back = $('[data-testid="settings-back"]');
-  if (await back.isExisting()) await back.click();
+  // Below the rail's breakpoint the same names are a list of destinations,
+  // one level in from the group list the back control returns to.
   await browser.execute((group: string) => {
+    document
+      .querySelector<HTMLButtonElement>('[data-testid="settings-back"]')
+      ?.click();
     document
       .querySelector<HTMLButtonElement>(
         `.settings-group-row[data-section="${group}"]`,
       )
       ?.click();
   }, name);
+  await browser.waitUntil(async () => (await railState(name)).shown === name, {
+    timeout: 5000,
+    timeoutMsg: `${name} group did not open`,
+  });
 }
 
 async function waitForPersistedDemoSetting(field: string, value: string) {
@@ -2521,36 +2709,61 @@ describe("skribeum shell", () => {
       await $(".cm-skr-selectionLayer .cm-selectionBackground").waitForExist({
         timeout: 10000,
       });
-      const drawn = await browser.execute(() => {
-        const content = document.querySelector<HTMLElement>(".cm-content");
-        if (content === null) throw new Error("editor content missing");
-        const contentBox = content.getBoundingClientRect();
-        const style = window.getComputedStyle(content);
-        const columnLeft =
-          contentBox.left + Number.parseFloat(style.paddingLeft);
-        const columnRight =
-          contentBox.right - Number.parseFloat(style.paddingRight);
-        const stock = document.querySelector<HTMLElement>(
-          ".cm-layer.cm-selectionLayer",
+      const drawnHighlight = () =>
+        browser.execute(() => {
+          const content = document.querySelector<HTMLElement>(".cm-content");
+          if (content === null) throw new Error("editor content missing");
+          const contentBox = content.getBoundingClientRect();
+          const style = window.getComputedStyle(content);
+          const columnLeft =
+            contentBox.left + Number.parseFloat(style.paddingLeft);
+          const columnRight =
+            contentBox.right - Number.parseFloat(style.paddingRight);
+          const stock = document.querySelector<HTMLElement>(
+            ".cm-layer.cm-selectionLayer",
+          );
+          const rectangles = [
+            ...document.querySelectorAll<HTMLElement>(
+              ".cm-skr-selectionLayer .cm-selectionBackground",
+            ),
+          ].map((element) => element.getBoundingClientRect());
+          return {
+            stockLayerDisplay:
+              stock === null
+                ? "absent"
+                : window.getComputedStyle(stock).display,
+            rectangleCount: rectangles.length,
+            overshoots: rectangles.filter(
+              (box) => box.left < columnLeft - 1 || box.right > columnRight + 1,
+            ).length,
+          };
+        });
+      // The highlight is redrawn as the resize and the selection reflow the
+      // lines under it, and the first rectangle exists before that settles, so
+      // its width at that moment is the width of a layout still in motion.
+      // The contract is where the highlight comes to rest, and a rectangle
+      // that genuinely escapes the column keeps escaping it.
+      let drawn = await drawnHighlight();
+      try {
+        await browser.waitUntil(
+          async () => {
+            drawn = await drawnHighlight();
+            return (
+              drawn.stockLayerDisplay === "none" &&
+              drawn.rectangleCount > 0 &&
+              drawn.overshoots === 0
+            );
+          },
+          { timeout: 10000 },
         );
-        const rectangles = [
-          ...document.querySelectorAll<HTMLElement>(
-            ".cm-skr-selectionLayer .cm-selectionBackground",
-          ),
-        ].map((element) => element.getBoundingClientRect());
-        return {
-          stockLayerDisplay:
-            stock === null ? "absent" : window.getComputedStyle(stock).display,
-          rectangleCount: rectangles.length,
-          overshoots: rectangles.filter(
-            (box) => box.left < columnLeft - 1 || box.right > columnRight + 1,
-          ).length,
-        };
-      });
-      // The stock layer must not paint a second, unclamped highlight.
-      expect(drawn.stockLayerDisplay).toBe("none");
-      expect(drawn.rectangleCount).toBeGreaterThan(0);
-      expect(drawn.overshoots).toBe(0);
+      } catch {
+        throw new Error(
+          // The stock layer must not paint a second, unclamped highlight.
+          `the selection highlight settled outside the reading column; observed ${JSON.stringify(
+            drawn,
+          )}`,
+        );
+      }
     } finally {
       await clearEditorSelection();
       await restoreDesktopViewport();
@@ -2715,12 +2928,10 @@ describe("skribeum shell", () => {
           (await firstBodyCell?.getAttribute("data-editing")) === "true",
         { timeout: 10000, timeoutMsg: "table cell did not acquire its caret" },
       );
-      expect(
-        await browser.execute(
-          () =>
-            document.activeElement?.classList.contains("cm-content") ?? false,
-        ),
-      ).toBe(true);
+      // Focus custody and the caret it carries land together and land after
+      // the cell reports itself editing, so the poll below is the assertion:
+      // reading focus once before it covers the same property against a
+      // webview that has not delivered the focus event yet.
       await browser.waitUntil(
         () =>
           browser.execute(() => {
@@ -2890,37 +3101,16 @@ describe("skribeum shell", () => {
         },
       ]);
       await browser.releaseActions();
+      await waitForCellCaretAtEnd();
       await pressFocusedKey("ArrowRight");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("1");
+      await expectEditingCell({ row: "1", column: "1" });
       await pressFocusedKey("Tab");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("2");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("0");
+      await expectEditingCell({ row: "2", column: "0" });
       await pressFocusedKey("Tab", true);
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("1");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("1");
+      await expectEditingCell({ row: "1", column: "1" });
 
       await browser.keys([modifierKey, "p"]);
       const commandSurface = $('[data-testid="unified-command-surface"]');
@@ -2939,16 +3129,7 @@ describe("skribeum shell", () => {
         { timeout: 10000 },
       );
       expect(await $(".cm-skr-table-grid").getAttribute("role")).toBe("grid");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("1");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("1");
+      await expectEditingCell({ row: "1", column: "1" });
 
       await browser.keys(Key.Escape);
       await browser.keys([modifierKey, "e"]);
@@ -2967,65 +3148,42 @@ describe("skribeum shell", () => {
       await placeCursorAtLineEnd("Large table follows.");
       await pressFocusedKey("ArrowDown");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(await $$('.cm-skr-table-cell[data-editing="true"]')).toHaveLength(
-        0,
-      );
+      await expectEditingCell(null);
       await pressFocusedKey("ArrowDown");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("0");
+      await expectEditingCell({ row: "0" });
       for (let row = 1; row <= 30; row += 1) {
         await pressFocusedKey("ArrowDown");
-        expect(
-          await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-            "data-row",
-          ),
-        ).toBe(String(row));
+        await expectEditingCell({ row: String(row) });
       }
       await pressFocusedKey("ArrowDown");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(await $$('.cm-skr-table-cell[data-editing="true"]')).toHaveLength(
-        0,
-      );
+      await expectEditingCell(null);
       await pressFocusedKey("ArrowUp");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("30");
+      await expectEditingCell({ row: "30" });
       await browser.keys(Key.Escape);
-      expect(await $$(".cm-skr-table-grid")).toHaveLength(2);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 2,
+        { timeout: 10000 },
+      );
       expect(await editorText()).not.toContain("| --- | --- |");
 
       const renderedTables = await $$(".cm-skr-table-grid");
       await renderedTables[0]
         ?.$('.cm-skr-table-cell[data-row="2"][data-column="1"]')
         .click();
+      // Which cell the Tab travels from is the cell the press landed in, so
+      // the press has to have been answered before the key is sent.
+      await expectEditingCell({ row: "2", column: "1" });
       await pressFocusedKey("Tab");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("3");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("0");
+      await expectEditingCell({ row: "3", column: "0" });
       const tabGrown = edited.replace("| Ada | 10 |", "| Ada | 10 |\n| | |");
       await browser.keys([modifierKey, "s"]);
       await waitForDisk(TABLE_EDITING_NOTE_NAME, tabGrown);
 
       await pressFocusedKey("Enter");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("4");
+      await expectEditingCell({ row: "4" });
       const enterGrown = tabGrown.replace(
         "| Ada | 10 |\n| | |",
         "| Ada | 10 |\n| | |\n| | |",
@@ -3085,15 +3243,37 @@ describe("skribeum shell", () => {
         async () => (await $$(".cm-skr-table-grid")).length === 2,
         { timeout: 15000 },
       );
+      // Two rendered tables is the shape of the note before and after every
+      // case here, so it cannot tell a reset editor from one still holding the
+      // rows the previous case inserted: the write lands on disk, and the
+      // editor adopts it when the watcher reports it. Running the next command
+      // against the buffer that has yet to be replaced applies it on top of the
+      // previous case's edit. The first table's own dimensions are what
+      // distinguishes them.
+      await browser.waitUntil(
+        async () => {
+          const grid = (await $$(".cm-skr-table-grid"))[0];
+          return (
+            grid !== undefined &&
+            (await grid.getAttribute("aria-rowcount")) === "3" &&
+            (await grid.getAttribute("aria-colcount")) === "2"
+          );
+        },
+        {
+          timeout: 15000,
+          timeoutMsg:
+            "the table fixture did not return to its original shape before the next case",
+        },
+      );
     };
     const focusBodyCell = async () => {
       const tables = await $$(".cm-skr-table-grid");
       await tables[0]
         ?.$('.cm-skr-table-cell[data-row="1"][data-column="0"] .cm-content')
         .click();
-      await $('.cm-skr-table-cell[data-editing="true"]').waitForExist({
-        timeout: 10000,
-      });
+      // Where a structure command inserts is where the caret is, so the cell
+      // the press selected has to be holding it before the command runs.
+      await expectEditingCell({ row: "1", column: "0" });
     };
     // A surface is displayed as soon as it is rendered, which is while its
     // entrance is still travelling, so the row's position when WebDriver
@@ -3994,6 +4174,63 @@ describe("skribeum shell", () => {
     await waitForDisk(CRLF_NOTE_NAME, "first\r\nsecond!\r\nthird\r\n");
   });
 
+  it("preserves_each_terminator_of_a_mixed_ending_note", async () => {
+    await openNoteFromTree(MIXED_ENDING_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("old mac line"),
+      { timeout: 15000 },
+    );
+
+    // Every terminator is a line break in the buffer whatever bytes wrote
+    // it, so the four line ends sit at the offsets the LF-normalized text
+    // "unix line\ndos line\nold mac line\nfinal line\n" puts them at. A lone
+    // CR read as an ordinary character would collapse the last two lines
+    // into one and move both later offsets.
+    const lineEnds = [];
+    for (const text of [
+      "unix line",
+      "dos line",
+      "old mac line",
+      "final line",
+    ]) {
+      lineEnds.push(
+        await browser.execute(
+          (lineText: string) =>
+            (
+              window as Window & {
+                __SKRIBEUM_E2E_SET_LINE_END__?: (
+                  lineText: string,
+                ) => number | null;
+              }
+            ).__SKRIBEUM_E2E_SET_LINE_END__?.(lineText) ?? null,
+          text,
+        ),
+      );
+    }
+    expect(lineEnds).toEqual([9, 18, 31, 42]);
+
+    await placeCursorAtLineEnd("dos line");
+    await $(".cm-content").addValue("!");
+    await browser.keys([modifierKey, "s"]);
+
+    await waitForDisk(
+      MIXED_ENDING_NOTE_NAME,
+      "unix line\ndos line!\r\nold mac line\rfinal line\n",
+    );
+
+    // An edit on the far side of the lone CR keeps the terminators before
+    // it: a mapping that resolved every break to one terminator would
+    // rewrite the whole file on the first save.
+    await placeCursorAtLineEnd("final line");
+    await $(".cm-content").addValue("?");
+    await browser.keys([modifierKey, "s"]);
+
+    await waitForDisk(
+      MIXED_ENDING_NOTE_NAME,
+      "unix line\ndos line!\r\nold mac line\rfinal line?\n",
+    );
+  });
+
   it("edits_a_file_that_is_not_a_note_without_rewriting_its_other_bytes", async () => {
     await openNoteFromTree(CONFIG_FILE_NAME);
     await browser.waitUntil(
@@ -4577,9 +4814,24 @@ describe("skribeum shell", () => {
     );
     const beforeArrow = await activeElementDescriptor();
     await browser.keys(Key.ArrowDown);
-    const afterArrow = await activeElementDescriptor();
-    expect(afterArrow).toContain("treeitem");
-    expect(afterArrow).not.toBe(beforeArrow);
+    // The tree moves its roving stop after the render that the arrow key
+    // schedules, so the focus lands a frame later than the key command
+    // returns; reading once here asks whether it has landed yet rather than
+    // whether it lands on another row.
+    let afterArrow = beforeArrow;
+    try {
+      await browser.waitUntil(
+        async () => {
+          afterArrow = await activeElementDescriptor();
+          return afterArrow.includes("treeitem") && afterArrow !== beforeArrow;
+        },
+        { timeout: 5000 },
+      );
+    } catch {
+      throw new Error(
+        `the arrow key left focus on ${afterArrow} rather than moving it to another tree row`,
+      );
+    }
     await browser.execute((noteName: string) => {
       document
         .querySelector<HTMLElement>(
@@ -4593,15 +4845,56 @@ describe("skribeum shell", () => {
       ),
     ).toBe(LF_NOTE_NAME);
     await browser.keys(Key.Enter);
-    await browser.waitUntil(
-      async () =>
-        (await $(".skr-editor-pane-focused .skr-editor-shell").getAttribute(
-          "data-note-path",
-        )) === LF_NOTE_NAME && (await editorText()).includes("alpha"),
-      {
-        timeout: 15000,
-      },
-    );
+    // The note the focused pane holds, read whole so a pane that has not
+    // mounted its shell yet is a reading rather than a thrown selector error,
+    // and so the wait below can say what it settled on. Reporting only that a
+    // condition timed out leaves a failure here indistinguishable between the
+    // row never opening, another row opening in its place, and the note
+    // opening in a pane that is not the focused one.
+    const focusedPaneNote = () =>
+      browser.execute(() => {
+        const shells = [
+          ...document.querySelectorAll<HTMLElement>(".skr-editor-shell"),
+        ].map((shell) => shell.getAttribute("data-note-path"));
+        return {
+          focused:
+            document
+              .querySelector(".skr-editor-pane-focused .skr-editor-shell")
+              ?.getAttribute("data-note-path") ?? null,
+          panes: shells,
+          activePath: document.activeElement?.getAttribute("data-path") ?? null,
+          treeTabStop:
+            document
+              .querySelector('[role="treeitem"][tabindex="0"]')
+              ?.getAttribute("data-path") ?? null,
+          // A switch the shell refused, rather than one that never reached
+          // it, says so here: the shell declines to leave a note whose
+          // pending edits it could not persist.
+          alert:
+            document
+              .querySelector('[role="alert"].skr-error')
+              ?.textContent?.trim() ?? null,
+        };
+      });
+    let openedNote = await focusedPaneNote();
+    try {
+      await browser.waitUntil(
+        async () => {
+          openedNote = await focusedPaneNote();
+          return (
+            openedNote.focused === LF_NOTE_NAME &&
+            (await editorText()).includes("alpha")
+          );
+        },
+        { timeout: 15000 },
+      );
+    } catch {
+      throw new Error(
+        `Enter on the focused tree row did not open ${LF_NOTE_NAME}; observed ${JSON.stringify(
+          openedNote,
+        )}`,
+      );
+    }
 
     // The editor is keyboard-focusable with a visible focus indicator, and
     // typing lands in the document.
@@ -6465,8 +6758,11 @@ describe("skribeum core editing surfaces", () => {
     await pressFocusedKey("Home");
     await browser.waitUntil(
       async () =>
-        (await $('[data-testid="settings-rail-appearance"]').getAttribute(
-          "aria-selected",
+        (await browser.execute(
+          () =>
+            document
+              .querySelector('[data-testid="settings-rail-appearance"]')
+              ?.getAttribute("aria-selected") ?? null,
         )) === "true",
       { timeout: 5000, timeoutMsg: "Home did not select the first group" },
     );
@@ -6761,6 +7057,7 @@ describe("skribeum core editing surfaces", () => {
 
     await browser.keys([modifierKey, ","]);
     await dialog.waitForExist({ timeout: 10000 });
+    await openSettingsGroup("appearance");
     expect(await $('[data-testid="settings-font-size"]').getValue()).toBe(
       String(target),
     );
@@ -6936,36 +7233,65 @@ describe("skribeum core editing surfaces", () => {
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
     await openSettingsGroup("appearance");
-    // Each read re-queries: the settings surface re-renders as the document
-    // commits, which detaches any handle held across a poll and turns a
-    // "not settled yet" into a thrown stale-element error.
-    const systemModeSelected = async () =>
-      (await $('[data-testid="settings-theme-system"]').getAttribute(
-        "aria-checked",
-      )) === "true";
+    /** The System card's own state, null while the control is not mounted. */
+    const systemSchemeSelected = () =>
+      browser.execute(() => {
+        const card = document.querySelector(
+          '[data-testid="settings-theme-system"]',
+        );
+        return card === null
+          ? null
+          : card.getAttribute("aria-checked") === "true";
+      });
     // The dialog's existence only means the container mounted; the controls
     // inside it commit the persisted document a moment later, so poll for
     // that committed state rather than asserting immediately on open. The
     // bound is generous because the commit follows a full reload's vault
     // reindex on the slowest CI runners; the poll returns the moment the
     // state lands.
-    const committedState = async () => ({
-      systemToggle: await systemModeSelected(),
-      gazetteChecked: await $(
-        '[data-testid="settings-palette-gazette"]',
-      ).getAttribute("aria-checked"),
-      signalClass: await $(
-        '[data-testid="settings-palette-signal"]',
-      ).getAttribute("class"),
-    });
+    //
+    // The whole snapshot is read in one document pass, and a control that is
+    // not mounted yet reads as absent rather than raising. Reading each
+    // control through its own element command instead spends the full
+    // implicit-existence wait on every control that has yet to appear, which
+    // turns this bound into two samples and ends the poll on a driver error
+    // naming the selector rather than on the state that was reached. It also
+    // leaves nothing for the diagnosis below to report, because that read
+    // fails the same way. The surface shows one group at a time, so a control
+    // belonging to another group is absent by design and has to read that way.
+    const committedState = () =>
+      browser.execute(() => {
+        const system = document.querySelector(
+          '[data-testid="settings-theme-system"]',
+        );
+        const gazette = document.querySelector(
+          '[data-testid="settings-palette-gazette"]',
+        );
+        const signal = document.querySelector(
+          '[data-testid="settings-palette-signal"]',
+        );
+        return {
+          dialogPresent:
+            document.querySelector('[data-testid="settings-view"]') !== null,
+          shownGroup:
+            document.querySelector<HTMLElement>("[data-settings-section]")
+              ?.dataset.settingsSection ?? null,
+          systemScheme:
+            system === null
+              ? null
+              : system.getAttribute("aria-checked") === "true",
+          gazetteChecked: gazette?.getAttribute("aria-checked") ?? null,
+          signalClass: signal?.getAttribute("class") ?? null,
+        };
+      });
     try {
       await browser.waitUntil(
         async () => {
           const state = await committedState();
           return (
-            state.systemToggle &&
+            state.systemScheme === true &&
             state.gazetteChecked === "true" &&
-            state.signalClass.includes("paired")
+            (state.signalClass ?? "").includes("paired")
           );
         },
         { timeout: 20000 },
@@ -6998,15 +7324,18 @@ describe("skribeum core editing surfaces", () => {
     });
     await browser.waitUntil(
       async () =>
-        (await $('[data-testid="settings-palette-signal"]').getAttribute(
-          "aria-checked",
+        (await browser.execute(
+          () =>
+            document
+              .querySelector('[data-testid="settings-palette-signal"]')
+              ?.getAttribute("aria-checked") ?? null,
         )) === "true",
       {
         timeout: 5000,
         timeoutMsg: "system dark palette did not become active",
       },
     );
-    expect(await systemModeSelected()).toBe(true);
+    expect(await systemSchemeSelected()).toBe(true);
     expect(
       await browser.execute(() => document.documentElement.dataset.theme),
     ).toBe("system");
@@ -7029,7 +7358,9 @@ describe("skribeum core editing surfaces", () => {
       },
       { timeout: 10000, timeoutMsg: "dark palette field did not persist" },
     );
-    expect(await systemModeSelected()).toBe(true);
+    // The write the card owns has landed, so the colour scheme it does not
+    // own is read on settled state rather than raced against the same commit.
+    expect(await systemSchemeSelected()).toBe(true);
     expect(
       await browser.execute(() => ({
         theme: document.documentElement.dataset.theme,
@@ -7115,6 +7446,7 @@ describe("skribeum core editing surfaces", () => {
     await browser.keys([modifierKey, ","]);
     const dialog = $('[data-testid="settings-view"]');
     await dialog.waitForExist({ timeout: 10000 });
+    await openSettingsGroup("appearance");
 
     let readout = $('[data-testid="settings-editor-font-size-readout"]');
     await readout.click();

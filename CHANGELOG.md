@@ -230,7 +230,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Saving works wherever the caret is. `Mod-s` was claimed only while the
   note's own editable surface held focus, so a save pressed while editing a
   rendered table cell did nothing.
-
+- The application no longer scrolls inside its own window. The page under the
+  shell is bounded rather than merely hidden, so a surface that outgrows the
+  window is cut off at its edge instead of extending the page, and focusing a
+  control outside the viewport, a wheel over the chrome, or an overscroll can
+  no longer slide the application away from the window's own controls. Every
+  region that is meant to scroll still scrolls.
 ## [0.0.8] - 2026-08-15
 
 ### Added

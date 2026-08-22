@@ -8,6 +8,36 @@ body,
   margin: 0;
 }
 
+/* An application shell owns its scroll regions explicitly; the document is
+   never one of them. Every engine keeps the page scrollable once anything
+   overflows it, whatever the root's `overflow` says, so the guarantee has
+   to be that nothing can overflow: the body clips (not merely hides, which
+   would leave the body itself scrollable) and gives every absolutely
+   positioned surface its containing block, so one placed past the window's
+   edge is cut off there instead of extending the page. With no page to
+   scroll, focusing a control outside the viewport, a wheel over the chrome
+   and a stray `scrollIntoView` all leave the shell where it is instead of
+   sliding it out from under the window controls. Suppressing overscroll
+   covers the engines that still rubber-band a page with nowhere to go. */
+html {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  position: relative;
+  overflow: hidden;
+}
+
+/* `clip` is the stronger statement: it bounds the body without making the
+   body itself a scroll container, so the shell cannot be displaced one
+   level down either. */
+@supports (overflow: clip) {
+  body {
+    overflow: clip;
+  }
+}
+
 html,
 .cm-scroller {
   scroll-behavior: auto;

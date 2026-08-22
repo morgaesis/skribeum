@@ -175,20 +175,51 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: oven-sh/setup-bun@v2
+      # A change that cannot reach the benchmarked crates cannot regress
+      # them, but a hosted runner's timing noise regularly exceeds the
+      # comparison threshold on microsecond-scale benchmarks, so running the
+      # gate anyway converts noise into red pull requests. Pull requests
+      # therefore run the comparison only when the change touches Rust
+      # sources, the dependency locks, the baselines, the comparison script,
+      # or this workflow; pushes to main always run it, which is also what
+      # keeps the cache and the baselines honest.
+      - name: Decide whether this change can affect the benchmarks
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}/files" \
+              --paginate -q '.[].filename' \
+            | grep -qE '^(crates/|Cargo\.toml|Cargo\.lock|scripts/compare-benchmarks\.ts|\.github/workflows/ci\.yml)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - run: bun install --frozen-lockfile
+      - uses: oven-sh/setup-bun@v2
+        if: steps.relevance.outputs.relevant == 'true'
+
+      - if: steps.relevance.outputs.relevant == 'true'
+        run: bun install --frozen-lockfile
 
       - name: Install Rust toolchain
+        if: steps.relevance.outputs.relevant == 'true'
         run: rustup toolchain install
 
       # Restored on every event, written only from the default branch;
       # see the note on the same step in the rust job and docs/ci.md.
       - uses: Swatinem/rust-cache@v2
+        if: steps.relevance.outputs.relevant == 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run Rust benchmarks and compare baselines
+        if: steps.relevance.outputs.relevant == 'true'
         run: |
           cargo bench -p skribeum-core --bench parse_extract --locked -- --noplot
           cargo bench -p skribeum-vault --bench vault_operations --locked -- --noplot

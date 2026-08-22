@@ -29,7 +29,12 @@ The benchmark regression gate is its own job pinned to `ubuntu-latest`. The
 committed baselines under each crate's `benches/baselines/` are medians for the
 Linux x64 runner class, so the comparison is only meaningful there, and the
 benchmark crates carry no Tauri dependency, so that job needs neither the
-WebKitGTK packages nor a frontend build.
+WebKitGTK packages nor a frontend build. On a pull request the comparison runs
+only when the change touches the Rust sources, the dependency locks, the
+baselines, the comparison script, or the workflow itself: a change that cannot
+reach the benchmarked crates cannot regress them, while hosted-runner timing
+noise regularly exceeds the comparison threshold on microsecond-scale
+benchmarks. A push to `main` always runs it.
 
 ## Running the full matrix before a merge
 

@@ -46,22 +46,33 @@ export type TagAffordanceOptions = {
   remember(tag: string): void;
 };
 
+/**
+ * One open menu answers from one catalog, read when the menu opened and held
+ * until it closes.
+ *
+ * The catalog is vault state that refreshes on its own schedule, outside the
+ * editor's transactions, and the largest thing that changes it while a tag is
+ * being written is the writing itself: the half-typed word is autosaved,
+ * indexed, and becomes a tag the vault holds. Reading the catalog again
+ * during that fed the fragment back as its own exact match, so `#ced` was
+ * offered above the tags it was a prefix of, and Enter committed the
+ * fragment rather than a tag. Reading it again only per render, meanwhile,
+ * let the list the reader sees and the list a keystroke acts on come from
+ * two different catalogs, so Enter could commit a row that was never on
+ * screen. One read at the top answers both: the rows are a function of the
+ * query, the query is a function of the document, and what the reader sees
+ * is what Enter commits.
+ */
 type TagMenuState = {
   /** Position of the hash character. */
   from: number;
   /** The query text the offered rows answer, without the leading hash. */
   query: string;
-  /**
-   * The rows the menu offers, in order.
-   *
-   * They are computed once, when the query changes, and then held. The
-   * catalog is vault state that refreshes on its own schedule, outside the
-   * editor's transactions, so recomputing per render let the list the reader
-   * sees and the list a keystroke acts on come from two different catalogs:
-   * an indexing pass landing between the last keystroke and Enter silently
-   * redirected Enter to a tag that was never on screen. Holding one snapshot
-   * makes the offered row and the committed row the same row by construction.
-   */
+  /** The vault's tags as they read when this menu opened. */
+  catalog: readonly TagCatalogEntry[];
+  /** Recently used tags as they read when this menu opened. */
+  recentTags: readonly string[];
+  /** The rows the menu offers, in order. */
   items: readonly TagCompletion[];
   /** Index into `items`. */
   selected: number;
@@ -146,7 +157,15 @@ function menuAt(
   if (previous !== null && previous.query === query) {
     return { ...previous, from };
   }
-  return { from, query, items: offeredTags(state, query), selected: 0 };
+  const options = previous ?? readCatalog(state);
+  return {
+    from,
+    query,
+    catalog: options.catalog,
+    recentTags: options.recentTags,
+    items: filteredTagCompletions(options.catalog, options.recentTags, query),
+    selected: 0,
+  };
 }
 
 export const tagCompletionState = StateField.define<TagMenuState | null>({
@@ -242,16 +261,17 @@ export function tagCompletionOpen(state: EditorState): boolean {
   return state.field(tagCompletionState, false) != null;
 }
 
-function offeredTags(
-  state: EditorState,
-  query: string,
-): readonly TagCompletion[] {
+/** The vault's tags and the session's recent ones, read once for one menu. */
+function readCatalog(state: EditorState): {
+  catalog: readonly TagCatalogEntry[];
+  recentTags: readonly string[];
+} {
   const config = state.facet(tagConfig);
   if (config === null) {
-    return [];
+    return { catalog: [], recentTags: [] };
   }
   const options = config.options();
-  return filteredTagCompletions(options.catalog(), options.recentTags(), query);
+  return { catalog: options.catalog(), recentTags: options.recentTags() };
 }
 
 function acceptItem(view: EditorView): boolean {

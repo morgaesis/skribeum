@@ -425,6 +425,34 @@ export function tableCellRanges(text: string): TableCell[] {
 }
 
 /**
+ * Whether a line repeats the header's outer-pipe shape closely enough to
+ * be a row of this table rather than a following paragraph.
+ *
+ * GFM tables allow ragged rows: a row can carry fewer or more cells than
+ * the header, so cell count alone cannot tell a short row from prose. The
+ * header's own leading/trailing pipe convention is the reliable signal for
+ * a table that has outer pipes. A table without outer pipes has no such
+ * signal from a single cell, since a bare word matches its header's shape
+ * exactly as well as a genuine one-cell row would; there, a row needs at
+ * least the one internal pipe a real cell split requires.
+ */
+function matchesHeaderShape(
+  line: string,
+  header: ParsedLine | undefined,
+): boolean {
+  const row = parseTableLines(line)[0];
+  if (
+    header === undefined ||
+    row === undefined ||
+    row.leadingPipe !== header.leadingPipe ||
+    row.trailingPipe !== header.trailingPipe
+  ) {
+    return false;
+  }
+  return header.leadingPipe || header.trailingPipe || row.cells.length >= 2;
+}
+
+/**
  * Completes a row the reported end stops inside.
  *
  * A table block spans whole rows, and every offset a table edit declares
@@ -432,10 +460,9 @@ export function tableCellRanges(text: string): TableCell[] {
  * would make that row parse as its own truncated line, so an edit aimed
  * at the row's end would land in the middle of the row's source instead.
  * Only a partial row is completed, and a line counts as a row of this
- * block only when it repeats the header's shape: the same column count
- * and the same outer pipes. A prose line stays put even when it happens
- * to contain a pipe, so completing a row never grows the block over the
- * text that follows the table.
+ * block only when it repeats the header's shape. A prose line stays put
+ * even when it happens to contain a pipe, so completing a row never grows
+ * the block over the text that follows the table.
  */
 function completedRowEnd(
   sourceFromTable: string,
@@ -452,13 +479,10 @@ function completedRowEnd(
   const lineStart = sourceFromTable.lastIndexOf("\n", bounded - 1) + 1;
   const lineEnd = sourceFromTable.indexOf("\n", bounded);
   const rowEnd = lineEnd < 0 ? sourceFromTable.length : lineEnd;
-  const row = parseTableLines(sourceFromTable.slice(lineStart, rowEnd))[0];
-  const isRow =
-    header !== undefined &&
-    row !== undefined &&
-    row.cells.length === header.cells.length &&
-    row.leadingPipe === header.leadingPipe &&
-    row.trailingPipe === header.trailingPipe;
+  const isRow = matchesHeaderShape(
+    sourceFromTable.slice(lineStart, rowEnd),
+    header,
+  );
   return isRow ? rowEnd : bounded;
 }
 
@@ -472,9 +496,33 @@ export function extendedTableBlockEnd(
     headerEnd < 0 ? sourceFromTable : sourceFromTable.slice(0, headerEnd),
   )[0];
   const columnCount = Math.max(1, header?.cells.length ?? 1);
+  const delimiterStart = headerEnd < 0 ? sourceFromTable.length : headerEnd + 1;
+  const delimiterEnd = (() => {
+    const next = sourceFromTable.indexOf("\n", delimiterStart);
+    return next < 0 ? sourceFromTable.length : next;
+  })();
   const blockEnd = completedRowEnd(sourceFromTable, parsedLength, header);
-  let to = blockEnd;
-  let lineStart = blockEnd;
+  // The row grammar does not require a pipe past the header, so the tree
+  // can fold a following plain-text line straight into the table as a row
+  // with none. When the parsed end already sits on a full row boundary
+  // (rather than mid-row, which `completedRowEnd` above has already chosen
+  // to leave in place), any trailing row that does not share the header's
+  // shape is trimmed back out before extending past what the tree parsed,
+  // so a paragraph typed right after a table with no blank line between
+  // never gets folded into it.
+  const atRowBoundary =
+    blockEnd === sourceFromTable.length || sourceFromTable[blockEnd] === "\n";
+  let to = Math.max(delimiterEnd, blockEnd);
+  if (atRowBoundary) {
+    while (to > delimiterEnd) {
+      const lineStart = sourceFromTable.lastIndexOf("\n", to - 1) + 1;
+      if (matchesHeaderShape(sourceFromTable.slice(lineStart, to), header)) {
+        break;
+      }
+      to = lineStart > 0 ? lineStart - 1 : delimiterEnd;
+    }
+  }
+  let lineStart = to;
   while (sourceFromTable[lineStart] === "\n") {
     lineStart += 1;
     const lineEnd = sourceFromTable.indexOf("\n", lineStart);

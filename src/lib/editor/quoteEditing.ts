@@ -97,6 +97,29 @@ function replaceRedundantMarkers(
   return true;
 }
 
+/**
+ * The native input path's marker de-duplication, ahead of stock Markdown
+ * keys. A single typed character is never "content that already carries
+ * its own quote marker": after one keystroke a bare `>` is indistinguishable
+ * from the reader deepening the nesting level by hand, and collapsing it
+ * would eat every `>` past the first one typed at a line that currently
+ * reads as markers-only. The multi-character insert an IME commit or a
+ * programmatic snippet delivers in one shot is the case this guards against;
+ * real pasted content goes through the paste handler below instead.
+ */
+export function handleQuoteInput(
+  view: EditorView,
+  from: number,
+  to: number,
+  text: string,
+): boolean {
+  return (
+    from === to &&
+    text.length > 1 &&
+    replaceRedundantMarkers(view, text, "input.type")
+  );
+}
+
 /** Quote-block exit and marker de-duplication, ahead of stock Markdown keys. */
 export const quoteEditing: Extension = [
   Prec.highest(keymap.of([{ key: "Enter", run: exitQuoteBlock }])),
@@ -115,10 +138,5 @@ export const quoteEditing: Extension = [
       },
     }),
   ),
-  Prec.highest(
-    EditorView.inputHandler.of(
-      (view, from, to, text) =>
-        from === to && replaceRedundantMarkers(view, text, "input.type"),
-    ),
-  ),
+  Prec.highest(EditorView.inputHandler.of(handleQuoteInput)),
 ];

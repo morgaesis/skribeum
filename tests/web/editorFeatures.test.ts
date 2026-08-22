@@ -955,6 +955,23 @@ describe("table editing through the registry", () => {
     expect(runEditorCommand("table.cell.previous")).toBe(false);
   });
 
+  it("mounts the interactive grid for a table followed by prose with no blank line", () => {
+    // A table's row grammar folds a directly-following paragraph in as an
+    // extra row when there is no blank line to separate them, so a cursor
+    // in that paragraph reads as still inside the table unless the reveal
+    // range is clamped to the table's real, ragged-row-aware end.
+    const source = `${TABLE}\nafter table`;
+    const view = makeView(source, source.length, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    expect(view.dom.querySelector('[role="grid"]')).not.toBeNull();
+    expect(
+      view.dom.querySelector('[aria-label="Append table row"]'),
+    ).not.toBeNull();
+    expect(view.state.doc.toString()).toBe(source);
+  });
+
   it("grows the table when tabbing past the last cell", () => {
     const view = makeView(TABLE, 0, [
       decorationEngine(),

@@ -3695,12 +3695,19 @@ function revealRange(
         rule.reveal === "cursor-inside-after-start") &&
       rule.presentation.present === "widget");
   const scope = useNode ? node : (node.parent ?? node);
+  // A parsed Table node's row grammar does not require a pipe past the
+  // header, so the tree can fold a following plain-text line straight into
+  // it as an extra row with none. The reveal range has to agree with the
+  // boundary the table widget itself renders to (`extendedTableEnd`), or a
+  // cursor sitting in that folded paragraph keeps the whole table pinned to
+  // source and the interactive grid never mounts.
+  const to = scope.name === "Table" ? extendedTableEnd(scope, doc) : scope.to;
   if (rule.reveal !== "cursor-line") {
-    return { from: scope.from, to: scope.to };
+    return { from: scope.from, to };
   }
   return {
     from: doc.lineAt(scope.from).from,
-    to: doc.lineAt(Math.min(scope.to, doc.length)).to,
+    to: doc.lineAt(Math.min(to, doc.length)).to,
   };
 }
 

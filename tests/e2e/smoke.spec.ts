@@ -2398,6 +2398,148 @@ describe("skribeum shell", () => {
     }
   });
 
+  it("keeps_the_formatting_toolbar_clear_of_the_prose", async () => {
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+
+    try {
+      // Whichever placement this window's margins allow, the toolbar has to
+      // stay legible: clear of the prose in the margin, and clear of the line
+      // it covers when there is no margin to take. Which one a given width
+      // produces is decided by `toolbarPlacement`, covered by unit tests.
+      await setViewportSize(1280, 800);
+      await selectEditorText("Patient typography");
+      await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 10000 });
+      const wide = await browser.execute(() => {
+        const bar = document.querySelector<HTMLElement>(
+          ".cm-skr-selection-toolbar",
+        );
+        if (bar === null) throw new Error("toolbar missing");
+        const box = (bar.closest(".cm-tooltip") ?? bar).getBoundingClientRect();
+        let left = Number.POSITIVE_INFINITY;
+        let right = Number.NEGATIVE_INFINITY;
+        for (const line of document.querySelectorAll<HTMLElement>(
+          ".cm-content > .cm-line:not(.cm-skr-rich-callout)",
+        )) {
+          const lineBox = line.getBoundingClientRect();
+          const style = window.getComputedStyle(line);
+          left = Math.min(
+            left,
+            lineBox.left + Number.parseFloat(style.paddingLeft),
+          );
+          right = Math.max(
+            right,
+            lineBox.right - Number.parseFloat(style.paddingRight),
+          );
+        }
+        const anchor = [
+          ...document.querySelectorAll<HTMLElement>(".cm-content > .cm-line"),
+        ].find((line) =>
+          (line.textContent ?? "").includes("Patient typography"),
+        );
+        if (anchor === undefined) throw new Error("anchor line missing");
+        // Ink-relative for the same reason as the narrow case below.
+        const ink = document.createRange();
+        ink.selectNodeContents(anchor);
+        return {
+          placement: bar.dataset.placement,
+          clearOfColumn: box.left >= right || box.right <= left,
+          gap: ink.getBoundingClientRect().top - box.bottom,
+        };
+      });
+      if (wide.placement === "margin") {
+        expect(wide.clearOfColumn).toBe(true);
+      } else {
+        expect(wide.placement).toBe("over-text");
+        expect(wide.gap).toBeGreaterThan(0);
+      }
+
+      // A window with no margin to spare falls back over the text, and buys
+      // clearance from the line it covers rather than sitting flush on it.
+      await setViewportSize(560, 760);
+      await clearEditorSelection();
+      await selectEditorText("Patient typography");
+      await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 10000 });
+      const narrow = await browser.execute(() => {
+        const bar = document.querySelector<HTMLElement>(
+          ".cm-skr-selection-toolbar",
+        );
+        if (bar === null) throw new Error("toolbar missing");
+        const box = (bar.closest(".cm-tooltip") ?? bar).getBoundingClientRect();
+        const anchor = [
+          ...document.querySelectorAll<HTMLElement>(".cm-content > .cm-line"),
+        ].find((line) =>
+          (line.textContent ?? "").includes("Patient typography"),
+        );
+        if (anchor === undefined) throw new Error("anchor line missing");
+        // Clearance is measured against the glyph ink, not the line box: the
+        // toolbar offsets itself from the rendered text's own top, and the
+        // line box extends above that by the leading, whose share of the
+        // line-height varies with the platform's font metrics.
+        const ink = document.createRange();
+        ink.selectNodeContents(anchor);
+        const inkBox = ink.getBoundingClientRect();
+        return {
+          placement: bar.dataset.placement,
+          gap: inkBox.top - box.bottom,
+        };
+      });
+      expect(narrow.placement).toBe("over-text");
+      expect(narrow.gap).toBeGreaterThan(0);
+    } finally {
+      await restoreDesktopViewport();
+    }
+  });
+
+  it("draws_the_selection_highlight_inside_the_reading_column", async () => {
+    await openNoteFromTree(VISUAL_NOTE_NAME);
+    await $(".cm-skr-rich-callout").waitForExist({ timeout: 15000 });
+    try {
+      await setViewportSize(1280, 800);
+      // A selection spanning several lines produces at least one full-width
+      // rectangle, the kind that previously ran to the content box's own
+      // unpadded edge and into the gutter. The length reaches well past the
+      // matched phrase, across the following heading and list lines.
+      await dispatchSelectionFromLastMatch("Patient typography", 0, 150);
+      await $(".cm-skr-selectionLayer .cm-selectionBackground").waitForExist({
+        timeout: 10000,
+      });
+      const drawn = await browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(".cm-content");
+        if (content === null) throw new Error("editor content missing");
+        const contentBox = content.getBoundingClientRect();
+        const style = window.getComputedStyle(content);
+        const columnLeft =
+          contentBox.left + Number.parseFloat(style.paddingLeft);
+        const columnRight =
+          contentBox.right - Number.parseFloat(style.paddingRight);
+        const stock = document.querySelector<HTMLElement>(
+          ".cm-layer.cm-selectionLayer",
+        );
+        const rectangles = [
+          ...document.querySelectorAll<HTMLElement>(
+            ".cm-skr-selectionLayer .cm-selectionBackground",
+          ),
+        ].map((element) => element.getBoundingClientRect());
+        return {
+          stockLayerDisplay:
+            stock === null ? "absent" : window.getComputedStyle(stock).display,
+          rectangleCount: rectangles.length,
+          overshoots: rectangles.filter(
+            (box) => box.left < columnLeft - 1 || box.right > columnRight + 1,
+          ).length,
+        };
+      });
+      // The stock layer must not paint a second, unclamped highlight.
+      expect(drawn.stockLayerDisplay).toBe("none");
+      expect(drawn.rectangleCount).toBeGreaterThan(0);
+      expect(drawn.overshoots).toBe(0);
+    } finally {
+      await clearEditorSelection();
+      await restoreDesktopViewport();
+    }
+  });
+
   it("shares_rendered_column_geometry_within_each_table", async () => {
     await prepareTableGeometryNote();
     await openNoteFromTree(RENDERING_NOTE_NAME);
@@ -3286,7 +3428,13 @@ describe("skribeum shell", () => {
         TABLE_EDITING_NOTE_NAME,
         original.replace(firstTable, ""),
       );
-      expect(await $$(".cm-skr-table-grid")).toHaveLength(1);
+      // The disk write and the decoration rebuild that drops the deleted
+      // table's grid are two independent effects of the same keystroke; disk
+      // confirmation says nothing about whether the repaint has landed yet.
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 1,
+        { timeout: 10000 },
+      );
     } finally {
       await openNoteFromTree(VISUAL_NOTE_NAME);
       writeFileSync(
@@ -3700,7 +3848,20 @@ describe("skribeum shell", () => {
         right:
           paragraphBox.right - Number.parseFloat(paragraphStyle.paddingRight),
       };
-      const calloutBox = callout.getBoundingClientRect();
+      // The callout's frame bleed is painted by box-shadow copies beside the
+      // line, so the painted frame is the border box extended by the shadow
+      // offsets; the box rectangle alone no longer describes what the reader
+      // sees.
+      const calloutRect = callout.getBoundingClientRect();
+      const shadowOffsets = [
+        ...getComputedStyle(callout).boxShadow.matchAll(
+          /(-?\d+(?:\.\d+)?)px\s+-?\d+(?:\.\d+)?px/gu,
+        ),
+      ].map((match) => Number.parseFloat(match[1] ?? "0"));
+      const calloutBox = {
+        left: calloutRect.left + Math.min(0, ...shadowOffsets),
+        right: calloutRect.right + Math.max(0, ...shadowOffsets),
+      };
 
       return {
         leftEdges: {
@@ -6785,23 +6946,38 @@ describe("skribeum core editing surfaces", () => {
       $('[data-testid="settings-match-system"]').isSelected();
     // The dialog's existence only means the container mounted; the controls
     // inside it commit the persisted document a moment later, so poll for
-    // that committed state rather than asserting immediately on open.
-    await browser.waitUntil(
-      async () =>
-        (await systemToggleSelected()) &&
-        (await $('[data-testid="settings-palette-gazette"]').getAttribute(
-          "aria-checked",
-        )) === "true" &&
-        (
-          await $('[data-testid="settings-palette-signal"]').getAttribute(
-            "class",
-          )
-        ).includes("paired"),
-      {
-        timeout: 10000,
-        timeoutMsg: "settings surface did not commit the persisted document",
-      },
-    );
+    // that committed state rather than asserting immediately on open. The
+    // bound is generous because the commit follows a full reload's vault
+    // reindex on the slowest CI runners; the poll returns the moment the
+    // state lands.
+    const committedState = async () => ({
+      systemToggle: await systemToggleSelected(),
+      gazetteChecked: await $(
+        '[data-testid="settings-palette-gazette"]',
+      ).getAttribute("aria-checked"),
+      signalClass: await $(
+        '[data-testid="settings-palette-signal"]',
+      ).getAttribute("class"),
+    });
+    try {
+      await browser.waitUntil(
+        async () => {
+          const state = await committedState();
+          return (
+            state.systemToggle &&
+            state.gazetteChecked === "true" &&
+            state.signalClass.includes("paired")
+          );
+        },
+        { timeout: 20000 },
+      );
+    } catch {
+      throw new Error(
+        `settings surface did not commit the persisted document; observed ${JSON.stringify(
+          await committedState(),
+        )}`,
+      );
+    }
 
     await browser.execute(() => {
       const testWindow = window as unknown as {

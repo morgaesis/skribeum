@@ -1191,6 +1191,13 @@ class TaskCheckboxWidget extends WidgetType {
     box.addEventListener(OPEN_TASK_STATUS_MENU_EVENT, () => {
       openPalette("tap");
     });
+    // The checkbox is a focusable widget inside the editor's own scroller,
+    // where the browser's focus auto-scroll does not reach: tabbing to a
+    // checkbox below the fold would otherwise put focus on an element the
+    // reader cannot see.
+    box.addEventListener("focus", () => {
+      box.scrollIntoView?.({ block: "nearest" });
+    });
     palette.addEventListener("keydown", (event) => {
       if (event.target instanceof HTMLInputElement) {
         return;
@@ -1437,7 +1444,10 @@ function tableLayout(node: SyntaxNode, doc: Text): TableLayout {
     from: node.from,
     to,
     rows,
-    columns: widths.map((width) => `minmax(0, ${width}fr)`).join(" "),
+    // The floor keeps a many-column table legible: forty zero-minimum
+    // fractions compress to overlapping slivers, while floored tracks let
+    // the grid grow past its container and scroll inside it instead.
+    columns: widths.map((width) => `minmax(3.5rem, ${width}fr)`).join(" "),
     alignments: delimiterAlignments(delimiter, columnCount),
   };
 }
@@ -3681,7 +3691,8 @@ function revealRange(
   const useNode =
     rule.revealScope === "node" ||
     (rule.revealScope === undefined &&
-      rule.reveal === "cursor-inside" &&
+      (rule.reveal === "cursor-inside" ||
+        rule.reveal === "cursor-inside-after-start") &&
       rule.presentation.present === "widget");
   const scope = useNode ? node : (node.parent ?? node);
   if (rule.reveal !== "cursor-line") {
@@ -3753,7 +3764,11 @@ function findActiveReveal(
         continue;
       }
       const range = revealRange(rule, node, doc);
-      if (cursor < range.from || cursor > range.to) {
+      const interiorFrom =
+        rule.reveal === "cursor-inside-after-start"
+          ? range.from + 1
+          : range.from;
+      if (cursor < interiorFrom || cursor > range.to) {
         continue;
       }
       const candidate: RevealRegion = {
@@ -6032,6 +6047,13 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-embed-body": { display: "block" },
   ".cm-skr-embed-body > .cm-editor": { backgroundColor: "transparent" },
+  // A nested view mounts outside the shell's editor container, so the
+  // reading surface's own prose rule cannot reach it; without this the
+  // nested body falls back to CodeMirror's monospace default while its
+  // headings, which carry their own face, render correctly.
+  ".cm-skr-embed-body .cm-scroller": {
+    fontFamily: "var(--skr-font-prose)",
+  },
   ".cm-skr-embed-notice": {
     padding: "0.5rem 0.6rem",
     color: "var(--skr-text-muted)",
@@ -6049,7 +6071,7 @@ const engineTheme = EditorView.baseTheme({
     borderRadius: "var(--skr-radius-surface)",
     color: "var(--skr-text)",
     backgroundColor: "var(--skr-surface-raised)",
-    boxShadow: "var(--skr-shadow)",
+    boxShadow: "var(--skr-shadow-surface)",
     fontFamily: "var(--skr-font-prose)",
   },
   ".cm-skr-link-preview-header": {
@@ -6155,7 +6177,7 @@ const engineTheme = EditorView.baseTheme({
     backgroundColor: "var(--skr-surface-raised)",
     border: "1px solid var(--skr-border)",
     borderRadius: "var(--skr-radius-surface)",
-    boxShadow: "var(--skr-shadow)",
+    boxShadow: "var(--skr-shadow-surface)",
   },
   ".cm-skr-task-palette[hidden]": { display: "none" },
   ".cm-skr-task-track": {
@@ -6258,11 +6280,13 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-table-grid": {
     boxSizing: "border-box",
     width: "100%",
+    overflowX: "auto",
   },
   ".cm-skr-table-row": {
     boxSizing: "border-box",
     display: "grid",
     width: "100%",
+    minWidth: "min-content",
     borderLeft: "1px solid var(--skr-border)",
     borderRight: "1px solid var(--skr-border)",
     borderBottom: "1px solid var(--skr-border)",
@@ -6427,18 +6451,27 @@ const engineTheme = EditorView.baseTheme({
     { color: "var(--skr-danger)" },
   '.cm-skr-callout-mark[data-callout="tip"], .cm-skr-callout-mark[data-callout="success"]':
     { color: "var(--skr-success)" },
+  // The tinted background bleeds into the gutter margin the same way a code
+  // block's does (box-shadow copies either side of the line, not a widened
+  // box): CodeMirror's own selection-rectangle drawing reads its horizontal
+  // bounds from the padding of whichever `.cm-line` happens to be first in
+  // the document, so a callout whose own padding widened to fit its bleed
+  // would misdraw every selection in the file, not only its own line.
   ".cm-line.cm-skr-rich-callout": {
     "--skr-callout-color": "var(--skr-callout-blue)",
-    boxSizing: "border-box",
-    width: "calc(100% + 2rem + 3px)",
-    marginLeft: "calc(-1rem - 3px)",
-    marginRight: "-1rem",
-    paddingInline: "1rem",
-    overflow: "hidden",
-    color: "var(--skr-text)",
-    backgroundColor:
+    "--skr-callout-tinted-surface":
       "color-mix(in srgb, var(--skr-callout-color) var(--skr-callout-tint), var(--skr-surface))",
+    boxSizing: "border-box",
     borderLeft: "3px solid var(--skr-callout-color)",
+    // The accent bar sits outside the reading column: pulling the box left
+    // by exactly the border's width keeps the callout's text on the same
+    // left edge as every other block. Width stays automatic, so only the
+    // left edge moves.
+    marginLeft: "-3px",
+    boxShadow:
+      "-1rem 0 0 var(--skr-callout-tinted-surface), 1rem 0 0 var(--skr-callout-tinted-surface)",
+    color: "var(--skr-text)",
+    backgroundColor: "var(--skr-callout-tinted-surface)",
   },
   '.cm-skr-rich-callout[data-accent="cyan"]': {
     "--skr-callout-color": "var(--skr-callout-cyan)",
@@ -6508,7 +6541,16 @@ const engineTheme = EditorView.baseTheme({
     border: "1px solid var(--skr-border)",
     borderRadius: "var(--skr-radius-surface)",
   },
-  ".cm-skr-mermaid svg": { display: "block", maxWidth: "100%", margin: "auto" },
+  // The diagram shrinks to the reading column where the column is wide
+  // enough to keep it legible, and floors at 32rem otherwise, scrolling
+  // inside its own container the way a wide code block does: a phone-width
+  // column scaling a flowchart to a fifth of its size renders every label
+  // unreadable.
+  ".cm-skr-mermaid svg": {
+    display: "block",
+    maxWidth: "max(100%, 32rem)",
+    margin: "auto",
+  },
   ".cm-skr-render-error": {
     color: "var(--skr-danger)",
     backgroundColor: "var(--skr-danger-surface)",

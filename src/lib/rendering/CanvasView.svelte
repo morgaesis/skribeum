@@ -503,7 +503,7 @@ export function focus() {
     border: 1px solid var(--skr-border);
     border-radius: var(--skr-radius-surface);
     background: var(--skr-surface-raised);
-    box-shadow: var(--skr-shadow);
+    box-shadow: var(--skr-shadow-surface);
   }
   .canvas-toolbar button {
     min-width: 2rem;
@@ -576,7 +576,7 @@ export function focus() {
     border: 2px solid var(--canvas-node-color);
     border-radius: var(--skr-radius-surface);
     background: var(--skr-surface-raised);
-    box-shadow: var(--skr-shadow);
+    box-shadow: var(--skr-shadow-surface);
     cursor: pointer;
   }
   .canvas-card.card-dragging {

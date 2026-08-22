@@ -222,10 +222,12 @@ impl Vault {
         }
 
         let mut tree = Vec::new();
-        // (normalized path, number of distinct raw spellings observed)
-        let mut seen: Vec<(VaultPath, usize)> = Vec::new();
+        // Normalized path to the number of distinct raw spellings observed.
+        let mut seen: HashMap<VaultPath, usize> = HashMap::new();
         index_directory(fs, root, None, &mut tree, &mut seen)?;
         tree.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut seen: Vec<(VaultPath, usize)> = seen.into_iter().collect();
+        seen.sort();
         let collisions = detect_collisions(&seen);
 
         Ok(Self {
@@ -254,9 +256,11 @@ impl Vault {
     /// on failure the previous tree is kept.
     pub fn refresh(&mut self, fs: &dyn FileSystem) -> Result<(), VaultError> {
         let mut tree = Vec::new();
-        let mut seen: Vec<(VaultPath, usize)> = Vec::new();
+        let mut seen: HashMap<VaultPath, usize> = HashMap::new();
         index_directory(fs, &self.root, None, &mut tree, &mut seen)?;
         tree.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut seen: Vec<(VaultPath, usize)> = seen.into_iter().collect();
+        seen.sort();
         self.collisions = detect_collisions(&seen);
         self.tree = tree;
         Ok(())
@@ -731,7 +735,7 @@ fn index_directory(
     absolute: &Path,
     relative: Option<&VaultPath>,
     tree: &mut Vec<TreeEntry>,
-    seen: &mut Vec<(VaultPath, usize)>,
+    seen: &mut HashMap<VaultPath, usize>,
 ) -> Result<(), VaultError> {
     let mut entries = fs.read_dir(absolute)?;
     entries.sort_by(|a, b| a.file_name.cmp(&b.file_name));
@@ -770,12 +774,11 @@ fn index_directory(
 /// Records one raw directory-entry spelling for `path`. Two distinct raw
 /// spellings normalizing onto one `VaultPath` (an NFC/NFD pair) bump the
 /// spelling count, which `detect_collisions` surfaces as a collision.
-fn record_spelling(seen: &mut Vec<(VaultPath, usize)>, path: &VaultPath) {
-    if let Some(existing) = seen.iter_mut().find(|(p, _)| p == path) {
-        existing.1 += 1;
-    } else {
-        seen.push((path.clone(), 1));
-    }
+///
+/// Keyed rather than scanned: a vault indexes every entry through here, so a
+/// linear probe would make opening a vault quadratic in its entry count.
+fn record_spelling(seen: &mut HashMap<VaultPath, usize>, path: &VaultPath) {
+    *seen.entry(path.clone()).or_insert(0) += 1;
 }
 
 #[cfg(test)]

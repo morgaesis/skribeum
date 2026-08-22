@@ -194,6 +194,42 @@ async function openDemo(query: Record<string, string> = {}): Promise<void> {
   );
 }
 
+/**
+ * Opens the demo already booted into the given appearance. Writing the root's
+ * `data-theme` from a test races the app's own asynchronous settings read,
+ * which reapplies the persisted appearance whenever it resolves and silently
+ * reverts the test's override. Seeding the persisted settings and the paint
+ * bootstrap's mirror before a second navigation removes the race: the page
+ * boots into the appearance, and the settings read then confirms the same
+ * values instead of reverting them.
+ */
+async function openDemoWithAppearance(
+  query: Record<string, string>,
+  appearance: {
+    theme: "system" | "light" | "dark";
+    light_palette: string;
+    dark_palette: string;
+  },
+): Promise<void> {
+  await openDemo(query);
+  await browser.execute((seeded) => {
+    const stored = window.localStorage.getItem("skribeum.demo.settings");
+    let document_: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = stored === null ? {} : JSON.parse(stored);
+      if (typeof parsed === "object" && parsed !== null) {
+        document_ = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // A corrupt stored document is replaced outright.
+    }
+    const next = { ...document_, ...seeded };
+    window.localStorage.setItem("skribeum.demo.settings", JSON.stringify(next));
+    window.localStorage.setItem("skribeum.appearance.v1", JSON.stringify(next));
+  }, appearance);
+  await openDemo(query);
+}
+
 before(async () => {
   await browser.tauri.switchWindow("main");
 });
@@ -294,12 +330,14 @@ describe("brand palette retune", () => {
     ["nightroom", "dark", NIGHTROOM_TOKENS, [...SYNTAX_DARK, ...CALLOUT_DARK]],
   ] as const) {
     it(`renders no colour outside ${paletteName}'s token set on the quickstart note`, async () => {
-      await openDemo({ note: "quickstart.md" });
-      await browser.execute((t) => {
-        document.documentElement.dataset.theme = t;
-        document.documentElement.dataset.lightPalette = "manuscript";
-        document.documentElement.dataset.darkPalette = "nightroom";
-      }, theme);
+      await openDemoWithAppearance(
+        { note: "quickstart.md" },
+        {
+          theme,
+          light_palette: "manuscript",
+          dark_palette: "nightroom",
+        },
+      );
       await $(".cm-content").waitForExist({ timeout: 10000 });
 
       const allValues = [...Object.values(tokens), ...extras];

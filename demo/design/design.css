@@ -69,6 +69,110 @@ body {
   margin: 0 0 1.25rem;
 }
 
+/* ---- Mode preview cards ---- */
+
+.design-mode-cards {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.design-mode-card {
+  border: 1px solid var(--skr-border);
+  background: var(--skr-surface);
+  color: var(--skr-text);
+  border-radius: var(--skr-radius-surface);
+  padding: 0.4rem 0.4rem 0.3rem;
+  font: inherit;
+  font-size: var(--skr-type-label);
+  cursor: pointer;
+  display: grid;
+  gap: 0.3rem;
+  justify-items: center;
+}
+
+.design-mode-card:focus-visible {
+  outline: 2px solid var(--skr-focus);
+  outline-offset: 2px;
+}
+
+.design-mode-card[aria-pressed="true"] {
+  outline: 2px solid var(--skr-accent);
+  outline-offset: -1px;
+}
+
+.design-mode-card .design-mode-name {
+  color: var(--skr-text-muted);
+}
+
+.design-mode-preview {
+  position: relative;
+  display: block;
+  width: 5.5rem;
+  height: 3.25rem;
+  border-radius: var(--skr-radius-control);
+  overflow: hidden;
+}
+
+.design-mode-pane {
+  position: absolute;
+  inset: 0;
+  display: block;
+  background: var(--design-pane-surface);
+}
+
+/* The system card's dark half overlays the light pane, clipped along a
+   slanted seam, so one card previews both resolved appearances. */
+.design-mode-pane-half {
+  clip-path: polygon(58% 0, 100% 0, 100% 100%, 42% 100%);
+}
+
+.design-mode-pane-sidebar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 26%;
+  background: color-mix(
+    in srgb,
+    var(--design-pane-text) 8%,
+    var(--design-pane-surface)
+  );
+}
+
+.design-mode-pane-lines {
+  position: absolute;
+  inset: 18% 12% auto 34%;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.design-mode-pane-lines i {
+  display: block;
+  height: 0.2rem;
+  border-radius: 0.1rem;
+  background: color-mix(
+    in srgb,
+    var(--design-pane-text) 55%,
+    var(--design-pane-surface)
+  );
+}
+
+.design-mode-pane-lines i:nth-child(2) {
+  width: 72%;
+}
+
+.design-mode-pane-lines i:nth-child(3) {
+  width: 48%;
+}
+
+.design-mode-pane-accent {
+  position: absolute;
+  right: 12%;
+  bottom: 14%;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--design-pane-accent);
+}
+
 /* ---- Appearance switcher (also the segmented-control specimen) ---- */
 
 .design-segmented {
@@ -93,7 +197,7 @@ body {
 .design-segmented button[aria-pressed="true"] {
   background: var(--skr-surface-raised);
   color: var(--skr-heading);
-  box-shadow: var(--skr-shadow);
+  box-shadow: var(--skr-shadow-surface);
 }
 
 .design-segmented button:focus-visible {
@@ -277,6 +381,13 @@ body {
   height: 4.5rem;
   background: var(--skr-surface-raised);
   border: 1px solid var(--skr-border);
+}
+
+.design-radius-row .shadow-surface {
+  box-shadow: var(--skr-shadow-surface);
+}
+
+.design-radius-row .shadow-dialog {
   box-shadow: var(--skr-shadow);
 }
 
@@ -412,7 +523,7 @@ body {
   background-color: var(--skr-surface-raised);
   border: 1px solid var(--skr-border);
   border-radius: var(--skr-radius-surface);
-  box-shadow: var(--skr-shadow);
+  box-shadow: var(--skr-shadow-surface);
 }
 
 .design-toolbar button {
@@ -439,7 +550,7 @@ body {
   background: var(--skr-surface-raised);
   border: 1px solid var(--skr-border);
   border-radius: var(--skr-radius-surface);
-  box-shadow: var(--skr-shadow);
+  box-shadow: var(--skr-shadow-surface);
   padding: 0.25rem;
 }
 
@@ -551,41 +662,6 @@ body {
   cursor: pointer;
   font-size: var(--skr-type-label);
   color: var(--skr-text-muted);
-}
-
-.design-motion-box[data-motion="state"].design-motion-play {
-  animation: design-motion-fade var(--skr-motion-state-duration)
-    var(--skr-motion-state-easing);
-}
-
-.design-motion-box[data-motion="surface"].design-motion-play {
-  animation: design-motion-enter var(--skr-motion-surface-duration)
-    var(--skr-motion-surface-easing);
-}
-
-.design-motion-box[data-motion="panel"].design-motion-play {
-  animation: design-motion-enter var(--skr-motion-panel-duration)
-    var(--skr-motion-panel-easing);
-}
-
-@keyframes design-motion-fade {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes design-motion-enter {
-  from {
-    opacity: 0;
-    transform: translateY(var(--skr-motion-distance));
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .design-motion-row figcaption {

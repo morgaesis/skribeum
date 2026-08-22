@@ -29,6 +29,11 @@ and replaces the panel, while leaving the block restores the panel.
 
 Reveal policies:
 
+- **cursor-inside-after-start**: as cursor-inside, except a caret sitting
+  exactly on the construct's first position does not reveal. Focusing a
+  rendered table cell parks the host selection at the table's start, and that
+  parked caret must not tear down the widget it is editing through, while a
+  caret typing anywhere further inside the block keeps the source visible.
 - **cursor-inside**: hidden or replaced text returns as plain source, and
   receded source styling clears, while the main cursor touches the selected
   construct.
@@ -121,11 +126,16 @@ visible caret. A nested edit dispatches one parent-document change over that
 cell span; unedited pipes, padding, alignment markers, rows, and neighboring
 cells retain their exact source bytes. A typed pipe is stored as `\|`.
 
-The table replacement never follows ordinary cursor reveal. Pointer placement
-or keyboard entry focuses a rendered cell, while the registered table-source
-command temporarily removes the replacement for that table. Whole-note source
-mode omits the decoration engine and exposes every table in the same way as
-other Markdown source.
+The table replacement follows the cursor-inside-after-start policy: a main
+caret anywhere inside the table's source past its first position keeps the
+whole table as plain source, so a table being typed never converts under the
+caret and swallows the keystrokes that follow. A caret parked exactly at the
+table's start, which is where focusing a rendered cell parks the host
+selection, keeps the replacement mounted. Pointer placement or keyboard entry
+focuses a rendered cell, while the registered table-source command temporarily
+removes the replacement for that table. Whole-note source mode omits the
+decoration engine and exposes every table in the same way as other Markdown
+source.
 
 The replacement derives one column template from every source row in the
 complete table block and gives that template to every rendered row. The
@@ -213,7 +223,7 @@ above. `-` means the row applies to every node of that name.
 | `WikilinkTarget` | `withoutSibling=WikilinkAlias` | `mark cm-skr-wikilink-target` | never |
 | `WikilinkAlias` | `-` | `mark cm-skr-wikilink-alias` | never |
 | `Embed` | `-` | `widget embed` | cursor-inside |
-| `Table` | `-` | `widget table` | never |
+| `Table` | `-` | `widget table` | cursor-inside-after-start |
 | `ListMark` | `-` | `mark cm-skr-list-mark` | never |
 | `Task` | `-` | `mark cm-skr-task` | never |
 | `TaskMarker` | `-` | `widget task-checkbox` | cursor-inside |

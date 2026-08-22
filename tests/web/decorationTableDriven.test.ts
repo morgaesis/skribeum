@@ -293,6 +293,11 @@ describe("data-driven decoration table", () => {
         ),
       ).toBe(false);
       expect(forceParsing(view, view.state.doc.length, 1_000)).toBe(true);
+      // The bulk insert leaves the caret at the pasted table's end, which
+      // keeps the table as source under cursor-inside-after-start; the
+      // deferred refresh under test needs the caret elsewhere so the grid
+      // may mount at all.
+      view.dispatch({ selection: { anchor: 0 } });
 
       view.scrollDOM.scrollTop = 160;
       view.scrollDOM.dispatchEvent(new Event("scroll"));

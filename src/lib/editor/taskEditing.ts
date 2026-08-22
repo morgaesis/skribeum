@@ -220,6 +220,50 @@ const deleteTaskMarkerForward: Command = ({ state, dispatch }) => {
   return true;
 };
 
+const LIST_ITEM_PREFIX = /^(\s*)(?:[-*+]|\d+[.)])\s(?:\[[^\]\n]\]\s)?/;
+
+/**
+ * Backspace at a list item's line start joins it into the previous line.
+ * Left to the stock join, the item's raw marker is spliced into the middle
+ * of the previous line's text; taking the marker with the newline keeps the
+ * merge clean. Backspace at the end of a marker-only item clears the whole
+ * marker, leaving an empty line rather than shaving bytes off the marker.
+ */
+const mergeListItemBackward: Command = ({ state, dispatch }) => {
+  const range = state.selection.main;
+  if (!range.empty) {
+    return false;
+  }
+  const line = state.doc.lineAt(range.head);
+  const prefix = LIST_ITEM_PREFIX.exec(line.text);
+  if (prefix === null) {
+    return false;
+  }
+  const markerEnd = line.from + prefix[0].length;
+  if (range.head === line.from && line.number > 1) {
+    const previous = state.doc.line(line.number - 1);
+    dispatch(
+      state.update({
+        changes: { from: previous.to, to: markerEnd },
+        selection: { anchor: previous.to },
+        userEvent: "delete.backward",
+      }),
+    );
+    return true;
+  }
+  if (range.head === markerEnd && markerEnd === line.to) {
+    dispatch(
+      state.update({
+        changes: { from: line.from, to: line.to },
+        selection: { anchor: line.from },
+        userEvent: "delete.backward",
+      }),
+    );
+    return true;
+  }
+  return false;
+};
+
 /** Task continuation and character-wise marker deletion ahead of stock Markdown keys. */
 export const taskEditing: Extension = [
   taskEditingState,
@@ -227,6 +271,7 @@ export const taskEditing: Extension = [
     keymap.of([
       { key: "Enter", run: continueTaskTrack },
       { key: "Backspace", run: deleteTaskMarkerBackward },
+      { key: "Backspace", run: mergeListItemBackward },
       { key: "Delete", run: deleteTaskMarkerForward },
     ]),
   ),

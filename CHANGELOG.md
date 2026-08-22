@@ -9,14 +9,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - A design reference page beside the browser demo, at `/design.html`. It
-  renders the palettes, color roles, type scale, radius scale, control
-  specimens, and motion classes from the theme's own tokens, reads every
-  displayed value back from the live cascade, and computes WCAG contrast
-  ratios for the active palette's named pairs, so the page cannot drift from
-  the stylesheet it documents.
+  renders the palettes, color roles, type scale, radius and elevation scale,
+  control specimens, and motion classes from the theme's own tokens, reads
+  every displayed value back from the live cascade, and computes WCAG
+  contrast ratios for the active palette's named pairs, so the page cannot
+  drift from the stylesheet it documents. The color-scheme switcher previews
+  the selected palettes as miniature shells, the system card split between
+  its light and dark halves, and each motion box replays a full exit on the
+  state clock followed by its class's entrance.
 
 ### Changed
 
+- Elevation is tiered with the radius scale: menus, popovers, completion
+  menus, tooltips, the selection toolbar, statusline popovers, and canvas
+  cards carry a lighter shadow than before, and only window-scale dialogs
+  and sheets keep the deep one, so a small floating surface no longer casts
+  a dialog's shadow.
 - The formatting toolbar stays out of the way of the note. It sits in the
   margin beside the selection rather than over the lines above it, level with
   the line the selection starts on, so every line stays legible while it is
@@ -27,10 +35,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of three. Stacked into a single narrow column, it fits in the margin at
   window widths that used to force it over the text.
 
+### Changed
+
+- Tab and Shift+Tab nest and unnest a list item when the caret sits at the
+  item's text start. Everywhere else both keys keep moving focus through
+  the page, so the editor never becomes a keyboard trap.
+
 ### Fixed
 
 - A selection spanning a wrapped or multi-line block no longer draws its
   highlight past the edge of the reading column into the margin.
+- Typing a table no longer loses keystrokes: a table whose source holds the
+  caret stays plain source, and the interactive grid takes over when the
+  caret leaves it. Focusing a rendered cell still parks the host selection
+  at the table's start without tearing the grid down.
+- The browser demo's Back and Forward controls work: committing each
+  navigation to history before the note loads stops the address echo from
+  downgrading every visit to a history replacement that left Back
+  permanently disabled.
+- Backspace at a list item's start joins it into the previous line without
+  splicing the raw marker into the text, and Backspace on an empty item
+  clears the whole marker instead of leaving a remnant.
+- The hover preview renders its body in the reading face instead of
+  monospace: nested note views now carry the prose typography that the
+  editor's own container previously supplied.
+- The outline lands on the selected heading even when an asynchronously
+  rendered diagram above it grows after the jump; the scroll re-anchors for
+  a bounded settle window instead of drifting.
+- The slash menu follows the visual viewport when an on-screen keyboard
+  shrinks it, instead of leaving the menu and the caret stranded off
+  screen.
+- A table with many columns floors its column tracks and scrolls inside its
+  own frame instead of compressing cells into overlapping slivers.
+- Mermaid diagrams keep a legible minimum size on narrow viewports and
+  scroll inside their own block, matching how wide code blocks behave.
+- Tabbing to a task checkbox below the fold scrolls it into view, and the
+  properties panel answers keyboard focus with the same visible ring every
+  other control shows.
+- Opening a canvas names the file in the header instead of the application.
+- The browser demo reports when a browser cannot open local folders instead
+  of doing nothing, and a folder picker that fails to open produces an
+  error instead of silence.
 
 ### Security
 

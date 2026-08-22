@@ -49,6 +49,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A table followed by prose with no blank line renders as a table again: the
+  parser's over-extended block is trimmed back to rows that share the
+  header's shape, so the following paragraph stops being swallowed as a
+  bogus row that kept the grid from mounting.
+- Typing a nested quote marker keeps every `>` typed: the paste
+  deduplication that folds pre-quoted content into a continuation line no
+  longer runs on single keystrokes.
+- New tab opens a new tab: the command shared the new-note path's in-place
+  navigation and replaced the current tab instead of adding one.
 - The reading position survives: a reload lands on the line the reader left,
   and switching to another tab and back returns to the same place instead of
   drifting, because tab snapshots anchor to content rather than a pixel

@@ -1600,7 +1600,7 @@ async function refreshTreeIndex(refreshTags = false) {
   }
 }
 
-async function createNewNote() {
+async function createNewNote(intent: "in-place" | "new-tab" = "in-place") {
   const activeVault = vault;
   if (activeVault === null) {
     return;
@@ -1623,7 +1623,7 @@ async function createNewNote() {
     tree = await vaultTreeRefresh(activeVault);
     void loadTreeTitles(activeVault, tree);
     refreshLinkContext();
-    await navigateToNote(path);
+    await navigateToNote(path, undefined, intent);
   } catch (error) {
     errorText = describeError(STRINGS.noteCreateFailed, error);
   }
@@ -1944,7 +1944,7 @@ function commandContext(): CommandContext {
     copyTreeNoteLink: (path) => writeLink({ path }),
     revealTreeEntry,
     togglePanel,
-    createTab: createNewNote,
+    createTab: () => createNewNote("new-tab"),
     closeTab: () => closeWorkspaceTab(),
     reopenClosedTab: reopenClosedWorkspaceTab,
     cycleTab: cycleWorkspaceTab,

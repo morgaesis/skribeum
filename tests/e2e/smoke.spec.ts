@@ -4756,6 +4756,13 @@ describe("skribeum shell", () => {
             document
               .querySelector('[role="treeitem"][tabindex="0"]')
               ?.getAttribute("data-path") ?? null,
+          // A switch the shell refused, rather than one that never reached
+          // it, says so here: the shell declines to leave a note whose
+          // pending edits it could not persist.
+          alert:
+            document
+              .querySelector('[role="alert"].skr-error')
+              ?.textContent?.trim() ?? null,
         };
       });
     let openedNote = await focusedPaneNote();

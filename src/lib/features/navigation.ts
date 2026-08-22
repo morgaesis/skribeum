@@ -743,15 +743,21 @@ export function createNoteNavigator(options: {
     },
     async open(address) {
       history.updateViewState(options.capture?.() ?? null);
-      const loaded = await enqueue(address, null, "fresh");
-      if (!loaded) {
-        options.changed?.(state());
-        return;
-      }
-      if (sameAddress(history.current(), address)) {
+      // The history entry commits before the load, not after: the shell
+      // reports the note it shows through `syncAddress` the moment the load
+      // lands, so a push decided afterwards would find the address already
+      // rewritten to its own destination and degrade into a replace,
+      // leaving every navigation without a history entry. A load that then
+      // fails walks the committed entry back.
+      const revisit = sameAddress(history.current(), address);
+      if (revisit) {
         history.replace(address, null);
       } else {
         history.push(address);
+      }
+      const loaded = await enqueue(address, null, "fresh");
+      if (!loaded && !revisit) {
+        history.back();
       }
       options.changed?.(state());
     },

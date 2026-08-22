@@ -619,6 +619,43 @@ describe("note addressing and desktop history", () => {
     navigator.dispose();
   });
 
+  it("keeps a history entry when the shell echoes the address mid-load", async () => {
+    // The shell reports the note it shows through `syncAddress` as soon as
+    // the load lands, before `open` resolves. A navigator that decided
+    // push-versus-replace after its load would find the address already
+    // rewritten to the destination and record no entry at all, leaving Back
+    // permanently disabled.
+    window.history.replaceState({}, "", "/skribeum/");
+    const first = { path: "first.md" };
+    const second = { path: "folder/second.md" };
+    let navigator: ReturnType<typeof createNoteNavigator> | null = null;
+    const load = vi.fn(async (address: NoteAddress) => {
+      navigator?.syncAddress(address);
+    });
+    navigator = createNoteNavigator({
+      mode: "browser",
+      browserWindow: window,
+      load,
+    });
+
+    await navigator.start(first);
+    await navigator.open(second);
+    expect(navigator.state()).toMatchObject({
+      address: second,
+      canGoBack: true,
+      canGoForward: false,
+    });
+
+    expect(navigator.back()).toBe(true);
+    await vi.waitFor(() =>
+      expect(new URL(window.location.href).searchParams.get("note")).toBe(
+        "first.md",
+      ),
+    );
+    navigator.dispose();
+    window.history.replaceState({}, "", "/");
+  });
+
   it("projects browser navigation onto the History API", async () => {
     window.history.replaceState({}, "", "/skribeum/");
     const first = { path: "first.md" };

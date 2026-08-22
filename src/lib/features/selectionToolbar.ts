@@ -316,7 +316,7 @@ const toolbarTheme = View.theme({
     backgroundColor: "var(--skr-surface-raised)",
     border: "1px solid var(--skr-border)",
     borderRadius: "var(--skr-radius-surface)",
-    boxShadow: "var(--skr-shadow)",
+    boxShadow: "var(--skr-shadow-surface)",
     fontFamily: "var(--skr-font-interface)",
   },
   ".cm-skr-toolbar-button": {

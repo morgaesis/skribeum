@@ -370,7 +370,7 @@ function surfaceEnter(node: HTMLElement) {
     border-radius: var(--skr-radius-surface);
     padding: 0.625rem 0.75rem;
     background: var(--skr-surface-raised);
-    box-shadow: var(--skr-shadow);
+    box-shadow: var(--skr-shadow-surface);
   }
 
   .skr-statusline-popover-trailing {

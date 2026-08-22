@@ -332,8 +332,15 @@ export async function selectLocalDirectory(): Promise<string | null> {
     return null;
   }
   const demoWindow = window as DemoWindow;
+  // A missing picker is a browser capability gap, not a cancellation: only
+  // an actual dismissal returns null, so the shell can stay quiet for a
+  // cancel and report every other outcome instead of failing silently.
   if (demoWindow.showDirectoryPicker === undefined) {
-    return null;
+    fail(
+      "vault/local-folder-unsupported",
+      "This browser cannot open a local folder. Opening a folder needs the File System Access API, which Chromium-based browsers provide.",
+      null,
+    );
   }
   try {
     return await useLocalDirectory(
@@ -342,6 +349,13 @@ export async function selectLocalDirectory(): Promise<string | null> {
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       return null;
+    }
+    if (error instanceof DOMException) {
+      fail(
+        "vault/local-folder-unavailable",
+        `The folder picker did not open: ${error.message}`,
+        null,
+      );
     }
     throw error;
   }

@@ -262,9 +262,48 @@ function setAppearance(key: string, value: string): void {
   localStorage.setItem(key, value);
   applyAppearance();
   renderLiveValues();
+  syncModePreviews();
 }
 
 /* ---- Sections ---- */
+
+/** A miniature shell mockup painted from one palette's preview tokens. */
+function modePreviewPane(paletteKind: "light" | "dark"): HTMLElement {
+  const pane = element("span", "design-mode-pane");
+  pane.dataset.paneMode = paletteKind;
+  const sidebar = element("span", "design-mode-pane-sidebar");
+  const lines = element("span", "design-mode-pane-lines");
+  for (let index = 0; index < 3; index += 1) {
+    lines.append(element("i"));
+  }
+  const accent = element("span", "design-mode-pane-accent");
+  pane.append(sidebar, lines, accent);
+  return pane;
+}
+
+/** Repaints every mode card's panes from the selected palettes' preview
+ * tokens, so the cards always show the palettes the page would resolve. */
+function syncModePreviews(): void {
+  const light = localStorage.getItem("design-light-palette") ?? "manuscript";
+  const dark = localStorage.getItem("design-dark-palette") ?? "nightroom";
+  for (const pane of document.querySelectorAll<HTMLElement>(
+    ".design-mode-pane",
+  )) {
+    const palette = pane.dataset.paneMode === "light" ? light : dark;
+    pane.style.setProperty(
+      "--design-pane-surface",
+      `var(--skr-preview-${palette}-surface)`,
+    );
+    pane.style.setProperty(
+      "--design-pane-text",
+      `var(--skr-preview-${palette}-text)`,
+    );
+    pane.style.setProperty(
+      "--design-pane-accent",
+      `var(--skr-preview-${palette}-accent)`,
+    );
+  }
+}
 
 function headerBlock(): HTMLElement {
   const header = element("header", "design-header");
@@ -272,13 +311,25 @@ function headerBlock(): HTMLElement {
   mark.src = "/favicon.svg";
   mark.alt = "";
   const title = element("h1", undefined, "Skribeum design system");
-  const modes = element("div", "design-segmented");
+  const modes = element("div", "design-mode-cards");
   modes.setAttribute("role", "group");
   modes.setAttribute("aria-label", "Color scheme");
   for (const mode of ["system", "light", "dark"]) {
-    const button = element("button", undefined, mode);
+    const button = element("button", "design-mode-card");
     button.type = "button";
     button.dataset.mode = mode;
+    const preview = element("span", "design-mode-preview");
+    if (mode === "light" || mode === "system") {
+      preview.append(modePreviewPane("light"));
+    }
+    if (mode === "dark" || mode === "system") {
+      const pane = modePreviewPane("dark");
+      // The system card shows both halves at once: the dark pane overlays
+      // the light one, clipped to the trailing half along a slanted seam.
+      if (mode === "system") pane.classList.add("design-mode-pane-half");
+      preview.append(pane);
+    }
+    button.append(preview, element("span", "design-mode-name", mode));
     button.addEventListener("click", () => {
       setAppearance("design-theme", mode);
       syncModeButtons();
@@ -293,7 +344,7 @@ function headerBlock(): HTMLElement {
     for (const button of modes.querySelectorAll("button")) {
       button.setAttribute(
         "aria-pressed",
-        String(button.dataset.mode === active),
+        String((button as HTMLElement).dataset.mode === active),
       );
     }
   }
@@ -415,20 +466,27 @@ function typeSection(): HTMLElement {
 
 function radiusSection(): HTMLElement {
   const container = section(
-    "Radius scale",
-    "Three values, nothing else: controls and chips, floating surfaces and content blocks, window-scale dialogs.",
+    "Radius and elevation",
+    "Three radii, two shadows, tiered together: controls sit flat in their surface, floating surfaces carry the light shadow, and window-scale dialogs carry the deep one.",
   );
   const row = element("div", "design-radius-row");
-  for (const [name, className] of [
-    ["control", "radius-control"],
-    ["surface", "radius-surface"],
-    ["dialog", "radius-dialog"],
+  for (const [name, className, caption] of [
+    ["control", "radius-control", "--skr-radius-control · no shadow"],
+    [
+      "surface",
+      "radius-surface shadow-surface",
+      "--skr-radius-surface · --skr-shadow-surface",
+    ],
+    [
+      "dialog",
+      "radius-dialog shadow-dialog",
+      "--skr-radius-dialog · --skr-shadow",
+    ],
   ]) {
     const figure = element("figure");
-    figure.append(
-      element("div", `radius-box ${className}`),
-      element("figcaption", undefined, `--skr-radius-${name}`),
-    );
+    const box = element("div", `radius-box ${className}`);
+    box.dataset.radius = name;
+    figure.append(box, element("figcaption", undefined, caption));
     row.append(figure);
   }
   container.append(row);
@@ -549,24 +607,78 @@ function controlsSection(): HTMLElement {
   return container;
 }
 
+/** Reads a duration token from the element's cascade, in milliseconds. */
+function tokenMilliseconds(styles: CSSStyleDeclaration, name: string): number {
+  const value = styles.getPropertyValue(name).trim();
+  if (value.endsWith("ms")) return Number.parseFloat(value);
+  if (value.endsWith("s")) return Number.parseFloat(value) * 1000;
+  return 0;
+}
+
+/** How long the box rests hidden between its exit and its entrance, so the
+ * two phases read as two events rather than one flicker. */
+const MOTION_REST_MILLISECONDS = 240;
+
 function motionSection(): HTMLElement {
   const container = section(
     "Motion",
-    "Three one-shot classes, opacity and position only. Click a box to replay its class. The caret blink and loading pulse are the only continuous indicators.",
+    "Three one-shot classes, opacity and position only. Every exit rides the 50ms state clock; each entrance uses its own class. Click a box to watch it leave and arrive. The caret blink and loading pulse are the only continuous indicators.",
   );
   const row = element("div", "design-motion-row");
   for (const [kind, label] of [
-    ["state", "state · 50ms linear"],
-    ["surface", "surface · 120ms"],
-    ["panel", "panel · 160ms"],
+    ["state", "exit 50ms · enter 50ms state"],
+    ["surface", "exit 50ms · enter 120ms surface"],
+    ["panel", "exit 50ms · enter 160ms panel"],
   ]) {
     const figure = element("figure");
     const box = element("div", "design-motion-box", "replay");
     box.dataset.motion = kind;
     box.addEventListener("click", () => {
-      box.classList.remove("design-motion-play");
-      void box.offsetWidth;
-      box.classList.add("design-motion-play");
+      if (box.dataset.playing === "true") return;
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        return;
+      }
+      box.dataset.playing = "true";
+      const styles = getComputedStyle(box);
+      const distance = styles.getPropertyValue("--skr-motion-distance").trim();
+      const exit = box.animate([{ opacity: 1 }, { opacity: 0 }], {
+        duration: tokenMilliseconds(styles, "--skr-motion-state-duration"),
+        easing: "linear",
+        fill: "forwards",
+      });
+      exit.onfinish = () => {
+        setTimeout(() => {
+          const enter =
+            kind === "state"
+              ? box.animate([{ opacity: 0 }, { opacity: 1 }], {
+                  duration: tokenMilliseconds(
+                    styles,
+                    "--skr-motion-state-duration",
+                  ),
+                  easing: "linear",
+                })
+              : box.animate(
+                  [
+                    { opacity: 0, transform: `translateY(${distance})` },
+                    { opacity: 1, transform: "translateY(0)" },
+                  ],
+                  {
+                    duration: tokenMilliseconds(
+                      styles,
+                      `--skr-motion-${kind}-duration`,
+                    ),
+                    easing:
+                      styles
+                        .getPropertyValue(`--skr-motion-${kind}-easing`)
+                        .trim() || "linear",
+                  },
+                );
+          exit.cancel();
+          enter.onfinish = () => {
+            delete box.dataset.playing;
+          };
+        }, MOTION_REST_MILLISECONDS);
+      };
     });
     figure.append(box, element("figcaption", undefined, label));
     row.append(figure);
@@ -672,7 +784,7 @@ shell.append(
 document.getElementById("design")?.append(shell);
 
 for (const button of document.querySelectorAll(
-  ".design-segmented [data-mode]",
+  ".design-mode-card[data-mode]",
 )) {
   button.setAttribute(
     "aria-pressed",
@@ -695,6 +807,7 @@ for (const card of document.querySelectorAll(".design-palette-card")) {
 }
 
 renderLiveValues();
+syncModePreviews();
 
 const colourScheme = window.matchMedia("(prefers-color-scheme: dark)");
 colourScheme.addEventListener("change", () => renderLiveValues());

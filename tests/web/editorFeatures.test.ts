@@ -883,7 +883,7 @@ describe("table editing through the registry", () => {
   const TABLE = "| a | b |\n| --- | --- |\n| c | d |";
 
   it("moves across cells on the cell navigation commands", () => {
-    const view = makeView(TABLE, 2, [
+    const view = makeView(TABLE, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -952,11 +952,11 @@ describe("table editing through the registry", () => {
   });
 
   it("grows the table when tabbing past the last cell", () => {
-    const view = makeView(TABLE, TABLE.length - 2, [
+    const view = makeView(TABLE, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
-    expect(runEditorCommand("table.cell.next")).toBe(true);
+    expect(focusRenderedTableCell(view, 0, 1, 1, "end")).toBe(true);
     expect(runEditorCommand("table.cell.next")).toBe(true);
     expect(view.state.doc.toString().split("\n")).toHaveLength(4);
   });
@@ -1126,8 +1126,8 @@ describe("table editing through the registry", () => {
     }
   });
 
-  it("shows raw table source only through its registered command", async () => {
-    const view = makeView(TABLE, TABLE.indexOf("c"), [
+  it("shows raw table source through its registered command", async () => {
+    const view = makeView(TABLE, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -1152,7 +1152,7 @@ describe("table editing through the registry", () => {
   });
 
   it("routes the row and column insertion strips through registry commands", async () => {
-    const rowView = makeView(TABLE, TABLE.length, [
+    const rowView = makeView(TABLE, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -1171,7 +1171,7 @@ describe("table editing through the registry", () => {
     expect(rowView.state.doc.toString()).toBe(`${TABLE}\n| | |`);
     rowView.destroy();
 
-    const columnView = makeView(TABLE, TABLE.length, [
+    const columnView = makeView(TABLE, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -1191,7 +1191,7 @@ describe("table editing through the registry", () => {
 
   it("routes ragged insertion strips from existing edge cells", async () => {
     const ragged = "| a | b | c |\n| --- | --- | --- |\n| x |";
-    const rowView = makeView(ragged, ragged.length, [
+    const rowView = makeView(ragged, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);
@@ -1202,7 +1202,7 @@ describe("table editing through the registry", () => {
     expect(rowView.state.doc.toString()).toBe(`${ragged}\n| | | |`);
     rowView.destroy();
 
-    const columnView = makeView(ragged, ragged.length, [
+    const columnView = makeView(ragged, 0, [
       decorationEngine(),
       tableEditingExtension(registry, context),
     ]);

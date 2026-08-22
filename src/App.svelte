@@ -2053,12 +2053,14 @@ function noteOpensWithHeading(source: string): boolean {
 const shellTitle = $derived(
   imageDocument !== null
     ? noteFileName(imageDocument.path)
-    : note === null || selectedPath === null
-      ? STRINGS.appTitle
-      : isNotePath(selectedPath)
-        ? resolveNoteTitle({ path: selectedPath, source: currentNoteSource })
-            .displayTitle
-        : noteFileName(selectedPath),
+    : contentView === VIEW_CANVAS && selectedPath !== null
+      ? noteFileName(selectedPath)
+      : note === null || selectedPath === null
+        ? STRINGS.appTitle
+        : isNotePath(selectedPath)
+          ? resolveNoteTitle({ path: selectedPath, source: currentNoteSource })
+              .displayTitle
+          : noteFileName(selectedPath),
 );
 const shellTitleVisible = $derived(note === null || noteTitleVisible);
 
@@ -2402,6 +2404,36 @@ function outlineNavigate(from: number) {
     userEvent: "select",
   });
   view.focus();
+  // scrollIntoView above lands `from` using CodeMirror's height map at
+  // dispatch time, and applies the actual scroll asynchronously rather than
+  // within this call. A widget below the target that renders asynchronously
+  // (a Mermaid diagram, a math block) can also grow once its own render
+  // finishes and calls requestMeasure, which shifts the heading without
+  // moving the scroll position again — possibly well after the initial
+  // scroll lands. Wait a frame for that initial scroll, capture it as the
+  // intended offset, then hold the heading there for a bounded window while
+  // any later async layout settles.
+  const docLength = view.state.doc.length;
+  const offsetFromViewportTop = () =>
+    view.lineBlockAt(from).top -
+    Math.max(0, view.scrollDOM.scrollTop - view.documentPadding.top);
+  let anchorOffset: number | null = null;
+  const deadline = performance.now() + 1500;
+  const resettle = () => {
+    if (view.state.doc.length !== docLength) return;
+    if (anchorOffset === null) {
+      anchorOffset = offsetFromViewportTop();
+    } else {
+      const drift = offsetFromViewportTop() - anchorOffset;
+      if (Math.abs(drift) > 0.5) {
+        view.scrollDOM.scrollTop += drift;
+      }
+    }
+    if (performance.now() < deadline) {
+      requestAnimationFrame(resettle);
+    }
+  };
+  requestAnimationFrame(resettle);
 }
 
 function linkGenerationContext(): WikilinkResolutionContext {

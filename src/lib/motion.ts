@@ -73,16 +73,6 @@ export function motionEasing(
   return value === "" ? "linear" : value;
 }
 
-/** The shared entrance travel: the distance a surface covers arriving. */
-export function motionDistance(
-  element: Element = document.documentElement,
-): string {
-  const value = getComputedStyle(element)
-    .getPropertyValue("--skr-motion-distance")
-    .trim();
-  return value === "" ? "0px" : value;
-}
-
 /** Starts an entrance after the initial compositor state has been resolved. */
 export function enterMotionSurface(
   element: HTMLElement | null | undefined,

@@ -99,10 +99,20 @@ The state class is `50ms linear`, the entrance-only surface class is `120ms`
 with `cubic-bezier(0.2, 0, 0, 1)`, and the panel class is `160ms` with the same
 curve. Transient surface exits use the state duration and animate opacity only.
 
-Heading marker geometry changes instantly. Entering the line raises the
-marker opacity with the state class, while leaving lowers it. Link, embed, and
-callout source swaps do not animate text or geometry. Source mode also applies
-without a transition.
+A revealed marker glyph is an object that takes up room: it grows from no
+width to its measured width entering, on the surface clock, and is squeezed
+back to no width leaving, on the state clock, fading over the same span
+either way. It is clipped to its own box for the length of the motion, so it
+shows only as much of itself as it currently has room for, and the text
+beside it is carried along continuously instead of being displaced in one
+frame and snapped back in the next. A construct only shows its markers while
+revealed, so the moment the cursor leaves there is no longer a node holding
+the width owed back; the exit plays instead on a stand-in holding the same
+glyphs in the same place for exactly as long as the motion runs, never part
+of the note, hidden from assistive technology, and dropped once the motion
+ends. Link, embed, and callout source swaps animate opacity only, since the
+swap happens in place and a width or translate there would move the text the
+cursor is sitting in. Source mode also applies without a transition.
 
 Motion state follows the one active reveal region. Link marks change state
 when that link owns the region. Embed source receives a temporary mark while
@@ -110,11 +120,11 @@ its atomic replacement is absent. Source-backed callout line decorations stay
 mounted while one state mark owns the composite region. Nested links do not
 receive an independent reveal state while their owning callout is active.
 
-Reveal motion changes opacity only. It does not animate width, height,
-transform, padding, margin, or font metrics, so cursor travel cannot move text.
 Under `prefers-reduced-motion: reduce`, all three class durations resolve to
-zero. The loading pulse stops at a fixed opacity, while the editor caret keeps
-its default blink.
+zero, so a marker's width and opacity swap directly between their two resting
+values with no motion between them and no stand-in built for the exit. The
+loading pulse stops at a fixed opacity, while the editor caret keeps its
+default blink.
 
 ## Table geometry and overflow
 

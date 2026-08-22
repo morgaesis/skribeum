@@ -685,6 +685,41 @@ async function editingCell(): Promise<EditingCell | null> {
 }
 
 /**
+ * Waits until nothing in the editing cell follows the caret.
+ *
+ * A pointer press places the caret when the editor answers the event, not when
+ * the driver finishes dispatching it. Travelling out of a cell is conditional
+ * on the caret already sitting at that cell's end, so an arrow key pressed
+ * before the press has been answered moves the selection the editor still held
+ * and stays inside the cell, which reads afterwards as a cell that refused to
+ * hand the caret on.
+ */
+async function waitForCellCaretAtEnd(): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(
+          '.cm-skr-table-cell[data-editing="true"] .cm-content',
+        );
+        const selection = getSelection();
+        if (content === null || selection === null || !selection.isCollapsed) {
+          return false;
+        }
+        const anchor = selection.anchorNode;
+        if (anchor === null || !content.contains(anchor)) return false;
+        const remainder = document.createRange();
+        remainder.setStart(anchor, selection.anchorOffset);
+        remainder.setEnd(content, content.childNodes.length);
+        return remainder.toString() === "";
+      }),
+    {
+      timeout: 10000,
+      timeoutMsg: "the caret did not reach the end of the editing cell",
+    },
+  );
+}
+
+/**
  * Waits for the caret to settle in the table cell described by `expected`, or
  * outside every table when `expected` is null.
  *
@@ -2987,6 +3022,7 @@ describe("skribeum shell", () => {
         },
       ]);
       await browser.releaseActions();
+      await waitForCellCaretAtEnd();
       await pressFocusedKey("ArrowRight");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
       await expectEditingCell({ row: "1", column: "1" });
@@ -3058,6 +3094,9 @@ describe("skribeum shell", () => {
       await renderedTables[0]
         ?.$('.cm-skr-table-cell[data-row="2"][data-column="1"]')
         .click();
+      // Which cell the Tab travels from is the cell the press landed in, so
+      // the press has to have been answered before the key is sent.
+      await expectEditingCell({ row: "2", column: "1" });
       await pressFocusedKey("Tab");
       await expectEditingCell({ row: "3", column: "0" });
       const tabGrown = edited.replace("| Ada | 10 |", "| Ada | 10 |\n| | |");

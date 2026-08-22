@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-08-22
+
 ### Added
 
 - A design reference page beside the browser demo, at `/design.html`. It
@@ -34,9 +36,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   above the line it covers and shorter buttons, so it crowds one line instead
   of three. Stacked into a single narrow column, it fits in the margin at
   window widths that used to force it over the text.
-
-### Changed
-
 - Tab and Shift+Tab nest and unnest a list item when the caret sits at the
   item's text start. Everywhere else both keys keep moving focus through
   the page, so the editor never becomes a keyboard trap.

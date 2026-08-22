@@ -2933,7 +2933,17 @@ async function openVaultAtPath(
       // as much as on a first visit, so it outranks whatever the restored
       // workspace last showed. The note joins the focused pane's strip
       // instead of replacing a restored tab, so nothing persisted is lost.
-      await navigation?.start(addressed);
+      // Reading position is not lost with it: the addressed note is very
+      // often the tab the workspace already carried a reading position for,
+      // and that persisted position, not a fresh top-of-document open, is
+      // what "restored" means for a reload.
+      const tab = ensurePaneTab(focusedWorkspacePane(), addressed.path);
+      // Reactive state is not structured-cloneable, and `start` threads this
+      // through `history.replaceState`, so the browser history entry needs
+      // its own plain copy rather than the workspace's live proxy.
+      const restoration =
+        tab.viewState === null ? null : $state.snapshot(tab.viewState);
+      await navigation?.start(addressed, restoration);
     } else if (
       navigationSurface === "browser" &&
       focusedWorkspacePane().activePath !== null &&

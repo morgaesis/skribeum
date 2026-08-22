@@ -79,6 +79,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The tag completion menu stops at the ends of its list instead of wrapping
   around, matching the command surface, and reopens when a character that
   ended the query is deleted instead of requiring the hash to be retyped.
+- A tag accepted a moment ago no longer displaces a closer answer to what is
+  being typed now. Session recency was compared before the rank recording how
+  closely a tag answers the query, so accepting a tag whose second path
+  segment matched carried it above one that matched outright for the rest of
+  the session, moving the row under Enter for a reason nothing on screen
+  stated.
+- A table followed by prose with no blank line renders as a table again: the
+  parser's over-extended block is trimmed back to rows that share the
+  header's shape, so the following paragraph stops being swallowed as a
+  bogus row that kept the grid from mounting.
+- Typing a nested quote marker keeps every `>` typed: the paste
+  deduplication that folds pre-quoted content into a continuation line no
+  longer runs on single keystrokes.
+- New tab opens a new tab: the command shared the new-note path's in-place
+  navigation and replaced the current tab instead of adding one.
 - The reading position survives: a reload lands on the line the reader left,
   and switching to another tab and back returns to the same place instead of
   drifting, because tab snapshots anchor to content rather than a pixel

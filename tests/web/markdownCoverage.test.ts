@@ -27,6 +27,7 @@ import {
 } from "../../src/lib/editor/markdown/obsidian";
 import {
   doublesQuoteMarker,
+  handleQuoteInput,
   quoteEditing,
 } from "../../src/lib/editor/quoteEditing";
 import { DEFAULT_TASK_STATUSES } from "../../src/lib/taskStatuses";
@@ -449,6 +450,36 @@ describe("quote and callout line editing", () => {
     // Unquoted text carries no marker to double.
     expect(doublesQuoteMarker("> ", "plain")).toBe(false);
     expect(doublesQuoteMarker("", "> quoted")).toBe(false);
+  });
+
+  it("keeps every keystroke when the reader types a nested quote marker by hand", () => {
+    // A single typed `>` is never "content that already carries its own
+    // marker": right after the first keystroke the line reads exactly like
+    // an editor-continued markers-only line, and collapsing every further
+    // `>` the reader types would silently eat them instead of deepening
+    // the nesting. Only a multi-character insert (paste, IME commit) is
+    // the marker-doubling case this guards against. `handleQuoteInput` is
+    // exercised directly, one keystroke at a time, the same way the real
+    // `EditorView.inputHandler` wiring calls it; when it declines, the
+    // character is applied exactly as CodeMirror's own default input path
+    // would apply it.
+    const view = quoteView("", 0);
+    const typeChar = (character: string): void => {
+      const range = view.state.selection.main;
+      if (!handleQuoteInput(view, range.from, range.to, character)) {
+        view.dispatch({
+          changes: { from: range.from, to: range.to, insert: character },
+          selection: { anchor: range.from + character.length },
+          userEvent: "input.type",
+        });
+      }
+    };
+    typeChar(">");
+    typeChar(">");
+    expect(view.state.doc.toString()).toBe(">>");
+    typeChar(" ");
+    typeChar("x");
+    expect(view.state.doc.toString()).toBe(">> x");
   });
 
   it("leaves pasted quoted content alone outside a quote", () => {

@@ -1345,6 +1345,19 @@ function updateTabDropZone(event: DragEvent, paneId: string) {
   splitDropZone = { paneId, side };
 }
 
+/**
+ * The drop zone only ever describes a drag in flight, so it ends with the
+ * drag rather than with the drop that happens to conclude it. A pane clears
+ * its own zone when the pointer leaves it or drops on it, but neither
+ * happens when the tab is carried back to a strip, when the drag is
+ * cancelled with Escape, or when the pointer is released outside the
+ * window: `dragend` is the one event every ending delivers, so it is what
+ * takes the overlay down.
+ */
+function endTabDrag() {
+  splitDropZone = null;
+}
+
 async function dropTabOnPane(event: DragEvent, paneId: string) {
   const origin = currentTabDrag();
   const zone = splitDropZone;
@@ -4205,7 +4218,7 @@ onMount(() => {
 <!-- registry-exempt keydown: the window handler is the registry's own
      global dispatcher; every chord it recognizes is a registered
      keybinding. -->
-<svelte:window onkeydown={onGlobalKeydown} />
+<svelte:window onkeydown={onGlobalKeydown} ondragend={endTabDrag} />
 
 <div
   class="skr-shell flex h-screen flex-col overflow-hidden"

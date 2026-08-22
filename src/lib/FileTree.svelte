@@ -19,17 +19,22 @@ const TREE_PADDING = 4;
 const OVERSCAN_ROWS = 12;
 const HOLD_DELAY_MS = 550;
 
-// The folder reveal choreography: rows displaced by a toggle translate from
-// their previous slot and revealed or hidden rows cross-fade, all on the
-// panel clock, while row hover fills keep the state clock throughout.
-const FOLDER_REVEAL_TRANSITION = [
-  "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
-  "opacity var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)",
-  "background-color var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
-].join(", ");
+// A folder reveal is a real expansion. The rows a toggle displaces hold
+// their own slot in the tree's layout and travel to the new one on the panel
+// clock, so the gap opens over the whole duration instead of opening in one
+// frame under an animation that only looks like travel. The rows the toggle
+// reveals or hides unfold from, and fold back into, the slot below their
+// folder: they start stacked on that fold line clipped to nothing and end at
+// their own slot at full height, which keeps the block flush against the
+// rows below it at every point of the animation. The scroll extent follows
+// the same clock, so a list taller than the sidebar grows and shrinks under
+// the reader rather than jumping.
+const FOLDED_CLIP = "inset(0 0 100% 0)";
+const UNFOLDED_CLIP = "inset(0 0 0 0)";
 
-// The open note's highlight travel: a compositor-only transform on the
-// panel clock, matching the folder reveal's own reflow clock above.
+// The open note's highlight travel between two notes: a compositor-only
+// transform on the panel clock. A highlight displaced by a folder reveal
+// instead moves with the row it marks, on the row's own clock and geometry.
 const ACTIVE_HIGHLIGHT_TRAVEL_TRANSITION =
   "transform var(--skr-motion-panel-duration) var(--skr-motion-panel-easing)";
 
@@ -82,12 +87,21 @@ let dropPath = $state<string | null>(null);
 let hoveredPath = $state<string | null>(null);
 let holdTimer: ReturnType<typeof setTimeout> | null = null;
 let menuCloseGeneration = 0;
-let folderMotionGeneration = 0;
-let folderMotionFrame: number | null = null;
-let folderMotionTimer: ReturnType<typeof setTimeout> | null = null;
-let folderMotionElements: HTMLElement[] = [];
-let ghostElements = $state<Array<HTMLElement | null | undefined>>([]);
+// The reveal in flight: whether the tree carries the panel-clock transitions,
+// which rows are unfolding and from where, which rows are held on the slot
+// they are travelling away from, which are folding away, and whether the
+// animation has been handed its end state yet. Only geometry is ever held;
+// the row list, the ARIA tree and the persisted expansion are the toggle's
+// own flush, so anything reading the tree sees the new state at once.
+let revealing = $state(false);
+let revealPhase = $state<0 | 1>(0);
+let unfoldingRows = $state<Record<string, FoldedStart>>({});
+let heldTops = $state<Record<string, number>>({});
+let heldHeight = $state<number | null>(null);
 let leavingRows = $state<GhostRow[]>([]);
+let revealSpan = $state(0);
+let revealGeneration = 0;
+let revealTimer: ReturnType<typeof setTimeout> | null = null;
 let highlightElement = $state<HTMLElement | null>();
 // Plain (non-reactive) bookkeeping: the choreography effect below both
 // reads and writes these, and making them `$state` would make its own
@@ -98,6 +112,18 @@ let highlightAnimatedPath: string | null = null;
 let highlightMotionGeneration = 0;
 let highlightMotionFrame: number | null = null;
 let highlightMotionTimer: ReturnType<typeof setTimeout> | null = null;
+// Tracks which `selectedPath` the ancestor auto-expand effect below last
+// computed for. Without this the effect would also re-run whenever a
+// manual folder toggle mutates `userExpanded`/`autoExpanded`, and since
+// `selectedPath` still points inside the folder being collapsed, it would
+// recompute the very ancestor the user just closed back into `autoExpanded`
+// and silently undo the collapse.
+let autoExpandedForPath: string | null | undefined;
+let revealedSelection: string | null = null;
+// The first expansion state the tree resolves is a rendering, not a change:
+// no row was on screen to travel from, so it lands in the frame the tree
+// first paints. Everything after it is a change the reader can see.
+let hasRendered = false;
 let mounted = true;
 
 type RowPresentation = {
@@ -118,18 +144,16 @@ type Row = TreeEntry & {
   setSize: number;
 };
 
-/** A collapsed row lingering only long enough to fade out. */
+/** Where an unfolding row starts, and how much of it is visible there. */
+type FoldedStart = { top: number; clip: string };
+
+/** A collapsed row lingering only long enough to fold away. */
 type GhostRow = RowPresentation & {
   open: boolean;
-  top: number;
-  opacity: number;
-};
-
-type FolderMotionSnapshot = {
-  presentation: RowPresentation;
-  open: boolean;
-  top: number;
-  opacity: number;
+  from: number;
+  fromClip: string;
+  to: number;
+  folded: boolean;
 };
 
 function parentPath(path: string): string {
@@ -140,50 +164,66 @@ function baseName(path: string): string {
   return path.split("/").at(-1) ?? path;
 }
 
-function transformOffset(element: HTMLElement, axis: "x" | "y"): number {
+function transformOffset(element: HTMLElement): number {
   const transform = getComputedStyle(element).transform.trim();
   if (transform === "" || transform === "none") return 0;
 
   const matrix3d = transform.match(/^matrix3d\(([^)]+)\)$/);
   if (matrix3d !== null) {
     const values = matrix3d[1]?.split(",").map(Number) ?? [];
-    return values[axis === "x" ? 12 : 13] ?? 0;
+    return values[13] ?? 0;
   }
   const matrix = transform.match(/^matrix\(([^)]+)\)$/);
   if (matrix !== null) {
     const values = matrix[1]?.split(",").map(Number) ?? [];
-    return values[axis === "x" ? 4 : 5] ?? 0;
+    return values[5] ?? 0;
   }
 
   const translate = transform.match(
-    /^translate\(\s*(-?[\d.]+)px(?:,\s*(-?[\d.]+)px)?\s*\)$/,
+    /^translate\(\s*-?[\d.]+px(?:,\s*(-?[\d.]+)px)?\s*\)$/,
   );
-  if (translate !== null) {
-    return Number.parseFloat(translate[axis === "x" ? 1 : 2] ?? "0");
-  }
-  const axisTranslate = transform.match(
-    new RegExp(`^translate${axis.toUpperCase()}\\(\\s*(-?[\\d.]+)px\\s*\\)$`),
-  );
+  if (translate !== null) return Number.parseFloat(translate[1] ?? "0");
+  const axisTranslate = transform.match(/^translateY\(\s*(-?[\d.]+)px\s*\)$/);
   return axisTranslate === null
     ? 0
     : Number.parseFloat(axisTranslate[1] ?? "0");
 }
 
-function renderedCoordinate(
-  element: HTMLElement,
-  axis: "x" | "y",
-  fallback: number,
-): number {
-  const property = axis === "x" ? element.style.left : element.style.top;
-  const base = Number.parseFloat(property);
+/**
+ * Where an element is right now rather than where it is headed: the computed
+ * `top` reports the interpolated value while a transition runs, so a reveal
+ * interrupted mid-flight starts its reversal from what the reader can see.
+ */
+function renderedTop(element: HTMLElement, fallback: number): number {
+  const computed = Number.parseFloat(getComputedStyle(element).top);
+  const inline = Number.parseFloat(element.style.top);
+  const base = Number.isFinite(computed)
+    ? computed
+    : Number.isFinite(inline)
+      ? inline
+      : fallback;
+  return base + transformOffset(element);
+}
+
+function renderedClip(element: HTMLElement, fallback: string): string {
+  const clip = getComputedStyle(element).clipPath.trim();
+  return clip === "" || clip === "none" ? fallback : clip;
+}
+
+function rowElement(path: string): HTMLElement | null {
   return (
-    (Number.isFinite(base) ? base : fallback) + transformOffset(element, axis)
+    treeElement?.querySelector<HTMLElement>(
+      `[data-path="${CSS.escape(path)}"]`,
+    ) ?? null
   );
 }
 
-function renderedOpacity(element: HTMLElement): number {
-  const opacity = Number.parseFloat(getComputedStyle(element).opacity);
-  return Number.isFinite(opacity) ? opacity : 1;
+function ghostElement(path: string): HTMLElement | null {
+  return (
+    treeElement?.querySelector<HTMLElement>(
+      `[data-ghost-path="${CSS.escape(path)}"]`,
+    ) ?? null
+  );
 }
 
 function cancelHighlightCallbacks(): void {
@@ -197,24 +237,20 @@ function cancelHighlightCallbacks(): void {
   }
 }
 
-function cancelFolderCallbacks(): void {
-  if (folderMotionFrame !== null) {
-    cancelAnimationFrame(folderMotionFrame);
-    folderMotionFrame = null;
-  }
-  if (folderMotionTimer !== null) {
-    clearTimeout(folderMotionTimer);
-    folderMotionTimer = null;
+function cancelRevealCallbacks(): void {
+  if (revealTimer !== null) {
+    clearTimeout(revealTimer);
+    revealTimer = null;
   }
 }
 
 onDestroy(() => {
   mounted = false;
   highlightMotionGeneration += 1;
-  folderMotionGeneration += 1;
+  revealGeneration += 1;
   menuCloseGeneration += 1;
   cancelHighlightCallbacks();
-  cancelFolderCallbacks();
+  cancelRevealCallbacks();
   clearHold();
 });
 function expanded(path: string): boolean {
@@ -267,7 +303,17 @@ function noteRowsByParent(): Map<
   return resolved;
 }
 
-const rows = $derived.by((): Row[] => {
+/**
+ * The visible row list for a given expansion state. Taking the state as an
+ * argument rather than reading it lets a toggle measure the layout it is
+ * about to produce while the current one is still on screen, which is what
+ * makes the reveal a real expansion instead of a jump with an animation over
+ * it.
+ */
+function buildRows(
+  userOpen: Record<string, boolean>,
+  autoOpen: Record<string, boolean>,
+): Row[] {
   const noteRows = noteRowsByParent();
   const children = new Map<string, TreeEntry[]>();
   for (const entry of entries) {
@@ -300,14 +346,19 @@ const rows = $derived.by((): Row[] => {
         position: index + 1,
         setSize: siblings.length,
       });
-      if (entry.kind === "directory" && expanded(entry.path)) {
+      if (
+        entry.kind === "directory" &&
+        (userOpen[entry.path] === true || autoOpen[entry.path] === true)
+      ) {
         append(entry.path, depth + 1);
       }
     });
   };
   append("", 0);
   return visible;
-});
+}
+
+const rows = $derived(buildRows(userExpanded, autoExpanded));
 
 const activeRowIndex = $derived(
   selectedPath === null
@@ -317,12 +368,37 @@ const activeRowIndex = $derived(
 const activeRowTop = $derived(
   activeRowIndex < 0 ? null : TREE_PADDING + activeRowIndex * rowHeight,
 );
+const activeRowPath = $derived(activeRowIndex < 0 ? null : selectedPath);
+/**
+ * Where the open note's highlight belongs this frame. A highlight on a row
+ * the current reveal is unfolding sits on that row's own travelling
+ * geometry, so the fill and the row it marks are never a frame apart.
+ */
+const highlightTop = $derived.by((): number | null => {
+  if (activeRowTop === null || activeRowPath === null) return activeRowTop;
+  if (revealPhase === 1) return activeRowTop;
+  return (
+    unfoldingRows[activeRowPath]?.top ?? heldTops[activeRowPath] ?? activeRowTop
+  );
+});
+const highlightClip = $derived.by((): string | null => {
+  if (activeRowPath === null || unfoldingRows[activeRowPath] === undefined) {
+    return null;
+  }
+  return revealPhase === 1
+    ? UNFOLDED_CLIP
+    : (unfoldingRows[activeRowPath]?.clip ?? FOLDED_CLIP);
+});
 
+// While a reveal runs, rows travel across slots they do not finally occupy,
+// so the rendered window has to cover the distance the block moves as well
+// as the resting viewport.
+const overscanRows = $derived(OVERSCAN_ROWS + revealSpan);
 const windowStart = $derived(
   Math.max(
     0,
     Math.floor(Math.max(0, scrollTop - TREE_PADDING) / rowHeight) -
-      OVERSCAN_ROWS,
+      overscanRows,
   ),
 );
 const windowEnd = $derived(
@@ -330,7 +406,7 @@ const windowEnd = $derived(
     rows.length,
     Math.ceil(
       Math.max(0, scrollTop + viewportHeight - TREE_PADDING) / rowHeight,
-    ) + OVERSCAN_ROWS,
+    ) + overscanRows,
   ),
 );
 const renderedIndices = $derived.by((): number[] => {
@@ -386,6 +462,14 @@ $effect(() => {
 
 $effect(() => {
   const path = selectedPath;
+  // Only a genuine selection change reveals ancestors. Reading `path` above
+  // is what makes this effect re-run when it changes; bailing out before
+  // touching `userExpanded`/`autoExpanded` keeps this run from depending on
+  // either, so a manual folder toggle (which mutates both) does not
+  // re-trigger this effect and re-derive the selected path's ancestors from
+  // scratch, which would auto-expand the very folder the toggle just closed.
+  if (path === autoExpandedForPath) return;
+  autoExpandedForPath = path;
   const next: Record<string, boolean> = {};
   if (path !== null) {
     const segments = path.split("/").slice(0, -1);
@@ -398,21 +482,12 @@ $effect(() => {
   const changed =
     Object.keys(previous).length !== Object.keys(next).length ||
     Object.keys(next).some((ancestor) => previous[ancestor] !== true);
-  if (changed) {
-    const snapshots = captureFolderMotion();
-    const collapsingPaths = Object.keys(previous).filter(
-      (folderPath) =>
-        previous[folderPath] === true &&
-        next[folderPath] !== true &&
-        userExpanded[folderPath] !== true,
-    );
-    const generation = ++folderMotionGeneration;
-    cancelFolderCallbacks();
-    settleFolderMotion();
-    autoExpanded = next;
-    void playFolderReveal(snapshots, generation, collapsingPaths);
-  }
-  if (path !== null) {
+  if (changed) void playExpansionChange(userExpanded, next);
+  // Only a note change scrolls the tree. Re-running this reveal for an
+  // unrelated folder toggle would drag the whole sidebar back to the open
+  // note every time a reader opened a folder somewhere else in the vault.
+  if (path !== null && path !== revealedSelection) {
+    revealedSelection = path;
     void tick().then(() => {
       if (!mounted) return;
       const index = rows.findIndex((row) => row.path === path);
@@ -424,18 +499,20 @@ $effect(() => {
 /**
  * Travels the open-note highlight from its previous row to the new one on
  * the panel clock, a compositor-only transform. The overlay's own geometry
- * (top) always applies instantly; only the leftover transform interpolates.
- * This effect re-runs for reasons other than a selection change too (the
- * tree reflowing under an unchanged selection, e.g. a sibling folder
- * toggling), in which case it just follows the new geometry with no
- * choreography at all: the travel is reserved for an actual note change.
- * When the previous row has left the screen (first selection, or the row
- * sat inside what is now a collapsed folder), there is nothing to travel
- * from, so the highlight enters in place with the surface class instead.
+ * (top) applies instantly; only the leftover transform interpolates. When
+ * the previous row has left the screen (first selection, or the row sat
+ * inside what is now a collapsed folder), there is nothing to travel from,
+ * so the highlight enters in place with the surface class instead.
+ *
+ * A reveal that displaces the open note is not a travel: the highlight then
+ * takes the row's own moving geometry, on the tree's panel-clock transition,
+ * so the fill stays on its row for every frame of the expansion instead of
+ * animating on a clock of its own.
  */
 $effect(() => {
   const path = selectedPath;
-  const top = activeRowTop;
+  const top = highlightTop;
+  const clip = highlightClip;
   const element = highlightElement;
   if (!(element instanceof HTMLElement)) return;
 
@@ -450,16 +527,42 @@ $effect(() => {
     element.style.transition = "";
     element.style.transform = "";
     element.style.opacity = "0";
+    element.style.removeProperty("clip-path");
     highlightRestTop = null;
     return;
   }
 
+  // A row the reveal is unfolding carries the highlight with it: same start,
+  // same clip, same panel-clock transition, so the two are one object. The
+  // start state is taken up in one frame like the row's own, which is a new
+  // element and so cannot animate into existence; the travel that follows is
+  // the tree's transition, shared with the row.
+  if (clip !== null) {
+    const arriving = revealPhase === 0;
+    highlightAnimatedPath = path;
+    cancelHighlightCallbacks();
+    highlightMotionGeneration += 1;
+    delete element.dataset.motionSurface;
+    element.style.transition = arriving ? "none" : "";
+    element.style.transform = "";
+    element.style.opacity = "1";
+    element.style.top = `${top}px`;
+    element.style.clipPath = clip;
+    highlightRestTop = top;
+    if (arriving) {
+      // Commit the start state under `transition: none`, then hand the
+      // element back to the tree's own transition for the travel.
+      void element.offsetHeight;
+      element.style.transition = "";
+    }
+    return;
+  }
+  element.style.removeProperty("clip-path");
+
   const isNewSelection = path !== highlightAnimatedPath;
   highlightAnimatedPath = path;
   const previousTop =
-    highlightRestTop === null
-      ? null
-      : renderedCoordinate(element, "y", highlightRestTop);
+    highlightRestTop === null ? null : renderedTop(element, highlightRestTop);
   cancelHighlightCallbacks();
   const generation = ++highlightMotionGeneration;
 
@@ -547,6 +650,13 @@ $effect(() => {
   return () => observer.disconnect();
 });
 
+// Declared last, so it runs after the expansion state settles on the first
+// pass: from the second pass on, a change to that state is a change to
+// something the reader has already seen.
+$effect(() => {
+  hasRendered = true;
+});
+
 async function focusRow(index: number, focus = true) {
   if (rows.length === 0) return;
   const nextIndex = Math.max(0, Math.min(index, rows.length - 1));
@@ -631,192 +741,177 @@ function persistExpanded() {
   );
 }
 
+function presentationOf(row: Row | GhostRow): RowPresentation {
+  return {
+    path: row.path,
+    kind: row.kind,
+    depth: row.depth,
+    label: row.label,
+    ...(row.suffix === undefined ? {} : { suffix: row.suffix }),
+    ...(row.icon === undefined ? {} : { icon: row.icon }),
+  };
+}
+
 function toggleFolder(row: Row) {
-  void toggleFolderWithReveal(row);
+  const nextUser = { ...userExpanded, [row.path]: !expanded(row.path) };
+  const nextAuto = { ...autoExpanded };
+  delete nextAuto[row.path];
+  void playExpansionChange(nextUser, nextAuto, true);
 }
 
-function captureFolderMotion(): Map<string, FolderMotionSnapshot> {
-  const snapshots = new Map<string, FolderMotionSnapshot>();
-  for (const index of renderedIndices) {
-    const row = rows[index];
-    const element = itemElements[index];
-    if (row === undefined || !(element instanceof HTMLElement)) continue;
-    snapshots.set(row.path, {
-      presentation: {
-        path: row.path,
-        kind: row.kind,
-        depth: row.depth,
-        label: row.label,
-        ...(row.suffix === undefined ? {} : { suffix: row.suffix }),
-        ...(row.icon === undefined ? {} : { icon: row.icon }),
-      },
-      open: row.kind === "directory" && expanded(row.path),
-      top: renderedCoordinate(element, "y", TREE_PADDING + index * rowHeight),
-      opacity: renderedOpacity(element),
-    });
-  }
-  for (const [index, ghost] of leavingRows.entries()) {
-    const element = ghostElements[index];
-    snapshots.set(ghost.path, {
-      presentation: {
-        path: ghost.path,
-        kind: ghost.kind,
-        depth: ghost.depth,
-        label: ghost.label,
-        ...(ghost.suffix === undefined ? {} : { suffix: ghost.suffix }),
-        ...(ghost.icon === undefined ? {} : { icon: ghost.icon }),
-      },
-      open: ghost.open,
-      top:
-        element instanceof HTMLElement
-          ? renderedCoordinate(element, "y", ghost.top)
-          : ghost.top,
-      opacity:
-        element instanceof HTMLElement
-          ? renderedOpacity(element)
-          : ghost.opacity,
-    });
-  }
-  return snapshots;
-}
-
-/** Restores every row the reveal choreography touched to its settled state. */
-function settleFolderMotion() {
-  for (const element of folderMotionElements) {
-    element.style.transition = "";
-    element.style.transform = "";
-    element.style.opacity = "";
-  }
-  folderMotionElements = [];
-  ghostElements = [];
+/** Releases every row and overlay the reveal borrowed. */
+function settleReveal(): void {
+  revealing = false;
+  revealPhase = 0;
+  revealSpan = 0;
+  heldHeight = null;
+  if (Object.keys(unfoldingRows).length > 0) unfoldingRows = {};
+  if (Object.keys(heldTops).length > 0) heldTops = {};
   if (leavingRows.length > 0) leavingRows = [];
 }
 
 /**
- * Flips a folder and choreographs the change so it reads as a reveal: rows
- * a toggle displaces translate from their previous slot while revealed rows
- * fade in and hidden rows linger as inert ghosts fading out. Row geometry
- * itself applies instantly and only transform and opacity animate, so
- * keyboard focus, scrolling, and the ARIA tree read from the real rows at
- * their final positions throughout. With animations off or reduced motion,
- * the toggle lands in its final state with no choreography at all.
+ * The slot a block of rows unfolds out of, or folds back into: the one
+ * directly below the nearest row above it that exists in both layouts,
+ * measured in the layout the block is travelling away from.
  */
-async function toggleFolderWithReveal(row: Row) {
-  const folderPath = row.path;
-  const opening = !expanded(folderPath);
-  const snapshots = captureFolderMotion();
-  const generation = ++folderMotionGeneration;
-  cancelFolderCallbacks();
-  settleFolderMotion();
+function foldOrigin(
+  order: readonly Row[],
+  index: number,
+  slots: ReadonlyMap<string, number>,
+): number {
+  for (let above = index - 1; above >= 0; above -= 1) {
+    const path = order[above]?.path;
+    const slot = path === undefined ? undefined : slots.get(path);
+    if (slot !== undefined) return TREE_PADDING + (slot + 1) * rowHeight;
+  }
+  return TREE_PADDING;
+}
+
+/**
+ * Moves the tree from one expansion state to another as a real expansion.
+ * Every displaced row travels through the slots between its old and new
+ * position on the panel clock, the revealed rows unfold from their folder's
+ * slot while the hidden ones fold back into it, and the tree's own height
+ * follows the same clock so the scroll extent grows and shrinks under the
+ * reader instead of jumping. The ARIA tree, keyboard focus and hit testing
+ * read the new state from the first frame; only the geometry is in motion.
+ * With animations off or reduced motion the new state simply applies.
+ */
+async function playExpansionChange(
+  nextUser: Record<string, boolean>,
+  nextAuto: Record<string, boolean>,
+  persist = false,
+): Promise<void> {
   const tree = treeElement;
+  const apply = () => {
+    userExpanded = nextUser;
+    autoExpanded = nextAuto;
+    if (persist) persistExpanded();
+  };
   const duration = !(tree instanceof HTMLElement)
     ? 0
     : motionDurationMilliseconds("--skr-motion-panel-duration", tree);
-  if (duration > 0 && !opening) {
-    leavingRows = renderedIndices.flatMap((index): GhostRow[] => {
-      const hidden = rows[index];
-      const snapshot =
-        hidden === undefined ? undefined : snapshots.get(hidden.path);
-      if (
-        hidden === undefined ||
-        snapshot === undefined ||
-        !hidden.path.startsWith(`${folderPath}/`)
-      ) {
-        return [];
-      }
-      return [
-        {
-          ...snapshot.presentation,
-          open: snapshot.open,
-          top: snapshot.top,
-          opacity: snapshot.opacity,
-        },
-      ];
-    });
-  }
-  userExpanded[folderPath] = opening;
-  delete autoExpanded[folderPath];
-  persistExpanded();
-  if (duration === 0 || !(tree instanceof HTMLElement)) return;
-  await playFolderReveal(snapshots, generation, opening ? [] : [folderPath]);
-}
-
-async function playFolderReveal(
-  snapshots: Map<string, FolderMotionSnapshot>,
-  generation: number,
-  collapsingPaths: readonly string[] = [],
-): Promise<void> {
-  const tree = treeElement;
-  if (!mounted || !(tree instanceof HTMLElement)) return;
-  const duration = motionDurationMilliseconds(
-    "--skr-motion-panel-duration",
-    tree,
-  );
-  if (duration === 0) return;
-  if (collapsingPaths.length > 0) {
-    leavingRows = [...snapshots.values()]
-      .filter((snapshot) =>
-        collapsingPaths.some((folderPath) =>
-          snapshot.presentation.path.startsWith(`${folderPath}/`),
-        ),
-      )
-      .map((snapshot) => ({
-        ...snapshot.presentation,
-        open: snapshot.open,
-        top: snapshot.top,
-        opacity: snapshot.opacity,
-      }));
-  }
-  await tick();
-  if (!mounted || generation !== folderMotionGeneration) return;
-  const moving: HTMLElement[] = [];
-  for (const index of renderedIndices) {
-    const current = rows[index];
-    const element = itemElements[index];
-    if (current === undefined || !(element instanceof HTMLElement)) continue;
-    const before = snapshots.get(current.path);
-    if (before === undefined) {
-      element.style.transition = "none";
-      element.style.opacity = "0";
-      moving.push(element);
-    } else {
-      const finalTop = TREE_PADDING + index * rowHeight;
-      const offset = before.top - finalTop;
-      const opacityChanged = before.opacity < 1;
-      if (offset === 0 && !opacityChanged) continue;
-      element.style.transition = "none";
-      if (offset !== 0) element.style.transform = `translateY(${offset}px)`;
-      if (opacityChanged) element.style.opacity = `${before.opacity}`;
-      moving.push(element);
-    }
-  }
-  const ghosts = ghostElements.filter(
-    (element): element is HTMLElement => element instanceof HTMLElement,
-  );
-  folderMotionElements = [...moving, ...ghosts];
-  if (folderMotionElements.length === 0) {
-    settleFolderMotion();
+  if (
+    !hasRendered ||
+    !(tree instanceof HTMLElement) ||
+    duration === 0 ||
+    !mounted
+  ) {
+    revealGeneration += 1;
+    cancelRevealCallbacks();
+    settleReveal();
+    apply();
     return;
   }
-  void tree.offsetWidth;
-  folderMotionFrame = requestAnimationFrame(() => {
-    folderMotionFrame = null;
-    if (!mounted || generation !== folderMotionGeneration) return;
-    for (const element of moving) {
-      element.style.transition = FOLDER_REVEAL_TRANSITION;
-      element.style.transform = "";
-      element.style.opacity = "";
-    }
-    for (const ghost of ghosts) {
-      ghost.style.transition = FOLDER_REVEAL_TRANSITION;
-      ghost.style.opacity = "0";
-    }
-    folderMotionTimer = setTimeout(() => {
-      folderMotionTimer = null;
-      if (!mounted || generation !== folderMotionGeneration) return;
-      settleFolderMotion();
-    }, duration);
+
+  const before = rows;
+  const after = buildRows(nextUser, nextAuto);
+  const beforeSlots = new Map(before.map((row, index) => [row.path, index]));
+  const afterSlots = new Map(after.map((row, index) => [row.path, index]));
+
+  const unfolding: Record<string, FoldedStart> = {};
+  after.forEach((row, index) => {
+    if (beforeSlots.has(row.path)) return;
+    // A row that reverses an unfinished collapse starts from wherever its own
+    // ghost has reached, so an interrupted reveal never restarts from a
+    // position the reader has not seen.
+    const ghost = ghostElement(row.path);
+    const origin = foldOrigin(after, index, beforeSlots);
+    unfolding[row.path] = {
+      top: ghost === null ? origin : renderedTop(ghost, origin),
+      clip: ghost === null ? FOLDED_CLIP : renderedClip(ghost, FOLDED_CLIP),
+    };
   });
+
+  const folding: GhostRow[] = [];
+  before.forEach((row, index) => {
+    if (afterSlots.has(row.path)) return;
+    const element = rowElement(row.path);
+    const resting = TREE_PADDING + index * rowHeight;
+    folding.push({
+      ...presentationOf(row),
+      open: row.kind === "directory" && expanded(row.path),
+      from: element === null ? resting : renderedTop(element, resting),
+      fromClip:
+        element === null ? UNFOLDED_CLIP : renderedClip(element, UNFOLDED_CLIP),
+      to: foldOrigin(before, index, afterSlots),
+      folded: false,
+    });
+  });
+
+  if (Object.keys(unfolding).length === 0 && folding.length === 0) {
+    apply();
+    return;
+  }
+
+  // Every surviving row the change displaces holds the slot it is travelling
+  // away from for one flush, which is what the transition then interpolates
+  // out of.
+  const held: Record<string, number> = {};
+  for (const [path, slot] of beforeSlots) {
+    const destination = afterSlots.get(path);
+    if (destination === undefined || destination === slot) continue;
+    held[path] = TREE_PADDING + slot * rowHeight;
+  }
+
+  const generation = ++revealGeneration;
+  cancelRevealCallbacks();
+  // Ghosts still folding away from an earlier toggle keep their own motion;
+  // only the rows this change moves are staged afresh.
+  const carried = leavingRows.filter(
+    (ghost) =>
+      !afterSlots.has(ghost.path) &&
+      folding.every((row) => row.path !== ghost.path),
+  );
+  revealing = true;
+  revealPhase = 0;
+  unfoldingRows = unfolding;
+  heldTops = held;
+  heldHeight = TREE_PADDING * 2 + before.length * rowHeight;
+  leavingRows = [...carried, ...folding];
+  revealSpan = Math.max(Object.keys(unfolding).length, folding.length);
+  // The new state lands here, in the caller's own flush: rows, ARIA, and the
+  // persisted expansion are never a frame behind the click. Only where the
+  // rows are drawn is held back.
+  apply();
+  await tick();
+  if (!mounted || generation !== revealGeneration) return;
+  // The transitions have to be committed before the geometry moves: a
+  // transition runs only when the style it interpolates from already named
+  // it, so reading layout here is what makes the next flush animate rather
+  // than jump.
+  void tree.getBoundingClientRect();
+
+  revealPhase = 1;
+  for (const ghost of leavingRows) ghost.folded = true;
+  await tick();
+  if (!mounted || generation !== revealGeneration) return;
+  revealTimer = setTimeout(() => {
+    revealTimer = null;
+    if (!mounted || generation !== revealGeneration) return;
+    settleReveal();
+  }, duration);
 }
 
 function activate(row: Row, newTab = false) {
@@ -1033,6 +1128,29 @@ function onMenuKeydown(event: KeyboardEvent) {
   buttons[next]?.focus();
 }
 
+/**
+ * A row's geometry for this frame: its resting slot, or the fold line it is
+ * unfolding from while the reveal's start state is on screen.
+ */
+function rowStyle(path: string, index: number, depth: number): string {
+  const unfolding = unfoldingRows[path];
+  const held = revealPhase === 0;
+  const resting = TREE_PADDING + index * rowHeight;
+  const top = held ? (unfolding?.top ?? heldTops[path] ?? resting) : resting;
+  const geometry = `top: ${top}px; height: ${rowHeight}px; padding-left: ${0.5 + depth}rem`;
+  if (unfolding === undefined) return geometry;
+  return `${geometry}; clip-path: ${held ? unfolding.clip : UNFOLDED_CLIP}`;
+}
+
+function ghostStyle(ghost: GhostRow): string {
+  return [
+    `top: ${ghost.folded ? ghost.to : ghost.from}px`,
+    `height: ${rowHeight}px`,
+    `padding-left: ${0.5 + ghost.depth}rem`,
+    `clip-path: ${ghost.folded ? FOLDED_CLIP : ghost.fromClip}`,
+  ].join("; ");
+}
+
 function dropOn(destination: string | null) {
   const source = dragPath;
   dragPath = null;
@@ -1078,6 +1196,7 @@ function dropOn(destination: string | null) {
 <ul
   bind:this={treeElement}
   class="skr-file-tree"
+  class:skr-file-tree-revealing={revealing}
   role="tree"
   tabindex="-1"
   aria-label={STRINGS.vaultTreeLabel}
@@ -1101,7 +1220,7 @@ function dropOn(destination: string | null) {
     role="presentation"
     aria-hidden="true"
     class="skr-tree-spacer"
-    style={`height: ${TREE_PADDING * 2 + rows.length * rowHeight}px`}
+    style={`height: ${revealPhase === 0 && heldHeight !== null ? heldHeight : TREE_PADDING * 2 + rows.length * rowHeight}px`}
   ></li>
   <li
     bind:this={highlightElement}
@@ -1129,7 +1248,7 @@ function dropOn(destination: string | null) {
         class:skr-tree-row-dragging={dragPath === row.path}
         class:skr-tree-row-drop={dropPath === row.path}
         class:skr-tree-row-hovered={hoveredPath === row.path}
-        style={`top: ${TREE_PADDING + index * rowHeight}px; height: ${rowHeight}px; padding-left: ${0.5 + row.depth}rem`}
+        style={rowStyle(row.path, index, row.depth)}
         draggable={true}
         onfocus={() => (focusIndex = index)}
         onclick={(event) => {
@@ -1209,18 +1328,17 @@ function dropOn(destination: string | null) {
       </li>
     {/if}
   {/each}
-  {#each leavingRows as ghost, ghostIndex (ghost.path)}
+  {#each leavingRows as ghost (ghost.path)}
     <!-- A collapse leaves its hidden rows behind as inert, presentation-only
-         ghosts for one panel-class fade; the ARIA tree, keyboard focus, and
-         hit-testing only ever see the real rows above. -->
+         ghosts while they fold back into their folder's slot; the ARIA tree,
+         keyboard focus, and hit-testing only ever see the real rows above. -->
     <li
-      bind:this={ghostElements[ghostIndex]}
       role="presentation"
       aria-hidden="true"
       inert
       class="skr-tree-row skr-tree-ghost"
       data-ghost-path={ghost.path}
-      style={`top: ${ghost.top}px; height: ${rowHeight}px; padding-left: ${0.5 + ghost.depth}rem${ghost.opacity < 1 ? `; opacity: ${ghost.opacity}` : ""}`}
+      style={ghostStyle(ghost)}
     >
       {@render rowBody(ghost, ghost.open)}
     </li>

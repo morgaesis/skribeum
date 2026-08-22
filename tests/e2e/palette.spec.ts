@@ -176,6 +176,22 @@ async function openDemo(query: Record<string, string> = {}): Promise<void> {
   }
   await browser.url(target.href);
   await $(".demo-shell").waitForExist({ timeout: 15000 });
+  // The shell exists before the palette stylesheet has been applied to the
+  // root, and every assertion here samples resolved custom properties. Wait
+  // for the root to carry a resolved token, or a sample taken in the gap
+  // reads the empty string on a runner fast enough to reach it.
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(() =>
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--skr-surface")
+          .trim(),
+      )) !== "",
+    {
+      timeout: 15000,
+      timeoutMsg: "the demo root never resolved --skr-surface",
+    },
+  );
 }
 
 /**

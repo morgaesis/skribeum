@@ -35,6 +35,7 @@ import {
   LF_NOTE_NAME,
   LIVE_PREVIEW_NOTE_CONTENT,
   LIVE_PREVIEW_NOTE_NAME,
+  MIXED_ENDING_NOTE_NAME,
   NAVIGATION_SOURCE_NOTE_CONTENT,
   NAVIGATION_SOURCE_NOTE_NAME,
   NAVIGATION_TARGET_NOTE_CONTENT,
@@ -467,14 +468,17 @@ async function setViewportSize(
     }
 
     previous = actual;
-    outerWidth = Math.max(
-      MINIMUM_WINDOW_EDGE,
-      outerWidth + width - actual.width,
-    );
-    outerHeight = Math.max(
-      MINIMUM_WINDOW_EDGE,
-      outerHeight + height - actual.height,
-    );
+    // The correction is the shortfall between the viewport asked for and
+    // the one the host produced, which is normally positive: window chrome
+    // makes the viewport smaller than the outer size. A host that clamps or
+    // refuses the resize reports a viewport at least as large as the
+    // request, so the correction turns negative and walks the outer size
+    // down on every attempt until WebDriver rejects a non-positive size
+    // with a range error, losing the whole run to a driver error instead of
+    // this helper's own diagnostic below. The outer window can never be
+    // smaller than the viewport it has to contain, so that is the floor.
+    outerWidth = Math.max(width, outerWidth + (width - actual.width));
+    outerHeight = Math.max(height, outerHeight + (height - actual.height));
   }
 
   // Hosted macOS displays cap native window height below 844 pixels. The
@@ -4118,6 +4122,63 @@ describe("skribeum shell", () => {
     // Every terminator stays CRLF, including on the edited line; only the
     // typed byte was added.
     await waitForDisk(CRLF_NOTE_NAME, "first\r\nsecond!\r\nthird\r\n");
+  });
+
+  it("preserves_each_terminator_of_a_mixed_ending_note", async () => {
+    await openNoteFromTree(MIXED_ENDING_NOTE_NAME);
+    await browser.waitUntil(
+      async () => (await editorText()).includes("old mac line"),
+      { timeout: 15000 },
+    );
+
+    // Every terminator is a line break in the buffer whatever bytes wrote
+    // it, so the four line ends sit at the offsets the LF-normalized text
+    // "unix line\ndos line\nold mac line\nfinal line\n" puts them at. A lone
+    // CR read as an ordinary character would collapse the last two lines
+    // into one and move both later offsets.
+    const lineEnds = [];
+    for (const text of [
+      "unix line",
+      "dos line",
+      "old mac line",
+      "final line",
+    ]) {
+      lineEnds.push(
+        await browser.execute(
+          (lineText: string) =>
+            (
+              window as Window & {
+                __SKRIBEUM_E2E_SET_LINE_END__?: (
+                  lineText: string,
+                ) => number | null;
+              }
+            ).__SKRIBEUM_E2E_SET_LINE_END__?.(lineText) ?? null,
+          text,
+        ),
+      );
+    }
+    expect(lineEnds).toEqual([9, 18, 31, 42]);
+
+    await placeCursorAtLineEnd("dos line");
+    await $(".cm-content").addValue("!");
+    await browser.keys([modifierKey, "s"]);
+
+    await waitForDisk(
+      MIXED_ENDING_NOTE_NAME,
+      "unix line\ndos line!\r\nold mac line\rfinal line\n",
+    );
+
+    // An edit on the far side of the lone CR keeps the terminators before
+    // it: a mapping that resolved every break to one terminator would
+    // rewrite the whole file on the first save.
+    await placeCursorAtLineEnd("final line");
+    await $(".cm-content").addValue("?");
+    await browser.keys([modifierKey, "s"]);
+
+    await waitForDisk(
+      MIXED_ENDING_NOTE_NAME,
+      "unix line\ndos line!\r\nold mac line\rfinal line?\n",
+    );
   });
 
   it("edits_a_file_that_is_not_a_note_without_rewriting_its_other_bytes", async () => {

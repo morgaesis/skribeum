@@ -6361,6 +6361,11 @@ const engineTheme = EditorView.baseTheme({
     border: "0",
     opacity: "0",
     cursor: "pointer",
+    // A row or column drag-select that reaches the table's edge sweeps
+    // across these overlay strips; without this their own "+" glyph would
+    // land in the selection, and from there in copied text, alongside the
+    // table's actual content.
+    userSelect: "none",
     transition:
       "opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
   },
@@ -6392,6 +6397,14 @@ const engineTheme = EditorView.baseTheme({
   ".cm-skr-code-block": {
     boxSizing: "border-box",
     position: "relative",
+    // Independent of the document's own `wrap_long_lines` setting: a code
+    // line wrapping mid-token defeats the `overflow-x: auto` below (its
+    // content never grows past the line box, so the scrollbar never has
+    // anything to do), and prose wrapping was never meant to reach into a
+    // code fence. Tables, code blocks, block math, mermaid diagrams and
+    // canvas previews all keep this contract: content wider than its box
+    // scrolls inside the box, and the box itself never grows the page.
+    whiteSpace: "pre",
     overflowX: "auto",
     backgroundColor: "var(--skr-code-surface)",
     boxShadow:
@@ -6429,6 +6442,11 @@ const engineTheme = EditorView.baseTheme({
     borderRadius: "var(--skr-radius-control)",
     opacity: "0",
     pointerEvents: "none",
+    // A drag-selection that spans a fenced block passes right over this
+    // button's own label; without this its "Copy code" text would join
+    // the fence's actual content in the selection, and from there in
+    // whatever gets copied.
+    userSelect: "none",
     transition:
       "opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
   },

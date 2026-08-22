@@ -354,6 +354,22 @@ const toolbarTheme = View.theme({
   '.cm-skr-selection-toolbar[data-placement="margin"]': {
     flexDirection: "column",
   },
+  // Section 4.6's touch floor applies here like every other interactive
+  // target on a narrow viewport. Both placements set `minWidth`/`minHeight`
+  // themselves (30px and 26px above), which ties app.css's own narrow-
+  // viewport rule on specificity; without a matching declaration in this
+  // theme, the loser of that tie leaves the buttons below the touch floor.
+  "@media (max-width: 60rem)": {
+    ".cm-skr-toolbar-button": {
+      minWidth: "2.75rem",
+      minHeight: "2.75rem",
+    },
+    '.cm-skr-selection-toolbar[data-placement="over-text"] .cm-skr-toolbar-button':
+      {
+        minWidth: "2.75rem",
+        minHeight: "2.75rem",
+      },
+  },
 });
 
 /** The selection toolbar extension over the registry's format commands. */

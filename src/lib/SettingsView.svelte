@@ -2583,7 +2583,7 @@ function onKeydown(event: KeyboardEvent) {
     background: var(--skr-surface-raised);
     border: 1px solid var(--skr-border);
     border-radius: var(--skr-radius-surface);
-    box-shadow: var(--skr-shadow);
+    box-shadow: var(--skr-shadow-surface);
     display: grid;
     padding: 0.5rem;
     position: absolute;

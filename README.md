@@ -169,6 +169,25 @@ first. Deleting a note garbage-collects its history, and the
 note file. The journal is never synced through the vault by Syncthing, git,
 Drive, or another vault-level tool.
 
+## Diagnostics
+
+Skribeum writes a rotating application log outside every vault, in the
+operating system log directory:
+
+| Platform | Location |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\org.skribeum.desktop\logs\skribeum.log` |
+| macOS | `~/Library/Logs/org.skribeum.desktop/skribeum.log` |
+| Linux | `$XDG_DATA_HOME/org.skribeum.desktop/logs/skribeum.log` |
+
+The log records vault indexing, crash-journal replay, full-text index
+rebuilds, and any request that held the interface longer than a frame. Three
+rotations are retained alongside the live file, each capped at 4 MB.
+
+Set `SKRIBEUM_LOG` to `debug` or `trace` before launching to record every
+request rather than the slow ones alone. The log names vault paths and note
+paths, so review it before sharing.
+
 ## Tables
 
 Tables remain rendered while the document caret moves through the note. Click

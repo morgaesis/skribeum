@@ -81,7 +81,18 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install
 
+      # Restored on every event, written only from the default branch: an
+      # entry saved from a pull request is scoped to that pull request's
+      # merge ref, so nothing else can read it, and it duplicates the
+      # default-branch entry under the same key. The condition is written
+      # inline rather than through a workflow variable because the action
+      # hashes every environment variable whose name begins with RUST,
+      # CARGO, CC, CFLAGS, CXX or CMAKE into the cache key, and a variable
+      # holding this condition would key pull requests apart from the
+      # branch they need to restore from. See docs/ci.md.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: cargo fmt --all --check
 
@@ -142,7 +153,11 @@ jobs:
       - name: Install MSRV toolchain
         run: rustup toolchain install 1.95 --profile minimal
 
+      # Restored on every event, written only from the default branch;
+      # see the note on the same step in the rust job and docs/ci.md.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml so the build runs on
       # the minimum supported version declared in Cargo.toml.
@@ -211,7 +226,11 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install
 
+      # Restored on every event, written only from the default branch;
+      # see the note on the same step in the rust job and docs/ci.md.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The webdriver feature compiles the embedded WebDriver server into the
       # debug binary; the @wdio/tauri-service embedded provider connects to it

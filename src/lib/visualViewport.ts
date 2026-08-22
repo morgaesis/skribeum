@@ -1,5 +1,5 @@
 import {
-  type EditorView,
+  EditorView,
   repositionTooltips,
   tooltips,
   ViewPlugin,
@@ -76,9 +76,33 @@ const visualViewportTooltipListener = ViewPlugin.fromClass(
 
     constructor(readonly view: EditorView) {
       const target = view.dom.ownerDocument.defaultView ?? window;
+      // observeVisualViewport runs its callback once synchronously to
+      // establish the initial state, and that first call lands inside the
+      // EditorView construction this plugin is part of. Dispatching there
+      // would recurse into an update already in progress, so the initial
+      // call only repositions; every later, genuinely async callback also
+      // scrolls the caret back into view.
+      let mounted = false;
       this.stopObserving = observeVisualViewport(() => {
+        // A shrinking visual viewport (an on-screen keyboard opening) can
+        // leave the caret below the editor's now-shorter scroll area.
+        // Tooltip positions are anchored to the caret's document position,
+        // so CodeMirror clips a tooltip whose anchor has scrolled out of
+        // view: scrolling the caret back into view before repositioning is
+        // what brings the tooltip back rather than leaving it hidden until
+        // the next keystroke. The scroll runs only while a tooltip is
+        // actually open; with none showing, a viewport event must not move
+        // a reading position the person scrolled away from the caret.
+        if (mounted && view.dom.querySelector(".cm-tooltip") !== null) {
+          view.dispatch({
+            effects: EditorView.scrollIntoView(view.state.selection.main.head, {
+              y: "nearest",
+            }),
+          });
+        }
         repositionTooltips(view);
       }, target);
+      mounted = true;
     }
 
     destroy(): void {

@@ -521,7 +521,7 @@ select {
   border-radius: var(--skr-radius-surface);
   padding: 0.25rem;
   background: var(--skr-surface-raised);
-  box-shadow: var(--skr-shadow);
+  box-shadow: var(--skr-shadow-surface);
 }
 
 .skr-tree-menu button {
@@ -1164,7 +1164,7 @@ html body .settings-dialog {
 [role="dialog"] {
   background: var(--skr-surface-raised);
   color: var(--skr-text);
-  box-shadow: var(--skr-shadow);
+  box-shadow: var(--skr-shadow-surface);
 }
 
 [role="treeitem"][aria-selected="true"] {
@@ -1706,7 +1706,7 @@ html body .settings-dialog {
   padding: 0.25rem 0.375rem;
   color: var(--skr-text);
   background: var(--skr-surface-raised);
-  box-shadow: var(--skr-shadow);
+  box-shadow: var(--skr-shadow-surface);
   font-family: var(--skr-font-interface);
   font-size: var(--skr-type-label);
   line-height: 1.2;

@@ -20,6 +20,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Instant;
 use tauri::Manager;
 
+pub mod diagnostics;
 pub mod error;
 pub mod ipc;
 pub mod menu;
@@ -540,12 +541,15 @@ pub fn run() {
     }
 
     let builder = tauri::Builder::default()
+        .plugin(diagnostics::logging())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(ipc::VaultRegistry::default())
         .manage(ipc::OpenFilesState::default())
         .manage(ipc::WindowRevealState::default())
-        .invoke_handler(specta_builder.invoke_handler());
+        .invoke_handler(diagnostics::timed_invoke_handler(
+            specta_builder.invoke_handler(),
+        ));
 
     // The updater is compiled out of the end-to-end build so tests never
     // reach the network; release builds carry it.
@@ -699,7 +703,7 @@ pub fn run() {
                     tauri::window::Color(246, 242, 234, 255)
                 };
                 if let Err(error) = window.set_background_color(Some(background)) {
-                    eprintln!("skribeum: failed to set the startup window background: {error}");
+                    log::warn!("failed to set the startup window background: {error}");
                 }
             }
             // Native reveal watchdog: if the frontend never reports ready

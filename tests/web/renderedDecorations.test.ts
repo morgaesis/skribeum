@@ -556,12 +556,23 @@ describe("rendered decoration DOM", () => {
       rows[1]?.style.gridTemplateColumns,
     );
 
-    view.dispatch({ selection: { anchor: source.indexOf("Name") } });
+    // A caret parked exactly at the table's start, where cell focus parks
+    // the host selection, keeps the grid mounted.
+    view.dispatch({ selection: { anchor: source.indexOf("| Name") } });
     expect(view.dom.querySelectorAll('[role="row"]')).toHaveLength(3);
-    expect(view.contentDOM.textContent).not.toContain("| Name | Score |");
     expect(view.dom.querySelector('[role="gridcell"]')?.textContent).toBe(
       "Ada",
     );
+
+    // A caret further inside the table's source reveals the whole block as
+    // source, so a table being composed never converts under the caret.
+    view.dispatch({ selection: { anchor: source.indexOf("Name") } });
+    expect(view.dom.querySelector('[role="grid"]')).toBeNull();
+    expect(view.contentDOM.textContent).toContain("| Name | Score |");
+
+    // Leaving the table restores the replacement.
+    view.dispatch({ selection: { anchor: source.indexOf("outside") } });
+    expect(view.dom.querySelectorAll('[role="row"]')).toHaveLength(3);
   });
 
   it("parks the host selection while a nested cell writes one exact span", async () => {
@@ -1207,12 +1218,26 @@ describe("rendered decoration DOM", () => {
       "after",
     ].join("\n");
     const view = mountedView(source, 0);
-    for (const marker of ["Name", "row 1", "row 15", "row 30", "after"]) {
-      view.dispatch({ selection: { anchor: source.indexOf(marker) } });
+    // Travel outside the table and park at its start: the replacement stays
+    // mounted with a stable row count. Caret positions inside the source
+    // reveal it instead, under the cursor-inside-after-start policy.
+    const tableFrom = source.indexOf("| Name");
+    for (const anchor of [
+      source.indexOf("before"),
+      tableFrom,
+      source.indexOf("after"),
+      tableFrom,
+      source.length,
+      tableFrom,
+    ]) {
+      view.dispatch({ selection: { anchor } });
       expect(view.dom.querySelectorAll('[role="row"]')).toHaveLength(31);
       expect(view.dom.querySelector('[data-editing="true"]')).toBeNull();
       expect(view.contentDOM.textContent).not.toContain("| --- | --- |");
     }
+    view.dispatch({ selection: { anchor: source.indexOf("row 15") } });
+    expect(view.dom.querySelector('[role="grid"]')).toBeNull();
+    expect(view.contentDOM.textContent).toContain("| --- | --- |");
   }, 10000);
 
   it("renders a section embed as nested read-only markdown", async () => {

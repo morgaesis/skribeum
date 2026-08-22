@@ -192,6 +192,7 @@ import {
 } from "./lib/themes/theme";
 import UnifiedCommandSurface from "./lib/UnifiedCommandSurface.svelte";
 import {
+  CoalescingTreeRefresh,
   installNativeOpenListener,
   NativeOpenQueue,
   StartupPathGate,
@@ -2052,12 +2053,14 @@ function noteOpensWithHeading(source: string): boolean {
 const shellTitle = $derived(
   imageDocument !== null
     ? noteFileName(imageDocument.path)
-    : note === null || selectedPath === null
-      ? STRINGS.appTitle
-      : isNotePath(selectedPath)
-        ? resolveNoteTitle({ path: selectedPath, source: currentNoteSource })
-            .displayTitle
-        : noteFileName(selectedPath),
+    : contentView === VIEW_CANVAS && selectedPath !== null
+      ? noteFileName(selectedPath)
+      : note === null || selectedPath === null
+        ? STRINGS.appTitle
+        : isNotePath(selectedPath)
+          ? resolveNoteTitle({ path: selectedPath, source: currentNoteSource })
+              .displayTitle
+          : noteFileName(selectedPath),
 );
 const shellTitleVisible = $derived(note === null || noteTitleVisible);
 
@@ -2313,6 +2316,19 @@ async function refreshTreeAfterTagCatalog(handle: VaultHandle) {
   }
 }
 
+/**
+ * Watcher-driven refreshes run through here so a bulk filesystem change costs
+ * one vault walk rather than one per file.
+ */
+const watcherTreeRefresh = new CoalescingTreeRefresh(async (kind) => {
+  const activeVault = vault;
+  if (activeVault === null) return;
+  if (kind === "tree") await refreshTree();
+  else if (kind === "tags-then-tree")
+    await refreshTreeAfterTagCatalog(activeVault);
+  else await refreshTreeIndex(kind === "index-with-tags");
+});
+
 function onOverlayPick(item: PickerItem, intent?: { newTab?: boolean }) {
   if (item.kind === "command") {
     // Keep the editor's selection stable until editor-scoped commands have
@@ -2388,6 +2404,36 @@ function outlineNavigate(from: number) {
     userEvent: "select",
   });
   view.focus();
+  // scrollIntoView above lands `from` using CodeMirror's height map at
+  // dispatch time, and applies the actual scroll asynchronously rather than
+  // within this call. A widget below the target that renders asynchronously
+  // (a Mermaid diagram, a math block) can also grow once its own render
+  // finishes and calls requestMeasure, which shifts the heading without
+  // moving the scroll position again — possibly well after the initial
+  // scroll lands. Wait a frame for that initial scroll, capture it as the
+  // intended offset, then hold the heading there for a bounded window while
+  // any later async layout settles.
+  const docLength = view.state.doc.length;
+  const offsetFromViewportTop = () =>
+    view.lineBlockAt(from).top -
+    Math.max(0, view.scrollDOM.scrollTop - view.documentPadding.top);
+  let anchorOffset: number | null = null;
+  const deadline = performance.now() + 1500;
+  const resettle = () => {
+    if (view.state.doc.length !== docLength) return;
+    if (anchorOffset === null) {
+      anchorOffset = offsetFromViewportTop();
+    } else {
+      const drift = offsetFromViewportTop() - anchorOffset;
+      if (Math.abs(drift) > 0.5) {
+        view.scrollDOM.scrollTop += drift;
+      }
+    }
+    if (performance.now() < deadline) {
+      requestAnimationFrame(resettle);
+    }
+  };
+  requestAnimationFrame(resettle);
 }
 
 function linkGenerationContext(): WikilinkResolutionContext {
@@ -3955,12 +4001,13 @@ onMount(() => {
       if (!activeVaultMatchesEvent(event.payload.vault)) {
         return;
       }
-      if (event.payload.change === "overflow") {
-        void refreshTreeIndex(true);
-      } else if (event.payload.change === "removed") {
-        void refreshTreeIndex(true);
+      if (
+        event.payload.change === "overflow" ||
+        event.payload.change === "removed"
+      ) {
+        watcherTreeRefresh.request("index-with-tags");
       } else if (event.payload.change !== "modified") {
-        void refreshTree();
+        watcherTreeRefresh.request("tree");
       }
     }),
     events.externalNoteUpdate.listen((event) => {
@@ -3992,7 +4039,7 @@ onMount(() => {
       ) {
         return;
       }
-      void refreshTreeAfterTagCatalog(activeVault);
+      watcherTreeRefresh.request("tags-then-tree");
       if (event.payload.path === selectedPath) {
         editor?.markRemoved();
         pushBanner({

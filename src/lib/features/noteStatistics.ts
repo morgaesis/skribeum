@@ -89,6 +89,32 @@ export function formatLastEdited(modifiedMs: number, nowMs: number): string {
   return formatString(STRINGS.statuslineEdited, { time });
 }
 
+/**
+ * The bare relative-edited text for the empty pane's Recent list (design
+ * spec section 12.5): the statusline's own formatter, thresholds and
+ * seven-day window, without the "Edited " wrapper, capitalized so it reads
+ * as a standalone label ("Yesterday", not "yesterday").
+ */
+export function formatRelativeTimeBare(
+  modifiedMs: number,
+  nowMs: number,
+): string {
+  const age = nowMs - modifiedMs;
+  if (age < MINUTE_MS) {
+    return STRINGS.recentEditedJustNow;
+  }
+  if (age >= RELATIVE_WINDOW_MS) {
+    return absoluteDateFormat.format(modifiedMs);
+  }
+  const time =
+    age < HOUR_MS
+      ? relativeFormat.format(-Math.floor(age / MINUTE_MS), "minute")
+      : age < DAY_MS
+        ? relativeFormat.format(-Math.floor(age / HOUR_MS), "hour")
+        : relativeFormat.format(-Math.floor(age / DAY_MS), "day");
+  return time.charAt(0).toUpperCase() + time.slice(1);
+}
+
 /** Formats an absolute timestamp for the note-info popover. */
 export function formatTimestamp(ms: number): string {
   return timestampFormat.format(ms);

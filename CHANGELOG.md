@@ -39,6 +39,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Tab and Shift+Tab nest and unnest a list item when the caret sits at the
   item's text start. Everywhere else both keys keep moving focus through
   the page, so the editor never becomes a keyboard trap.
+- A pane with no note open shows one of three states instead of the
+  development scaffold it used to render as an editable document: "No note
+  is open" offers New note, Find a note, and Search note text, each with its
+  keybinding, followed by up to five recently opened notes; "This vault is
+  empty" replaces that when the vault holds no notes; "No vault is open" is
+  unchanged. None of the three mounts an editable surface, and closing the
+  last open tab moves focus to the primary action with its focus ring drawn,
+  whether the tab closed by keyboard or pointer.
 
 ### Fixed
 

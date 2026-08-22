@@ -10,6 +10,10 @@ import {
 } from "./lib/commandTooltip";
 import { showConfirmDialog, showPromptDialog } from "./lib/dialogs";
 import Editor from "./lib/Editor.svelte";
+import EmptyPaneState, {
+  type EmptyPaneAction,
+  type EmptyPaneRecentRow,
+} from "./lib/EmptyPaneState.svelte";
 import {
   currentWikilinkContext,
   focusedRenderedTableCell,
@@ -48,6 +52,7 @@ import {
 } from "./lib/features/navigation";
 import {
   type EditorStatistics,
+  formatRelativeTimeBare,
   type PersistenceState,
 } from "./lib/features/noteStatistics";
 import {
@@ -70,6 +75,10 @@ import {
   searchResultItems,
   tagItems,
 } from "./lib/features/pickers";
+import {
+  rankByModifiedTime,
+  selectRecentPaths,
+} from "./lib/features/recentNotes";
 import {
   DEFAULT_SETTINGS,
   type SettingsState,
@@ -99,7 +108,6 @@ import {
   restartToApply,
   type UpdateState,
 } from "./lib/features/updates";
-import { M0_FIXTURE } from "./lib/fixture";
 import {
   type BannerReason,
   type ByteRangeReplace,
@@ -139,7 +147,12 @@ import {
 } from "./lib/ipc/vault";
 import type { PaneSwitchKind } from "./lib/motion";
 import NoteInfo from "./lib/NoteInfo.svelte";
-import { isNotePath, noteFileName, resolveNoteTitle } from "./lib/noteTitles";
+import {
+  isNotePath,
+  noteFileName,
+  resolveNoteTitle,
+  resolveTitleCollisions,
+} from "./lib/noteTitles";
 import OutlinePanel from "./lib/OutlinePanel.svelte";
 import PanelDivider from "./lib/PanelDivider.svelte";
 import {
@@ -253,6 +266,15 @@ let tree = $state<TreeEntry[]>([]);
 let treeTitleSources = $state<Record<string, string>>({});
 let selectedPath = $state<string | null>(null);
 let note = $state<LoadedNote | null>(null);
+/**
+ * False until the workspace pane has painted content once. The vault
+ * itself opens asynchronously (StartupVaultRecovery covers that gap), so
+ * this flips on the pane's own first frame, not the component's mount: the
+ * empty pane's arrival motion (design spec section 17) and initial focus
+ * (section 16.1) both key off it, instant and focus-taking at that first
+ * frame, animated and focus-preserving on every later arrival.
+ */
+let paneContentEverShown = $state(false);
 let collisionGroups = $state<string[][]>([]);
 let errorText = $state<string | null>(null);
 function initialStartupVaultSurface(): StartupVaultSurface {
@@ -880,6 +902,7 @@ async function activateWorkspaceTab(path: string | null) {
     note = null;
     selectedPath = null;
     currentNoteSource = "";
+    claimEmptyPaneFocus(pane.id);
     return;
   }
   if (pane.activePath === path && selectedPath === path) return;
@@ -906,6 +929,7 @@ async function openEmptyWorkspaceTab(paneId = workspace.focusedPaneId) {
   note = null;
   selectedPath = null;
   currentNoteSource = "";
+  claimEmptyPaneFocus(pane.id);
   updatePaneNavigationState();
 }
 
@@ -938,6 +962,22 @@ async function focusWorkspacePane(id: string) {
   }
   captureFocusedTabState();
   await adoptFocusedPane(id);
+}
+
+/**
+ * Which pane's empty-pane surface should claim the primary action on its
+ * next mount (design spec section 16.1): closing the last tab, closing the
+ * tab the caret was in, or opening a new empty tab. Cleared the tick after
+ * it is set so a later, unrelated remount of the same pane slot (a Recent
+ * list refresh, a state A/B switch) never re-claims focus.
+ */
+let focusTakingPaneId = $state<string | null>(null);
+
+function claimEmptyPaneFocus(paneId: string): void {
+  focusTakingPaneId = paneId;
+  void tick().then(() => {
+    if (focusTakingPaneId === paneId) focusTakingPaneId = null;
+  });
 }
 
 let tabCloseFocusGeneration = 0;
@@ -1017,6 +1057,7 @@ async function closeWorkspaceTab(
       return;
     }
   }
+  let emptiedPane = false;
   if (pane.activePath === path) {
     const next = pane.tabs[Math.min(index, pane.tabs.length - 1)];
     if (next === undefined) {
@@ -1024,11 +1065,20 @@ async function closeWorkspaceTab(
       note = null;
       selectedPath = null;
       currentNoteSource = "";
+      // Closing the last tab, or the tab the caret was in, always claims
+      // the resulting empty pane's primary action (design spec section
+      // 16.1), whether the close came from the keyboard or a pointer click
+      // on the tab strip; the older tab-strip-successor fallback below is
+      // for switching to another still-open tab, not this case.
+      emptiedPane = true;
+      claimEmptyPaneFocus(pane.id);
     } else {
       await activateWorkspaceTab(next.path);
     }
   }
-  if (restoresActiveTabFocus) restoreTabCloseFocus(pane.id, generation);
+  if (restoresActiveTabFocus && !emptiedPane) {
+    restoreTabCloseFocus(pane.id, generation);
+  }
 }
 
 async function reopenClosedWorkspaceTab() {
@@ -1533,6 +1583,17 @@ function restoreSurfaceFocus() {
     surfaceFocusRestoreFrame = requestAnimationFrame(() => {
       surfaceFocusRestoreFrame = null;
       if (activeSheet !== null || activeOverlay !== null) return;
+      // A command run from a menu or the palette can itself empty the pane
+      // (`tab.close` on the last tab): the empty-pane surface's own
+      // programmatic focus claim (design spec section 16.1) already landed
+      // by the time this frame runs, marked by the force-focus-ring it
+      // draws, and must not be walked back to the control that invoked it.
+      if (
+        document.activeElement instanceof HTMLElement &&
+        document.activeElement.dataset.forceFocusRing === "true"
+      ) {
+        return;
+      }
       if (origin?.isConnected) {
         origin.focus({ preventScroll: true });
       } else {
@@ -2148,7 +2209,12 @@ $effect(() => {
   // names its note, and restores the selected path, before anything opens;
   // until the note itself is loaded the address is still an input, naming
   // the note a `?note=` link asked for.
-  if (path === null || note === null || selectedPath !== path) return;
+  if (path === null || note === null || selectedPath !== path) {
+    // The focused pane holds no note: a stale `?note=` from the tab that
+    // just closed must not keep naming a document nothing shows any more.
+    if (path === null && note === null) navigation?.clearAddress();
+    return;
+  }
   const current = navigation?.state().address ?? null;
   if (current?.path === path) return;
   navigation?.syncAddress({ path });
@@ -2183,6 +2249,101 @@ const openWorkspacePaths = $derived(
   workspacePanes.flatMap((pane) => pane.tabs.map((tab) => tab.path)),
 );
 const parsedOverlayQuery = $derived(parsePickerQuery(overlayQuery));
+
+// The empty pane's own state (design spec sections 10-17): whether the
+// vault has any note at all (state A versus state B), the three action
+// rows' copy and keybinding chips from the existing registry and
+// formatter, and the Recent list's rows.
+const emptyPaneHasNotes = $derived(notePaths.length > 0);
+const EMPTY_PANE_ACTION_IDS: readonly [string, string, string] = [
+  "note.create",
+  "quick-switcher.open",
+  "vault-search.open",
+];
+const emptyPaneActions: EmptyPaneAction[] = $derived(
+  EMPTY_PANE_ACTION_IDS.map((id, index) => {
+    const command = registry.command(id);
+    const label = [
+      STRINGS.treeCreateNote,
+      STRINGS.findNote,
+      STRINGS.searchNoteText,
+    ][index] as string;
+    const keybinding = formattedCommandKeybinding(command);
+    return keybinding === undefined ? { id, label } : { id, label, keybinding };
+  }),
+);
+
+let emptyPaneRecent = $state<EmptyPaneRecentRow[]>([]);
+let emptyPaneRecentGeneration = 0;
+
+$effect(() => {
+  const currentVault = vault;
+  const showingStateA =
+    currentVault !== null && note === null && emptyPaneHasNotes;
+  if (!showingStateA) {
+    if (emptyPaneRecent.length > 0) emptyPaneRecent = [];
+    return;
+  }
+  const generation = ++emptyPaneRecentGeneration;
+  const candidatePaths = notePaths;
+  const openPaths = new Set(openWorkspacePaths);
+  const recentlyOpened = recents;
+  const titleSources = treeTitleSources;
+  const stale = () =>
+    emptyPaneRecentGeneration !== generation || vault !== currentVault;
+  void (async () => {
+    const statModifiedMs = async (path: string): Promise<number | null> => {
+      try {
+        return (await readNoteStat(currentVault, path)).modified_ms;
+      } catch {
+        return null;
+      }
+    };
+    let paths = selectRecentPaths(
+      recentlyOpened,
+      candidatePaths,
+      openPaths,
+      [],
+    );
+    if (paths.length === 0) {
+      const ranked = await rankByModifiedTime(candidatePaths, statModifiedMs);
+      if (stale()) return;
+      paths = selectRecentPaths(
+        recentlyOpened,
+        candidatePaths,
+        openPaths,
+        ranked,
+      );
+    }
+    const titled = resolveTitleCollisions(
+      paths.map((path) => ({ path, source: titleSources[path] ?? "" })),
+    );
+    const nowMs = Date.now();
+    const rows = await Promise.all(
+      paths.map(async (path, index) => {
+        const modifiedMs = await statModifiedMs(path);
+        const resolved = titled[index];
+        return {
+          path,
+          title: resolved?.displayTitle ?? noteFileName(path),
+          ...(resolved?.collisionSuffix === undefined
+            ? {}
+            : { suffix: resolved.collisionSuffix }),
+          relativeTime:
+            modifiedMs === null
+              ? STRINGS.recentEditedJustNow
+              : formatRelativeTimeBare(modifiedMs, nowMs),
+        };
+      }),
+    );
+    if (stale()) return;
+    emptyPaneRecent = rows;
+  })();
+});
+
+function openEmptyPaneRecent(path: string, newTab: boolean) {
+  openPath(path, { newTab });
+}
 
 function visibleCommandItems(query: string): PickerItem[] {
   return commandItems(registry, query, macPlatform)
@@ -3908,6 +4069,26 @@ $effect(() => {
   return () => observer.disconnect();
 });
 
+// The vault itself opens asynchronously (StartupVaultRecovery covers that
+// gap), so the workspace pane's own first frame lands whenever `vault`
+// first becomes non-null, not at component mount. The flip waits two
+// animation frames past that so the frame the pane actually paints still
+// reads `paneContentEverShown === false` (instant, focus-taking); a plain
+// microtask would resolve before the pane's own content ever painted.
+$effect(() => {
+  if (vault === null || paneContentEverShown) return;
+  let cancelled = false;
+  requestAnimationFrame(() => {
+    if (cancelled) return;
+    requestAnimationFrame(() => {
+      if (!cancelled) paneContentEverShown = true;
+    });
+  });
+  return () => {
+    cancelled = true;
+  };
+});
+
 onMount(() => {
   const stopVisualViewportCss = bindVisualViewportCss();
   const narrowQuery = window.matchMedia(
@@ -4487,6 +4668,20 @@ onMount(() => {
                          until its pane takes focus and its editor arrives. -->
                     <p class="skr-unfocused-file">{noteFileName(pane.activePath)}</p>
                   {/if}
+                {:else}
+                  <!-- An empty pane in a split shows the same surface as the
+                       focused one (design spec section 11), but never takes
+                       focus: only the pane the reader is looking at claims
+                       it (section 16.1). -->
+                  <EmptyPaneState
+                    hasNotes={emptyPaneHasNotes}
+                    actions={emptyPaneActions}
+                    recent={[]}
+                    takeFocus={false}
+                    instant={!paneContentEverShown}
+                    onRunCommand={runActionCommand}
+                    onOpenRecent={openEmptyPaneRecent}
+                  />
                 {/if}
               {:else if contentView === VIEW_CANVAS && canvas !== null}
                 <CanvasView
@@ -4537,21 +4732,29 @@ onMount(() => {
                     </button>
                   {/if}
                 </div>
-              {:else}
+              {:else if note === null}
                 <!--
-                  One Editor instance regardless of whether a note is open:
-                  branching this on `note !== null` used to mount a second,
-                  separate Editor (and CodeMirror view) the moment the first
-                  note loaded, which read as the whole page rebuilding. The
-                  single instance transitions in place through its own
-                  reactive `note`/`path` handling instead. `vault` and `path`
-                  stay null together with `note` so a still-loading note
-                  never keys the live tab-state cache under its final path
-                  before it has actually arrived.
+                  No CodeMirror instance is mounted while the pane holds no
+                  note (design spec section 11): the development scaffold
+                  that used to fill this slot rendered as a fully editable
+                  fake document, typable and indistinguishable from a real
+                  note at a glance. `editor` is left unbound here, so the
+                  next real note mounts a fresh `Editor` rather than reusing
+                  a stale one; `preparePaneSwitch` already guards every call
+                  site that assumes a bound instance.
                 -->
+                <EmptyPaneState
+                  hasNotes={emptyPaneHasNotes}
+                  actions={emptyPaneActions}
+                  recent={emptyPaneRecent}
+                  takeFocus={focusTakingPaneId === pane.id || !paneContentEverShown}
+                  instant={!paneContentEverShown}
+                  onRunCommand={runActionCommand}
+                  onOpenRecent={openEmptyPaneRecent}
+                />
+              {:else}
                 <Editor
                   bind:this={editor}
-                  doc={M0_FIXTURE}
                   {note}
                   vault={editorVault}
                   path={editorPath}

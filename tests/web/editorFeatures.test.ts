@@ -996,6 +996,27 @@ describe("tag affordances", () => {
         "#delete-only",
       ]);
     });
+
+    it("keeps the closer answer first however recently the other was used", () => {
+      // `cedar-notes` starts with the query outright and `project/cedar-room`
+      // only does so from its second segment, so the query itself separates
+      // them and recency has nothing left to decide. Accepting the weaker
+      // answer must not carry it over the stronger one for the next query:
+      // that would move the row under Enter between one word and the next,
+      // for a reason nothing on screen states.
+      for (const recent of [
+        [],
+        ["project/cedar-room"],
+        ["project/cedar-room", "cedar-notes"],
+        ["cedar-notes", "project/cedar-room"],
+      ]) {
+        expect(
+          filteredTagCompletions(CATALOG, recent, "ced").map(
+            (row) => `#${row.tag}`,
+          ),
+        ).toEqual(["#cedar-notes", "#project/cedar-room"]);
+      }
+    });
   });
 
   // The catalog is vault state that refreshes on its own schedule: an

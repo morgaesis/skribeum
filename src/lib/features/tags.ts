@@ -212,8 +212,9 @@ export type TagCompletion = TagCatalogEntry & {
  * durable error rather than a wasted keystroke: search tolerates typos,
  * authoring must not propose them.
  *
- * Recency is the first tiebreak inside a band, so a tag used in this session
- * comes before an equally relevant one that was not.
+ * Recency separates tags a band ranks equally, so a tag used in this session
+ * comes before an equally relevant one that was not, and a tag accepted a
+ * moment ago never displaces a closer answer to what is being typed now.
  */
 export function filteredTagCompletions(
   catalog: readonly TagCatalogEntry[],

@@ -453,10 +453,14 @@ export function matchTags(
     nearMatches?: boolean;
     limit?: number;
     /**
-     * How recently the tag was used, lower being more recent. Applied as the
-     * first tiebreak inside a band, ahead of note count. It has to be part of
-     * the ordering rather than a pass over the result, or a bounded selection
-     * would drop a recent tag before it could be promoted.
+     * How recently the tag was used, lower being more recent. Applied among
+     * tags a band ranks equally, ahead of note count: it separates answers
+     * the query cannot separate, and never promotes a weaker answer over a
+     * stronger one. A recent segment-prefix match reordered above a
+     * whole-tag prefix match would move the row under Enter for a reason the
+     * reader can neither see in the query nor predict. It has to be part of
+     * the ordering rather than a pass over the result, or a bounded
+     * selection would drop a recent tag before it could be promoted.
      */
     recencyOf?: (tag: string) => number;
   } = {},
@@ -466,12 +470,15 @@ export function matchTags(
     recencyOf === undefined
       ? byRankThenUsage
       : (left: RankedTag, right: RankedTag) => {
+          if (left.rank !== right.rank) {
+            return left.rank - right.rank;
+          }
           const leftRecency = recencyOf(left.entry.tag);
           const rightRecency = recencyOf(right.entry.tag);
           if (leftRecency !== rightRecency) {
             return leftRecency < rightRecency ? -1 : 1;
           }
-          return byRankThenUsage(left, right);
+          return byUsage(left, right);
         };
   const ordered = (left: RankedTag, right: RankedTag) =>
     BAND_ORDER[left.band] - BAND_ORDER[right.band] || withinBand(left, right);

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  CoalescingTreeRefresh,
   installNativeOpenListener,
   NativeOpenQueue,
   StartupPathGate,
   StartupRecoveryGuard,
+  type TreeRefreshKind,
   VaultOwnership,
   type VaultSession,
 } from "../../src/lib/vaultLifecycle";
@@ -220,5 +222,50 @@ describe("vault ownership", () => {
     await ownership.dispose();
     expect(ownership.isActive(current.session)).toBe(false);
     expect(closed).toEqual([2, 1, 3]);
+  });
+});
+
+describe("coalescing tree refresh", () => {
+  it("collapses an event burst into a single strongest refresh", async () => {
+    const ran: TreeRefreshKind[] = [];
+    const refresh = new CoalescingTreeRefresh(async (kind) => {
+      ran.push(kind);
+    }, 5);
+
+    for (let index = 0; index < 500; index += 1) refresh.request("tree");
+    refresh.request("index-with-tags");
+    for (let index = 0; index < 500; index += 1) refresh.request("tree");
+    await refresh.settled();
+
+    expect(ran).toEqual(["index-with-tags"]);
+  });
+
+  it("never runs two refreshes concurrently and picks up a mid-pass request", async () => {
+    const ran: TreeRefreshKind[] = [];
+    let active = 0;
+    let peak = 0;
+    const firstRunning = deferred<void>();
+    const releaseFirst = deferred<void>();
+
+    const refresh = new CoalescingTreeRefresh(async (kind) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      ran.push(kind);
+      if (ran.length === 1) {
+        firstRunning.resolve();
+        await releaseFirst.promise;
+      }
+      active -= 1;
+    }, 1);
+
+    refresh.request("tree");
+    await firstRunning.promise;
+    // Lands while the first pass is still in flight.
+    refresh.request("index");
+    releaseFirst.resolve();
+    await refresh.settled();
+
+    expect(peak).toBe(1);
+    expect(ran).toEqual(["tree", "index"]);
   });
 });

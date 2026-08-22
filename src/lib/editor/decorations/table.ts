@@ -7,7 +7,11 @@
 // column row for row, and a test keeps the two in lockstep.
 
 /** When a hidden or replaced range re-appears as plain source text. */
-export type RevealPolicy = "cursor-inside" | "cursor-line" | "never";
+export type RevealPolicy =
+  | "cursor-inside"
+  | "cursor-inside-after-start"
+  | "cursor-line"
+  | "never";
 
 /** Widgets the engine knows how to build. */
 export type WidgetName =
@@ -255,7 +259,12 @@ const tableRows: DecorationRule[] = [
   {
     node: "Table",
     presentation: { present: "widget", widget: "table" },
-    reveal: "never",
+    // A table being composed must stay source while the caret is inside it:
+    // mounting the replacement mid-typing swallows every following
+    // keystroke. The start boundary is excluded because focusing a rendered
+    // cell parks the host selection exactly there, and that parked caret
+    // must not tear down the widget it is editing through.
+    reveal: "cursor-inside-after-start",
   },
 ];
 

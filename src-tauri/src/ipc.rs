@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use skribeum_vault::{
@@ -918,6 +918,7 @@ impl IndexRebuilds {
                 request
             };
             let generation = request.generation;
+            let rebuild_started = Instant::now();
             let outcome = {
                 let guard = request
                     .search
@@ -948,6 +949,15 @@ impl IndexRebuilds {
                 }
             };
             let rebuilt = matches!(outcome, Some(skribeum_vault::RebuildOutcome::Completed(_)));
+            log::info!(
+                "full-text index generation {generation} {} after {} ms",
+                if rebuilt {
+                    "published"
+                } else {
+                    "did not publish"
+                },
+                rebuild_started.elapsed().as_millis()
+            );
             self.finish_generation(generation, &request.active, rebuilt);
             #[cfg(test)]
             if rebuilt {
@@ -1540,7 +1550,7 @@ fn spawn_index_rebuild<F: FileSystem + 'static>(open: &OpenVault, fs: F) {
 
 /// Opens a vault at an absolute path, validates it and indexes its tree.
 /// This is the only command that accepts an absolute path.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
 fn vault_open<R: Runtime>(
@@ -1549,7 +1559,13 @@ fn vault_open<R: Runtime>(
     session: State<'_, VaultSessionState>,
     path: String,
 ) -> Result<VaultOpenResult, AppError> {
+    let scan_started = Instant::now();
     let vault = Vault::open(&RealFs, Path::new(&path))?;
+    log::info!(
+        "indexed {} vault entries in {} ms",
+        vault.tree().len(),
+        scan_started.elapsed().as_millis()
+    );
     let mutation = session.1.lock().unwrap_or_else(PoisonError::into_inner);
     // Startup recovery is best effort. A read-only, full, or inaccessible
     // device-local session store never invalidates a successfully opened vault.
@@ -1597,7 +1613,7 @@ fn vault_open<R: Runtime>(
 
 /// Releases a native vault handle. Repeating the close is harmless so a
 /// superseded frontend open can always clean up its provisional handle.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
 fn vault_close(registry: State<'_, VaultRegistry>, handle: VaultHandle) {
@@ -1622,7 +1638,7 @@ fn tree_entries(vault: &Vault) -> Vec<TreeEntry> {
 }
 
 /// Lists the indexed tree of an open vault, sorted by path.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
 fn vault_tree(
@@ -1641,7 +1657,7 @@ fn vault_tree(
 /// external bulk changes or watcher overflow: the tree indexed at open
 /// never silently drifts, it is re-read here on demand. Newly discovered
 /// collisions re-emit, and the search index rebuilds in the background.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
 fn vault_tree_refresh<R: Runtime>(
@@ -1793,7 +1809,7 @@ fn tree_entry_delete(
 }
 
 /// Reveals one indexed entry in the operating system file manager.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
 fn tree_entry_reveal(
@@ -2209,7 +2225,7 @@ fn apply_external_recon_state(
 /// Subscribes to change events under an open vault. Events arrive as the
 /// `VaultChanged` event stream; a second subscription for the same handle is
 /// a no-op.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
 fn watch_subscribe<R: Runtime>(
@@ -2248,14 +2264,26 @@ fn watch_subscribe<R: Runtime>(
     // bytes, a changed-on-disk chain surfaces the reconciliation banner and
     // is never applied silently.
     if let Some(journal) = &journal.0 {
+        let started = Instant::now();
         replay_journal(&app, journal, handle.id, &root, &active, &publication);
+        log::info!(
+            "replayed the crash journal in {} ms",
+            started.elapsed().as_millis()
+        );
     }
     if !active.load(Ordering::Acquire) {
         watching.store(false, Ordering::Release);
         return Ok(());
     }
     if let Some(journal) = &edit_history.0 {
-        let _ = journal.garbage_collect(&RealFs, &root);
+        let started = Instant::now();
+        if let Err(error) = journal.garbage_collect(&RealFs, &root) {
+            log::warn!("edit-history garbage collection failed: {error}");
+        }
+        log::info!(
+            "collected edit-history garbage in {} ms",
+            started.elapsed().as_millis()
+        );
     }
 
     let watcher = RealFs.watch(&root).map_err(|error| AppError {
@@ -2290,7 +2318,7 @@ fn watch_subscribe<R: Runtime>(
 /// BM25 scores (title matches outrank heading matches outrank body
 /// matches), a Rust-assembled snippet and byte-offset match ranges into
 /// that snippet. At most `limit` hits return, best first.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
 fn search_query(
@@ -2343,7 +2371,7 @@ fn search_query(
 }
 
 /// Returns the indexed vault tag catalog with aggregate usage counts.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
 fn tag_catalog(

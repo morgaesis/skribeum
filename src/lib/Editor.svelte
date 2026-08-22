@@ -1479,9 +1479,6 @@ $effect(() => {
   .editor :global(.cm-line) {
     padding-inline: 0;
   }
-  .editor :global(.cm-line.cm-skr-rich-callout) {
-    padding-inline: 1rem;
-  }
   .editor :global(.cm-line.cm-skr-code-block) {
     font-family: var(--skr-font-mono);
     font-size: 0.875em;

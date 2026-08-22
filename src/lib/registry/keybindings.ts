@@ -11,6 +11,8 @@ import { type EditorView, type KeyBinding, keymap } from "@codemirror/view";
 import { noteHistoryChord } from "../editor/decorations/engine";
 import { quoteEditing } from "../editor/quoteEditing";
 import { taskEditing } from "../editor/taskEditing";
+import { listTabIndent } from "../features/insertions";
+import { navigationEditorExtensions } from "../features/navigation";
 import type { CommandRegistry } from "./registry";
 import type { CommandContext } from "./types";
 
@@ -226,6 +228,15 @@ export function editorKeymap(
   return [
     taskEditing,
     quoteEditing,
+    navigationEditorExtensions(),
+    // Registry-exempt keydown, like task continuation above: nesting on Tab
+    // at a list item's text start is text-editing semantics. Both keys fall
+    // through to the browser's focus order everywhere else, so the editor
+    // stays escapable by keyboard.
+    keymap.of([
+      { key: "Tab", run: listTabIndent(1) },
+      { key: "Shift-Tab", run: listTabIndent(-1) },
+    ]),
     // A rendered table cell is an editable surface of its own inside the
     // note's, and its key contract hands the history chords back to the
     // note rather than letting the browser undo the cell in isolation.

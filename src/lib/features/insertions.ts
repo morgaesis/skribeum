@@ -301,6 +301,34 @@ function changeListIndent(view: EditorView, delta: 1 | -1): boolean {
 }
 
 /**
+ * Tab and Shift-Tab nest and unnest a list item when the caret sits at the
+ * item's text start, the one position where indentation is what the key
+ * means. Everywhere else both keys fall through to the browser's focus
+ * order, so the editor never becomes a keyboard trap: a caret in prose
+ * tabs out, a caret mid-sentence in a list tabs out, and only the exact
+ * spot every peer editor treats as "nest this item" indents.
+ */
+export function listTabIndent(delta: 1 | -1) {
+  return (view: EditorView): boolean => {
+    const state = view.state;
+    const range = state.selection.main;
+    if (!range.empty || state.readOnly) {
+      return false;
+    }
+    const line = state.doc.lineAt(range.head);
+    const shape = shapeOf(line.text);
+    if (!["task", "bullet", "ordered"].includes(shape.kind)) {
+      return false;
+    }
+    const textStart = line.from + shape.indent.length + shape.marker.length;
+    if (range.head !== textStart) {
+      return false;
+    }
+    return changeListIndent(view, delta);
+  };
+}
+
+/**
  * Inserts a snippet at the caret with the caret placed inside it, at
  * `cursorOffset` characters from the snippet's start.
  */

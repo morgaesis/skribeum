@@ -170,7 +170,7 @@ onMount(() => {
     border-radius: var(--skr-radius-surface);
     padding: 0.25rem;
     background: var(--skr-surface-raised);
-    box-shadow: var(--skr-shadow);
+    box-shadow: var(--skr-shadow-surface);
     color: var(--skr-text);
     font-family: var(--skr-font-interface);
     font-size: var(--skr-type-control);

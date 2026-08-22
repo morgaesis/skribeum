@@ -862,4 +862,51 @@ describe("a selection inside a collapsed folder", () => {
 
     await unmount(component);
   });
+
+  it("stays collapsed when the folder being closed holds the selected note", async () => {
+    // `Examples/Research` starts expanded, revealing the selected note
+    // inside it, same as the reveal choreography leaves it after opening.
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries: vault,
+        expandedPaths: [...COLLAPSED_ANCESTOR, "Examples/Research"],
+        selectedPath: SELECTED,
+        onOpenPath: () => {},
+      },
+    });
+    flushSync();
+    const tree = document.querySelector<HTMLUListElement>('[role="tree"]');
+    expect(tree).not.toBeNull();
+    if (tree === null) return;
+    setViewport(tree, ROW_HEIGHT * (EVERY_ROW + 4));
+
+    expect(
+      document
+        .querySelector<HTMLElement>('[data-path="Examples/Research"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(
+      document.querySelector<HTMLElement>(`[data-path="${SELECTED}"]`),
+    ).not.toBeNull();
+
+    // Closing the folder that holds the still-selected note must not spring
+    // back open: the ancestor auto-expand effect only reveals a folder on
+    // an actual selection change, not on every later toggle of it.
+    document
+      .querySelector<HTMLElement>('[data-path="Examples/Research"]')
+      ?.click();
+    await tick();
+
+    expect(
+      document
+        .querySelector<HTMLElement>('[data-path="Examples/Research"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      document.querySelector<HTMLElement>(`[data-path="${SELECTED}"]`),
+    ).toBeNull();
+
+    await unmount(component);
+  });
 });

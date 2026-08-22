@@ -38,6 +38,16 @@ export const LF_NOTE_CONTENT = "alpha\nbeta\ngamma\n";
 export const CRLF_NOTE_NAME = "crlf.md";
 export const CRLF_NOTE_CONTENT = "first\r\nsecond\r\nthird\r\n";
 
+// LF, CRLF and a lone CR in one file. A note written elsewhere arrives with
+// whatever terminators its author's tools produced, and the editor buffer
+// sees only "\n", so every terminator has to be mapped back onto the bytes
+// it came from. The fixture exists so that the packaged application answers
+// for those bytes wherever the suite runs, rather than only where the
+// platform happens to write them.
+export const MIXED_ENDING_NOTE_NAME = "mixed-endings.md";
+export const MIXED_ENDING_NOTE_CONTENT =
+  "unix line\ndos line\r\nold mac line\rfinal line\n";
+
 /**
  * A file the note extensions do not cover, with CRLF terminators and no
  * final newline: the two things a text editor is most likely to silently
@@ -344,6 +354,10 @@ export function createScratchVault(): void {
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, CRLF_NOTE_NAME),
     CRLF_NOTE_CONTENT,
+  );
+  writeFileSync(
+    path.join(SCRATCH_VAULT_PATH, MIXED_ENDING_NOTE_NAME),
+    MIXED_ENDING_NOTE_CONTENT,
   );
   writeFileSync(
     path.join(SCRATCH_VAULT_PATH, CONFIG_FILE_NAME),

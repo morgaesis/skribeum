@@ -8,6 +8,179 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Tag search matches by prefix at path-segment boundaries and groups its
+  results in bands: the tag itself, then everything below it in the path,
+  then tags a path segment of which starts with the query, then near matches
+  under their own heading. Near matches are tags containing what was typed or
+  a bounded edit distance from it, capped at five rows, drawn muted, never
+  preselected, and never offered while authoring. Every row states how many
+  notes use the tag and orders by it. `*` is removed from a tag query wherever
+  it appears, so `#feat`, `#feat*` and `#*feat` are one query with one result
+  list, and typing one no longer empties the results or closes the completion
+  menu.
+- A tag query returns the notes below it in the path: `#work` lists notes
+  tagged `work/meetings` and not notes tagged `workshop`, and each row's note
+  count covers the same set the row produces.
+- Tag mode ends with a row that re-runs the query as a note-text search, and
+  its empty states name what to do next: how to make the vault's first tag,
+  or which query found nothing after the wildcards were removed.
+- The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
+  terminators, and the keybinding tests drive the global handler on macOS,
+  Windows and Linux platform strings, so both classes are answered wherever
+  the suite runs rather than only on the platform that produces the input.
+
+### Changed
+
+- The application no longer scrolls inside its own window. The page under the
+  shell is bounded rather than merely hidden, so a surface that outgrows the
+  window is cut off at its edge instead of extending the page, and focusing a
+  control outside the viewport, a wheel over the chrome, or an overscroll can
+  no longer slide the application away from the window's own controls. Every
+  region that is meant to scroll still scrolls.
+- Expanding and collapsing a file tree folder moves the rows it displaces
+  through the positions between their old and new slots, with the tree's own
+  height on the same clock, so a vault taller than the sidebar grows and
+  shrinks under the reader instead of jumping to its new size and animating
+  over it. The rows a folder reveals unfold out of its slot and fold back
+  into it; the fill marking the open note travels on the row it belongs to,
+  and toggling a folder no longer scrolls the sidebar back to the open note.
+- Hovering a file tree row emphasises the entry's own text rather than
+  filling the whole row, leaving the filled row to mean one thing: this is
+  the note that is open.
+- Pull requests run the `rust` and `e2e` jobs on one arm64 Linux runner
+  instead of on Linux, macOS and Windows. The full matrix, x64 Linux, arm64
+  Linux, macOS and Windows, runs on every push to `main`, and on a pull
+  request labelled `full-matrix` for a change that touches platform-specific
+  behaviour. Both matrices come from one job that emits the platform list for
+  the event, so the jobs stay defined once. The benchmark regression gate is
+  now its own job, pinned to the x64 runner class its committed baselines
+  were measured on.
+- A push to `main` that fails CI opens an issue labelled `broken-main` naming
+  the commit and linking each failing job, comments on it for each further
+  failure, and closes it when `main` is green again.
+- The pre-push hook runs the Rust format, lint and workspace tests and the
+  web lint, type check and test suite, filtered by the file types being
+  pushed. `docs/ci.md` describes what runs when, what a Linux-only pull
+  request no longer proves, and how to run the packaged end-to-end suite.
+
+### Fixed
+
+- The inline tag completion menu offers the tag that was typed, and accepting
+  a row replaces what was typed. It had removed the exact match from its own
+  results, so finishing a tag the vault already holds showed "No matches", and
+  pressing Enter committed a neighbouring tag into the note.
+- The tag catalog holds every tag in the vault. It had been cut to the
+  thousand most-used, so a rarely written tag existed for no surface and
+  nothing said so.
+- A tag written with a decomposed accent is indexed and searchable. The
+  editor rendered, offered and accepted the whole word while the indexer
+  stopped at the combining mark, which the syntax specification already
+  counts as part of the letter it belongs to.
+- The tag completion menu stops at the ends of its list instead of wrapping
+  around, matching the command surface, and reopens when a character that
+  ended the query is deleted instead of requiring the hash to be retyped.
+- The reading position survives: a reload lands on the line the reader left,
+  and switching to another tab and back returns to the same place instead of
+  drifting, because tab snapshots anchor to content rather than a pixel
+  offset measured before the editor settled.
+- A tab drag that ended anywhere but a pane body no longer leaves the
+  split-preview overlay painted over the top quarter of the note for the
+  rest of the session.
+- Pressing Enter immediately after typing a link inserts the paragraph break
+  instead of following the link, swallowing the newline and dropping focus.
+  A link reached by click, arrow keys or Tab still follows on Enter, and
+  Mod-Enter always follows.
+- Canvas and image files carry the full navigation model: reached by URL
+  they render their real viewers instead of raw text, and they get a tab,
+  the address bar, a history entry, and restoration after a reload.
+- Collapsing the folder that holds the selected note stays collapsed
+  instead of snapping back open, and collapsing a scrolled tree no longer
+  stacks the hidden rows over the surviving ones as duplicates.
+- Dragging a selection across a table or a code fence copies the content
+  without the insert buttons' glyphs or the copy button's label.
+- The selection toolbar keeps its full touch-target size on phones, and
+  long code lines scroll inside the code block's own frame instead of
+  wrapping.
+
+## [0.0.10] - 2026-08-22
+
+### Added
+
+- A design reference page beside the browser demo, at `/design.html`. It
+  renders the palettes, color roles, type scale, radius and elevation scale,
+  control specimens, and motion classes from the theme's own tokens, reads
+  every displayed value back from the live cascade, and computes WCAG
+  contrast ratios for the active palette's named pairs, so the page cannot
+  drift from the stylesheet it documents. The color-scheme switcher previews
+  the selected palettes as miniature shells, the system card split between
+  its light and dark halves, and each motion box replays a full exit on the
+  state clock followed by its class's entrance.
+
+### Changed
+
+- Elevation is tiered with the radius scale: menus, popovers, completion
+  menus, tooltips, the selection toolbar, statusline popovers, and canvas
+  cards carry a lighter shadow than before, and only window-scale dialogs
+  and sheets keep the deep one, so a small floating surface no longer casts
+  a dialog's shadow.
+- The formatting toolbar stays out of the way of the note. It sits in the
+  margin beside the selection rather than over the lines above it, level with
+  the line the selection starts on, so every line stays legible while it is
+  open. It waits for the selection to hold still before appearing, so dragging
+  or holding an arrow key no longer pulls a toolbar across the page. A window
+  with no margin to spare still places it over the text, but with clearance
+  above the line it covers and shorter buttons, so it crowds one line instead
+  of three. Stacked into a single narrow column, it fits in the margin at
+  window widths that used to force it over the text.
+- Tab and Shift+Tab nest and unnest a list item when the caret sits at the
+  item's text start. Everywhere else both keys keep moving focus through
+  the page, so the editor never becomes a keyboard trap.
+
+### Fixed
+
+- A selection spanning a wrapped or multi-line block no longer draws its
+  highlight past the edge of the reading column into the margin.
+- Typing a table no longer loses keystrokes: a table whose source holds the
+  caret stays plain source, and the interactive grid takes over when the
+  caret leaves it. Focusing a rendered cell still parks the host selection
+  at the table's start without tearing the grid down.
+- The browser demo's Back and Forward controls work: committing each
+  navigation to history before the note loads stops the address echo from
+  downgrading every visit to a history replacement that left Back
+  permanently disabled.
+- Backspace at a list item's start joins it into the previous line without
+  splicing the raw marker into the text, and Backspace on an empty item
+  clears the whole marker instead of leaving a remnant.
+- The hover preview renders its body in the reading face instead of
+  monospace: nested note views now carry the prose typography that the
+  editor's own container previously supplied.
+- The outline lands on the selected heading even when an asynchronously
+  rendered diagram above it grows after the jump; the scroll re-anchors for
+  a bounded settle window instead of drifting.
+- The slash menu follows the visual viewport when an on-screen keyboard
+  shrinks it, instead of leaving the menu and the caret stranded off
+  screen.
+- A table with many columns floors its column tracks and scrolls inside its
+  own frame instead of compressing cells into overlapping slivers.
+- Mermaid diagrams keep a legible minimum size on narrow viewports and
+  scroll inside their own block, matching how wide code blocks behave.
+- Tabbing to a task checkbox below the fold scrolls it into view, and the
+  properties panel answers keyboard focus with the same visible ring every
+  other control shows.
+- Opening a canvas names the file in the header instead of the application.
+- The browser demo reports when a browser cannot open local folders instead
+  of doing nothing, and a folder picker that fails to open produces an
+  error instead of silence.
+
+### Security
+
+- The development dependency tree pins `deepmerge-ts` to 8.0.1, clearing a
+  stack-exhaustion advisory reached through the WebdriverIO toolchain.
+
+## [0.0.9] - 2026-08-20
+
+### Added
+
 - A headless list-move primitive: given a document, a list item and a
   destination list and index, it returns the declared spans that relocate
   the item and nothing else. The moved extent is the item's whole lines
@@ -38,6 +211,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server reports a download size, and an installed update offers "Restart to
   apply", which confirms first and saves any unsaved work through the same
   path any other window-closing action uses before restarting.
+- Every file a vault holds opens. A file that is not a note opens as an
+  editable buffer through the same read and write path notes use: line
+  endings, a byte-order mark, trailing whitespace, and a missing final
+  newline all survive an edit unchanged, the vault compares the on-disk
+  projection before writing, and a file that changed underneath the editor
+  reports a conflict rather than being overwritten. Those documents carry
+  creation and modification times in the note-information panel too.
+- Common formats get syntax highlighting, chosen from the file extension and
+  never from the file's contents: YAML, JSON, TOML, shell, and the rest of
+  the bundled language set, plus a small table of extensionless names such as
+  `Dockerfile` and shell startup files. A path naming no known language opens
+  as plain text and is still fully editable.
+- Image files open in a viewer: PNG, JPEG, GIF, WebP, SVG, and the other
+  formats the image extension allowlist names. Bytes reach an image element
+  and nothing else and are typed from the extension, so a vector image loads
+  in the user agent's secure static mode with scripts, event handlers, and
+  external references all disabled.
+- The browser demo vault ships a `.gitignore`, a YAML pipeline file, and a
+  PDF, so the non-note surfaces are visible without opening a local folder.
 
 ### Changed
 
@@ -48,6 +240,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The file tree opens every row it shows. A file that is neither a note nor a
   canvas is no longer drawn muted and inert, and the unified command surface
   reaches every indexed file rather than notes and canvases alone.
+- Expanding and collapsing a file tree folder moves the rows it displaces
+  through the positions between their old and new slots, with the tree's own
+  height on the same clock, so a vault taller than the sidebar grows and
+  shrinks under the reader instead of jumping to its new size and animating
+  over it. The rows a folder reveals unfold out of its slot and fold back
+  into it; the fill marking the open note travels on the row it belongs to,
+  and toggling a folder no longer scrolls the sidebar back to the open note.
+- Hovering a file tree row emphasises the entry's own text rather than
+  filling the whole row, leaving the filled row to mean one thing: this is
+  the note that is open.
 - A file that is neither an image nor valid UTF-8 opens read-only with the
   non-UTF-8 notice, the same treatment a non-UTF-8 note gets, so no editing
   pass can write a lossy re-encoding over a binary file.
@@ -63,9 +265,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the incremental update after a save and after an external change both skip
   a path a full index rebuild would not have recorded, so a row can no longer
   appear in results until the next rebuild silently removes it.
+- Every build writes a rotating application log to the operating system log
+  directory, outside every vault, recording vault indexing, crash-journal
+  replay, full-text index rebuilds, and any request that held the interface
+  longer than a frame. The README gives the per-platform location, and
+  `SKRIBEUM_LOG` raises the level for a run. The log names vault and note
+  paths, so it is worth a read before sharing.
 
 ### Fixed
 
+- A large vault opens without the application stopping. Indexing a vault
+  walked its tree with a linear scan over every entry already seen, making
+  the cost grow with the square of the entry count, and it ran on the thread
+  that draws the window and answers input, alongside crash-journal replay,
+  edit-history collection, and serializing the whole tree back across the
+  bridge. A vault big enough exhausted that thread, so startup showed its
+  recovery message and then answered nothing: no clicks, no folder
+  expansion, a half-painted tree. Indexing is now linear, and every request
+  whose cost scales with the vault, waits on a lock, or reaches the network
+  runs off the event loop.
+- A bulk filesystem change costs one vault walk rather than one per changed
+  file. Watcher events answered each changed file with a full re-index, so a
+  sync client landing a directory queued thousands of walks; they now
+  coalesce into a single refresh per quiet period.
 - Every block insertion places the caret inside the construct it inserted.
   A heading, task, list, or callout inserted on an empty line left the caret
   in front of the marker, so the first character typed landed before it and
@@ -89,6 +311,44 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A failure inside one panel of the shell now takes down only that panel,
   which reports the failure in place and offers to rebuild itself, while the
   rest of the workspace keeps rendering and responding.
+- Collapsing a folder in a scrolled file tree no longer leaves the rows it
+  hid behind as duplicates stacked over the surviving rows.
+- Emptying a wikilink alias no longer costs the note every decoration it has.
+  A construct with no text between its markers now has no presentation
+  instead of an impossible one, and a decoration build that fails for any
+  other reason leaves the note rendering what it already had rather than
+  disabling the whole engine until the note is reopened.
+- A key pressed inside a rendered table cell can no longer land in the note.
+  The cell answers every key it receives: it acts on the cell, lets the
+  browser edit the cell that holds focus, hands the note its undo and redo
+  chords, or refuses the key outright. Select-all, which used to take focus
+  out of the cell and scatter the following keystrokes through the document,
+  now selects the cell's text. The cell's focus ring is painted from where
+  the keystrokes go, so it cannot point at a cell the caret has left.
+- A table structure command leaves the caret in the table it changed, in the
+  first cell of an inserted row or the cell that replaced what it removed,
+  and focus arriving at the note while a cell is being edited returns to that
+  cell, so running one of these commands from the command palette no longer
+  parks the caret inside the rendered table and puts the next characters
+  outside it.
+- Redo no longer runs undo. A chord on a letter is matched against the
+  event's modifiers exactly, so `Mod-Shift-z` reaches redo on every platform
+  and keyboard state, including Caps Lock, rather than being answered by the
+  `Mod-z` binding.
+- Saving works wherever the caret is. `Mod-s` was claimed only while the
+  note's own editable surface held focus, so a save pressed while editing a
+  rendered table cell did nothing.
+- The application no longer scrolls inside its own window. The page under the
+  shell is bounded rather than merely hidden, so a surface that outgrows the
+  window is cut off at its edge instead of extending the page, and focusing a
+  control outside the viewport, a wheel over the chrome, or an overscroll can
+  no longer slide the application away from the window's own controls. Every
+  region that is meant to scroll still scrolls.
+- The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
+  terminators, and the keybinding tests drive the global handler on macOS,
+  Windows and Linux platform strings, so both classes are answered wherever
+  the suite runs rather than only on the platform that produces the input.
+
 ## [0.0.8] - 2026-08-15
 
 ### Added

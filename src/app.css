@@ -8,6 +8,36 @@ body,
   margin: 0;
 }
 
+/* An application shell owns its scroll regions explicitly; the document is
+   never one of them. Every engine keeps the page scrollable once anything
+   overflows it, whatever the root's `overflow` says, so the guarantee has
+   to be that nothing can overflow: the body clips (not merely hides, which
+   would leave the body itself scrollable) and gives every absolutely
+   positioned surface its containing block, so one placed past the window's
+   edge is cut off there instead of extending the page. With no page to
+   scroll, focusing a control outside the viewport, a wheel over the chrome
+   and a stray `scrollIntoView` all leave the shell where it is instead of
+   sliding it out from under the window controls. Suppressing overscroll
+   covers the engines that still rubber-band a page with nowhere to go. */
+html {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  position: relative;
+  overflow: hidden;
+}
+
+/* `clip` is the stronger statement: it bounds the body without making the
+   body itself a scroll container, so the shell cannot be displaced one
+   level down either. */
+@supports (overflow: clip) {
+  body {
+    overflow: clip;
+  }
+}
+
 html,
 .cm-scroller {
   scroll-behavior: auto;
@@ -357,10 +387,6 @@ select {
     var(--skr-motion-state-easing);
 }
 
-.skr-tree-row:hover {
-  background: var(--skr-surface-subtle);
-}
-
 .skr-tree-row:focus-visible {
   outline: 2px solid var(--skr-focus);
   outline-offset: -2px;
@@ -396,6 +422,32 @@ select {
   box-shadow: inset 2px 0 var(--skr-accent);
   opacity: 0;
   pointer-events: none;
+}
+
+/* While a folder reveal runs, the rows it displaces travel between their
+   slots and the tree's own height follows them, so the scroll extent grows
+   and shrinks with the list instead of jumping to its new size in one frame.
+   The rows being revealed or hidden carry a clip as well, unfolding out of
+   and back into their folder's slot; only those rows ever hold one, and only
+   while they move, because a clip makes an element the containing block for
+   any fixed-position descendant. Row fills keep the state clock throughout. */
+.skr-file-tree-revealing .skr-tree-row {
+  transition:
+    top var(--skr-motion-panel-duration) var(--skr-motion-panel-easing),
+    clip-path var(--skr-motion-panel-duration) var(--skr-motion-panel-easing),
+    background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+.skr-file-tree-revealing .skr-tree-spacer {
+  transition: height var(--skr-motion-panel-duration)
+    var(--skr-motion-panel-easing);
+}
+
+.skr-file-tree-revealing .skr-tree-active-highlight {
+  transition:
+    top var(--skr-motion-panel-duration) var(--skr-motion-panel-easing),
+    clip-path var(--skr-motion-panel-duration) var(--skr-motion-panel-easing);
 }
 
 .skr-tree-indent-guide {
@@ -434,10 +486,25 @@ select {
   line-height: 1;
 }
 
+/* Hover names the entry, not the row. The filled row belongs to the open
+   note alone, so the pointer's own emphasis is the same subtle surface fill
+   every other control uses for hover, scoped to the entry's text on the 50ms
+   state clock. The padding and its matching negative margin leave the label's
+   text box exactly where it rests, so nothing moves under the pointer. */
 .skr-tree-label {
   min-width: 0;
   overflow: hidden;
+  border-radius: var(--skr-radius-control);
+  margin-inline: -0.25rem;
+  padding-inline: 0.25rem;
   text-overflow: ellipsis;
+  transition: background-color var(--skr-motion-state-duration)
+    var(--skr-motion-state-easing);
+}
+
+.skr-tree-row:hover .skr-tree-label,
+.skr-tree-row-hovered .skr-tree-label {
+  background-color: var(--skr-surface-subtle);
 }
 
 .skr-tree-suffix {
@@ -484,7 +551,7 @@ select {
   border-radius: var(--skr-radius-surface);
   padding: 0.25rem;
   background: var(--skr-surface-raised);
-  box-shadow: var(--skr-shadow);
+  box-shadow: var(--skr-shadow-surface);
 }
 
 .skr-tree-menu button {
@@ -1127,7 +1194,7 @@ html body .settings-dialog {
 [role="dialog"] {
   background: var(--skr-surface-raised);
   color: var(--skr-text);
-  box-shadow: var(--skr-shadow);
+  box-shadow: var(--skr-shadow-surface);
 }
 
 [role="treeitem"][aria-selected="true"] {
@@ -1634,7 +1701,10 @@ html body .settings-dialog {
     min-height: 2.75rem;
   }
 
-  .cm-skr-selection-toolbar .cm-skr-toolbar-button,
+  /* The selection toolbar's own touch-mode floor lives in
+     selectionToolbar.ts next to the sizes it overrides: this rule and that
+     theme both set `min-width`/`min-height` on the same element, and the
+     loser of that specificity tie silently drops below the touch floor. */
   .cm-skr-slash-option,
   .cm-skr-tag-option,
   .cm-skr-task-checkbox,
@@ -1669,7 +1739,7 @@ html body .settings-dialog {
   padding: 0.25rem 0.375rem;
   color: var(--skr-text);
   background: var(--skr-surface-raised);
-  box-shadow: var(--skr-shadow);
+  box-shadow: var(--skr-shadow-surface);
   font-family: var(--skr-font-interface);
   font-size: var(--skr-type-label);
   line-height: 1.2;

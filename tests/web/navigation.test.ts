@@ -341,8 +341,114 @@ describe("wikilink keyboard navigation", () => {
       (candidate) => candidate.value === "navigation.follow-link",
     );
 
-    expect(command?.keybindings).toEqual(["Mod-Enter", "Enter"]);
+    expect(command?.keybindings).toEqual(["Mod-Enter"]);
     expect(item?.keybinding).toBe("Ctrl+Enter");
+  });
+
+  function typingLinkView(
+    registry: ReturnType<typeof createAppRegistry>,
+    commandContext: () => CommandContext,
+  ): EditorView {
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "See ",
+        selection: { anchor: 4 },
+        extensions: [
+          markdown({
+            base: markdownLanguage,
+            extensions: obsidianMarkdownExtensions,
+          }),
+          editorKeymap(registry, commandContext),
+        ],
+      }),
+      parent: document.body,
+    });
+    views.push(view);
+    view.focus();
+    // A real keystroke sequence, each insertion tagged the way CodeMirror's
+    // own input handler tags ordinary typing, landing the caret right after
+    // a wikilink target it just finished composing.
+    for (const char of "[[Target note]]") {
+      const from = view.state.selection.main.head;
+      view.dispatch({
+        changes: { from, insert: char },
+        selection: { anchor: from + 1 },
+        userEvent: "input.type",
+      });
+    }
+    expect(view.state.doc.toString()).toBe("See [[Target note]]");
+    return view;
+  }
+
+  it("keeps Enter a paragraph break right after typing a link", () => {
+    const registry = createAppRegistry();
+    const navigate = vi.fn();
+    const options = navigationOptions({ navigate });
+    let view: EditorView;
+    const commandContext = (): CommandContext => ({
+      view,
+      openNote: () => Promise.resolve(),
+      openView: () => {},
+      openCommandSurface: () => {},
+      toggleView: () => {},
+      closeSurfaces: () => {},
+      requestSave: () => {},
+      notePaths: () => options.context.paths,
+      recentNotePaths: () => [],
+      navigateBack: () => false,
+      navigateForward: () => false,
+      followLink: (activeView) =>
+        followWikilinkUnderCursor(activeView ?? view, options),
+    });
+    view = typingLinkView(registry, commandContext);
+
+    const plainEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      bubbles: true,
+      cancelable: true,
+    });
+    view.contentDOM.dispatchEvent(plainEnter);
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe("See [[Target note]]\n");
+    expect(view.hasFocus).toBe(true);
+  });
+
+  it("still follows a link with Mod-Enter right after typing it", () => {
+    const registry = createAppRegistry();
+    const navigate = vi.fn();
+    const options = navigationOptions({ navigate });
+    let view: EditorView;
+    const commandContext = (): CommandContext => ({
+      view,
+      openNote: () => Promise.resolve(),
+      openView: () => {},
+      openCommandSurface: () => {},
+      toggleView: () => {},
+      closeSurfaces: () => {},
+      requestSave: () => {},
+      notePaths: () => options.context.paths,
+      recentNotePaths: () => [],
+      navigateBack: () => false,
+      navigateForward: () => false,
+      followLink: (activeView) =>
+        followWikilinkUnderCursor(activeView ?? view, options),
+    });
+    view = typingLinkView(registry, commandContext);
+
+    const modEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    view.contentDOM.dispatchEvent(modEnter);
+
+    expect(navigate).toHaveBeenCalledWith({ path: "Target note.md" });
   });
 });
 
@@ -617,6 +723,43 @@ describe("note addressing and desktop history", () => {
       }),
     );
     navigator.dispose();
+  });
+
+  it("keeps a history entry when the shell echoes the address mid-load", async () => {
+    // The shell reports the note it shows through `syncAddress` as soon as
+    // the load lands, before `open` resolves. A navigator that decided
+    // push-versus-replace after its load would find the address already
+    // rewritten to the destination and record no entry at all, leaving Back
+    // permanently disabled.
+    window.history.replaceState({}, "", "/skribeum/");
+    const first = { path: "first.md" };
+    const second = { path: "folder/second.md" };
+    let navigator: ReturnType<typeof createNoteNavigator> | null = null;
+    const load = vi.fn(async (address: NoteAddress) => {
+      navigator?.syncAddress(address);
+    });
+    navigator = createNoteNavigator({
+      mode: "browser",
+      browserWindow: window,
+      load,
+    });
+
+    await navigator.start(first);
+    await navigator.open(second);
+    expect(navigator.state()).toMatchObject({
+      address: second,
+      canGoBack: true,
+      canGoForward: false,
+    });
+
+    expect(navigator.back()).toBe(true);
+    await vi.waitFor(() =>
+      expect(new URL(window.location.href).searchParams.get("note")).toBe(
+        "first.md",
+      ),
+    );
+    navigator.dispose();
+    window.history.replaceState({}, "", "/");
   });
 
   it("projects browser navigation onto the History API", async () => {

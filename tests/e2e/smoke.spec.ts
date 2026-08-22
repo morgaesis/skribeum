@@ -384,6 +384,67 @@ async function viewportAfterPaint(): Promise<ViewportSize> {
   });
 }
 
+/** The shared viewport every test starts and ends at. */
+const DESKTOP_VIEWPORT: ViewportSize = { width: 1100, height: 750 };
+
+/**
+ * The smallest edge a resize request may carry.
+ *
+ * The compensation below adds the shortfall between the requested viewport
+ * and the observed one to the next outer size. A reading taken before the
+ * host applied the previous resize reports the old, larger viewport, and for
+ * a large shrink that shortfall exceeds the request itself: 390 + (390 -
+ * 1280) is negative, and the driver rejects a negative window size outright
+ * with an argument error that says nothing about the viewport. The floor
+ * keeps a retry a retry.
+ */
+const MINIMUM_WINDOW_EDGE = 240;
+
+/**
+ * Reads the viewport once the host has finished resizing the window.
+ *
+ * A resize reaches the webview through the display server on its own
+ * schedule, while frames keep being produced throughout, so an elapsed frame
+ * count is not evidence that the new size has landed. This samples the
+ * viewport every frame and reports it once it matches the requested size or
+ * has held still long enough to be settled rather than mid-flight, and
+ * reports whatever it last saw if neither happens inside the bound.
+ */
+async function settledViewport(target: ViewportSize): Promise<ViewportSize> {
+  return browser.executeAsync<ViewportSize, [ViewportSize, number, number]>(
+    (wanted, stableFor, limit, done) => {
+      const start = performance.now();
+      let last = { width: window.innerWidth, height: window.innerHeight };
+      let lastChange = start;
+      const sample = () => {
+        const now = performance.now();
+        const current = {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        };
+        if (current.width !== last.width || current.height !== last.height) {
+          last = current;
+          lastChange = now;
+        }
+        if (
+          (current.width === wanted.width &&
+            current.height === wanted.height) ||
+          now - lastChange >= stableFor ||
+          now - start >= limit
+        ) {
+          done(current);
+          return;
+        }
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    },
+    target,
+    400,
+    5000,
+  );
+}
+
 async function setViewportSize(
   width: number,
   height: number,
@@ -395,7 +456,7 @@ async function setViewportSize(
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     await browser.setWindowSize(outerWidth, outerHeight);
-    actual = await viewportAfterPaint();
+    actual = await settledViewport({ width, height });
     if (actual.width === width && actual.height === height) return actual;
     if (
       attempt > 0 &&
@@ -406,8 +467,14 @@ async function setViewportSize(
     }
 
     previous = actual;
-    outerWidth += width - actual.width;
-    outerHeight += height - actual.height;
+    outerWidth = Math.max(
+      MINIMUM_WINDOW_EDGE,
+      outerWidth + width - actual.width,
+    );
+    outerHeight = Math.max(
+      MINIMUM_WINDOW_EDGE,
+      outerHeight + height - actual.height,
+    );
   }
 
   // Hosted macOS displays cap native window height below 844 pixels. The
@@ -420,15 +487,17 @@ async function setViewportSize(
   );
 }
 
+/**
+ * Returns the window to the shared desktop viewport.
+ *
+ * The wait is for that viewport to have been reached, not merely for a
+ * reading above the narrow breakpoint: every width this runs from is either
+ * already above the breakpoint or on its way past it, so the looser check
+ * returns while the resize is still in flight and hands the next test a
+ * window that is still moving under its measurements.
+ */
 async function restoreDesktopViewport() {
-  await browser.setWindowSize(1100, 750);
-  await browser.waitUntil(
-    async () => (await viewportAfterPaint()).width > 960,
-    {
-      timeout: 10000,
-      timeoutMsg: "viewport did not return above the narrow breakpoint",
-    },
-  );
+  await setViewportSize(DESKTOP_VIEWPORT.width, DESKTOP_VIEWPORT.height);
 }
 
 async function setSimulatedVisualViewport(

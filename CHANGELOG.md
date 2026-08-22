@@ -144,6 +144,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The file tree opens every row it shows. A file that is neither a note nor a
   canvas is no longer drawn muted and inert, and the unified command surface
   reaches every indexed file rather than notes and canvases alone.
+- Expanding and collapsing a file tree folder moves the rows it displaces
+  through the positions between their old and new slots, with the tree's own
+  height on the same clock, so a vault taller than the sidebar grows and
+  shrinks under the reader instead of jumping to its new size and animating
+  over it. The rows a folder reveals unfold out of its slot and fold back
+  into it; the fill marking the open note travels on the row it belongs to,
+  and toggling a folder no longer scrolls the sidebar back to the open note.
+- Hovering a file tree row emphasises the entry's own text rather than
+  filling the whole row, leaving the filled row to mean one thing: this is
+  the note that is open.
 - A file that is neither an image nor valid UTF-8 opens read-only with the
   non-UTF-8 notice, the same treatment a non-UTF-8 note gets, so no editing
   pass can write a lossy re-encoding over a binary file.
@@ -205,6 +215,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A failure inside one panel of the shell now takes down only that panel,
   which reports the failure in place and offers to rebuild itself, while the
   rest of the workspace keeps rendering and responding.
+- Collapsing a folder in a scrolled file tree no longer leaves the rows it
+  hid behind as duplicates stacked over the surviving rows.
 - Emptying a wikilink alias no longer costs the note every decoration it has.
   A construct with no text between its markers now has no presentation
   instead of an impossible one, and a decoration build that fails for any
@@ -230,7 +242,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Saving works wherever the caret is. `Mod-s` was claimed only while the
   note's own editable surface held focus, so a save pressed while editing a
   rendered table cell did nothing.
-
+- The application no longer scrolls inside its own window. The page under the
+  shell is bounded rather than merely hidden, so a surface that outgrows the
+  window is cut off at its edge instead of extending the page, and focusing a
+  control outside the viewport, a wheel over the chrome, or an overscroll can
+  no longer slide the application away from the window's own controls. Every
+  region that is meant to scroll still scrolls.
 ## [0.0.8] - 2026-08-15
 
 ### Added

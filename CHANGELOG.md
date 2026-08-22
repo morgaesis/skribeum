@@ -255,13 +255,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The file tree opens every row it shows. A file that is neither a note nor a
   canvas is no longer drawn muted and inert, and the unified command surface
   reaches every indexed file rather than notes and canvases alone.
-- Expanding and collapsing a file tree folder moves the rows it displaces
-  through the positions between their old and new slots, with the tree's own
-  height on the same clock, so a vault taller than the sidebar grows and
-  shrinks under the reader instead of jumping to its new size and animating
-  over it. The rows a folder reveals unfold out of its slot and fold back
-  into it; the fill marking the open note travels on the row it belongs to,
-  and toggling a folder no longer scrolls the sidebar back to the open note.
 - Hovering a file tree row emphasises the entry's own text rather than
   filling the whole row, leaving the filled row to mean one thing: this is
   the note that is open.
@@ -353,12 +346,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Saving works wherever the caret is. `Mod-s` was claimed only while the
   note's own editable surface held focus, so a save pressed while editing a
   rendered table cell did nothing.
-- The application no longer scrolls inside its own window. The page under the
-  shell is bounded rather than merely hidden, so a surface that outgrows the
-  window is cut off at its edge instead of extending the page, and focusing a
-  control outside the viewport, a wheel over the chrome, or an overscroll can
-  no longer slide the application away from the window's own controls. Every
-  region that is meant to scroll still scrolls.
 - The end-to-end suite exercises a note mixing LF, CRLF and lone-CR
   terminators, and the keybinding tests drive the global handler on macOS,
   Windows and Linux platform strings, so both classes are answered wherever

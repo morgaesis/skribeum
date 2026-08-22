@@ -26,11 +26,12 @@ const RADIUS_EXEMPT_SELECTOR =
 // controls -- buttons, chips, rows -- are not in this list.
 const BORDER_AT_REST_ALLOWED_SELECTOR =
   '[role="dialog"], .settings-dialog, .command-surface-dialog, .skr-tree-menu, ' +
-  ".skr-tab-menu, .settings-jump-menu, .task-listbox-options, .skr-command-tooltip, " +
+  ".skr-tab-menu, .task-listbox-options, .skr-command-tooltip, " +
   ".sheet, .cm-skr-link-preview, .cm-skr-task-palette, .cm-skr-selection-toolbar, " +
   ".cm-skr-slash-menu, .cm-skr-tag-menu, table, .cm-skr-table-first, .cm-skr-table-row, " +
   ".cm-skr-code-block, .cm-skr-rich-callout, .cm-skr-embed, .cm-skr-math-block, " +
-  ".cm-skr-mermaid, .cm-skr-code-copy, .palette-card, .palette-live-preview, " +
+  ".cm-skr-mermaid, .cm-skr-code-copy, .palette-card, .mode-card, " +
+  ".settings-group-row, .palette-live-preview, " +
   ".task-status-table, .cm-skr-task-checkbox, .skr-property-checkbox input, " +
   ".palette-live-box, .switch, .switch *, .canvas-toolbar, .canvas-card, " +
   ".cm-skr-find-panel, .demo-notice, .demo-storage-status";

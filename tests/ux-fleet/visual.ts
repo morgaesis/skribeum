@@ -248,6 +248,11 @@ async function parkCursor(text: string): Promise<void> {
 export async function setTheme(value: Theme): Promise<void> {
   await browser.keys([modifier, ","]);
   await $('[data-testid="settings-view"]').waitForExist({ timeout: 10_000 });
+  const rail = $('[data-testid="settings-rail-appearance"]');
+  if (await rail.isExisting()) await rail.click();
+  // The mode cards own the colour scheme and the palette cards own their own
+  // field, so the appearance is set in two acts rather than one.
+  await $(`[data-testid="settings-theme-${value}"]`).click();
   const palette = value === "light" ? "manuscript" : "graphite";
   await $(`[data-testid="settings-palette-${palette}"]`).click();
   await browser.waitUntil(() => browser.execute((next) => document.documentElement.dataset.theme === next, value));

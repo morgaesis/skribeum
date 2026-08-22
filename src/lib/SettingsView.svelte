@@ -3740,7 +3740,9 @@ function onKeydown(event: KeyboardEvent) {
       var(--skr-mode-pane-text) 55%,
       var(--skr-mode-pane-surface)
     );
-    border-radius: 0.1rem;
+    /* Larger than half the bar's own height, so it clips to a pill while the
+       specified value still belongs to the radius scale. */
+    border-radius: var(--skr-radius-control);
     display: block;
     height: 0.2rem;
   }
@@ -3755,7 +3757,9 @@ function onKeydown(event: KeyboardEvent) {
 
   .mode-pane-accent {
     background: var(--skr-mode-pane-accent);
-    border-radius: 50%;
+    /* Larger than half the dot's own box, so it clips to a full circle while
+       the specified value still belongs to the radius scale. */
+    border-radius: var(--skr-radius-control);
     bottom: 14%;
     height: 0.5rem;
     position: absolute;

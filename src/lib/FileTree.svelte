@@ -563,14 +563,48 @@ async function focusRow(index: number, focus = true) {
   }
   await tick();
   if (!mounted) return;
-  if (focus) itemElements[nextIndex]?.focus();
+  if (focus) focusRowElement(nextIndex);
+}
+
+/**
+ * Moves focus onto the row at `index`, and keeps it inside the tree.
+ *
+ * Only the window of rows around the scroll position is rendered, so a row
+ * that leaves it is destroyed, and destroying the row that holds focus hands
+ * focus to the document body. The element bindings that window maintains are
+ * therefore not a reliable handle on the row to focus next: a scroll or a
+ * refreshed tree can rebuild the row between the request and this call, and a
+ * binding that has not been written back yet leaves focus on the body, where
+ * no key reaches the tree at all. Resolving the row from the tree's own DOM
+ * covers the rebuild, and falling back to the tree keeps the widget reachable
+ * from the keyboard when the row genuinely is not rendered.
+ */
+function focusRowElement(index: number): void {
+  const bound = itemElements[index];
+  if (bound instanceof HTMLElement && bound.isConnected) {
+    bound.focus();
+    return;
+  }
+  const row = rows[index];
+  const rendered =
+    row === undefined
+      ? null
+      : (treeElement?.querySelector<HTMLElement>(
+          `[role="treeitem"][data-path="${CSS.escape(row.path)}"]`,
+        ) ?? null);
+  if (rendered !== null) {
+    rendered.focus();
+    return;
+  }
+  const active = document.activeElement;
+  if (active === null || active === document.body) treeElement?.focus();
 }
 
 function restoreMenuTreeFocus(path: string): () => void {
   const originIndex = rows.findIndex((row) => row.path === path);
   if (originIndex >= 0) {
     focusIndex = originIndex;
-    itemElements[originIndex]?.focus();
+    focusRowElement(originIndex);
   }
 
   return () => {

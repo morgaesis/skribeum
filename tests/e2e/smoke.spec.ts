@@ -667,6 +667,63 @@ async function renderedTableGeometry(): Promise<TableGeometry[]> {
   });
 }
 
+type EditingCell = { row: string | null; column: string | null };
+
+/** The cell that owns the caret, or null when the caret is outside a table. */
+async function editingCell(): Promise<EditingCell | null> {
+  return browser.execute(() => {
+    const cell = document.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"]',
+    );
+    return cell === null
+      ? null
+      : {
+          row: cell.getAttribute("data-row"),
+          column: cell.getAttribute("data-column"),
+        };
+  });
+}
+
+/**
+ * Waits for the caret to settle in the table cell described by `expected`, or
+ * outside every table when `expected` is null.
+ *
+ * A cell move is the settled result of a keystroke that the editor answers by
+ * rewriting the source and rebuilding the table's decorations, and the cell
+ * that reports itself editing partway through that rebuild is not the one the
+ * writer ends up in. Reading the attributes one command after the key samples
+ * whatever the surface was passing through; this waits for the destination and
+ * names the cell it last saw when the caret settles somewhere else.
+ */
+async function expectEditingCell(
+  expected: { row?: string; column?: string } | null,
+): Promise<void> {
+  let seen = await editingCell();
+  const settled = (cell: EditingCell | null) => {
+    if (expected === null) return cell === null;
+    return (
+      cell !== null &&
+      (expected.row === undefined || cell.row === expected.row) &&
+      (expected.column === undefined || cell.column === expected.column)
+    );
+  };
+  try {
+    await browser.waitUntil(
+      async () => {
+        seen = await editingCell();
+        return settled(seen);
+      },
+      { timeout: 10000 },
+    );
+  } catch {
+    throw new Error(
+      `the caret settled in ${JSON.stringify(seen)} rather than ${
+        expected === null ? "outside every table" : JSON.stringify(expected)
+      }`,
+    );
+  }
+}
+
 async function prepareTableGeometryNote(): Promise<void> {
   await openNoteFromTree(VISUAL_NOTE_NAME);
   await browser.waitUntil(
@@ -2757,12 +2814,10 @@ describe("skribeum shell", () => {
           (await firstBodyCell?.getAttribute("data-editing")) === "true",
         { timeout: 10000, timeoutMsg: "table cell did not acquire its caret" },
       );
-      expect(
-        await browser.execute(
-          () =>
-            document.activeElement?.classList.contains("cm-content") ?? false,
-        ),
-      ).toBe(true);
+      // Focus custody and the caret it carries land together and land after
+      // the cell reports itself editing, so the poll below is the assertion:
+      // reading focus once before it covers the same property against a
+      // webview that has not delivered the focus event yet.
       await browser.waitUntil(
         () =>
           browser.execute(() => {
@@ -2934,35 +2989,13 @@ describe("skribeum shell", () => {
       await browser.releaseActions();
       await pressFocusedKey("ArrowRight");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("1");
+      await expectEditingCell({ row: "1", column: "1" });
       await pressFocusedKey("Tab");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("2");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("0");
+      await expectEditingCell({ row: "2", column: "0" });
       await pressFocusedKey("Tab", true);
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("1");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("1");
+      await expectEditingCell({ row: "1", column: "1" });
 
       await browser.keys([modifierKey, "p"]);
       const commandSurface = $('[data-testid="unified-command-surface"]');
@@ -2981,16 +3014,7 @@ describe("skribeum shell", () => {
         { timeout: 10000 },
       );
       expect(await $(".cm-skr-table-grid").getAttribute("role")).toBe("grid");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("1");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("1");
+      await expectEditingCell({ row: "1", column: "1" });
 
       await browser.keys(Key.Escape);
       await browser.keys([modifierKey, "e"]);
@@ -3009,38 +3033,25 @@ describe("skribeum shell", () => {
       await placeCursorAtLineEnd("Large table follows.");
       await pressFocusedKey("ArrowDown");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(await $$('.cm-skr-table-cell[data-editing="true"]')).toHaveLength(
-        0,
-      );
+      await expectEditingCell(null);
       await pressFocusedKey("ArrowDown");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("0");
+      await expectEditingCell({ row: "0" });
       for (let row = 1; row <= 30; row += 1) {
         await pressFocusedKey("ArrowDown");
-        expect(
-          await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-            "data-row",
-          ),
-        ).toBe(String(row));
+        await expectEditingCell({ row: String(row) });
       }
       await pressFocusedKey("ArrowDown");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(await $$('.cm-skr-table-cell[data-editing="true"]')).toHaveLength(
-        0,
-      );
+      await expectEditingCell(null);
       await pressFocusedKey("ArrowUp");
       expect(noteOnDisk(TABLE_EDITING_NOTE_NAME)).toBe(edited);
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("30");
+      await expectEditingCell({ row: "30" });
       await browser.keys(Key.Escape);
-      expect(await $$(".cm-skr-table-grid")).toHaveLength(2);
+      await browser.waitUntil(
+        async () => (await $$(".cm-skr-table-grid")).length === 2,
+        { timeout: 10000 },
+      );
       expect(await editorText()).not.toContain("| --- | --- |");
 
       const renderedTables = await $$(".cm-skr-table-grid");
@@ -3048,26 +3059,13 @@ describe("skribeum shell", () => {
         ?.$('.cm-skr-table-cell[data-row="2"][data-column="1"]')
         .click();
       await pressFocusedKey("Tab");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("3");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-column",
-        ),
-      ).toBe("0");
+      await expectEditingCell({ row: "3", column: "0" });
       const tabGrown = edited.replace("| Ada | 10 |", "| Ada | 10 |\n| | |");
       await browser.keys([modifierKey, "s"]);
       await waitForDisk(TABLE_EDITING_NOTE_NAME, tabGrown);
 
       await pressFocusedKey("Enter");
-      expect(
-        await $('.cm-skr-table-cell[data-editing="true"]').getAttribute(
-          "data-row",
-        ),
-      ).toBe("4");
+      await expectEditingCell({ row: "4" });
       const enterGrown = tabGrown.replace(
         "| Ada | 10 |\n| | |",
         "| Ada | 10 |\n| | |\n| | |",
@@ -4619,9 +4617,24 @@ describe("skribeum shell", () => {
     );
     const beforeArrow = await activeElementDescriptor();
     await browser.keys(Key.ArrowDown);
-    const afterArrow = await activeElementDescriptor();
-    expect(afterArrow).toContain("treeitem");
-    expect(afterArrow).not.toBe(beforeArrow);
+    // The tree moves its roving stop after the render that the arrow key
+    // schedules, so the focus lands a frame later than the key command
+    // returns; reading once here asks whether it has landed yet rather than
+    // whether it lands on another row.
+    let afterArrow = beforeArrow;
+    try {
+      await browser.waitUntil(
+        async () => {
+          afterArrow = await activeElementDescriptor();
+          return afterArrow.includes("treeitem") && afterArrow !== beforeArrow;
+        },
+        { timeout: 5000 },
+      );
+    } catch {
+      throw new Error(
+        `the arrow key left focus on ${afterArrow} rather than moving it to another tree row`,
+      );
+    }
     await browser.execute((noteName: string) => {
       document
         .querySelector<HTMLElement>(
@@ -4635,15 +4648,49 @@ describe("skribeum shell", () => {
       ),
     ).toBe(LF_NOTE_NAME);
     await browser.keys(Key.Enter);
-    await browser.waitUntil(
-      async () =>
-        (await $(".skr-editor-pane-focused .skr-editor-shell").getAttribute(
-          "data-note-path",
-        )) === LF_NOTE_NAME && (await editorText()).includes("alpha"),
-      {
-        timeout: 15000,
-      },
-    );
+    // The note the focused pane holds, read whole so a pane that has not
+    // mounted its shell yet is a reading rather than a thrown selector error,
+    // and so the wait below can say what it settled on. Reporting only that a
+    // condition timed out leaves a failure here indistinguishable between the
+    // row never opening, another row opening in its place, and the note
+    // opening in a pane that is not the focused one.
+    const focusedPaneNote = () =>
+      browser.execute(() => {
+        const shells = [
+          ...document.querySelectorAll<HTMLElement>(".skr-editor-shell"),
+        ].map((shell) => shell.getAttribute("data-note-path"));
+        return {
+          focused:
+            document
+              .querySelector(".skr-editor-pane-focused .skr-editor-shell")
+              ?.getAttribute("data-note-path") ?? null,
+          panes: shells,
+          activePath: document.activeElement?.getAttribute("data-path") ?? null,
+          treeTabStop:
+            document
+              .querySelector('[role="treeitem"][tabindex="0"]')
+              ?.getAttribute("data-path") ?? null,
+        };
+      });
+    let openedNote = await focusedPaneNote();
+    try {
+      await browser.waitUntil(
+        async () => {
+          openedNote = await focusedPaneNote();
+          return (
+            openedNote.focused === LF_NOTE_NAME &&
+            (await editorText()).includes("alpha")
+          );
+        },
+        { timeout: 15000 },
+      );
+    } catch {
+      throw new Error(
+        `Enter on the focused tree row did not open ${LF_NOTE_NAME}; observed ${JSON.stringify(
+          openedNote,
+        )}`,
+      );
+    }
 
     // The editor is keyboard-focusable with a visible focus indicator, and
     // typing lands in the document.

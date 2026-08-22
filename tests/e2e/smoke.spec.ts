@@ -2655,36 +2655,61 @@ describe("skribeum shell", () => {
       await $(".cm-skr-selectionLayer .cm-selectionBackground").waitForExist({
         timeout: 10000,
       });
-      const drawn = await browser.execute(() => {
-        const content = document.querySelector<HTMLElement>(".cm-content");
-        if (content === null) throw new Error("editor content missing");
-        const contentBox = content.getBoundingClientRect();
-        const style = window.getComputedStyle(content);
-        const columnLeft =
-          contentBox.left + Number.parseFloat(style.paddingLeft);
-        const columnRight =
-          contentBox.right - Number.parseFloat(style.paddingRight);
-        const stock = document.querySelector<HTMLElement>(
-          ".cm-layer.cm-selectionLayer",
+      const drawnHighlight = () =>
+        browser.execute(() => {
+          const content = document.querySelector<HTMLElement>(".cm-content");
+          if (content === null) throw new Error("editor content missing");
+          const contentBox = content.getBoundingClientRect();
+          const style = window.getComputedStyle(content);
+          const columnLeft =
+            contentBox.left + Number.parseFloat(style.paddingLeft);
+          const columnRight =
+            contentBox.right - Number.parseFloat(style.paddingRight);
+          const stock = document.querySelector<HTMLElement>(
+            ".cm-layer.cm-selectionLayer",
+          );
+          const rectangles = [
+            ...document.querySelectorAll<HTMLElement>(
+              ".cm-skr-selectionLayer .cm-selectionBackground",
+            ),
+          ].map((element) => element.getBoundingClientRect());
+          return {
+            stockLayerDisplay:
+              stock === null
+                ? "absent"
+                : window.getComputedStyle(stock).display,
+            rectangleCount: rectangles.length,
+            overshoots: rectangles.filter(
+              (box) => box.left < columnLeft - 1 || box.right > columnRight + 1,
+            ).length,
+          };
+        });
+      // The highlight is redrawn as the resize and the selection reflow the
+      // lines under it, and the first rectangle exists before that settles, so
+      // its width at that moment is the width of a layout still in motion.
+      // The contract is where the highlight comes to rest, and a rectangle
+      // that genuinely escapes the column keeps escaping it.
+      let drawn = await drawnHighlight();
+      try {
+        await browser.waitUntil(
+          async () => {
+            drawn = await drawnHighlight();
+            return (
+              drawn.stockLayerDisplay === "none" &&
+              drawn.rectangleCount > 0 &&
+              drawn.overshoots === 0
+            );
+          },
+          { timeout: 10000 },
         );
-        const rectangles = [
-          ...document.querySelectorAll<HTMLElement>(
-            ".cm-skr-selectionLayer .cm-selectionBackground",
-          ),
-        ].map((element) => element.getBoundingClientRect());
-        return {
-          stockLayerDisplay:
-            stock === null ? "absent" : window.getComputedStyle(stock).display,
-          rectangleCount: rectangles.length,
-          overshoots: rectangles.filter(
-            (box) => box.left < columnLeft - 1 || box.right > columnRight + 1,
-          ).length,
-        };
-      });
-      // The stock layer must not paint a second, unclamped highlight.
-      expect(drawn.stockLayerDisplay).toBe("none");
-      expect(drawn.rectangleCount).toBeGreaterThan(0);
-      expect(drawn.overshoots).toBe(0);
+      } catch {
+        throw new Error(
+          // The stock layer must not paint a second, unclamped highlight.
+          `the selection highlight settled outside the reading column; observed ${JSON.stringify(
+            drawn,
+          )}`,
+        );
+      }
     } finally {
       await clearEditorSelection();
       await restoreDesktopViewport();

@@ -998,32 +998,68 @@ describe("tag affordances", () => {
     });
   });
 
-  it("answers from the catalog it had when the last key was pressed", () => {
-    // The menu is drawn by the editor's update cycle. A catalog that changes
-    // with no editing in between -- which is what an autosave of the
-    // half-typed word produces -- does not redraw it, and the next keystroke
-    // does. A test that waits for a catalog change to appear in an open menu
-    // is therefore waiting for something that will not happen until it types
-    // again.
-    tagCatalog = [
-      { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 2 },
-    ];
-    const view = makeView("", 0);
-    typeText(view, "#ced");
-    const rows = () =>
+  // The catalog is vault state that refreshes on its own schedule: an
+  // autosave of the half-typed word indexes it and the tag being typed
+  // becomes a tag of the vault while the menu that produced it is still
+  // open. The menu answers the query it was opened with, from the catalog it
+  // read then, and the row Enter commits is a row that was on screen.
+  describe("a catalog that changes while the menu is open", () => {
+    const rowsOf = (view: EditorView) =>
       [...view.dom.querySelectorAll('.cm-skr-tag-menu [role="option"]')].map(
         (option) => option.textContent,
       );
-    expect(rows()).toEqual(["#project/cedar-room"]);
 
-    tagCatalog = [
-      ...tagCatalog,
-      { tag: "ced", noteCount: 1, occurrenceCount: 1 },
-    ];
+    function openMenuThenIndexTheQuery(): EditorView {
+      tagCatalog = [
+        { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 2 },
+      ];
+      const view = makeView("", 0);
+      typeText(view, "#ced");
+      expect(rowsOf(view)).toEqual(["#project/cedar-room"]);
+      // What the autosave's reindex does to the catalog: the half-typed
+      // word is now a tag the vault holds.
+      tagCatalog = [
+        ...tagCatalog,
+        { tag: "ced", noteCount: 1, occurrenceCount: 1 },
+      ];
+      return view;
+    }
 
-    expect(rows()).toEqual(["#project/cedar-room"]);
-    view.dispatch({ selection: { anchor: view.state.selection.main.head } });
-    expect(rows()).toEqual(["#ced", "#project/cedar-room"]);
+    it("keeps the rows it drew, through an update that redraws them", () => {
+      const view = openMenuThenIndexTheQuery();
+
+      expect(rowsOf(view)).toEqual(["#project/cedar-room"]);
+      // A redraw with no new query: a caret move, a measure, a viewport
+      // change. Recomputing here would swap the row under the reader's
+      // finger without the reader having touched anything.
+      view.dispatch({ selection: { anchor: view.state.selection.main.head } });
+      expect(rowsOf(view)).toEqual(["#project/cedar-room"]);
+    });
+
+    it("commits the row that was on screen rather than the query itself", () => {
+      const view = openMenuThenIndexTheQuery();
+
+      pressEditorKey(view, "Enter");
+
+      expect(view.state.doc.toString()).toBe("#project/cedar-room");
+      expect(rememberedTags).toEqual(["project/cedar-room"]);
+    });
+
+    it("answers the next keystroke from the catalog it now holds", () => {
+      const view = openMenuThenIndexTheQuery();
+
+      // Deleting back to a query the new entry answers proves the menu
+      // reads the catalog again whenever the query changes, rather than
+      // holding the one it opened with for the life of the menu.
+      const head = view.state.selection.main.head;
+      view.dispatch({
+        changes: { from: head - 1, to: head },
+        userEvent: "delete.backward",
+      });
+      typeText(view, "d");
+
+      expect(rowsOf(view)).toEqual(["#ced", "#project/cedar-room"]);
+    });
   });
 
   it("removes the trigger and query when dismissed with Escape", () => {

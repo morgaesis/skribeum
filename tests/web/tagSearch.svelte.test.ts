@@ -368,13 +368,23 @@ describe("tag mode empty states and bounds", () => {
     // without looking at each candidate. Measuring against that floor in the
     // same process states the property a frame budget is a proxy for, and
     // says it in a way that does not depend on how fast this machine is.
+    //
+    // The floor is timed over as many passes as the budget allows rather than
+    // over one, so the two timed windows are of comparable length. A single
+    // pass runs in a fraction of the time a keystroke takes, and a scheduler
+    // pause on a loaded machine is correspondingly likelier to land inside
+    // the longer window than the shorter one, which turns the ratio between
+    // them into a measurement of contention rather than of the matcher.
+    const PASSES = 6;
     const floor = () => {
       const started = performance.now();
-      const seen = new Set<string>();
-      for (const entry of catalog) {
-        seen.add(entry.tag.toLowerCase());
+      for (let pass = 0; pass < PASSES; pass += 1) {
+        const seen = new Set<string>();
+        for (const entry of catalog) {
+          seen.add(entry.tag.toLowerCase());
+        }
+        expect(seen.size).toBe(catalog.length);
       }
-      expect(seen.size).toBe(catalog.length);
       return performance.now() - started;
     };
     const keystroke = (query: string) => {
@@ -404,6 +414,6 @@ describe("tag mode empty states and bounds", () => {
       ...keystrokes.map((query) => fastest(() => keystroke(query))),
     );
 
-    expect(worst).toBeLessThan(reference * 6);
+    expect(worst).toBeLessThan(reference);
   });
 });

@@ -49,7 +49,21 @@ export type TagAffordanceOptions = {
 type TagMenuState = {
   /** Position of the hash character. */
   from: number;
-  /** Index into the filtered completion list. */
+  /** The query text the offered rows answer, without the leading hash. */
+  query: string;
+  /**
+   * The rows the menu offers, in order.
+   *
+   * They are computed once, when the query changes, and then held. The
+   * catalog is vault state that refreshes on its own schedule, outside the
+   * editor's transactions, so recomputing per render let the list the reader
+   * sees and the list a keystroke acts on come from two different catalogs:
+   * an indexing pass landing between the last keystroke and Enter silently
+   * redirected Enter to a tag that was never on screen. Holding one snapshot
+   * makes the offered row and the committed row the same row by construction.
+   */
+  items: readonly TagCompletion[];
+  /** Index into `items`. */
   selected: number;
 };
 
@@ -105,18 +119,34 @@ function queryStartBefore(state: EditorState): number | null {
     : null;
 }
 
-function queryOf(state: EditorState, open: TagMenuState): string | null {
+function queryOf(state: EditorState, from: number): string | null {
   const head = state.selection.main.head;
-  if (!state.selection.main.empty || head < open.from + 1) {
+  if (!state.selection.main.empty || head < from + 1) {
     return null;
   }
-  if (state.doc.sliceString(open.from, open.from + 1) !== "#") {
+  if (state.doc.sliceString(from, from + 1) !== "#") {
     return null;
   }
-  const query = state.doc.sliceString(open.from + 1, head);
+  const query = state.doc.sliceString(from + 1, head);
   return query.length <= TAG_QUERY_LIMIT && TAG_QUERY.test(query)
     ? query
     : null;
+}
+
+/** The menu state for a query that starts at `from`, or null when there is none. */
+function menuAt(
+  state: EditorState,
+  from: number,
+  previous: TagMenuState | null,
+): TagMenuState | null {
+  const query = queryOf(state, from);
+  if (query === null) {
+    return null;
+  }
+  if (previous !== null && previous.query === query) {
+    return { ...previous, from };
+  }
+  return { from, query, items: offeredTags(state, query), selected: 0 };
 }
 
 export const tagCompletionState = StateField.define<TagMenuState | null>({
@@ -124,13 +154,11 @@ export const tagCompletionState = StateField.define<TagMenuState | null>({
   update(value, transaction) {
     let next = value;
     if (next !== null) {
-      next = {
-        from: transaction.changes.mapPos(next.from, 1),
-        selected: transaction.docChanged ? 0 : next.selected,
-      };
-      if (queryOf(transaction.state, next) === null) {
-        next = null;
-      }
+      next = menuAt(
+        transaction.state,
+        transaction.changes.mapPos(next.from, 1),
+        next,
+      );
     }
     if (
       next === null &&
@@ -140,7 +168,7 @@ export const tagCompletionState = StateField.define<TagMenuState | null>({
     ) {
       const from = queryStartBefore(transaction.state);
       if (from !== null) {
-        next = { from, selected: 0 };
+        next = menuAt(transaction.state, from, null);
       }
     }
     for (const effect of transaction.effects) {
@@ -213,20 +241,16 @@ export function tagCompletionOpen(state: EditorState): boolean {
   return state.field(tagCompletionState, false) != null;
 }
 
-function completionItems(
+function offeredTags(
   state: EditorState,
-  open: TagMenuState,
+  query: string,
 ): readonly TagCompletion[] {
   const config = state.facet(tagConfig);
   if (config === null) {
     return [];
   }
   const options = config.options();
-  return filteredTagCompletions(
-    options.catalog(),
-    options.recentTags(),
-    queryOf(state, open) ?? "",
-  );
+  return filteredTagCompletions(options.catalog(), options.recentTags(), query);
 }
 
 function acceptItem(view: EditorView): boolean {
@@ -235,8 +259,7 @@ function acceptItem(view: EditorView): boolean {
   if (open == null || config === null) {
     return false;
   }
-  const items = completionItems(view.state, open);
-  const item = items[Math.min(open.selected, items.length - 1)];
+  const item = open.items[Math.min(open.selected, open.items.length - 1)];
   if (item === undefined) {
     return false;
   }
@@ -258,7 +281,7 @@ function moveSelection(view: EditorView, delta: number): boolean {
   if (open == null) {
     return false;
   }
-  const count = completionItems(view.state, open).length;
+  const count = open.items.length;
   if (count === 0) {
     return true;
   }
@@ -396,7 +419,7 @@ function tagTooltip(open: TagMenuState): Tooltip {
         if (current == null) {
           return;
         }
-        const items = completionItems(state, current);
+        const items = current.items;
         if (items.length === 0) {
           const empty = document.createElement("li");
           empty.className = "cm-skr-tag-empty";

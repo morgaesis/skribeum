@@ -98,6 +98,13 @@ let highlightAnimatedPath: string | null = null;
 let highlightMotionGeneration = 0;
 let highlightMotionFrame: number | null = null;
 let highlightMotionTimer: ReturnType<typeof setTimeout> | null = null;
+// Tracks which `selectedPath` the ancestor auto-expand effect below last
+// computed for. Without this the effect would also re-run whenever a
+// manual folder toggle mutates `userExpanded`/`autoExpanded`, and since
+// `selectedPath` still points inside the folder being collapsed, it would
+// recompute the very ancestor the user just closed back into `autoExpanded`
+// and silently undo the collapse.
+let autoExpandedForPath: string | null | undefined;
 let mounted = true;
 
 type RowPresentation = {
@@ -386,6 +393,14 @@ $effect(() => {
 
 $effect(() => {
   const path = selectedPath;
+  // Only a genuine selection change reveals ancestors. Reading `path` above
+  // is what makes this effect re-run when it changes; bailing out before
+  // touching `userExpanded`/`autoExpanded` keeps this run from depending on
+  // either, so a manual folder toggle (which mutates both) does not
+  // re-trigger this effect and re-derive the selected path's ancestors from
+  // scratch, which would auto-expand the very folder the toggle just closed.
+  if (path === autoExpandedForPath) return;
+  autoExpandedForPath = path;
   const next: Record<string, boolean> = {};
   if (path !== null) {
     const segments = path.split("/").slice(0, -1);

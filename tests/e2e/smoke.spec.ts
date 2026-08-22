@@ -1879,10 +1879,22 @@ describe("skribeum shell", () => {
     // The scratch vault auto-opens at launch (SKRIBEUM_E2E_VAULT) with a
     // reset workspace and no note selected: the pane holds no note in a
     // vault that has notes, the empty pane's state A (design spec section
-    // 12). No CodeMirror instance mounts behind it.
-    const heading = $("h1=No note is open");
-    await heading.waitForExist({ timeout: 15000 });
-    expect(await $(".cm-content").isExisting()).toBe(false);
+    // 12). No CodeMirror instance mounts behind it. Both facts are read
+    // from one snapshot, so the heading and the absent editor are never
+    // read a frame apart.
+    await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          const headingShown = [...document.querySelectorAll("h1")].some(
+            (element) => element.textContent?.trim() === "No note is open",
+          );
+          return headingShown && document.querySelector(".cm-content") === null;
+        }),
+      {
+        timeout: 15000,
+        timeoutMsg: "the empty pane's state A did not settle",
+      },
+    );
 
     mkdirSync(screenshotDirectory, { recursive: true });
     await browser.saveScreenshot(path.join(screenshotDirectory, "smoke.png"));

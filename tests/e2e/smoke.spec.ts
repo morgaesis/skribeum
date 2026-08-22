@@ -7302,11 +7302,26 @@ describe("skribeum core editing surfaces", () => {
       async () => !(await $('[role="combobox"]').isExisting()),
       { timeout: 5000 },
     );
-    const restoredFocus = await activeElementDescriptor();
-    expect(
-      restoredFocus.includes("cm-content") ||
-        restoredFocus.includes("skr-pane-content"),
-    ).toBe(true);
+    // The webview restores focus a frame after the surface leaves, so this
+    // polls for where it lands rather than asking whether it has landed yet,
+    // and names what it settled on when it never gets there.
+    let restoredFocus = await activeElementDescriptor();
+    try {
+      await browser.waitUntil(
+        async () => {
+          restoredFocus = await activeElementDescriptor();
+          return (
+            restoredFocus.includes("cm-content") ||
+            restoredFocus.includes("skr-pane-content")
+          );
+        },
+        { timeout: 5000 },
+      );
+    } catch {
+      throw new Error(
+        `focus settled on ${restoredFocus} rather than returning to the pane`,
+      );
+    }
 
     // No element anywhere acquired a positive tabindex.
     const positive = await browser.execute(() =>

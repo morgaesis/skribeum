@@ -1497,8 +1497,8 @@ async function selectSettingsChoice(selector: string, label: string) {
  * control names the group that holds it.
  */
 async function openSettingsGroup(name: string) {
-  /** The rail's state and the group the pane shows, in one document pass. */
-  const railState = (group: string) =>
+  /** The surface's navigation state and the group it shows, in one pass. */
+  const surfaceState = (group: string) =>
     browser.execute((target: string) => {
       const tab = document.querySelector(
         `[data-testid="settings-rail-${target}"]`,
@@ -1506,39 +1506,54 @@ async function openSettingsGroup(name: string) {
       return {
         railed: tab !== null,
         selected: tab?.getAttribute("aria-selected") === "true",
+        listedRow:
+          document.querySelector(
+            `.settings-group-row[data-section="${target}"]`,
+          ) !== null,
         shown:
           document.querySelector<HTMLElement>("[data-settings-section]")
             ?.dataset.settingsSection ?? null,
       };
     }, group);
 
-  if ((await railState(name)).railed) {
+  if ((await surfaceState(name)).railed) {
     await $(`[data-testid="settings-rail-${name}"]`).click();
     await browser.waitUntil(
       async () => {
-        const state = await railState(name);
+        const state = await surfaceState(name);
         return state.selected && state.shown === name;
       },
       { timeout: 5000, timeoutMsg: `${name} group did not open` },
     );
     return;
   }
-  // Below the rail's breakpoint the same names are a list of destinations,
-  // one level in from the group list the back control returns to.
+
+  // Below the rail's breakpoint the six names are a level of their own, so
+  // leaving the group that is showing is its own act: the list it returns to
+  // arrives in a later frame, and a second click issued in the same document
+  // pass would find nothing to press.
+  if (!(await surfaceState(name)).listedRow) {
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLButtonElement>('[data-testid="settings-back"]')
+        ?.click();
+    });
+    await browser.waitUntil(async () => (await surfaceState(name)).listedRow, {
+      timeout: 5000,
+      timeoutMsg: "the settings group list did not arrive",
+    });
+  }
   await browser.execute((group: string) => {
-    document
-      .querySelector<HTMLButtonElement>('[data-testid="settings-back"]')
-      ?.click();
     document
       .querySelector<HTMLButtonElement>(
         `.settings-group-row[data-section="${group}"]`,
       )
       ?.click();
   }, name);
-  await browser.waitUntil(async () => (await railState(name)).shown === name, {
-    timeout: 5000,
-    timeoutMsg: `${name} group did not open`,
-  });
+  await browser.waitUntil(
+    async () => (await surfaceState(name)).shown === name,
+    { timeout: 5000, timeoutMsg: `${name} group did not open` },
+  );
 }
 
 async function waitForPersistedDemoSetting(field: string, value: string) {
@@ -6299,6 +6314,10 @@ describe("skribeum core editing surfaces", () => {
         { timeout: 5000 },
       );
     }
+    // The settings surface swallows application chords while it is open, so a
+    // test that opens it and fails before closing it would otherwise decide
+    // the next test's result rather than its own.
+    await closeIfOpen('[data-testid="settings-view"]');
   }
 
   async function closeIfOpen(selector: string) {
@@ -6755,17 +6774,31 @@ describe("skribeum core editing surfaces", () => {
         };
       }),
     ).toEqual({ selected: ["editor"], rovingStops: 1, groups: ["editor"] });
-    await pressFocusedKey("Home");
+    // Selection wraps at both ends, so the last group is one key away from
+    // the first. Home and End carry the same reachability and are asserted in
+    // the component suite instead: this driver hands those two keys to the
+    // page as an unidentified key with an empty `key` and the raw WebDriver
+    // codepoint in `keyCode`, so no keyboard handler can see them here.
+    const selectedGroup = () =>
+      browser.execute(
+        () =>
+          document.querySelector<HTMLElement>(
+            '[role="tab"][aria-selected="true"]',
+          )?.dataset.section ?? null,
+      );
+    await pressFocusedKey("ArrowUp");
     await browser.waitUntil(
-      async () =>
-        (await browser.execute(
-          () =>
-            document
-              .querySelector('[data-testid="settings-rail-appearance"]')
-              ?.getAttribute("aria-selected") ?? null,
-        )) === "true",
-      { timeout: 5000, timeoutMsg: "Home did not select the first group" },
+      async () => (await selectedGroup()) === "appearance",
+      {
+        timeout: 5000,
+        timeoutMsg: "Up did not select the previous group",
+      },
     );
+    await pressFocusedKey("ArrowUp");
+    await browser.waitUntil(async () => (await selectedGroup()) === "about", {
+      timeout: 5000,
+      timeoutMsg: "the rail selection did not wrap to the last group",
+    });
 
     // Nothing in the surface opens a list of sections behind an icon.
     expect(
@@ -6799,11 +6832,6 @@ describe("skribeum core editing surfaces", () => {
         width: box.width,
         expectedHeight: Math.min(window.innerHeight * 0.85, 48 * 16),
         expectedWidth: Math.min(56 * 16, window.innerWidth - 4 * 16),
-        versionHomes: [
-          ...settings.querySelectorAll<HTMLElement>(
-            '[data-setting-id$=".version"]',
-          ),
-        ].map(({ dataset }) => dataset.settingId),
       };
     });
     expect(
@@ -6812,7 +6840,34 @@ describe("skribeum core editing surfaces", () => {
     expect(
       Math.abs(dialogGeometry.width - dialogGeometry.expectedWidth),
     ).toBeLessThan(1);
-    expect(dialogGeometry.versionHomes).toEqual(["updates.version"]);
+
+    // The installed version has one home. The pane shows a single group, so
+    // the claim is only worth as much as the sweep behind it: every group is
+    // visited and the version row must appear in exactly one of them.
+    const versionHomes: string[] = [];
+    for (const group of [
+      "appearance",
+      "editor",
+      "files",
+      "search",
+      "updates",
+      "about",
+    ]) {
+      await openSettingsGroup(group);
+      versionHomes.push(
+        ...(await browser.execute(() =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              '[data-setting-id$=".version"]',
+            ),
+          ].map((row) => row.dataset.settingId ?? ""),
+        )),
+      );
+    }
+    expect(versionHomes).toEqual(["updates.version"]);
+    // The palette cards below belong to Appearance, and the sweep ended on
+    // the last group.
+    await openSettingsGroup("appearance");
 
     await setViewportSize(390, 844);
     const cardGeometry = await browser.execute(() => {

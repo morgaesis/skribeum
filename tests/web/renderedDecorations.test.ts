@@ -2101,13 +2101,20 @@ describe("reveal motion coverage", () => {
     ).toBeGreaterThan(3);
   });
 
-  it("hides a marker with no reserved width and reveals it at its natural width", async () => {
+  it("rests a hidden marker at no width, clipped, and a revealed one at its own", async () => {
     const hidden = mountedView("## Heading\n\nbody", 12);
     await new Promise((resolve) => setTimeout(resolve, 20));
     const hiddenMarker = hidden.dom.querySelector(".cm-skr-reveal-marker");
     expect(
       hiddenMarker?.classList.contains("cm-skr-reveal-marker-active"),
     ).toBe(false);
+    // The two resting widths are what the entrance and the exit travel
+    // between, so they are read here as the reader's geometry, not as class
+    // names: a hidden glyph occupies nothing and shows nothing of itself.
+    const hiddenStyle = getComputedStyle(hiddenMarker as HTMLElement);
+    expect(hiddenStyle.maxWidth).toBe("0px");
+    expect(hiddenStyle.overflow).toBe("hidden");
+    expect(hiddenStyle.opacity).toBe("0");
 
     const revealed = mountedView("## Heading\n\nbody", 4);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -2115,6 +2122,146 @@ describe("reveal motion coverage", () => {
       ".cm-skr-reveal-marker-active",
     );
     expect(revealedMarker?.textContent).toBe("## ");
+    const revealedStyle = getComputedStyle(revealedMarker as HTMLElement);
+    expect(revealedStyle.maxWidth).toBe("none");
+    expect(revealedStyle.overflow).toBe("visible");
+    expect(revealedStyle.opacity).toBe("1");
+  });
+});
+
+/**
+ * The glyphs a construct shows while revealed are taken away the moment the
+ * caret leaves, so the width they were holding belongs to a node that is
+ * already gone. These cover the stand-in that holds it open long enough for
+ * the text to close over it, and the fact that it is only ever a loan.
+ */
+describe("departing marker stand-in", () => {
+  const EXIT_DURATION = 50;
+
+  function withMotionClock(duration: number): () => void {
+    const root = document.documentElement;
+    root.style.setProperty("--skr-motion-state-duration", `${duration}ms`);
+    root.style.setProperty("--skr-motion-surface-duration", "120ms");
+    return () => {
+      root.style.removeProperty("--skr-motion-state-duration");
+      root.style.removeProperty("--skr-motion-surface-duration");
+    };
+  }
+
+  /** jsdom plays no animations, so the driver is given one it can start. */
+  function withPlayableAnimations(): () => void {
+    const target = Element.prototype as unknown as {
+      animate?: (...args: unknown[]) => Animation;
+    };
+    const original = target.animate;
+    target.animate = () =>
+      ({
+        id: "",
+        cancel: () => {},
+        addEventListener: () => {},
+      }) as unknown as Animation;
+    return () => {
+      if (original === undefined) delete target.animate;
+      else target.animate = original;
+    };
+  }
+
+  function standIns(view: EditorView): HTMLElement[] {
+    return [
+      ...view.contentDOM.querySelectorAll<HTMLElement>(
+        "[data-skr-marker-exit]",
+      ),
+    ];
+  }
+
+  it("holds an inside-scope construct's glyphs open while the text closes over them", async () => {
+    const restoreClock = withMotionClock(EXIT_DURATION);
+    const restoreAnimations = withPlayableAnimations();
+    try {
+      const doc = "a **word** b";
+      const view = mountedView(doc, 6);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Revealed: the glyphs are real document text, replaced outright the
+      // moment the caret leaves, so nothing of theirs survives the exit.
+      expect(
+        [...view.dom.querySelectorAll(".cm-skr-reveal-marker-active")].map(
+          (element) => element.textContent,
+        ),
+      ).toEqual(["**", "**"]);
+
+      view.dispatch({ selection: { anchor: 0 } });
+      const holding = standIns(view);
+      expect(holding.map((element) => element.textContent)).toEqual([
+        "**",
+        "**",
+      ]);
+      // A stand-in is scenery: it is not in the note, and the reader of a
+      // screen reader is never told about it.
+      expect(view.state.doc.toString()).toBe(doc);
+      expect(
+        holding.every(
+          (element) => element.getAttribute("aria-hidden") === "true",
+        ),
+      ).toBe(true);
+
+      await new Promise((resolve) => setTimeout(resolve, EXIT_DURATION + 60));
+      expect(standIns(view)).toHaveLength(0);
+      expect(view.state.doc.toString()).toBe(doc);
+      // Once the motion is over the glyphs are gone from the page as well as
+      // from the note: nothing permanent was added to what the DOM says.
+      expect(view.contentDOM.textContent).toBe("a word b");
+    } finally {
+      restoreAnimations();
+      restoreClock();
+    }
+  });
+
+  it("holds a line-scope construct's glyphs open the same way", async () => {
+    const restoreClock = withMotionClock(EXIT_DURATION);
+    const restoreAnimations = withPlayableAnimations();
+    try {
+      const view = mountedView("## Heading\n\nbody", 4);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      view.dispatch({ selection: { anchor: 13 } });
+      expect(standIns(view).map((element) => element.textContent)).toEqual([
+        "## ",
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, EXIT_DURATION + 60));
+      expect(standIns(view)).toHaveLength(0);
+    } finally {
+      restoreAnimations();
+      restoreClock();
+    }
+  });
+
+  it("builds no stand-in at all when the exit clock is zeroed", async () => {
+    const restoreClock = withMotionClock(0);
+    const restoreAnimations = withPlayableAnimations();
+    try {
+      const view = mountedView("a **word** b", 6);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      view.dispatch({ selection: { anchor: 0 } });
+      expect(standIns(view)).toHaveLength(0);
+    } finally {
+      restoreAnimations();
+      restoreClock();
+    }
+  });
+
+  it("adds nothing when a keystroke leaves the revealed construct alone", async () => {
+    const restoreClock = withMotionClock(EXIT_DURATION);
+    const restoreAnimations = withPlayableAnimations();
+    try {
+      const view = mountedView("a **word** b", 6);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // The caret moves, but stays inside the same construct: nothing has
+      // departed, so nothing is held open.
+      view.dispatch({ selection: { anchor: 7 } });
+      expect(standIns(view)).toHaveLength(0);
+    } finally {
+      restoreAnimations();
+      restoreClock();
+    }
   });
 });
 

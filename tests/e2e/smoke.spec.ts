@@ -4946,7 +4946,8 @@ describe("skribeum shell", () => {
           active: marker.classList.contains("cm-skr-reveal-marker-active"),
           opacity: style.opacity,
           reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
-          transform: style.transform,
+          maxWidth: style.maxWidth,
+          width: marker.getBoundingClientRect().width,
           // The glyph is played rather than transitioned, because the view
           // rebuilds the node whenever its decoration class changes and a
           // transition would have no starting value to run from.
@@ -4968,9 +4969,10 @@ describe("skribeum shell", () => {
     );
     const hidden = await headingMarkerState();
     expect(hidden?.opacity).toBe("0");
-    // At rest the glyph waits 0.25rem (4px) toward the reading direction,
-    // ready to translate into its reserved space on reveal.
-    expect(hidden?.transform).toBe("matrix(1, 0, 0, 1, 4, 0)");
+    // At rest the glyph is squeezed to no width at all, clipped to the
+    // nothing it occupies, so it reserves no room in the line.
+    expect(hidden?.maxWidth).toBe("0px");
+    expect(hidden?.width).toBe(0);
     const followingPositionBefore = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -5000,9 +5002,11 @@ describe("skribeum shell", () => {
       },
     );
     const revealed = await headingMarkerState();
-    // Settled active glyph: fully opaque and translated home.
+    // Settled active glyph: fully opaque, uncapped, and holding its own
+    // measured width rather than reserving none.
     expect(revealed?.opacity).toBe("1");
-    expect(revealed?.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
+    expect(revealed?.maxWidth).toBe("none");
+    expect(revealed?.width).toBeGreaterThan(0);
     const followingPositionAfter = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),

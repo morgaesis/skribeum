@@ -1421,23 +1421,21 @@ html body .settings-dialog {
   background: var(--skr-surface-subtle);
 }
 
-/* The marker's reserved width applies with the instant list (no transition
-   ever targets it); only opacity and a compositor translate ever animate
-   here. The two states below are the resting values the glyph animates
-   between: the entrance and the exit themselves are played on the node the
-   view has just built, because a decoration class change replaces that node
-   and a CSS transition would have no starting value to run from. The glyph
-   enters on the surface clock and leaves on the state clock, the exit
-   mirroring the entrance travel rather than a bare fade. */
+/* The two states below are the resting values the glyph animates between: no
+   width and invisible, or its own width and fully there. The entrance and the
+   exit themselves are played on the node the view has just built, because a
+   decoration class change replaces that node and a CSS transition would have
+   no starting value to run from. Width is the motion — the glyph takes room
+   from the text arriving and gives it back leaving — so nothing here declares
+   a transition and nothing translates. The glyph enters on the surface clock
+   and leaves on the state clock. */
 .cm-skr-reveal-marker {
   display: inline-block;
   opacity: 0;
-  transform: translateX(var(--skr-motion-distance));
 }
 
 .cm-skr-reveal-marker-active {
   opacity: 1;
-  transform: translateX(0);
 }
 
 @media (prefers-reduced-motion: reduce) {

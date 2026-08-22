@@ -46,6 +46,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   web lint, type check and test suite, filtered by the file types being
   pushed. `docs/ci.md` describes what runs when, what a Linux-only pull
   request no longer proves, and how to run the packaged end-to-end suite.
+- Revealed markdown markers behave like objects that take up room. A marker
+  grows from no width when the caret enters its construct and is squeezed
+  back to none when the caret leaves, so the text beside it is carried along
+  continuously instead of being displaced and then snapped back. Markers a
+  construct only shows while revealed keep their place through the exit on a
+  stand-in that is never part of the note, is hidden from assistive
+  technology, and is dropped as soon as the motion ends. Reduced motion
+  leaves the two resting widths and no motion between them.
 
 ### Fixed
 

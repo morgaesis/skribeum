@@ -853,9 +853,10 @@ async function typeTagCompletionQuery(
   // to outlast the debounce.
   await harness.waitForQuerySaved(position, query);
   // That save makes the typed query a tag of this note, and the refresh it
-  // triggers does reach the catalog. It does not reach this menu: an open
-  // menu answers from the catalog it read when it opened, and a later one
-  // reaches the next menu. Every expectation below is therefore the vault's
+  // triggers does reach the catalog. It does not reach the rows already
+  // drawn: those answer the query as it stood at the last keystroke, and a
+  // catalog that arrives with no keystroke behind it reaches the next query
+  // rather than this one. Every expectation below is therefore the vault's
   // answer, not the vault's answer plus the word still being typed, and the
   // row a key commits below is a row asserted on above.
 }

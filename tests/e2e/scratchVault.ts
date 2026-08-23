@@ -171,6 +171,27 @@ export const TAG_COMPLETION_MIDDLE_LINE = "Tag completion target.";
 export const TAG_COMPLETION_FINAL_LINE = "Tag completion final line.";
 export const TAG_COMPLETION_TARGET_NOTE_CONTENT = `${TAG_COMPLETION_MIDDLE_LINE}\n\n${TAG_COMPLETION_FINAL_LINE}\n`;
 
+/**
+ * The queries the completion tests type, each carrying a leading `*`.
+ *
+ * A completion test types a query into a note and lets it be saved, because a
+ * menu that survives the save and the reindex behind it is part of what is
+ * being tested. That makes the typed text vault content: `#ced` autosaved
+ * into the note is a tag the vault holds a moment later, and the menu then
+ * has a third row, the query offering itself, which arrives whenever the
+ * indexing happens to beat the next keystroke. The oracle read that as the
+ * completion offering something it should not.
+ *
+ * A wildcard settles it at the source rather than teaching the oracle to
+ * ignore a row. `*` is stripped from a tag query wherever it appears, so
+ * these answer exactly as `ced` and `context` do, and it is not a character a
+ * tag body may contain, so `#*ced` on disk is not a tag and no amount of
+ * indexing turns it into one. The arrangement can no longer mint what the
+ * assertion is checking for.
+ */
+export const TAG_COMPLETION_QUERY = "*ced";
+export const TAG_COMPLETION_DESCENDANT_QUERY = "*context";
+
 export const VISUAL_NOTE_NAME = "zzz-reading-room.md";
 export const VISUAL_NOTE_CONTENT = [
   "---",

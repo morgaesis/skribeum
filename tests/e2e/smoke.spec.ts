@@ -52,8 +52,10 @@ import {
   TABLE_EDITING_NOTE_CONTENT,
   TABLE_EDITING_NOTE_NAME,
   TABLE_GEOMETRY_NOTE_CONTENT,
+  TAG_COMPLETION_DESCENDANT_QUERY,
   TAG_COMPLETION_FINAL_LINE,
   TAG_COMPLETION_MIDDLE_LINE,
+  TAG_COMPLETION_QUERY,
   TAG_COMPLETION_TARGET_NOTE_CONTENT,
   TAG_COMPLETION_TARGET_NOTE_NAME,
   TAG_DELETE_NOTE_NAME,
@@ -815,10 +817,39 @@ function tagCompletionResult(
   return `${TAG_COMPLETION_MIDDLE_LINE}\n${replacement}\n${TAG_COMPLETION_FINAL_LINE}\n`;
 }
 
+/**
+ * Forces a pending catalog refresh into the rows already on screen.
+ *
+ * The menu answers the query as it stood at the last keystroke, so a catalog
+ * that arrives with no keystroke behind it reaches the next query rather than
+ * the drawn one. Which side of the acceptance keystroke a refresh lands on is
+ * therefore a matter of save and index timing, and it differs by platform:
+ * the same interleaving that never appeared on Linux happened on Windows
+ * every run. Driving the query away and back leaves the same query answered
+ * from whatever the catalog holds now, so the rows the assertion reads are
+ * the rows the acceptance commits from, on every platform. Repeating until
+ * two reads agree is what makes it a settled state rather than a sample.
+ */
+async function settleTagCompletionRows(): Promise<void> {
+  let previous: string | null = null;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await $(".cm-content").addValue("x");
+    await browser.keys(Key.Backspace);
+    const rows = JSON.stringify(await tagCompletionOptionTexts());
+    if (rows === previous) {
+      return;
+    }
+    previous = rows;
+  }
+  throw new Error(
+    `tag completion rows never settled: last read ${previous ?? "none"}`,
+  );
+}
+
 async function typeTagCompletionQuery(
   harness: TagCompletionHarness,
   position: TagCompletionPosition = "final",
-  query = "ced",
+  query: string = TAG_COMPLETION_QUERY,
 ): Promise<void> {
   await placeCursorAtTagCompletionPosition(position);
   await $(".cm-content").addValue("#");
@@ -852,13 +883,14 @@ async function typeTagCompletionQuery(
   // event that triggers the refresh) rather than a fixed duration guessed
   // to outlast the debounce.
   await harness.waitForQuerySaved(position, query);
-  // That save makes the typed query a tag of this note, and the refresh it
-  // triggers does reach the catalog. It does not reach the rows already
-  // drawn: those answer the query as it stood at the last keystroke, and a
-  // catalog that arrives with no keystroke behind it reaches the next query
-  // rather than this one. Every expectation below is therefore the vault's
-  // answer, not the vault's answer plus the word still being typed, and the
-  // row a key commits below is a row asserted on above.
+  // The save is on disk and the reindex behind it is under way. Settling the
+  // rows against the catalog that reindex produces is what makes the
+  // expectations below read a state rather than a moment: whatever the save
+  // did to the vault has reached the menu by the time anything is asserted,
+  // and the row a key commits is the row asserted on. What the save did to
+  // the vault is nothing, because the query carries a wildcard and so is not
+  // a tag on disk, which is the property these tests rest on.
+  await settleTagCompletionRows();
 }
 
 async function saveAndExpectTagCompletionTarget(expected: string) {
@@ -1108,7 +1140,9 @@ async function verifyTagCompletionEscape(harness: TagCompletionHarness) {
       async () => !(await $(".cm-skr-tag-menu").isExisting()),
       { timeout: 3000 },
     );
-    expect(await editorDocumentText()).not.toContain("#ced");
+    expect(await editorDocumentText()).not.toContain(
+      `#${TAG_COMPLETION_QUERY}`,
+    );
     await harness.expectDismissedResult(tagCompletionResult(position, ""));
   }
 }
@@ -4710,7 +4744,7 @@ describe("skribeum shell", () => {
     await typeTagCompletionQuery(
       packagedTagCompletionHarness,
       "final",
-      "context",
+      TAG_COMPLETION_DESCENDANT_QUERY,
     );
     expect(await tagCompletionOptionTexts()).toEqual(["#context/outdoors"]);
     await browser.keys(Key.Enter);
@@ -4720,7 +4754,7 @@ describe("skribeum shell", () => {
 
     await placeCursorAtLineEnd("#context/outdoors");
     await browser.keys(Key.Enter);
-    await $(".cm-content").addValue("#ced");
+    await $(".cm-content").addValue(`#${TAG_COMPLETION_QUERY}`);
     const cedRows = packagedTagCompletionHarness.completionRows;
     await browser.waitUntil(
       async () => (await tagCompletionOptionTexts()).length === cedRows.length,

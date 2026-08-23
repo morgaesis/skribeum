@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-08-23
+
 ### Added
 
 - Tag search matches by prefix at path-segment boundaries and groups its

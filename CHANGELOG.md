@@ -35,8 +35,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carries a leading accent bar and its own reset control, and its group's rail
   item carries a dot, so "what have I changed" has an answer without opening
   each group.
-- The appearance section chooses the color scheme with three cards — System,
-  Light, Dark — each a miniature shell painted from the palettes currently
+- The appearance section chooses the color scheme with three cards (System,
+  Light, Dark), each a miniature shell painted from the palettes currently
   chosen, the System card split between its light and dark halves, so the
   control shows its consequence instead of naming it. Choosing a palette
   changes only that palette and repaints the cards in the same frame; the

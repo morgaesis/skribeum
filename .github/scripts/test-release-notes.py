@@ -214,6 +214,17 @@ class ValidatorTests(unittest.TestCase):
         body = self.body.replace("Reading column", f"Reading{chr(0x2014)}column", 1)
         self.assert_invalid(body, "em dash")
 
+    def test_em_dash_in_the_changelog_section_is_accepted(self) -> None:
+        section = self.section.replace(
+            "Release pages use", f"Release pages {chr(0x2014)} use", 1
+        )
+        self.assertEqual(
+            [],
+            RELEASE_NOTES.validate_generated_body(
+                candidate(section), section, "morgaesis/skribeum", "v0.0.6"
+            ),
+        )
+
     def test_tldr_requires_sentence_punctuation_and_an_emoji(self) -> None:
         body = self.body.replace(
             "**TL;DR: reading, touch controls, and tables behave like they mean it.** 📖",

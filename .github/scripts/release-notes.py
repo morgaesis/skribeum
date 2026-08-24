@@ -205,8 +205,6 @@ def validate_generated_body(
         EMOJI.search(first_line)
     ):
         errors.append("the first line is not a bold TL;DR")
-    if chr(0x2014) in body:
-        errors.append("the body contains an em dash")
     if len(body) > MAX_BODY_LENGTH:
         errors.append(f"the body exceeds {MAX_BODY_LENGTH} characters")
     if len(body) < len(suffix):
@@ -218,6 +216,11 @@ def validate_generated_body(
         intro = body
     else:
         intro = body[:details_start].rstrip()
+    # Only the introduction is the model's own prose. The changelog suffix is
+    # appended byte for byte, so a character rule applied to the whole body
+    # would reject every candidate whenever the changelog itself contains one.
+    if chr(0x2014) in intro:
+        errors.append("the introduction contains an em dash")
     if len(intro) >= MAX_INTRO_LENGTH:
         errors.append(
             f"the introduction must be shorter than {MAX_INTRO_LENGTH} characters"

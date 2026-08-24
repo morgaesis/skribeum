@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" role="img" aria-labelledby="title description">
+  <title id="title">Skribeum</title>
+  <desc id="description">A lit desk lamp beside the words Skribeum and Local-first Markdown editing.</desc>
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="0%" r="72%" fx="50%" fy="0%">
+      <stop offset="0" stop-color="#F6E7A8" stop-opacity="0.9" />
+      <stop offset="72%" stop-color="#F6E7A8" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="320" rx="32" fill="#F5F2E9" />
+  <rect x="72" y="56" width="208" height="208" rx="46" fill="#E9E3D5" />
+
+  <ellipse cx="176" cy="150" rx="78" ry="84" fill="url(#glow)" />
+  <path d="M112 148c0-37 29-67 64-67s64 30 64 67H112Z" fill="#1E4D3B" />
+  <rect x="169" y="148" width="14" height="55" rx="4" fill="#14251D" />
+  <rect x="132" y="199" width="88" height="17" rx="8.5" fill="#14251D" />
+  <rect x="112" y="222" width="128" height="17" rx="8.5" fill="#14251D" />
+
+  <text x="340" y="151" fill="#14251D" font-family="Georgia, 'Times New Roman', serif" font-size="88" font-weight="600">Skribeum</text>
+  <rect x="344" y="179" width="72" height="4" rx="2" fill="#A8842C" />
+  <text x="340" y="224" fill="#1E4D3B" font-family="Arial, Helvetica, sans-serif" font-size="27" letter-spacing="1.5">LOCAL-FIRST MARKDOWN EDITING</text>
+</svg>

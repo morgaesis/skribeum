@@ -1,282 +1,130 @@
-# Skribeum
+<h1 align="center">
+  <img src="assets/brand/skribeum-banner.svg" alt="Skribeum, local-first Markdown editing" width="100%">
+</h1>
 
-A byte-faithful, local-first Markdown editor for Obsidian-compatible vaults.
-Plain `.md`, `.markdown`, and `.txt` files on disk remain the source of truth;
-opening and saving a file never rewrites bytes outside the edit you made.
+<p align="center">
+  A local-first Markdown editor for Obsidian-compatible vaults.
+  Your files stay plain, portable, and yours.
+</p>
 
-The desktop application opens Obsidian-compatible vaults, preserves byte-level
-file details outside edited ranges, and provides rendered Markdown editing,
-search, navigation, settings, and JSON Canvas viewing. The browser demo uses a
-seeded vault and can open local folders in browsers with the File System Access
-API, with its storage behavior stated directly above the editor.
+<p align="center">
+  <a href="https://skribeum.app/"><strong>Try the web demo</strong></a>
+  ·
+  <a href="https://github.com/morgaesis/skribeum/releases">Download the desktop app</a>
+  ·
+  <a href="#build-from-source">Build from source</a>
+</p>
 
-Skribeum is pre-alpha software and has not received an independent security
-audit. Use it only with files that are backed up and versioned.
+<a href="https://skribeum.app/">
+  <img src="assets/readme/skribeum-demo.png" alt="The Skribeum browser demo editing a rendered research note, with the sample vault tree at left" width="100%">
+</a>
 
-## Navigation and controls
+## Why Skribeum
 
-`mod+k` opens one command surface. Enter a note or file name directly, or start
-the query with `>` for commands and individual settings, `#` for tags, or `?`
-for note text. `mod+o`, `mod+p`, `mod+shift+p`, and `mod+shift+f` open the same
-surface in their familiar modes. On wide viewports, the header contains icon
-buttons for note history, the note's display title, an optional read-only or
-Source indicator, and one overflow button. The anchored overflow menu contains
-the command aliases, file tree, outline, in-note find, settings, note creation,
-saving, copy-link actions, navigation history, and vault opening.
+- **Your vault is the database.** Skribeum opens `.md`, `.markdown`, and `.txt`
+  files directly, alongside the tools that already use them.
+- **Edits stay contained.** Saving preserves bytes outside the range you changed,
+  including line endings and untouched frontmatter.
+- **Markdown stays readable while you write.** Formatting renders in place, and
+  source mode is one shortcut away.
 
-The desktop application draws its own window chrome: the wide-viewport header
-is the window titlebar. Dragging an empty area of the header moves the window
-with the platform's own move loop, double-clicking it toggles maximize, and
-right-clicking it opens a window menu. macOS keeps the native traffic lights,
-inset from the leading edge, and the native application menu bar, whose items
-run the same commands as every other surface. Windows and Linux draw Minimize,
-Maximize or Restore, and Close buttons at the trailing edge of the header, in
-that fixed order; the button maximizes and restores the window on click. The
-Windows 11 snap layouts flyout on hover needs native hit-testing this build
-does not add. An unmaximized window keeps a 1px border, with an 8px corner
-radius on
-Linux; both drop when the window is maximized or fullscreen. The header's
-title, icons, and caption glyphs dim to 60% opacity while the window is
-unfocused; note content never dims.
+## Start here
 
-The wide sidebar starts with the vault name, then a compact tree whose note
-rows use frontmatter titles or first-line headings and hide the default `.md`
-extension. Authored single-grapheme `icon` values appear only in the tree.
-Folder chevrons, indent guides, selected-note reveal, and per-folder expansion
-state keep hierarchy visible. Hover or focus a row to open its registered
-Rename, Delete, Copy link, and desktop file-manager actions; activating the
-row's own trigger a second time closes the menu. Right-click, Shift+F10, the
-context-menu key, and touch hold open the same menu. Renaming or creating a
-note opens the application's own dialog rather than a browser prompt;
-deleting a vault entry, and every other destructive confirmation in the
-product, opens the same dialog with its destructive action styled apart from
-the safe default. Every dialog traps focus, closes on Escape, and returns
-focus to the control that opened it. A note's new name must end in `.md`,
-`.markdown`, or `.txt`, the extensions the vault treats as a note; a name
-outside that set is refused with the reason shown inline, so a rename can
-never leave a note the tree can no longer select or open.
+1. **Explore without installing:** open the
+   [browser demo](https://skribeum.app/). It starts with a guided sample vault.
+2. **Use a real vault:** get a pre-release build from
+   [GitHub Releases](https://github.com/morgaesis/skribeum/releases), back up your
+   vault, then choose **Open vault**.
+3. Press <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>K</kbd> to find notes, commands,
+   tags, settings, and full-text search from one place.
 
-Opening a second note adds a tab strip. `ctrl+tab` and `ctrl+shift+tab` cycle
-tabs, `mod+w` closes one, `mod+shift+t` reopens it, and `mod+1` through `mod+9`
-select by strip order. Drag tabs to reorder them. Split right from More actions,
-or drag a tab to the right third of the editor, to create a second pane. Each
-pane keeps its own tabs, Back and Forward stack, caret, scroll position, and
-properties state. Tabs, the split, pane histories, tree expansion, and panel
-geometry restore with the vault workspace.
+## What it handles
 
-The sidebar and outline resize from their inner dividers. Drag directly,
-double-click to reset, or focus a divider and use ArrowLeft, ArrowRight, Home,
-or End. Enter collapses the panel. Sidebar width stays between 12 and 24rem;
-outline width stays between 12 and 20rem. `mod+\` toggles the sidebar and
-`mod+shift+\` toggles the outline. A collapsed sidebar leaves one toggle at the
-leading edge of the header.
+- Live Markdown editing with source reveal, syntax highlighting, math, Mermaid,
+  code, callouts, embeds, tables, and configurable task states
+- Wikilinks, tags, heading links, link previews, vault search, and in-note find
+- Frontmatter properties that preserve untouched YAML
+- Tabs, split panes, navigation history, and restored workspaces
+- Interactive JSON Canvas boards and image viewing
+- Light and dark palettes, touch layouts, and keyboard-accessible controls
 
-At 60rem (960 CSS pixels) and narrower, the file tree and outline leave the
-editor column and open as modal bottom sheets. The permanent top bar contains
-a Files button, the current note display title, and an overflow button. The
-overflow sheet provides the quick switcher, search, command palette, settings,
-outline, file tree, note creation, saving, in-note find, navigation history,
-and vault opening. The editor retains 24px inline gutters, which leaves 312px
-for prose on a 360px viewport and 342px on a 390px viewport. Properties start
-collapsed above the note. A frontmatter `title` supplies the display title,
-followed by a first-line H1 and then the file name. Narrow viewports carry no
-statusline; the `Note statistics` command serves the same facts there.
+## Your files remain the source of truth
 
-`mod+f` opens in-note find and replace, claiming the key from the browser's
-own find bar on both the desktop application and the browser demo regardless
-of which element currently has focus. Escape closes the panel and returns
-focus to the editor, Enter and Shift-Enter step to the next and previous
-match, and the live match count is announced to assistive technology.
+```mermaid
+flowchart LR
+  vault["Your vault<br/>.md · .markdown · .txt"]
+  skribeum["Skribeum<br/>edit · search · navigate"]
+  tools["Your other tools<br/>Obsidian · git · sync · text editors"]
 
-Every visible control accepts pointer, touch, and keyboard activation. Tab and
-Shift+Tab stay inside an open modal sheet or dialog, Escape closes it, and
-focus returns to the control that opened it. On narrow viewports, the command
-surface anchors above the on-screen keyboard and scrolls its results
-internally. Keyboard shortcuts remain visible beside command results and in
-selection toolbar tooltips.
+  vault <-->|open and save| skribeum
+  vault <--> tools
+```
 
-The desktop application zooms its complete webview with `mod++` and `mod+-`.
-`mod+0` returns to 100 percent. Zoom is stored from 50 to 200 percent in
-10 percent steps and applies to every application window. Browser builds do
-not register these commands because the browser owns its own zoom shortcuts.
+The desktop app reads and writes the vault on disk. Its edit history and
+settings live in the operating system's application-data directory, outside
+the vault. Edit history can include text removed from a note; run
+`Note: clear edit history` to remove it for the active note.
 
-Packaged desktop builds register `.md`, `.markdown`, and `.txt` file handlers.
-Opening a file inside the active vault keeps that vault and selects the file.
-Opening a file outside the active vault opens its containing folder through
-the normal vault-opening flow, then selects the file. Later open-with requests
-are forwarded to the running application.
+## Desktop app and browser demo
 
-Back and forward restore each note's exact UTF-8 caret offsets,
-content-anchored reading position, and properties-panel state without moving
-keyboard focus into the editor. A newly opened note starts at the top with its
-caret parked and the form-factor panel default. The panel starts expanded on
-wide viewports and collapsed on narrow viewports, and arrival paints its final
-state in the first frame.
+| | Desktop app | Browser demo |
+| --- | --- | --- |
+| Starts with | A folder you choose | A seeded sample vault |
+| Storage | Files on disk | Memory for the sample vault |
+| Local folders | Reads and writes through the desktop filesystem | Available in browsers with the File System Access API |
+| Edit history | Persists outside the vault | Lasts for the page session |
+| Best for | Working with backed-up vaults | Exploring the editor |
 
-Frontmatter properties render in a compact flat panel at the note top: a
-single caps header row with the property count, then one line per property
-with a fixed label column. Boolean values render as checkboxes, list values as
-chips, dates as their ISO text, and wikilink values as links that navigate;
-everything else is flat text. Clicking a value places a caret in it, and the
-value being edited carries a thin bottom rule; edits write through to the
-exact frontmatter bytes. An Add property row appears at the panel's end on
-hover or focus, and `Note: add property` in the command palette reaches the
-same flow. A note without frontmatter shows no panel.
+The demo reports its storage mode above the editor. Sample-vault edits disappear
+on reload. A local folder writes through only when the browser grants permission
+and supports writable file handles. Browser folder writes cannot atomically
+detect concurrent external changes, so use a backed-up copy.
 
-Wide viewports carry a quiet statusline below the workspace. Its leading
-segment shows when the note was last edited and opens a note-info popover with
-the created and modified timestamps, the vault path, and word and character
-counts. The center region announces transient confirmations such as
-`Link copied`. The trailing segments show the word count, `132 of 4,210 words`
-while a selection is active, with a line and column segment joining only in
-source mode. The persistence slot stays silent while everything is saved,
-shows `Saving…` when a write runs long, and keeps `Couldn't save` visible,
-with the failure detail behind it, until a write succeeds. With no note open
-the bar renders empty. The `Note statistics` command serves the same facts on
-every viewport.
+## Essential shortcuts
 
-Hovering a resolved note link for 450ms opens a read-only preview. The preview
-uses the same reading-state decoration pipeline as the note and embeds, keeps
-open while the pointer follows its intent corridor, and closes with Escape.
-Focus a link and press `P` for the keyboard route. Slow previews and embeds
-share delayed skeleton bars, timeout in place, and never flash a spinner.
+`Mod` means <kbd>Cmd</kbd> on macOS and <kbd>Ctrl</kbd> on Windows and Linux.
 
-`mod+e` toggles the active note between reading presentation and its complete
-Markdown source. Source mode keeps syntax colouring but shows frontmatter,
-tables, math, embeds, task markers, callouts, and other constructs as source in
-the monospace face. A Source chip in the title region is the mode indicator.
-The Syntax reveal setting remains independent and controls caret-based marker
-reveal only in the normal reading presentation.
-
-Undo and redo continue across note switches and desktop application restarts.
-`mod+z` reaches into prior sessions when the current CodeMirror history is
-exhausted, and `mod+shift+z` or the platform redo chord moves forward again.
-Each step restores its recorded selection. An external file edit ends older
-reachable history, and a document-state mismatch stops replay without changing
-the note. `Note: clear edit history` in the command palette removes the active
-note's persisted history after confirmation. The browser demo keeps undo and
-redo only for the current page session because its seeded vault and folder
-handles have no stable identity across reloads.
-
-## Local data and privacy
-
-Desktop edit history is device-local application data in
-`edit-history.jsonl`, outside every vault. It can contain text that no longer
-appears in the note, including deleted text. Each note retains at most 2,000
-transactions and 8 MiB of serialized history, trimming the oldest entries
-first. Deleting a note garbage-collects its history, and the
-`Note: clear edit history` command removes it deliberately without changing the
-note file. The journal is never synced through the vault by Syncthing, git,
-Drive, or another vault-level tool.
-
-## Diagnostics
-
-Skribeum writes a rotating application log outside every vault, in the
-operating system log directory:
-
-| Platform | Location |
+| Shortcut | Action |
 | --- | --- |
-| Windows | `%LOCALAPPDATA%\org.skribeum.desktop\logs\skribeum.log` |
-| macOS | `~/Library/Logs/org.skribeum.desktop/skribeum.log` |
-| Linux | `$XDG_DATA_HOME/org.skribeum.desktop/logs/skribeum.log` |
+| `Mod+K` | Open the command surface |
+| `Mod+O` | Open a note |
+| `Mod+Shift+F` | Search note text |
+| `Mod+F` | Find and replace in the active note |
+| `Mod+E` | Toggle rendered and source modes |
+| `Mod+,` | Open settings |
 
-The log records vault indexing, crash-journal replay, full-text index
-rebuilds, and any request that held the interface longer than a frame. Three
-rotations are retained alongside the live file, each capped at 4 MB.
+## Project status
 
-Set `SKRIBEUM_LOG` to `debug` or `trace` before launching to record every
-request rather than the slow ones alone. The log names vault paths and note
-paths, so review it before sharing.
+> [!WARNING]
+> Skribeum is pre-alpha software and has not received an independent security
+> audit. Keep every vault backed up and versioned. Skribeum does not provide
+> sync, encryption, collaboration, or Obsidian plugin compatibility.
 
-## Tables
+See [SECURITY.md](SECURITY.md) for supported versions and private vulnerability
+reporting.
 
-Tables remain rendered while the document caret moves through the note. Click
-a cell to place the caret at that text position and edit inside the grid. Arrow
-keys cross cell and row boundaries, Tab and Shift+Tab move between cells, Enter
-moves down the current column, and Escape returns to the document after the
-table. Tab from the final cell and Enter from the final row append a padded row.
-Typing a pipe stores its Markdown-safe `\|` form without changing any other
-cell, delimiter, alignment marker, or existing padding.
+## Build from source
 
-The command surface and More actions menu contain row and column insertion and
-deletion commands for the focused cell, plus `Table: edit source`. Pointer
-insertion strips at the bottom and right edges append a row or column.
-Extending a cell selection past its boundary selects the complete table, so
-copy preserves the exact Markdown source and Delete or Backspace removes the
-block. `Table: edit source` and `mod+e` are the deliberate routes to
-pipe-delimited source.
+The frontend uses Svelte 5 and Bun. The desktop shell uses Tauri 2 and Rust.
 
-## Tasks
+```sh
+bun install
+bun run demo:dev   # browser demo
+bun tauri dev      # desktop app
+```
 
-Task markers belong to Task, Time, Importance, or Reference tracks. A short tap
-advances the current track. Task cycles through Todo, Doing, and Done; Time
-finishes as Done; and Importance keeps its marker while cycling the plain-text
-level glyphs `⏫`, `🔼`, and `🔽`. Reference statuses follow their configured
-transitions.
+Run the focused project checks before sending a change:
 
-Hold a marker, focus it and press Arrow Down, or invoke `Task: set status` from
-the command surface to open the grouped status menu. The overflow menu also
-shows this command while the caret or checkbox focus is on a task line. The
-deliberate route stays open for a tap or click and closes on Escape or an
-outside press. Choosing a Time status opens its due-date field. A touch date
-change or
-Enter writes an Obsidian Tasks token such as `📅 2031-04-05` directly into the
-note, while Escape applies the status without a date. Date and level tokens
-render as chips, but remain ordinary Markdown source that can be edited or
-deleted.
+```sh
+bunx biome check .
+bun run check
+bun run test:web
+cargo test --workspace --locked
+```
 
-Enter at the end of a task creates another marker from the same track without
-copying its payload. One immediate Backspace removes that new marker and its
-spacing. At the start of existing task text, Backspace reveals and deletes the
-marker one source character at a time.
-
-Copy link to note is available from the overflow menu and command mode. Browser links use
-the current absolute note URL, while desktop links use the vault's configured
-note-link form. Outline rows copy heading links from their trailing action, and
-command mode can copy the heading nearest the caret.
-
-Plain HTTP and HTTPS URLs and Markdown links open in the system browser from
-the desktop application. The browser demo opens the same external links in a
-new tab without granting the new page access to its opener. Click a rendered
-link or place the caret in its source and run Follow link. Other URL schemes
-are not opened.
-
-## Settings
-
-Open Settings from the overflow menu or with `mod+,`. The surface is organized into
-Appearance, Editor, Files and vault, Search, Updates and About. Its search box
-filters settings by their names and plain-language descriptions. Every setting
-is also a `>` mode action that opens this surface aligned to the matching row
-with its control focused.
-
-Appearance presents six light and dark palette cards in one chooser. Selecting
-a card applies and pins its appearance. Match system appearance follows the
-operating system between the last chosen light and dark palettes. Slider
-readouts accept typed values for font size, line spacing and text column width,
-and Mermaid diagrams use the active palette. Appearance also controls prose and
-code font stacks and motion. Motion uses fast state confirmation, brief
-compositor-only surface entrances, and bounded panel toggles. Disabling
-animations or requesting reduced motion makes these classes instant and stops
-loading pulses. Editor settings cover autosave, spell checking,
-indentation, wrapping, line numbers, visible whitespace, Markdown source
-reveal, link previews and configurable task tracks, statuses, and payloads.
-Files and vault settings control
-the folder used by the `Create new note` command, attachment resolution and
-compatible Obsidian configuration. Search settings control result count, title
-or full-text scope and case sensitivity. Updates selects the stable or beta
-channel and checks signed manifests, with stable fallback when no beta is
-published.
-
-Settings live in the operating system's application configuration directory,
-outside every vault. Unknown keys survive writes so a newer settings document
-can still be used by an older build.
-
-Development and commit history are public.
-See [SECURITY](SECURITY.md) for the security scope and vulnerability reporting
-process. See the [dependency policy](docs/dependency-policy.md) for version and
-audit requirements.
+The [CI guide](docs/ci.md) describes the complete platform and release gates.
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at
-your option.
+Skribeum is available under the [MIT](LICENSE-MIT) or
+[Apache-2.0](LICENSE-APACHE) license, at your option.

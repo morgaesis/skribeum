@@ -3717,7 +3717,10 @@ describe("skribeum shell", () => {
       // confirmation says nothing about whether the repaint has landed yet.
       await browser.waitUntil(
         async () => (await $$(".cm-skr-table-grid")).length === 1,
-        { timeout: 10000 },
+        {
+          timeout: 10000,
+          timeoutMsg: "deleted drag-selected table did not leave the editor",
+        },
       );
     } finally {
       await openNoteFromTree(VISUAL_NOTE_NAME);

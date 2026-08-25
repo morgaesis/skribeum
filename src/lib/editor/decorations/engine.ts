@@ -4496,11 +4496,11 @@ function refreshRequested(transaction: Transaction) {
 }
 
 /**
- * Native deletion and history replay may change a very large document while
- * leaving the user waiting for the next paint. Existing decorations map
+ * Single-caret deletion and history replay may change a very large document
+ * while leaving the user waiting for the next paint. Existing decorations map
  * exactly through those changes, so defer their expensive syntax walk until
- * after the input transaction. Commands that deliberately change structure
- * retain the synchronous rebuild they need to update their rendered control.
+ * after the input transaction. A selected range can remove complete rendered
+ * constructs, so it rebuilds synchronously with explicit structure commands.
  */
 function changesTouchBlockDecoration(
   changes: Transaction["changes"],
@@ -4520,11 +4520,14 @@ function defersDecorationRebuild(
   transaction: Transaction,
   blockDecorations?: DecorationSet,
 ): boolean {
+  const deletesSelection =
+    transaction.isUserEvent("delete") &&
+    transaction.startState.selection.ranges.some((range) => !range.empty);
   return (
     transaction.docChanged &&
     !changesTouchBlockDecoration(transaction.changes, blockDecorations) &&
     (transaction.annotation(bulkTextInputAnnotation) === true ||
-      transaction.isUserEvent("delete") ||
+      (transaction.isUserEvent("delete") && !deletesSelection) ||
       transaction.isUserEvent("undo") ||
       transaction.isUserEvent("redo"))
   );

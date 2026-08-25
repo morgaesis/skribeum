@@ -4,7 +4,13 @@
 // diff changing the table touches only the table file, tests and the
 // rules document.
 
-import { deleteCharBackward, history, redo, undo } from "@codemirror/commands";
+import {
+  deleteCharBackward,
+  deleteCharForward,
+  history,
+  redo,
+  undo,
+} from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
@@ -262,6 +268,41 @@ describe("data-driven decoration table", () => {
       view.dom.remove();
     }
   }, 15_000);
+
+  it("drops a rendered table synchronously when its selected source is deleted", () => {
+    const firstTable = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const secondTable = "| C | D |\n| --- | --- |\n| 3 | 4 |";
+    const doc = `before\n\n${firstTable}\n\nbetween\n\n${secondTable}\n`;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [
+          markdown({
+            base: markdownLanguage,
+            extensions: obsidianMarkdownExtensions,
+          }),
+          decorationEngine(),
+        ],
+      }),
+      parent: document.body,
+    });
+    try {
+      expect(forceParsing(view, view.state.doc.length, 1_000)).toBe(true);
+      expect(view.dom.querySelectorAll(".cm-skr-table-grid")).toHaveLength(2);
+      const from = doc.indexOf(firstTable);
+      view.dispatch({
+        selection: { anchor: from, head: from + firstTable.length },
+      });
+
+      expect(deleteCharForward(view)).toBe(true);
+
+      expect(view.state.doc.toString()).toBe(doc.replace(firstTable, ""));
+      expect(view.dom.querySelectorAll(".cm-skr-table-grid")).toHaveLength(1);
+    } finally {
+      view.destroy();
+      view.dom.remove();
+    }
+  });
 
   it("keeps a deferred block refresh scheduled across a viewport update", async () => {
     let viewportUpdates = 0;

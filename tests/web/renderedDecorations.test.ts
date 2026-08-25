@@ -2798,6 +2798,19 @@ describe("table structure commands", () => {
     });
   }
 
+  it("does not redirect a stale rendered-cell command to the table header", () => {
+    const { view, run } = harness();
+    expect(focusRenderedTableCell(view, tableFrom, 1, 0, "end")).toBe(true);
+    const grid = view.dom.querySelector<HTMLElement>(
+      ".cm-skr-table-grid[data-table-to]",
+    );
+    expect(grid).not.toBeNull();
+    grid?.setAttribute("data-table-to", String(source.indexOf("| a2") - 1));
+
+    expect(run("table.row.delete")).toBe(false);
+    expect(view.state.doc.toString()).toBe(source);
+  });
+
   it("hands focus back to the cell when the note takes it without asking", {
     timeout: 30000,
   }, async () => {

@@ -81,25 +81,43 @@ function tableContextAt(
   view?: EditorView,
 ): TableContext | null {
   const focused = view === undefined ? null : focusedRenderedTableCell(view);
-  const node = tableNodeAt(
-    state,
-    focused?.tableFrom ?? state.selection.main.head,
-  );
-  if (node === null) {
-    return null;
+  let blockFrom: number;
+  let blockTo: number;
+  if (focused !== null) {
+    // The rendered grid owns the exact source range the person is editing.
+    // Re-resolving its start through an incrementally updated syntax tree can
+    // temporarily return a shorter table while the live grid still carries
+    // the complete range. A structure command must follow that live range,
+    // or a missing body cell can be mistaken for the header row.
+    blockFrom = focused.tableFrom;
+    blockTo = focused.tableTo;
+    if (
+      blockFrom < 0 ||
+      blockFrom >= state.doc.length ||
+      blockTo <= blockFrom ||
+      blockTo > state.doc.length
+    ) {
+      return null;
+    }
+  } else {
+    const node = tableNodeAt(state, state.selection.main.head);
+    if (node === null) {
+      return null;
+    }
+    blockFrom = node.from;
+    blockTo = extendedTableEnd(state, node.from, node.to);
   }
-  const blockTo = extendedTableEnd(state, node.from, node.to);
-  const text = state.sliceDoc(node.from, blockTo);
+  const text = state.sliceDoc(blockFrom, blockTo);
   const cells = tableCellRanges(text);
-  const relative = state.selection.main.head - node.from;
+  const relative = state.selection.main.head - blockFrom;
   let currentIndex = 0;
   if (focused !== null) {
-    currentIndex = Math.max(
-      0,
-      cells.findIndex(
-        (cell) => cell.row === focused.row && cell.column === focused.column,
-      ),
+    currentIndex = cells.findIndex(
+      (cell) => cell.row === focused.row && cell.column === focused.column,
     );
+    if (currentIndex < 0) {
+      return null;
+    }
   } else {
     for (const [index, cell] of cells.entries()) {
       if (cell.from <= relative) {
@@ -109,7 +127,7 @@ function tableContextAt(
   }
   const current = cells[currentIndex];
   return {
-    blockFrom: node.from,
+    blockFrom,
     text,
     cells,
     currentIndex,

@@ -1614,11 +1614,25 @@ export function focusedRenderedTableCell(
     session.column,
   );
   const nested = host === null ? undefined : nestedTableCellViews.get(host);
-  if (host === null || nested === undefined || !nested.dom.isConnected) {
+  const grid = host?.closest<HTMLElement>(
+    ".cm-skr-table-grid[data-table-from][data-table-to]",
+  );
+  const liveFrom = Number(grid?.dataset.tableFrom);
+  const liveTo = Number(grid?.dataset.tableTo);
+  if (
+    host === null ||
+    nested === undefined ||
+    !nested.dom.isConnected ||
+    grid === null ||
+    liveFrom !== session.tableFrom ||
+    !Number.isFinite(liveTo) ||
+    liveTo <= liveFrom
+  ) {
     tableCellSessions.delete(view);
     updateTableCellStates(view);
     return null;
   }
+  session.tableTo = liveTo;
   return session;
 }
 

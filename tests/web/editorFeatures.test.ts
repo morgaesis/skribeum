@@ -34,6 +34,7 @@ import {
 import { tableEditingExtension } from "../../src/lib/features/tableEditing";
 import {
   filteredTagCompletions,
+  refreshTagCompletionAfterCatalogChange,
   type TagCatalogEntry,
   tagAffordances,
   tagCompletionOpen,
@@ -1050,6 +1051,8 @@ describe("tag affordances", () => {
       const view = openMenuThenIndexTheQuery();
 
       expect(rowsOf(view)).toEqual(["#project/cedar-room"]);
+      refreshTagCompletionAfterCatalogChange(view);
+      expect(rowsOf(view)).toEqual(["#project/cedar-room"]);
       // A redraw with no new query: a caret move, a measure, a viewport
       // change. Recomputing here would swap the row under the reader's
       // finger without the reader having touched anything.
@@ -1080,6 +1083,23 @@ describe("tag affordances", () => {
       typeText(view, "d");
 
       expect(rowsOf(view)).toEqual(["#ced", "#project/cedar-room"]);
+    });
+
+    it("fills an empty menu when the refreshed catalog gains a match", () => {
+      tagCatalog = [
+        { tag: "project/cedar-room", noteCount: 1, occurrenceCount: 2 },
+      ];
+      const view = makeView("", 0);
+      typeText(view, "#catalog-r");
+      expect(rowsOf(view)).toEqual([]);
+
+      tagCatalog = [
+        ...tagCatalog,
+        { tag: "catalog-refresh", noteCount: 1, occurrenceCount: 1 },
+      ];
+      refreshTagCompletionAfterCatalogChange(view);
+
+      expect(rowsOf(view)).toEqual(["#catalog-refresh"]);
     });
   });
 

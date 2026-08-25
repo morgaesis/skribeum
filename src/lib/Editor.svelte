@@ -66,7 +66,11 @@ import {
 import { slashMenu } from "./features/slashMenu";
 import { tableEditingExtension } from "./features/tableEditing";
 import { tableCellRanges } from "./features/tableOperations";
-import { type TagAffordanceOptions, tagAffordances } from "./features/tags";
+import {
+  refreshTagCompletionAfterCatalogChange,
+  type TagAffordanceOptions,
+  tagAffordances,
+} from "./features/tags";
 import type { ByteRangeReplace, VaultHandle } from "./ipc/bindings";
 import {
   editHistoryAppend,
@@ -1107,6 +1111,13 @@ export function markRemoved(): void {
 /** The live CodeMirror view, for command contexts and the outline. */
 export function getView(): EditorView | undefined {
   return view;
+}
+
+/** Rechecks an empty tag menu after the vault catalog publishes new rows. */
+export function refreshTagCompletion(): void {
+  if (view !== undefined) {
+    refreshTagCompletionAfterCatalogChange(view);
+  }
 }
 
 /**

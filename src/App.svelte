@@ -2524,6 +2524,7 @@ function setTagCatalog(entries: Awaited<ReturnType<typeof tagCatalog>>) {
     noteCount: entry.note_count,
     occurrenceCount: entry.occurrence_count,
   }));
+  editor?.refreshTagCompletion();
 }
 
 async function refreshTagCatalog(handle = vault) {

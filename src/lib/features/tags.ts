@@ -77,6 +77,7 @@ const tagConfig = Facet.define<TagConfig, TagConfig | null>({
 
 const setSelected = StateEffect.define<number>();
 const closeMenu = StateEffect.define<null>();
+const refreshEmptyMenu = StateEffect.define<null>();
 // `*` is accepted and then stripped, so a reader who reaches for a wildcard
 // keeps the menu they already had instead of losing it mid-word.
 const TAG_QUERY = /^[\p{L}\p{N}\p{M}_/*-]*$/u;
@@ -176,6 +177,16 @@ export const tagCompletionState = StateField.define<TagMenuState | null>({
         next = null;
       } else if (effect.is(setSelected) && next !== null) {
         next = { ...next, selected: effect.value };
+      } else if (
+        effect.is(refreshEmptyMenu) &&
+        next !== null &&
+        next.items.length === 0
+      ) {
+        next = {
+          ...next,
+          items: offeredTags(transaction.state, next.query),
+          selected: 0,
+        };
       }
     }
     return next;
@@ -240,6 +251,21 @@ export function filteredTagCompletions(
 /** Whether the tag completion menu is open. */
 export function tagCompletionOpen(state: EditorState): boolean {
   return state.field(tagCompletionState, false) != null;
+}
+
+/**
+ * Rechecks an open empty menu after the vault catalog changes.
+ *
+ * A menu that already contains rows keeps its snapshot so an indexing pass
+ * cannot move a different tag under Enter or a pointer. An empty menu has no
+ * actionable row to preserve, so newly indexed matches can appear without
+ * redirecting an existing action.
+ */
+export function refreshTagCompletionAfterCatalogChange(view: EditorView): void {
+  const open = view.state.field(tagCompletionState, false);
+  if (open != null && open.items.length === 0) {
+    view.dispatch({ effects: refreshEmptyMenu.of(null) });
+  }
 }
 
 function offeredTags(

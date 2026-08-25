@@ -4871,6 +4871,8 @@ describe("skribeum shell", () => {
   });
 
   it("keyboard_reaches_every_surface_in_order_without_traps", async () => {
+    await openNoteFromTree(CRLF_NOTE_NAME);
+
     // Focus order is DOM order: no element carries a positive tabindex, so
     // the traversal order is header overflow, banners when present, tree,
     // editor.
@@ -4913,12 +4915,16 @@ describe("skribeum shell", () => {
 
     // The tree exposes exactly one roving tabindex stop and arrow keys
     // move it; Enter opens the focused note.
-    const firstTreeItem = $(`[role="treeitem"][data-path="${LF_NOTE_NAME}"]`);
-    await firstTreeItem.click();
-    // A synthesized click's resulting focus event is delivered by the
-    // native webview asynchronously; document.activeElement can briefly
-    // still read as body immediately after the click command resolves, so
-    // this polls for the condition rather than asserting on the first read.
+    await browser.execute((noteName: string) => {
+      document
+        .querySelector<HTMLElement>(
+          `[role="treeitem"][data-path="${noteName}"]`,
+        )
+        ?.focus();
+    }, CRLF_NOTE_NAME);
+    // The native webview delivers the resulting focus event asynchronously;
+    // document.activeElement can briefly still read as body immediately after
+    // the focus command resolves, so poll instead of sampling once.
     await browser.waitUntil(
       async () => (await activeElementDescriptor()).includes("treeitem"),
       {
@@ -4958,6 +4964,23 @@ describe("skribeum shell", () => {
         document.activeElement?.getAttribute("data-path"),
       ),
     ).toBe(LF_NOTE_NAME);
+    // Native focus changes before Svelte publishes the matching roving
+    // tabindex. Sending Enter in that gap activates the row from the previous
+    // focus index even though document.activeElement already names this row.
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          (noteName: string) =>
+            document
+              .querySelector('[role="treeitem"][tabindex="0"]')
+              ?.getAttribute("data-path") === noteName,
+          LF_NOTE_NAME,
+        ),
+      {
+        timeout: 5000,
+        timeoutMsg: "the tree did not publish the focused row as its tab stop",
+      },
+    );
     await browser.keys(Key.Enter);
     // The note the focused pane holds, read whole so a pane that has not
     // mounted its shell yet is a reading rather than a thrown selector error,

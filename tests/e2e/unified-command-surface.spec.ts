@@ -11,6 +11,19 @@ async function overlayInput() {
   return input;
 }
 
+async function waitForEditorFocus(): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        () => document.activeElement?.classList.contains("cm-content") ?? false,
+      ),
+    {
+      timeout: 10000,
+      timeoutMsg: "browser-demo editor did not receive focus",
+    },
+  );
+}
+
 async function waitForCommandSurfaceEntrance() {
   await browser.waitUntil(
     () =>
@@ -112,13 +125,27 @@ beforeEach(async () => {
   await browser.url(target.href);
   await $(".demo-shell").waitForExist({ timeout: 15000 });
   await browser.waitUntil(
-    async () => (await $(".cm-content").getText()).includes("Quickstart"),
+    () =>
+      browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(".cm-content");
+        const harness = window as Window & {
+          __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
+        };
+        return (
+          document.readyState === "complete" &&
+          content !== null &&
+          content.getClientRects().length > 0 &&
+          (content.textContent ?? "").includes("Quickstart") &&
+          harness.__SKRIBEUM_E2E_CURRENT_PATH__?.() === "quickstart.md"
+        );
+      }),
     {
-      timeout: 15000,
+      timeout: 30000,
       timeoutMsg: "browser demo target did not open",
     },
   );
   await $(".cm-content").click();
+  await waitForEditorFocus();
 });
 
 describe("work package 1 browser behavior", () => {

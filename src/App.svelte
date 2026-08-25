@@ -405,6 +405,7 @@ let searchResults = $state<SearchResult[]>([]);
 let tagCatalogEntries = $state<TagCatalogEntry[]>([]);
 let recentTags = $state<string[]>([]);
 let tagCatalogGeneration = 0;
+let searchGeneration = 0;
 let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 let cancelOutlineRefresh: (() => void) | undefined;
 /** Recently opened note paths, most recent first. */
@@ -1548,9 +1549,25 @@ function openOverlay(id: string, initialQuery = "") {
   activeSheet = null;
   activeOverlay = id;
   overlayQuery = initialQuery;
+  searchGeneration += 1;
   searchResults = [];
   if (id === VIEW_COMMAND_SURFACE) {
-    void refreshTreeIndex();
+    void refreshCommandSurfaceIndex();
+  }
+}
+
+/**
+ * Refreshes the index behind an open command surface, then reruns whichever
+ * text query is still visible. The initial query remains responsive against
+ * the existing index, while the settled result cannot stay stale when a slow
+ * refresh finishes after it.
+ */
+async function refreshCommandSurfaceIndex() {
+  await refreshTreeIndex();
+  if (activeOverlay !== VIEW_COMMAND_SURFACE) return;
+  const parsed = parsePickerQuery(overlayQuery);
+  if (parsed.mode === "text" && parsed.query.length > 0) {
+    await runVaultSearch(parsed.query);
   }
 }
 
@@ -2436,19 +2453,40 @@ function onOverlayQuery(query: string) {
 }
 
 async function runVaultSearch(query: string) {
-  if (vault === null || query.length === 0) {
+  const activeVault = vault;
+  const generation = ++searchGeneration;
+  if (activeVault === null || query.length === 0) {
     searchResults = [];
     return;
   }
   try {
-    searchResults = await searchQuery(
-      vault,
+    const results = await searchQuery(
+      activeVault,
       query,
       settingsState.document.search_result_limit,
       true,
       settingsState.document.search_case_sensitive,
     );
+    const current = parsePickerQuery(overlayQuery);
+    if (
+      generation === searchGeneration &&
+      vault === activeVault &&
+      activeOverlay === VIEW_COMMAND_SURFACE &&
+      current.mode === "text" &&
+      current.query === query
+    ) {
+      searchResults = results;
+    }
   } catch (error) {
+    const current = parsePickerQuery(overlayQuery);
+    if (
+      generation !== searchGeneration ||
+      vault !== activeVault ||
+      activeOverlay !== VIEW_COMMAND_SURFACE ||
+      current.mode !== "text" ||
+      current.query !== query
+    )
+      return;
     searchResults = [];
     errorText = describeError(STRINGS.vaultSearchFailed, error);
   }

@@ -1907,6 +1907,13 @@ window.axe.run()
 }
 
 describe("skribeum shell", () => {
+  afterEach(async () => {
+    const commandSurface = $('[data-testid="unified-command-surface"]');
+    if (!(await commandSurface.isExisting())) return;
+    await browser.keys(Key.Escape);
+    await commandSurface.waitForExist({ reverse: true, timeout: 5000 });
+  });
+
   it("launches_and_renders_the_empty_pane", async () => {
     expect(await browser.getTitle()).toBe("Skribeum");
 
@@ -7378,6 +7385,23 @@ describe("skribeum core editing surfaces", () => {
     await persistSettings(storedSystemSettings);
     await browser.refresh();
     await $('[role="tree"]').waitForExist({ timeout: 15000 });
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          () =>
+            (
+              window as Window & {
+                __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
+              }
+            ).__SKRIBEUM_E2E_CURRENT_PATH__?.() !== null,
+        ),
+      {
+        timeout: 30000,
+        timeoutMsg: "refreshed desktop document did not become ready",
+      },
+    );
+    await $(".cm-content").click();
+    await waitForEditorFocus();
 
     await browser.execute(`
       const nativeMatchMedia = window.matchMedia.bind(window);

@@ -89,7 +89,11 @@ describe("external ingest cursor mapping", () => {
   it("maps a cursor after the ingested change forward", () => {
     const { view, session } = openNote("alpha\nbeta\ngamma\n");
     view.dispatch({ selection: { anchor: 11 } }); // at "gamma"
-    const changes = session.ingestDelta([byteChange(0, 0, "X")], "hash-1");
+    const changes = session.ingestDelta(
+      [byteChange(0, 0, "X")],
+      "hash-0",
+      "hash-1",
+    );
     dispatchIngest(view, changes);
     expect(view.state.doc.toString()).toBe("Xalpha\nbeta\ngamma\n");
     expect(view.state.selection.main.anchor).toBe(12);
@@ -98,7 +102,11 @@ describe("external ingest cursor mapping", () => {
   it("keeps a cursor before the ingested change in place", () => {
     const { view, session } = openNote("alpha\nbeta\ngamma\n");
     view.dispatch({ selection: { anchor: 2 } });
-    const changes = session.ingestDelta([byteChange(6, 10, "BETA!")], "hash-1");
+    const changes = session.ingestDelta(
+      [byteChange(6, 10, "BETA!")],
+      "hash-0",
+      "hash-1",
+    );
     dispatchIngest(view, changes);
     expect(view.state.doc.toString()).toBe("alpha\nBETA!\ngamma\n");
     expect(view.state.selection.main.anchor).toBe(2);
@@ -109,6 +117,7 @@ describe("external ingest cursor mapping", () => {
     view.dispatch({ selection: { anchor: 11, head: 16 } }); // "gamma"
     const changes = session.ingestDelta(
       [byteChange(0, 5, "prologue")],
+      "hash-0",
       "hash-1",
     );
     dispatchIngest(view, changes);
@@ -124,7 +133,11 @@ describe("external ingest cursor mapping", () => {
   it("rebases pending local edits over the ingest and saves the merge", () => {
     const { view, session } = openNote("one two three");
     typeLocal(view, session, 4, 7, "TWO");
-    const changes = session.ingestDelta([byteChange(8, 13, "3")], "hash-1");
+    const changes = session.ingestDelta(
+      [byteChange(8, 13, "3")],
+      "hash-0",
+      "hash-1",
+    );
     dispatchIngest(view, changes);
     expect(view.state.doc.toString()).toBe("one TWO 3");
     expect(decoder.decode(session.base.bytes)).toBe("one two 3");
@@ -145,6 +158,7 @@ describe("undo across external ingests", () => {
 
     const changes = session.ingestDelta(
       [byteChange(0, 0, "external ")],
+      "hash-0",
       "hash-1",
     );
     dispatchIngest(view, changes);
@@ -162,6 +176,7 @@ describe("undo across external ingests", () => {
     const { view, session } = openNote("base line\n");
     const ingest = session.ingestDelta(
       [byteChange(0, 0, "external ")],
+      "hash-0",
       "hash-1",
     );
     dispatchIngest(view, ingest);
@@ -175,6 +190,22 @@ describe("undo across external ingests", () => {
     expect(view.state.doc.toString()).toBe("external base line\n");
     redo(view);
     expect(view.state.doc.toString()).toBe("after external base line\n");
+  });
+
+  it("rejects a structurally valid delta from an older base projection", () => {
+    const { view, session } = openNote("fresh table bytes\n");
+    const before = view.state.doc.toString();
+
+    expect(() =>
+      session.ingestDelta(
+        [byteChange(0, 5, "stale")],
+        "hash-from-older-read",
+        "hash-stale-result",
+      ),
+    ).toThrow("external delta base does not match the open note");
+    expect(view.state.doc.toString()).toBe(before);
+    expect(session.base.text).toBe(before);
+    expect(session.base.projectionHash).toBe("hash-0");
   });
 });
 

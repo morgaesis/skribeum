@@ -14,6 +14,7 @@ import {
   vaultDocumentKind,
 } from "../../src/lib/editor/documentKinds";
 import { fileLanguageDescription } from "../../src/lib/editor/syntaxPolicy";
+import type { ByteRangeReplace } from "../../src/lib/ipc/bindings";
 import type { LoadedNote, VaultHandle } from "../../src/lib/ipc/vault";
 import * as vaultIpc from "../../src/lib/ipc/vault";
 import ImageView from "../../src/lib/rendering/ImageView.svelte";
@@ -21,6 +22,11 @@ import ImageView from "../../src/lib/rendering/ImageView.svelte";
 type EditorExports = {
   flush: () => Promise<boolean>;
   getView: () => EditorView | undefined;
+  ingestExternal: (
+    changeSet: readonly ByteRangeReplace[],
+    baseProjectionHash: string,
+    projectionHash: string,
+  ) => Promise<void>;
 };
 
 const VAULT: VaultHandle = { id: 1 };
@@ -356,6 +362,29 @@ describe("non-note editing", () => {
     // top of it, rather than either side being dropped.
     expect(view.state.doc.toString()).toContain("someone else wrote this");
     expect(view.state.doc.toString()).toContain("# mine");
+  });
+
+  it("re-reads instead of applying an external delta from an older base", async () => {
+    const source = new TextEncoder().encode("fresh table bytes\n");
+    const disk = openedDocument(
+      new TextEncoder().encode("authoritative disk bytes\n"),
+    );
+    stubEditHistory();
+    const read = vi.spyOn(vaultIpc, "readNote").mockResolvedValue(disk);
+    const component = mountEditor({
+      note: openedDocument(source),
+      path: "table.md",
+      vault: VAULT,
+    });
+
+    await component.ingestExternal(
+      [{ start: 0, end: 5, bytes: [115, 116, 97, 108, 101] }],
+      "hash-from-older-read",
+      "hash-stale-result",
+    );
+
+    expect(read).toHaveBeenCalledWith(VAULT, "table.md");
+    expect(component.getView()?.state.doc.toString()).toBe(disk.text);
   });
 });
 

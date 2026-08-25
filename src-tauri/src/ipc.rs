@@ -444,6 +444,8 @@ pub struct ExternalNoteUpdate {
     pub vault: u32,
     /// Vault-relative path.
     pub path: String,
+    /// Projection hash of the bytes the change set applies to.
+    pub base_projection_hash: String,
     /// Projection hash of the new on-disk content.
     pub projection_hash: String,
     /// Delta from the last projection to the new content.
@@ -2210,6 +2212,7 @@ fn apply_external_recon_state(
             path,
             projection_hash,
             change_set,
+            ..
         } => {
             let _ = vault.ingest_external_note(path, change_set, projection_hash);
         }
@@ -3814,6 +3817,7 @@ fn emit_recon_event<R: Runtime>(
     match event {
         ReconEvent::ExternalUpdate {
             path,
+            base_projection_hash,
             projection_hash,
             change_set,
         } => emit_for_open_vault(
@@ -3824,6 +3828,7 @@ fn emit_recon_event<R: Runtime>(
             ExternalNoteUpdate {
                 vault,
                 path: path.as_str().to_owned(),
+                base_projection_hash,
                 projection_hash,
                 change_set: to_ipc_changes(&change_set),
             },

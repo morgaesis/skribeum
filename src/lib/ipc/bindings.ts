@@ -352,6 +352,8 @@ export type ExternalNoteUpdate = {
 	vault: number,
 	/**  Vault-relative path. */
 	path: string,
+	/**  Projection hash of the bytes the change set applies to. */
+	base_projection_hash: string,
 	/**  Projection hash of the new on-disk content. */
 	projection_hash: string,
 	/**  Delta from the last projection to the new content. */

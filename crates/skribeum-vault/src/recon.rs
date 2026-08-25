@@ -70,6 +70,8 @@ pub enum ReconEvent {
     ExternalUpdate {
         /// The changed note.
         path: VaultPath,
+        /// Projection hash of the bytes the change set applies to.
+        base_projection_hash: String,
         /// Projection hash of the new content.
         projection_hash: String,
         /// Byte-range delta from the last projection to the new content.
@@ -365,6 +367,7 @@ fn external_update(path: &VaultPath, base: &[u8], observed: &[u8], hash: String)
     };
     ReconEvent::ExternalUpdate {
         path: path.clone(),
+        base_projection_hash: classify(base.to_vec()).projection_hash,
         projection_hash: hash,
         change_set,
     }
@@ -381,11 +384,18 @@ mod tests {
         let base = b"hello world\n";
         let observed = b"hello brave new world\n";
         let hash = classify(observed.to_vec()).projection_hash;
-        let ReconEvent::ExternalUpdate { change_set, .. } =
-            external_update(&path, base, observed, hash)
+        let ReconEvent::ExternalUpdate {
+            base_projection_hash,
+            change_set,
+            ..
+        } = external_update(&path, base, observed, hash)
         else {
             panic!("expected an update event");
         };
+        assert_eq!(
+            base_projection_hash,
+            classify(base.to_vec()).projection_hash
+        );
         let rebuilt = apply_change_set(base, &change_set).expect("delta applies");
         assert_eq!(rebuilt, observed);
     }

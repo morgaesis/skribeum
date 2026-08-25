@@ -1045,18 +1045,32 @@ function clearHold() {
 // through the menu or through the F2/Delete accelerators below, is a
 // registered command run through the registry.
 function onKeydown(event: KeyboardEvent) {
-  const row = rows[focusIndex];
+  const focusedPath =
+    event.target instanceof Element
+      ? event.target
+          .closest<HTMLElement>('[role="treeitem"][data-path]')
+          ?.getAttribute("data-path")
+      : null;
+  const focusedIndex =
+    focusedPath === null
+      ? -1
+      : rows.findIndex((candidate) => candidate.path === focusedPath);
+  const activeIndex = focusedIndex >= 0 ? focusedIndex : focusIndex;
+  if (focusedIndex >= 0 && focusIndex !== focusedIndex) {
+    focusIndex = focusedIndex;
+  }
+  const row = rows[activeIndex];
   if (row === undefined) return;
   switch (event.key) {
     case "ArrowDown":
-      void focusRow(Math.min(focusIndex + 1, rows.length - 1));
+      void focusRow(Math.min(activeIndex + 1, rows.length - 1));
       break;
     case "ArrowUp":
-      void focusRow(Math.max(focusIndex - 1, 0));
+      void focusRow(Math.max(activeIndex - 1, 0));
       break;
     case "ArrowRight":
       if (row.kind === "directory" && !expanded(row.path)) toggleFolder(row);
-      else if (row.kind === "directory") void focusRow(focusIndex + 1);
+      else if (row.kind === "directory") void focusRow(activeIndex + 1);
       break;
     case "ArrowLeft":
       if (row.kind === "directory" && expanded(row.path)) toggleFolder(row);
@@ -1079,13 +1093,13 @@ function onKeydown(event: KeyboardEvent) {
       if (!event.shiftKey) return;
       openMenu(
         row,
-        itemElements[focusIndex] ?? (event.currentTarget as HTMLElement),
+        itemElements[activeIndex] ?? (event.currentTarget as HTMLElement),
       );
       break;
     case "ContextMenu":
       openMenu(
         row,
-        itemElements[focusIndex] ?? (event.currentTarget as HTMLElement),
+        itemElements[activeIndex] ?? (event.currentTarget as HTMLElement),
       );
       break;
     case "F2":

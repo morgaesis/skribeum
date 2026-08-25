@@ -221,8 +221,12 @@ export class NoteSession {
    */
   ingestDelta(
     changes: readonly ByteChange[],
+    baseProjectionHash: string,
     projectionHash: string,
   ): ChangeSet {
+    if (this.base.projectionHash !== baseProjectionHash) {
+      throw new Error("external delta base does not match the open note");
+    }
     const bytes = applyByteChangeSet(this.base.bytes, changes);
     return this.reconcile(bytes, projectionHash);
   }

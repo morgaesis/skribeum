@@ -4326,6 +4326,7 @@ onMount(() => {
       }
       void editor?.ingestExternal(
         event.payload.change_set,
+        event.payload.base_projection_hash,
         event.payload.projection_hash,
       );
     }),

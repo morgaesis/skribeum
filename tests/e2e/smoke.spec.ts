@@ -4964,23 +4964,9 @@ describe("skribeum shell", () => {
         document.activeElement?.getAttribute("data-path"),
       ),
     ).toBe(LF_NOTE_NAME);
-    // Native focus changes before Svelte publishes the matching roving
-    // tabindex. Sending Enter in that gap activates the row from the previous
-    // focus index even though document.activeElement already names this row.
-    await browser.waitUntil(
-      () =>
-        browser.execute(
-          (noteName: string) =>
-            document
-              .querySelector('[role="treeitem"][tabindex="0"]')
-              ?.getAttribute("data-path") === noteName,
-          LF_NOTE_NAME,
-        ),
-      {
-        timeout: 5000,
-        timeoutMsg: "the tree did not publish the focused row as its tab stop",
-      },
-    );
+    // The key belongs to the row that owns DOM focus. Native focus can arrive
+    // before the reactive roving index publishes its matching tabindex, so
+    // Enter must use the event's row rather than cached component state.
     await browser.keys(Key.Enter);
     // The note the focused pane holds, read whole so a pane that has not
     // mounted its shell yet is a reading rather than a thrown selector error,

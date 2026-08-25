@@ -1055,6 +1055,7 @@ function fromIpcChanges(changes: readonly ByteRangeReplace[]): ByteChange[] {
  */
 export async function ingestExternal(
   changeSet: readonly ByteRangeReplace[],
+  baseProjectionHash: string,
   projectionHash: string,
 ): Promise<void> {
   if (session === null) {
@@ -1063,7 +1064,11 @@ export async function ingestExternal(
   removed = false;
   try {
     dispatchSessionChanges(
-      session.ingestDelta(fromIpcChanges(changeSet), projectionHash),
+      session.ingestDelta(
+        fromIpcChanges(changeSet),
+        baseProjectionHash,
+        projectionHash,
+      ),
       true,
     );
   } catch {

@@ -669,6 +669,40 @@ describe("designed file tree", () => {
 
     await unmount(component);
   });
+
+  it("activates the row that owns DOM focus when the roving index is stale", async () => {
+    const opened: string[] = [];
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        onOpenPath: (path: string) => opened.push(path),
+      },
+    });
+    flushSync();
+
+    const row = document.querySelector<HTMLElement>(
+      '[data-path="Folder/two.md"]',
+    );
+    expect(row).not.toBeNull();
+    if (row === null) return;
+    // Reproduce a native focus handoff that reaches the DOM before the
+    // component's roving-index callback. The key event still belongs to this
+    // row and must never activate the cached row from the previous stop.
+    row.addEventListener("focus", (event) => event.stopImmediatePropagation(), {
+      capture: true,
+      once: true,
+    });
+    row.focus();
+    expect(document.activeElement).toBe(row);
+    row.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+
+    expect(opened).toEqual(["Folder/two.md"]);
+    await unmount(component);
+  });
 });
 
 /**

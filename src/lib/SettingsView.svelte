@@ -14,7 +14,9 @@ import { onDestroy, onMount, tick } from "svelte";
 import {
   SETTINGS_DESCRIPTORS,
   type SettingSectionId,
+  settingSearchTerms,
 } from "./features/settingsCatalog";
+import { matchesSearchTerms } from "./fuzzy";
 import {
   DEFAULT_SETTINGS,
   type SettingsDocument,
@@ -309,9 +311,15 @@ const displayedSettings = $derived({
 const searchScope = $derived<SearchScope>(
   documentSettings.search_note_bodies ? "full-text" : "titles",
 );
-const activePalette = $derived<LightPaletteName | DarkPaletteName>(
+/** The half of the pair the shell is painting with right now. */
+const resolvedScheme = $derived<"light" | "dark">(
   documentSettings.theme === "dark" ||
     (documentSettings.theme === "system" && systemPrefersDark)
+    ? "dark"
+    : "light",
+);
+const activePalette = $derived<LightPaletteName | DarkPaletteName>(
+  resolvedScheme === "dark"
     ? (documentSettings.dark_palette as DarkPaletteName)
     : (documentSettings.light_palette as LightPaletteName),
 );
@@ -544,7 +552,7 @@ const matchedRowIds = $derived(
   new Set(
     Object.values(sectionRows)
       .flat()
-      .filter((row) => matches(row.label, row.description))
+      .filter((row) => matches(row))
       .map((row) => row.id),
   ),
 );
@@ -1013,21 +1021,28 @@ function focusSearchField() {
   field?.select();
 }
 
+/**
+ * Arrows travel inside one half of the pair. Each half is its own radio
+ * group and writes its own field, so wrapping past the last light palette
+ * into the dark ones would step across a group boundary and change a second
+ * setting the reader never reached for.
+ */
 async function paletteKeydown(event: KeyboardEvent, card: PaletteCard) {
-  const index = paletteCards.indexOf(card);
+  const siblings = paletteCards.filter(({ mode }) => mode === card.mode);
+  const index = siblings.indexOf(card);
   let nextIndex: number | null = null;
   if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-    nextIndex = (index + 1) % paletteCards.length;
+    nextIndex = (index + 1) % siblings.length;
   } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-    nextIndex = (index - 1 + paletteCards.length) % paletteCards.length;
+    nextIndex = (index - 1 + siblings.length) % siblings.length;
   } else if (event.key === "Home") {
     nextIndex = 0;
   } else if (event.key === "End") {
-    nextIndex = paletteCards.length - 1;
+    nextIndex = siblings.length - 1;
   }
   if (nextIndex === null) return;
   event.preventDefault();
-  const next = paletteCards[nextIndex];
+  const next = siblings[nextIndex];
   if (next === undefined) return;
   choosePalette(next);
   await tick();
@@ -1379,11 +1394,25 @@ onDestroy(() => {
   }
 });
 
-function matches(label: string, description: string): boolean {
-  const query = searchQuery.trim().toLocaleLowerCase();
-  return (
-    query.length === 0 ||
-    `${label} ${description}`.toLocaleLowerCase().includes(query)
+/**
+ * The extra words a row answers to. The palette row edits both palettes at
+ * once, so it answers to the words either of them carries.
+ */
+function searchTermsForRow(id: string): readonly string[] {
+  return id === "appearance.palette"
+    ? [
+        ...settingSearchTerms("appearance.light-palette"),
+        ...settingSearchTerms("appearance.dark-palette"),
+      ]
+    : settingSearchTerms(id);
+}
+
+function matches(row: SettingRow): boolean {
+  return matchesSearchTerms(
+    searchQuery,
+    row.label,
+    row.description,
+    searchTermsForRow(row.id),
   );
 }
 
@@ -1563,15 +1592,40 @@ function onKeydown(event: KeyboardEvent) {
   </button>
 {/snippet}
 
+{#snippet paletteGroup(
+  mode: "light" | "dark",
+  label: string,
+  settingId: string,
+)}
+  <span class="palette-target" data-setting-id={settingId}>
+    <span class="palette-group-head">
+      <span class="palette-group-label">{label}</span>
+      {#if resolvedScheme === mode}
+        <span class="palette-group-live">{STRINGS.settingsPaletteInUse}</span>
+      {/if}
+    </span>
+    <span
+      class="palette-group-options"
+      role="radiogroup"
+      aria-label={label}
+      data-palette-mode={mode}
+    >
+      {#each paletteCards.filter((card) => card.mode === mode) as card (card.value)}
+        {@render paletteCard(card)}
+      {/each}
+    </span>
+  </span>
+{/snippet}
+
 {#snippet paletteCard(card: PaletteCard)}
   <button
     type="button"
     class="palette-card skr-palette-swatch"
-    class:active={activePalette === card.value}
-    class:paired={paletteIsStoredChoice(card) && activePalette !== card.value}
+    class:active={paletteIsStoredChoice(card)}
+    class:live={activePalette === card.value}
     role="radio"
-    aria-checked={activePalette === card.value}
-    tabindex={activePalette === card.value ? 0 : -1}
+    aria-checked={paletteIsStoredChoice(card)}
+    tabindex={paletteIsStoredChoice(card) ? 0 : -1}
     data-palette={card.value}
     data-testid={`settings-palette-${card.value}`}
     onclick={() => choosePalette(card)}
@@ -1637,47 +1691,43 @@ function onKeydown(event: KeyboardEvent) {
     onkeydown={onKeydown}
   >
     <div class="settings-header">
-      <div class="settings-header-primary">
-        {#if backControlVisible}
-          <button
-            class="icon-button back-button"
-            type="button"
-            aria-label={STRINGS.settingsAllSettings}
-            title={STRINGS.settingsAllSettings}
-            data-btn-role="secondary"
-            data-testid="settings-back"
-            onclick={() => void showGroupList()}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M14.5 6 L9 12 L14.5 18" />
-            </svg>
-          </button>
-        {/if}
-        <h2>{STRINGS.settingsLabel}</h2>
+      {#if backControlVisible}
         <button
-          class="icon-button close-button"
+          class="icon-button back-button"
           type="button"
-          aria-label={STRINGS.closeAction}
+          aria-label={STRINGS.settingsAllSettings}
+          title={STRINGS.settingsAllSettings}
           data-btn-role="secondary"
-          onclick={closeSettings}
+          data-testid="settings-back"
+          onclick={() => void showGroupList()}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M6 6 L18 18 M18 6 L6 18" />
+            <path d="M14.5 6 L9 12 L14.5 18" />
           </svg>
         </button>
-      </div>
-      <div class="settings-header-tools">
-        <label class="settings-search">
-          <span class="visually-hidden">{STRINGS.settingsSearchLabel}</span>
-          <input
-            value={searchQuery}
-            oninput={onSearchInput}
-            data-testid="settings-search"
-            type="search"
-            placeholder={STRINGS.settingsSearchPlaceholder}
-          />
-        </label>
-      </div>
+      {/if}
+      <h2>{STRINGS.settingsLabel}</h2>
+      <label class="settings-search">
+        <span class="visually-hidden">{STRINGS.settingsSearchLabel}</span>
+        <input
+          value={searchQuery}
+          oninput={onSearchInput}
+          data-testid="settings-search"
+          type="search"
+          placeholder={STRINGS.settingsSearchPlaceholder}
+        />
+      </label>
+      <button
+        class="icon-button close-button"
+        type="button"
+        aria-label={STRINGS.closeAction}
+        data-btn-role="secondary"
+        onclick={closeSettings}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6 L18 18 M18 6 L6 18" />
+        </svg>
+      </button>
     </div>
 
     <div class="settings-body">
@@ -1721,11 +1771,24 @@ function onKeydown(event: KeyboardEvent) {
               onkeydown={railKeydown}
             >
               <span class="settings-rail-label">{section.label}</span>
-              <span class="settings-rail-slot" aria-hidden="true">
+              <span
+                class="settings-rail-slot"
+                title={searchActive
+                  ? STRINGS.settingsSectionMatchCount
+                  : changedSections.has(section.id)
+                    ? STRINGS.settingsSectionChanged
+                    : undefined}
+              >
                 {#if searchActive}
-                  <span class="settings-rail-count">{count}</span>
+                  <span class="settings-rail-count" aria-hidden="true">{count}</span>
+                  <span class="visually-hidden"
+                    >{STRINGS.settingsSectionMatchCount}: {count}</span
+                  >
                 {:else if changedSections.has(section.id)}
-                  <span class="settings-rail-dot"></span>
+                  <span class="settings-rail-dot" aria-hidden="true"></span>
+                  <span class="visually-hidden"
+                    >{STRINGS.settingsSectionChanged}</span
+                  >
                 {/if}
               </span>
             </button>
@@ -1785,28 +1848,17 @@ function onKeydown(event: KeyboardEvent) {
                     {@render settingError(["light_palette", "dark_palette"])}
                   </div>
                   <div class="palette-picker">
-                    <div
-                      class="palette-options"
-                      role="radiogroup"
-                      aria-label={STRINGS.settingsPalette}
-                      data-testid="settings-palette"
-                    >
-                      <span
-                        class="palette-target"
-                        data-setting-id="appearance.light-palette"
-                      >
-                        {#each paletteCards.filter(({ mode }) => mode === "light") as card}
-                          {@render paletteCard(card)}
-                        {/each}
-                      </span>
-                      <span
-                        class="palette-target"
-                        data-setting-id="appearance.dark-palette"
-                      >
-                        {#each paletteCards.filter(({ mode }) => mode === "dark") as card}
-                          {@render paletteCard(card)}
-                        {/each}
-                      </span>
+                    <div class="palette-options" data-testid="settings-palette">
+                      {@render paletteGroup(
+                        "light",
+                        STRINGS.settingsLightPalette,
+                        "appearance.light-palette",
+                      )}
+                      {@render paletteGroup(
+                        "dark",
+                        STRINGS.settingsDarkPalette,
+                        "appearance.dark-palette",
+                      )}
                     </div>
                     {@render palettePreview(
                       displayedPaletteCard?.label ??
@@ -3019,9 +3071,17 @@ function onKeydown(event: KeyboardEvent) {
                     onclick={() => void selectSection(section.id)}
                   >
                     <span>{section.label}</span>
-                    <span class="settings-group-slot" aria-hidden="true">
+                    <span
+                      class="settings-group-slot"
+                      title={changedSections.has(section.id)
+                        ? STRINGS.settingsSectionChanged
+                        : undefined}
+                    >
                       {#if changedSections.has(section.id)}
-                        <span class="settings-rail-dot"></span>
+                        <span class="settings-rail-dot" aria-hidden="true"></span>
+                        <span class="visually-hidden"
+                          >{STRINGS.settingsSectionChanged}</span
+                        >
                       {/if}
                       <svg class="settings-group-chevron" viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M9.5 6 L15 12 L9.5 18" />
@@ -3151,7 +3211,10 @@ function onKeydown(event: KeyboardEvent) {
     gap: 0.25rem;
     justify-content: space-between;
     min-height: 2rem;
-    padding: 0 0.75rem;
+    /* The rail is a fixed 8rem and the slot reserves its width whether or not
+       it holds a mark, which left the longest group name three pixels short
+       of fitting and clipped it to "Appeara...". */
+    padding: 0 0.625rem;
     position: relative;
     text-align: left;
     transition:
@@ -3276,30 +3339,19 @@ function onKeydown(event: KeyboardEvent) {
     justify-content: space-between;
   }
 
+  /* Title, query and closer share one band. Stacking them cost a fifth of
+     the surface's height before a single setting was shown, and none of the
+     three needs a line of its own to be read. */
   .settings-header {
-    border-bottom: 1px solid var(--skr-border);
-    flex: none;
-    padding: 0.625rem 1.125rem;
-  }
-
-  .settings-header-primary,
-  .settings-header-tools {
     align-items: center;
+    border-bottom: 1px solid var(--skr-border);
     display: flex;
-    justify-content: space-between;
+    flex: none;
+    gap: 0.75rem;
+    padding: 0.375rem 1.125rem;
   }
 
-  .settings-header-primary {
-    gap: 0.25rem;
-    min-height: 2.75rem;
-  }
-
-  .settings-header-primary h2 {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .settings-header-primary .icon-button {
+  .settings-header .icon-button {
     /* Icon glyphs are 1rem everywhere in the shell. */
     font-size: 1rem;
     height: 2.75rem;
@@ -3307,14 +3359,8 @@ function onKeydown(event: KeyboardEvent) {
     width: 2.75rem;
   }
 
-  /* A query crosses groups, so the field spans the rail and the pane both
-     rather than sitting inside the header's own inline padding. */
-  .settings-header-tools {
-    gap: 0.5rem;
-    margin-inline: -1.125rem;
-  }
-
   .settings-header h2 {
+    flex: none;
     font-size: var(--skr-type-title);
     font-weight: 600;
     margin: 0;
@@ -3422,8 +3468,12 @@ function onKeydown(event: KeyboardEvent) {
     width: 1px;
   }
 
+  /* The query takes the band's spare width up to a readable field length,
+     and sits against the closer so the title keeps the left edge. */
   .settings-search {
     flex: 1;
+    margin-inline-start: auto;
+    max-width: 22rem;
     min-width: 0;
   }
 
@@ -3500,16 +3550,16 @@ function onKeydown(event: KeyboardEvent) {
     stroke-width: 2;
   }
 
-  .settings-header-primary .icon-button svg {
+  .settings-header .icon-button svg {
     height: 1rem;
     width: 1rem;
   }
 
-  .settings-header-primary .icon-button {
+  .settings-header .icon-button {
     color: var(--skr-text-muted);
   }
 
-  .settings-header-primary .icon-button:active {
+  .settings-header .icon-button:active {
     color: var(--skr-text);
   }
 
@@ -3767,14 +3817,50 @@ function onKeydown(event: KeyboardEvent) {
     width: 0.5rem;
   }
 
+  /* The two halves of the pair stand side by side, each under its own name,
+     so a palette is read as one of three choices for a scheme rather than as
+     one of six unrelated cards whose only clue to which scheme it belongs to
+     is how dark the card happens to look. */
   .palette-options {
     display: grid;
-    gap: 0.5rem;
-    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
   }
 
   .palette-target {
-    display: contents;
+    display: grid;
+    gap: 0.375rem;
+    min-width: 0;
+  }
+
+  /* The marker sits against its own group's name. Pushed to the far edge it
+     lands beside the next group's name and labels the wrong half. */
+  .palette-group-head {
+    align-items: baseline;
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .palette-group-label {
+    color: var(--skr-text-muted);
+    font-size: var(--skr-type-label);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* Which half the shell is painting with is a property of the colour
+     scheme, not of any one card, so it is stated once above the group. */
+  .palette-group-live {
+    color: var(--skr-accent);
+    font-size: var(--skr-type-chip);
+    font-weight: 600;
+  }
+
+  .palette-group-options {
+    display: grid;
+    gap: 0.5rem;
+    min-width: 0;
   }
 
   .palette-options .palette-card {
@@ -3797,19 +3883,24 @@ function onKeydown(event: KeyboardEvent) {
     background: var(--skr-surface);
   }
 
+  /* Chosen for its own scheme. Both halves always have one, so both groups
+     always show which card their scheme would paint with. */
   .palette-card.active {
-    border-color: var(--skr-accent);
-    border-width: 2px;
-  }
-
-  .palette-card.paired {
     border-color: var(--skr-border-strong);
     border-width: 2px;
   }
 
+  /* Chosen and painting right now: the accent belongs to the one card the
+     reader is actually looking at the consequence of. */
+  .palette-card.active.live {
+    border-color: var(--skr-accent);
+  }
+
   .palette-card strong {
     color: var(--skr-heading);
-    font-size: 0.875rem;
+    /* A control's name, on the control scale: the card is a specimen of the
+       palette, not a heading in it. */
+    font-size: var(--skr-type-control);
     font-weight: 700;
     overflow-wrap: anywhere;
   }
@@ -3850,7 +3941,7 @@ function onKeydown(event: KeyboardEvent) {
 
   .palette-live-body {
     color: var(--skr-text);
-    font-size: 0.8125rem;
+    font-size: var(--skr-type-control);
     font-weight: 400;
     line-height: 1.4;
     margin: 0;
@@ -3874,7 +3965,7 @@ function onKeydown(event: KeyboardEvent) {
     align-items: center;
     color: var(--skr-text);
     display: flex;
-    font-size: 0.8125rem;
+    font-size: var(--skr-type-control);
     gap: 0.5rem;
   }
 
@@ -3975,7 +4066,11 @@ function onKeydown(event: KeyboardEvent) {
     display: flex;
   }
 
-  .stepper button {
+  /* The step glyphs are icons and take the shell's 1rem icon size. The value
+     between them is a control label and keeps the control size: the bare
+     element selector outranked `.numeric-readout` and rendered every stepped
+     number three pixels larger than the same number shown on a slider. */
+  .stepper button:not(.numeric-readout):not(.numeric-entry) {
     border: 0;
     font-size: 1rem;
     min-width: 2rem;
@@ -4285,7 +4380,7 @@ function onKeydown(event: KeyboardEvent) {
     }
 
     .settings-header {
-      padding-top: calc(0.625rem + env(safe-area-inset-top));
+      padding-top: calc(0.375rem + env(safe-area-inset-top));
     }
 
     .settings-footer span {

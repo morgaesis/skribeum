@@ -6,6 +6,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Settings search answers the words a reader uses rather than the words the
+  labels happen to use. Each setting carries the other spelling of its terms,
+  the concept its wording avoids and the names of the options it offers, so
+  "theme", "color" and "gazette" all reach the colour palettes. A query
+  tolerates a typo in any of those words, abbreviates a label across its word
+  starts, and narrows on each further word. Typo tolerance never runs against
+  a setting's description, which is a sentence of ordinary English. The
+  command palette searches the same words.
+- The colour palettes are presented as the two halves of a pair, each under
+  its own name, each its own radio group reporting its own stored choice, and
+  the half the shell is painting with is marked once above its group.
+
+### Changed
+
+- The settings surface states its name, its search field and its closer on
+  one line. Stacking them spent a seventh of the surface's height before a
+  single setting was shown.
+- The mark beside a settings group, and the count that replaces it while a
+  query is active, say what they mean on hover and to a screen reader.
+- Every number a stepper shows is drawn at the size of the labels around it,
+  which the step glyphs' own icon size was overriding, and the palette cards
+  and preview take sizes from the type scale.
+- A tab is a soft shape sitting on the strip: the top corners round, the open
+  tab carries the pane's surface up into the strip, and the new-tab control
+  follows the last tab rather than holding the strip's far edge, until the
+  tabs overflow and it would scroll out of reach.
+
+### Fixed
+
+- A pane without focus shows its note at the same type size, leading and
+  column width as the pane with focus. It renders through the read-only
+  renderer, which sat outside the editor's own styles, so moving focus
+  between two panes showing one note resized its text and reflowed its
+  tables.
+- Switching notes no longer blinks. The pane hid its outgoing frame and then
+  faded the incoming one in from nothing, and with no frame composed beneath
+  it that fade showed the pane's bare background for its whole length. The
+  surface returns to full opacity in the same frame its content is complete.
+
 ## [0.0.11] - 2026-08-23
 
 ### Added

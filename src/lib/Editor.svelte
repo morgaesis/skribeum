@@ -83,7 +83,7 @@ import {
   readNote,
 } from "./ipc/vault";
 import { ASYNC_SKELETON_DELAY_MS } from "./loadingStates";
-import { enterMotionSurface, type PaneSwitchKind } from "./motion";
+import type { PaneSwitchKind } from "./motion";
 import PropertiesPanel from "./PropertiesPanel.svelte";
 import { type CommandContext, CommandRegistry, editorKeymap } from "./registry";
 import { NARROW_BREAKPOINT_REM } from "./responsive";
@@ -690,12 +690,27 @@ function stateFor(
   });
 }
 
+/**
+ * Reveals the composed frame the swap prepared under cover.
+ *
+ * The hide is what keeps a half-built note off the screen; the reveal is not
+ * an arrival and does not fade. A pane switch replaces the contents of a
+ * surface the reader is already looking at, so there is no frame underneath
+ * for an incoming one to fade in over: fading from zero shows the pane's
+ * bare background for the length of the transition, which reads as the note
+ * blinking out and back on every switch. The surface returns to full opacity
+ * in the same frame its content became complete.
+ */
 function finishPreparedArrival(): void {
   if (!arrivalPrepared) return;
   arrivalPrepared = false;
   if (!(shell instanceof HTMLElement)) return;
+  shell.dataset.motionInstant = "true";
   delete shell.dataset.motionPreparing;
-  enterMotionSurface(shell);
+  shell.dataset.motionEntered = "true";
+  requestAnimationFrame(() => {
+    if (shell instanceof HTMLElement) delete shell.dataset.motionInstant;
+  });
 }
 
 function replaceEditorState(content: string, locked: boolean): void {

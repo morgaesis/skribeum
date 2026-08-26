@@ -211,6 +211,76 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
   },
 ];
 
+/**
+ * Words that reach a setting without appearing in its label or description:
+ * the other spelling of a word, the concept the wording avoids, and the names
+ * of the options the setting offers. "Colour palette" is what a reader means
+ * by "theme", spells "color", and recognizes by the name of one palette, and
+ * a search that answers none of those three has failed at its only job.
+ *
+ * The settings surface and the command palette both search through this, so a
+ * setting stays reachable by the same words wherever it is looked for.
+ */
+export const SETTING_SEARCH_TERMS: Readonly<Record<string, string>> = {
+  "appearance.theme":
+    "theme themes colour color scheme mode dark light night system appearance contrast",
+  "appearance.light-palette":
+    "theme themes colour color colours colors palette palettes scheme light manuscript studio gazette",
+  "appearance.dark-palette":
+    "theme themes colour color colours colors palette palettes scheme dark night nightroom graphite signal",
+  "appearance.prose-font":
+    "font fonts typeface typography family prose text serif sans",
+  "appearance.code-font":
+    "font fonts typeface typography family code monospace mono modern classic",
+  "appearance.font-size":
+    "font size text bigger smaller larger zoom scale typography",
+  "appearance.line-height":
+    "line height leading spacing space lines typography",
+  "appearance.line-width":
+    "line width measure column characters wrap reading typography",
+  "appearance.animations":
+    "animation animations motion transition transitions reduce",
+  "editor.autosave": "autosave save saving delay debounce milliseconds",
+  "editor.spell-check": "spell spelling checker dictionary typos misspelling",
+  "editor.indent-style": "indent indentation tab tabs spaces whitespace",
+  "editor.indent-width": "indent indentation width size tab tabs spaces",
+  "editor.wrap-long-lines":
+    "wrap wrapping lines soft overflow horizontal scroll",
+  "editor.line-numbers": "line lines numbers numbering gutter",
+  "editor.invisibles":
+    "invisible invisibles whitespace spaces tabs characters marks",
+  "editor.reveal-syntax":
+    "reveal syntax markers markdown raw source formatting",
+  "editor.link-previews": "link links preview previews hover popup tooltip",
+  "editor.task-statuses":
+    "task tasks checkbox checkboxes status statuses todo done kanban",
+  "files.default-note-folder":
+    "file files folder directory location path new note",
+  "files.attachment-folder":
+    "attachment attachments image images paste folder directory path",
+  "files.obsidian-config":
+    "obsidian compatibility config vault import interoperability",
+  "search.result-limit": "search results limit maximum count",
+  "search.note-text": "search full text body bodies contents notes",
+  "search.case-sensitive": "search case sensitive sensitivity matching",
+  "updates.channel":
+    "update updates channel release stable beta prerelease version",
+  "updates.check": "update updates check download install version",
+  "updates.version": "version build release updates about",
+  "about.license": "license licence legal copyright mit apache about",
+  "about.repository": "repository repo source github code about",
+  "about.security-policy":
+    "security threat model privacy vulnerability report about",
+  "about.settings-file":
+    "settings file path json config configuration location backup",
+};
+
+/** The extra words for a setting, and none when it declares no extras. */
+export function settingSearchTerms(id: string): readonly string[] {
+  const terms = SETTING_SEARCH_TERMS[id];
+  return terms === undefined ? [] : terms.split(" ");
+}
+
 export function registerSettingActions(registry: CommandRegistry): void {
   for (const setting of SETTINGS_DESCRIPTORS) {
     registry.register({
@@ -220,6 +290,7 @@ export function registerSettingActions(registry: CommandRegistry): void {
         setting.label,
         setting.description,
         setting.id.replaceAll(/[.-]/g, " "),
+        ...settingSearchTerms(setting.id),
       ],
       kind: "setting",
       pointer: ["command-palette"],

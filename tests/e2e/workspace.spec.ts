@@ -817,6 +817,32 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     // split just created with a single tab in it.
     expect(await $$(".skr-tab-strip")).toHaveLength(2);
 
+    // A pane without focus renders its note through the read-only renderer
+    // rather than the editor. That renderer sits outside the editor's own
+    // scoped styles, so it once showed the same note at the interface's
+    // control size on the interface's leading in a column of unbounded
+    // width, and moving focus between panes resized the text and reflowed
+    // its tables. The values are read from the live document rather than
+    // compared to the markup that produced them, so a rule that stops
+    // applying fails here instead of passing.
+    const paneTypography = await browser.execute(() =>
+      [...document.querySelectorAll(".skr-editor-pane")]
+        .map((pane) => {
+          const content = pane.querySelector(".cm-content");
+          const editor = pane.querySelector(".cm-editor");
+          return content === null || editor === null
+            ? null
+            : {
+                fontSize: getComputedStyle(editor).fontSize,
+                lineHeight: getComputedStyle(content).lineHeight,
+                fontFamily: getComputedStyle(content).fontFamily,
+              };
+        })
+        .filter((entry) => entry !== null),
+    );
+    expect(paneTypography).toHaveLength(2);
+    expect(paneTypography[0]).toEqual(paneTypography[1]);
+
     await $('[aria-label="More actions"]').click();
     const splitDown = $('[data-command-id="pane.split-down"]');
     await splitDown.waitForDisplayed({ timeout: 10000 });

@@ -1,7 +1,13 @@
 // The fuzzy matcher behind the command surface and slash menu.
 
 import { describe, expect, it } from "vitest";
-import { fuzzyMatch, segmentByPositions } from "../../src/lib/fuzzy";
+import { settingSearchTerms } from "../../src/lib/features/settingsCatalog";
+import {
+  fuzzyMatch,
+  matchesSearchTerms,
+  segmentByPositions,
+} from "../../src/lib/fuzzy";
+import { STRINGS } from "../../src/lib/strings";
 
 describe("fuzzy matching", () => {
   it("matches subsequences case-insensitively", () => {
@@ -64,5 +70,71 @@ describe("segmenting by positions", () => {
 
   it("handles empty input", () => {
     expect(segmentByPositions("", [])).toEqual([]);
+  });
+});
+
+describe("settings search matching", () => {
+  const label = STRINGS.settingsPalette;
+  const description = STRINGS.settingsPaletteDescription;
+  const terms = [
+    ...settingSearchTerms("appearance.light-palette"),
+    ...settingSearchTerms("appearance.dark-palette"),
+  ];
+  const matches = (query: string) =>
+    matchesSearchTerms(query, label, description, terms);
+
+  it("answers the words a reader uses for a setting the label never says", () => {
+    // None of these three appears anywhere in "Colour palette" or its
+    // description, and each is what a reader types to find it.
+    expect(matches("theme")).toBe(true);
+    expect(matches("color")).toBe(true);
+    expect(matches("gazette")).toBe(true);
+  });
+
+  it("tolerates a typo in a naming word", () => {
+    expect(matches("palete")).toBe(true);
+    expect(
+      matchesSearchTerms(
+        "fnot size",
+        STRINGS.settingsFontSize,
+        STRINGS.settingsFontSizeDescription,
+        settingSearchTerms("appearance.font-size"),
+      ),
+    ).toBe(true);
+  });
+
+  it("never treats the description's ordinary English as a near match", () => {
+    // "theme" is one edit from "these"; a description full of common words
+    // would otherwise make every short query a near miss for every setting.
+    expect(
+      matchesSearchTerms(
+        "theme",
+        STRINGS.settingsFile,
+        "These preferences",
+        [],
+      ),
+    ).toBe(false);
+  });
+
+  it("narrows on each further word rather than widening", () => {
+    expect(matches("dark palette")).toBe(true);
+    expect(matches("dark elephant")).toBe(false);
+  });
+
+  it("abbreviates only across word starts and runs", () => {
+    expect(matchesSearchTerms("lw", "Line width", "", [])).toBe(true);
+    expect(matchesSearchTerms("linewid", "Line width", "", [])).toBe(true);
+    // `shone` is a subsequence of "Show line numbers" and two edits from
+    // every word in it, so only plain subsequence matching would return it.
+    // Each character has to start a word or continue a run, and the trailing
+    // `e` does neither.
+    expect(matchesSearchTerms("shone", "Show line numbers", "", [])).toBe(
+      false,
+    );
+  });
+
+  it("matches every setting on an empty query", () => {
+    expect(matches("")).toBe(true);
+    expect(matches("   ")).toBe(true);
   });
 });

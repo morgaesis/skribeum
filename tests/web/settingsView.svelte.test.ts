@@ -766,7 +766,14 @@ describe("settings navigation rail", () => {
     expect(list?.getAttribute("aria-label")).toBe(
       STRINGS.settingsSectionsLabel,
     );
-    expect(railTabs().map((tab) => tab.textContent?.trim())).toEqual([
+    // The rail item also carries a screen-reader sentence explaining its
+    // changed-settings dot, so the group's name is read from the label
+    // element rather than from everything the item happens to contain.
+    expect(
+      railTabs().map((tab) =>
+        tab.querySelector(".settings-rail-label")?.textContent?.trim(),
+      ),
+    ).toEqual([
       STRINGS.settingsSectionAppearance,
       STRINGS.settingsSectionEditor,
       STRINGS.settingsSectionFiles,

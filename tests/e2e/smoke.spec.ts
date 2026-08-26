@@ -7483,7 +7483,11 @@ describe("skribeum core editing surfaces", () => {
               ? null
               : system.getAttribute("aria-checked") === "true",
           gazetteChecked: gazette?.getAttribute("aria-checked") ?? null,
-          signalClass: signal?.getAttribute("class") ?? null,
+          // Each half of the pair is its own radio group and always reports
+          // its own stored choice checked. Which half is painting is stated
+          // once above the group, not on any one card.
+          signalChecked: signal?.getAttribute("aria-checked") ?? null,
+          signalLive: (signal?.getAttribute("class") ?? "").includes("live"),
         };
       });
     try {
@@ -7493,7 +7497,8 @@ describe("skribeum core editing surfaces", () => {
           return (
             state.systemScheme === true &&
             state.gazetteChecked === "true" &&
-            (state.signalClass ?? "").includes("paired")
+            state.signalChecked === "true" &&
+            state.signalLive === false
           );
         },
         { timeout: 20000 },
@@ -7524,14 +7529,17 @@ describe("skribeum core editing surfaces", () => {
       });
       query.dispatchEvent(event);
     });
+    // The stored dark choice was already reported checked by its own group;
+    // what the system flip changes is which half is painting, so that is
+    // what this waits on.
     await browser.waitUntil(
       async () =>
         (await browser.execute(
           () =>
             document
               .querySelector('[data-testid="settings-palette-signal"]')
-              ?.getAttribute("aria-checked") ?? null,
-        )) === "true",
+              ?.classList.contains("live") ?? false,
+        )) === true,
       {
         timeout: 5000,
         timeoutMsg: "system dark palette did not become active",

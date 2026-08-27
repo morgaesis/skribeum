@@ -474,6 +474,7 @@ describe("browser demo IPC", () => {
       search_note_bodies: true,
       search_case_sensitive: false,
       update_channel: "stable",
+      check_updates_on_startup: true,
       task_statuses: defaultTaskStatuses(),
     });
 
@@ -506,6 +507,7 @@ describe("browser demo IPC", () => {
       search_note_bodies: false,
       search_case_sensitive: true,
       update_channel: "beta",
+      check_updates_on_startup: false,
       task_statuses: defaultTaskStatuses(),
     };
     await settingsWrite(settings);
@@ -579,6 +581,7 @@ describe("browser demo IPC", () => {
       search_note_bodies: true,
       search_case_sensitive: false,
       update_channel: "stable",
+      check_updates_on_startup: true,
       task_statuses: defaultTaskStatuses(),
     });
     const valid = await settingsRead();

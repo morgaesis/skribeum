@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   checkForUpdate,
+  checkForUpdateOnStartup,
   describeUpdateFailure,
   describeUpdateState,
   installUpdate,
@@ -132,5 +133,32 @@ describe("update failure classification", () => {
     const result = describeUpdateFailure({ code: 7 });
     expect(result.message).not.toContain("[object Object]");
     expect(result.message.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the startup check", () => {
+  it("says nothing at all when the preference is off", async () => {
+    const states = await collect((onState) =>
+      checkForUpdateOnStartup({ channel: "stable", enabled: false }, onState),
+    );
+    // Not even "checking": a launch that did not ask must be
+    // indistinguishable from one that asked and found nothing.
+    expect(states).toEqual([]);
+  });
+
+  it("says nothing without the desktop shell, whatever the preference", async () => {
+    // The test runtime carries no Tauri internals, which is the browser
+    // demo's situation exactly. Nothing there could install what a check
+    // found, so asking would only produce a state nobody can act on.
+    const states = await collect((onState) =>
+      checkForUpdateOnStartup({ channel: "stable", enabled: true }, onState),
+    );
+    expect(states).toEqual([]);
+  });
+
+  it("never throws, on either channel", async () => {
+    await expect(
+      checkForUpdateOnStartup({ channel: "beta", enabled: true }, () => {}),
+    ).resolves.toBeUndefined();
   });
 });

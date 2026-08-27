@@ -353,6 +353,11 @@ const checkUpdatesDescription = $derived(
     ? STRINGS.settingsCheckUpdatesDescription
     : STRINGS.settingsCheckUpdatesDesktopRequired,
 );
+const startupCheckDescription = $derived(
+  desktopAvailable
+    ? STRINGS.settingsCheckUpdatesOnStartupDescription
+    : STRINGS.settingsCheckUpdatesOnStartupDesktopRequired,
+);
 
 const sectionRows = $derived<Record<SectionId, SettingRow[]>>({
   appearance: [
@@ -489,6 +494,12 @@ const sectionRows = $derived<Record<SectionId, SettingRow[]>>({
       label: STRINGS.settingsUpdateChannel,
       description: updateChannelDescription,
       keys: ["update_channel"],
+    },
+    {
+      id: "updates.startup-check",
+      label: STRINGS.settingsCheckUpdatesOnStartup,
+      description: startupCheckDescription,
+      keys: ["check_updates_on_startup"],
     },
     {
       id: "updates.check",
@@ -2884,6 +2895,39 @@ function onKeydown(event: KeyboardEvent) {
                   </div>
                   </div>
                   {@render rowReset("updates.channel")}
+                </div>
+              {/if}
+
+              {#if showRow("updates.startup-check")}
+                <div
+                  class="setting-row"
+                  class:changed={changedRowIds.has("updates.startup-check")}
+                  data-setting-id="updates.startup-check"
+                >
+                  <label class="setting-row-fields">
+                    <span class="setting-copy">
+                      <span class="setting-label"
+                        >{STRINGS.settingsCheckUpdatesOnStartup}</span
+                      >
+                      <span>{startupCheckDescription}</span>
+                      {@render settingError(["check_updates_on_startup"])}
+                    </span>
+                    <span class="switch">
+                      <input
+                        type="checkbox"
+                        checked={documentSettings.check_updates_on_startup}
+                        disabled={!desktopAvailable}
+                        onchange={(event) =>
+                          update({
+                            check_updates_on_startup: (
+                              event.currentTarget as HTMLInputElement
+                            ).checked,
+                          })}
+                      />
+                      <span aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  {@render rowReset("updates.startup-check")}
                 </div>
               {/if}
 

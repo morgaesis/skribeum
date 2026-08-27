@@ -1,8 +1,11 @@
 # Release runbook
 
-Releases build from a tag; updates reach installed applications only when a
-manifest is promoted. The two steps are deliberately separate, so a bad
-build never reaches anyone automatically.
+Releases build from a tag, and the same job assembles the updater manifest
+from the artifacts and signatures it just produced, publishing it both on the
+release it describes and at the fixed endpoint installed applications poll.
+A published release therefore reaches installed applications without a second
+step. The Promote workflow remains for the one case that is not a new
+release: pointing the endpoint back at an older version.
 
 ## Reviewing release notes
 
@@ -43,8 +46,9 @@ from using the changelog fallback.
    provenance attestations and an SBOM in the workflow run, and publishes the
    release as a prerelease. Every release body includes the complete changelog
    section and download verification instructions.
-3. Confirm that the release contains `CHECKSUM`, `CHECKSUM.sig`, and
-   `updater-signatures.json`, with no per-artifact `.sig` assets.
+3. Confirm that the release contains `latest.json`, `CHECKSUM`,
+   `CHECKSUM.sig`, and `updater-signatures.json`, with no per-artifact `.sig`
+   assets, and that the version in `latest.json` matches the tag.
 
 ## Verifying a download
 

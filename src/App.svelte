@@ -103,6 +103,7 @@ import {
 } from "./lib/features/taskCommands";
 import {
   checkForUpdate,
+  checkForUpdateOnStartup,
   hasDesktopRuntime,
   installUpdate,
   restartToApply,
@@ -419,6 +420,7 @@ let settingsState = $state<SettingsState>({
 let updateState = $state<UpdateState>({ kind: "idle" });
 let settingsFilePath = $state<string | null>(null);
 let updateCheckGeneration = 0;
+let startupUpdateCheckRun = false;
 let targetSetting = $state<string | null>(null);
 const transientBannerTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -470,6 +472,10 @@ const settingsStore = new SettingsStore((state) => {
     updateState = { kind: "idle" };
   }
   applySettings(state.document);
+  if (!startupUpdateCheckRun && state.loaded) {
+    startupUpdateCheckRun = true;
+    checkUpdatesOnStartup();
+  }
   if (
     vault !== null &&
     previous.honor_obsidian_config !== state.document.honor_obsidian_config
@@ -479,6 +485,55 @@ const settingsStore = new SettingsStore((state) => {
     refreshLinkContext();
   }
 });
+
+/**
+ * What the status line says about an update, or null when it says nothing.
+ * Only the two states a reader can act on reach it: an update that exists
+ * and one already installed and waiting on a restart. Checking, being up to
+ * date, and a failed check are answers to a question the reader asked in
+ * settings, and belong there rather than in a bar they did not open.
+ */
+const statuslineUpdate = $derived(
+  updateState.kind === "available"
+    ? {
+        label: STRINGS.statuslineUpdateAvailable,
+        version: updateState.version,
+        tooltip: STRINGS.statuslineUpdateTooltip,
+      }
+    : updateState.kind === "ready"
+      ? {
+          label: STRINGS.statuslineUpdateReady,
+          version: updateState.version,
+          tooltip: STRINGS.updateRestartConfirmTitle,
+        }
+      : null,
+);
+
+/**
+ * Asks the update server once per launch, on the desktop shell, when the
+ * reader has left that on. It waits for the settings document so the ask
+ * uses the chosen channel rather than the default, downloads nothing, and
+ * opens nothing: the answer reaches the status line only when a newer
+ * version exists, so a launch that finds none, or finds the server
+ * unreachable, looks exactly like one that never asked. The manual check in
+ * settings reports every outcome, including those two.
+ */
+function checkUpdatesOnStartup() {
+  const channel =
+    settingsState.document.update_channel === "beta" ? "beta" : "stable";
+  const generation = ++updateCheckGeneration;
+  void checkForUpdateOnStartup(
+    { channel, enabled: settingsState.document.check_updates_on_startup },
+    (state) => {
+      if (
+        generation === updateCheckGeneration &&
+        settingsState.document.update_channel === channel
+      ) {
+        updateState = state;
+      }
+    },
+  );
+}
 
 function checkSelectedUpdateChannel() {
   const channel =
@@ -5011,6 +5066,8 @@ onMount(() => {
       {sourceMode}
       persistence={persistenceState}
       announcement={statuslineAnnouncement}
+      update={statuslineUpdate}
+      onUpdateOpen={() => openSetting("updates.check")}
       bind:infoOpen={noteInfoOpen}
     />
   {/if}

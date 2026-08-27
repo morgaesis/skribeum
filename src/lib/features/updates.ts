@@ -126,6 +126,30 @@ export async function checkForUpdate(
 }
 
 /**
+ * The once-per-launch check.
+ *
+ * Two conditions gate it, and both live here rather than at the call site so
+ * the policy is one testable thing: the desktop shell has to be present,
+ * because nothing else can install what a check finds, and the reader has to
+ * have left the preference on. When either fails the function reports
+ * nothing at all, which is what keeps a launch that never asked
+ * indistinguishable from one that asked and found nothing.
+ *
+ * Reports only through `onState`, and only what a caller can act on: it is
+ * the caller's choice whether to surface a `current` or `failed` answer that
+ * nobody asked for.
+ */
+export async function checkForUpdateOnStartup(
+  options: { channel: "stable" | "beta"; enabled: boolean },
+  onState: (state: UpdateState) => void,
+): Promise<void> {
+  if (!options.enabled || !hasDesktopRuntime()) {
+    return;
+  }
+  await checkForUpdate(options.channel, onState);
+}
+
+/**
  * Downloads and installs a previously reported update, reporting progress.
  * The caller restarts the application; this function never does so on its
  * own, so an install can never interrupt unsaved work without consent.

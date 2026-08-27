@@ -457,6 +457,11 @@ export const STRINGS = {
     "Look for a newer desktop application version without interrupting your work.",
   settingsCheckUpdatesDesktopRequired:
     "Update checks require the desktop application.",
+  settingsCheckUpdatesOnStartup: "Check on startup",
+  settingsCheckUpdatesOnStartupDescription:
+    "Ask the update server once each time Skribeum starts, and say so in the status line when a newer version exists. Nothing is downloaded until you ask for it.",
+  settingsCheckUpdatesOnStartupDesktopRequired:
+    "Startup update checks require the desktop application.",
   settingsVersion: "Version",
   settingsVersionDescription: "The installed Skribeum version.",
   settingsLicense: "License",
@@ -575,6 +580,10 @@ export const STRINGS = {
     "This update failed a security check and was not installed. The download may have been altered or corrupted; do not retry it on an untrusted network.",
   updateUnavailable: "Updates are delivered by the desktop application",
   updateInstall: "Install update",
+  statuslineUpdateAvailable: "Update available",
+  statuslineUpdateReady: "Restart to update",
+  statuslineUpdateTooltip:
+    "A newer version of Skribeum is available; open Settings to install it",
   updateRestart: "Restart to apply",
   updateRestartConfirmTitle: "Restart to finish installing?",
   updateRestartConfirmMessage:

@@ -308,8 +308,28 @@ jobs:
           # manifests. Release the decoded document for the Minisign CLI.
           base64 --decode CHECKSUM.sig > CHECKSUM.minisig
           mv CHECKSUM.minisig CHECKSUM.sig
+          # The updater manifest is assembled here, from the signatures and
+          # artifacts this job already holds, rather than by a later manual
+          # step. Assembling it anywhere else lets a release publish and
+          # reach nobody, with nothing saying so: three releases shipped
+          # invisible that way. It stays out of CHECKSUM deliberately, since
+          # its integrity comes from the per-artifact signatures it carries
+          # and not from the manifest of the release it describes.
+          python3 "$GITHUB_WORKSPACE/.github/scripts/build-manifest.py" \
+            --version "${GITHUB_REF_NAME#v}" \
+            --directory "$release_directory" \
+            --signatures "$release_directory/updater-signatures.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --output "$release_directory/latest.json"
           gh release upload "$GITHUB_REF_NAME" \
-            updater-signatures.json CHECKSUM CHECKSUM.sig \
+            latest.json updater-signatures.json CHECKSUM CHECKSUM.sig \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          # The endpoint every shipped binary polls is a fixed URL, so the
+          # same manifest lands there in the same act that publishes the
+          # release it describes.
+          gh release upload updater latest.json \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
           gh release edit "$GITHUB_REF_NAME" \

@@ -47,6 +47,32 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it that fade showed the pane's bare background for its whole length. The
   surface returns to full opacity in the same frame its content is complete.
 
+## [0.0.12] - 2026-08-26
+
+### Fixed
+
+- Deleting a selection rebuilds the rendered structures it covered in the
+  same transaction. A deletion at a single caret defers its syntax walk until
+  after the paint, which is correct because the existing decorations map
+  exactly through that change, but a selected range can remove a whole
+  rendered construct, and deferring left the removed structure drawn on
+  screen until the next edit disturbed it.
+- A note update arriving from disk is applied only when it is built on the
+  version the pane actually holds, and a file-tree key press acts on the row
+  that owns focus rather than on a separately tracked index. Both reject work
+  aimed at a state the reader has already left.
+- The commands on a rendered table act on the cell the caret is in, rather
+  than on the extent the table had when its control was drawn.
+- The tag completion menu fills itself in when the vault finishes indexing,
+  instead of staying empty because it was opened before the tag catalog
+  existed.
+
+### Changed
+
+- The README opens as a landing page for a first-time reader: what Skribeum
+  is, where the files live, how to try the browser demo or download the
+  desktop application, and where the build entry points are.
+
 ## [0.0.11] - 2026-08-23
 
 ### Added

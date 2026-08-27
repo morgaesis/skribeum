@@ -174,6 +174,12 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     description: STRINGS.settingsUpdateChannelDescription,
   },
   {
+    id: "updates.startup-check",
+    section: "updates",
+    label: STRINGS.settingsCheckUpdatesOnStartup,
+    description: STRINGS.settingsCheckUpdatesOnStartupDescription,
+  },
+  {
     id: "updates.check",
     section: "updates",
     label: STRINGS.settingsCheckUpdates,
@@ -265,6 +271,8 @@ export const SETTING_SEARCH_TERMS: Readonly<Record<string, string>> = {
   "search.case-sensitive": "search case sensitive sensitivity matching",
   "updates.channel":
     "update updates channel release stable beta prerelease version",
+  "updates.startup-check":
+    "update updates check automatic automatically startup start launch boot notify notification background",
   "updates.check": "update updates check download install version",
   "updates.version": "version build release updates about",
   "about.license": "license licence legal copyright mit apache about",

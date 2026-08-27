@@ -520,6 +520,8 @@ pub struct Settings {
     pub search_note_bodies: bool,
     pub search_case_sensitive: bool,
     pub update_channel: String,
+    /// Whether the desktop shell asks the update server once at startup.
+    pub check_updates_on_startup: bool,
     /// Ordered task marker vocabulary and click-transition graph.
     pub task_statuses: Vec<TaskStatus>,
 }
@@ -555,6 +557,7 @@ impl Default for Settings {
             search_note_bodies: true,
             search_case_sensitive: false,
             update_channel: "stable".to_owned(),
+            check_updates_on_startup: true,
             task_statuses: default_task_statuses(),
         }
     }
@@ -775,6 +778,8 @@ impl SettingsStore {
                 UPDATE_CHANNELS,
                 &defaults.update_channel,
             ),
+            check_updates_on_startup: read_bool(&object, "check_updates_on_startup")
+                .unwrap_or(defaults.check_updates_on_startup),
             task_statuses: object
                 .get("task_statuses")
                 .cloned()
@@ -859,6 +864,10 @@ impl SettingsStore {
             (
                 "update_channel",
                 Value::from(settings.update_channel.clone()),
+            ),
+            (
+                "check_updates_on_startup",
+                Value::from(settings.check_updates_on_startup),
             ),
         ] {
             object.insert(key.to_owned(), value);

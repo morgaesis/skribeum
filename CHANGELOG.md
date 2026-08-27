@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The desktop application asks the update server once at startup and says so
+  in the status line when a newer version exists, naming the version and
+  opening the update controls when chosen. Nothing downloads until asked
+  for, and only the two answers a reader can act on reach the status line:
+  a launch that finds nothing, or finds the server unreachable, looks
+  exactly like one that never asked. "Check on startup" in the update
+  settings turns it off, and the browser demo never asks at all.
 - Settings search answers the words a reader uses rather than the words the
   labels happen to use. Each setting carries the other spelling of its terms,
   the concept its wording avoids and the names of the options it offers, so

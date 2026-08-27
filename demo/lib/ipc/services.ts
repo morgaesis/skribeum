@@ -58,6 +58,7 @@ const DEFAULT_SETTINGS: SettingsDocument = {
   search_note_bodies: true,
   search_case_sensitive: false,
   update_channel: "stable",
+  check_updates_on_startup: true,
   task_statuses: defaultTaskStatuses(),
 };
 const THEMES = new Set(["system", "light", "dark"]);
@@ -495,6 +496,10 @@ function normalizeSettings(value: unknown): SettingsDocument {
       UPDATE_CHANNELS,
       DEFAULT_SETTINGS.update_channel,
     ),
+    check_updates_on_startup:
+      typeof candidate.check_updates_on_startup === "boolean"
+        ? candidate.check_updates_on_startup
+        : DEFAULT_SETTINGS.check_updates_on_startup,
     task_statuses: normalizeTaskStatuses(candidate.task_statuses),
   };
 }
@@ -548,6 +553,7 @@ function validateSettings(doc: SettingsDocument): void {
   validateBoolean("search_note_bodies", doc.search_note_bodies);
   validateBoolean("search_case_sensitive", doc.search_case_sensitive);
   validateChoice("update_channel", doc.update_channel, UPDATE_CHANNELS);
+  validateBoolean("check_updates_on_startup", doc.check_updates_on_startup);
   validateBoolean("link_previews", doc.link_previews);
   if (
     JSON.stringify(validateTaskStatusDocuments(doc.task_statuses)) !==

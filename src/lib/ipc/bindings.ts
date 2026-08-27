@@ -568,6 +568,8 @@ export type SettingsDoc = {
 	search_case_sensitive: boolean,
 	/**  Update release channel. */
 	update_channel: string,
+	/**  Whether the desktop shell asks the update server once at startup. */
+	check_updates_on_startup: boolean,
 	/**  Ordered task marker vocabulary and click-transition graph. */
 	task_statuses: TaskStatusDoc[],
 };

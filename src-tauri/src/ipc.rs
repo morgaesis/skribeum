@@ -685,6 +685,8 @@ pub struct SettingsDoc {
     pub search_case_sensitive: bool,
     /// Update release channel.
     pub update_channel: String,
+    /// Whether the desktop shell asks the update server once at startup.
+    pub check_updates_on_startup: bool,
     /// Ordered task marker vocabulary and click-transition graph.
     pub task_statuses: Vec<TaskStatusDoc>,
 }
@@ -1439,6 +1441,7 @@ fn settings_to_doc(settings: Settings) -> SettingsDoc {
         search_note_bodies: settings.search_note_bodies,
         search_case_sensitive: settings.search_case_sensitive,
         update_channel: settings.update_channel,
+        check_updates_on_startup: settings.check_updates_on_startup,
         task_statuses: settings
             .task_statuses
             .into_iter()
@@ -1477,6 +1480,7 @@ fn settings_from_doc(doc: SettingsDoc) -> Settings {
         search_note_bodies: doc.search_note_bodies,
         search_case_sensitive: doc.search_case_sensitive,
         update_channel: doc.update_channel,
+        check_updates_on_startup: doc.check_updates_on_startup,
         task_statuses: doc
             .task_statuses
             .into_iter()

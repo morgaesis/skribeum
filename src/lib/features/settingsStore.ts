@@ -49,6 +49,7 @@ export const DEFAULT_SETTINGS: SettingsDocument = {
   search_note_bodies: true,
   search_case_sensitive: false,
   update_channel: "stable",
+  check_updates_on_startup: true,
   task_statuses: defaultTaskStatusDocuments(),
 };
 

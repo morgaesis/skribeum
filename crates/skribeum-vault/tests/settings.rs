@@ -46,6 +46,7 @@ fn configured_settings() -> Settings {
         search_note_bodies: false,
         search_case_sensitive: true,
         update_channel: "beta".to_owned(),
+        check_updates_on_startup: false,
         task_statuses: configured_task_statuses(),
     }
 }

@@ -21,6 +21,8 @@ let {
   sourceMode = false,
   persistence = { kind: "saved" },
   announcement = null,
+  update = null,
+  onUpdateOpen,
   infoOpen = $bindable(false),
 }: {
   /** Vault-relative path of the open note, or null with none open. */
@@ -32,6 +34,14 @@ let {
   persistence?: PersistenceState;
   /** The transient center-slot announcement of section 6.2. */
   announcement?: { id: number; text: string } | null;
+  /**
+   * An update the reader can act on, or null. Only states worth interrupting
+   * a glance at the bar for reach this: the transient ones belong to the
+   * settings surface, where the question was asked.
+   */
+  update?: { label: string; version: string; tooltip: string } | null;
+  /** Opens the settings surface at the update controls. */
+  onUpdateOpen?: () => void;
   /** Whether the note-info popover is open (also command-driven). */
   infoOpen?: boolean;
 } = $props();
@@ -225,6 +235,18 @@ function surfaceEnter(node: HTMLElement) {
   </div>
 
   <div class="skr-statusline-trailing">
+    {#if update !== null && update !== undefined}
+      <button
+        type="button"
+        class="skr-statusline-segment skr-statusline-update"
+        data-testid="statusline-update"
+        use:commandTooltip={{ title: update.tooltip }}
+        onclick={() => onUpdateOpen?.()}
+      >
+        {update.label}
+        {update.version}
+      </button>
+    {/if}
     {#if path !== null && sourceMode && statistics !== null && statistics !== undefined}
       <span class="skr-statusline-fact" data-testid="statusline-line-column">
         {formatLineColumn(statistics.line, statistics.column)}
@@ -353,6 +375,12 @@ function surfaceEnter(node: HTMLElement) {
   .skr-statusline-fact {
     padding-inline: 0.375rem;
     white-space: nowrap;
+  }
+
+  /* An update is news, not a fault: it takes the accent the interface uses
+     for a live choice rather than the danger colour a failed save takes. */
+  .skr-statusline-update {
+    color: var(--skr-accent);
   }
 
   .skr-statusline-danger {

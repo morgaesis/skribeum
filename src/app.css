@@ -638,6 +638,10 @@ select {
   display: none;
 }
 
+/* A tab is a soft shape sitting on the strip, not a full-height cell of a
+   grid: the top corners round, the bottom edge stays square where the tab
+   meets the pane it opens, and a hairline of strip shows on either side so
+   two tabs never share a wall. */
 .skr-tab-shell {
   position: relative;
   display: flex;
@@ -647,12 +651,21 @@ select {
   align-items: center;
   gap: 0.35rem;
   overflow: hidden;
+  margin-top: 0.1875rem;
+  border-top-left-radius: var(--skr-radius-dialog);
+  border-top-right-radius: var(--skr-radius-dialog);
   color: inherit;
   background: transparent;
   text-align: left;
 }
 
 .skr-tab-shell:hover {
+  background: var(--skr-surface-subtle);
+}
+
+/* The open tab carries the pane's own surface up into the strip, which is
+   what makes the two read as one sheet rather than a bar above a page. */
+.skr-tab-active {
   background: var(--skr-surface-subtle);
 }
 
@@ -874,15 +887,20 @@ select {
   background: var(--skr-surface);
 }
 
+/* Sized and shaped like the tabs it follows, so the row reads as one line of
+   soft shapes rather than a strip of tabs with a square button bolted on. */
 .skr-tab-new {
   display: grid;
-  width: 2.25rem;
-  min-width: 2.25rem;
+  width: 2rem;
+  min-width: 2rem;
+  height: calc(100% - 0.1875rem);
+  align-self: flex-end;
   place-items: center;
+  margin-inline: 0.125rem;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--skr-radius-surface);
   color: var(--skr-text-muted);
-  background: var(--skr-surface);
+  background: transparent;
 }
 
 .skr-tab-new svg {
@@ -1016,7 +1034,8 @@ select {
   box-sizing: border-box;
   height: 100%;
   overflow: auto;
-  padding: var(--skr-gutter);
+  padding-block: clamp(2rem, 5vh, 4rem);
+  padding-inline: var(--skr-gutter);
   color: var(--skr-text);
   background: var(--skr-surface);
 }
@@ -1501,6 +1520,25 @@ html body .settings-dialog {
 
 .cm-content {
   caret-color: var(--skr-caret);
+}
+
+/* A pane the reader is not focused in renders its note through the read-only
+   renderer rather than the editor, and the editor's own scoped rules do not
+   reach it. Without these it shows the same note at the interface's control
+   size on the interface's leading in a column of unbounded width, so moving
+   focus between two panes showing one note resizes its text and reflows its
+   tables. The three settings are read from the same custom properties the
+   editor reads, so the two presentations cannot drift apart. */
+.skr-unfocused-note .cm-editor {
+  font-size: var(--skr-editor-font-size, 1rem);
+}
+
+.skr-unfocused-note .cm-content {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--skr-editor-measure, 72) * 1ch);
+  margin-inline: auto;
+  line-height: var(--skr-editor-line-height, 1.7);
 }
 
 .cm-editor .cm-cursor,

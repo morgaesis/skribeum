@@ -298,6 +298,8 @@ export const STRINGS = {
   settingsSectionsLabel: "Settings sections",
   settingsAllSettings: "All settings",
   settingsResetToDefault: "Reset to default",
+  settingsSectionChanged: "Changed from the default in this section",
+  settingsSectionMatchCount: "Settings in this section matching your search",
   settingsSectionAppearance: "Appearance",
   settingsSectionEditor: "Editor",
   settingsSectionFiles: "Files",
@@ -313,6 +315,7 @@ export const STRINGS = {
   settingsPalette: "Colour palette",
   settingsLightPalette: "Light palette",
   settingsDarkPalette: "Dark palette",
+  settingsPaletteInUse: "In use now",
   settingsPaletteDescription:
     "Choose the palette each colour scheme paints with. The light and dark choices are kept separately.",
   settingsPaletteManuscript: "Manuscript",

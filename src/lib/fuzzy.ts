@@ -125,6 +125,89 @@ export function segmentByPositions(
   return segments;
 }
 
+const TERM_SEPARATORS = /[^\p{L}\p{N}]+/gu;
+
+function words(text: string): string[] {
+  return text.toLowerCase().split(TERM_SEPARATORS).filter(Boolean);
+}
+
+/**
+ * Whether `token` abbreviates `candidate`: every character lands either on a
+ * word start or immediately after the previous character it matched, so `lw`
+ * and `linewid` both reach "Line width" while `line` does not reach "Link
+ * previews". Plain subsequence matching admits that second pair, and a
+ * settings query that answers with the wrong row is worse than one that
+ * answers with none.
+ */
+function abbreviates(token: string, candidate: string): boolean {
+  const lower = candidate.toLowerCase();
+  let previous = -2;
+  let scan = 0;
+  for (const character of token) {
+    let found = -1;
+    for (let index = scan; index < lower.length; index += 1) {
+      if (lower[index] !== character) continue;
+      if (index === previous + 1 || isBoundary(candidate, index)) {
+        found = index;
+        break;
+      }
+    }
+    if (found === -1) {
+      return false;
+    }
+    previous = found;
+    scan = found + 1;
+  }
+  return true;
+}
+
+/**
+ * Whether a settings query names this setting. Every word of the query must
+ * land, so a second word narrows rather than widens, and a word lands three
+ * ways: it appears somewhere in the setting's text, it abbreviates the label,
+ * or it is a typo away from one of the setting's naming words.
+ *
+ * `terms` carries what the label and description never say: the other
+ * spelling of a word, the concept behind the wording, and the names of the
+ * options the setting offers. A reader looking for the palettes types
+ * "theme", "color" or the name of one palette, and none of those three
+ * appears in "Colour palette".
+ *
+ * Typo tolerance runs against the label and those terms and never against
+ * the description, which is a sentence of ordinary English: "theme" is one
+ * edit from "these", and admitting the description's prose makes almost
+ * every short query a near miss for almost every setting.
+ */
+export function matchesSearchTerms(
+  query: string,
+  label: string,
+  description: string,
+  terms: readonly string[] = [],
+): boolean {
+  const tokens = words(query);
+  if (tokens.length === 0) {
+    return true;
+  }
+  const text = `${label} ${description} ${terms.join(" ")}`.toLowerCase();
+  const naming = words(`${label} ${terms.join(" ")}`);
+  return tokens.every((token) => {
+    if (text.includes(token)) {
+      return true;
+    }
+    if (abbreviates(token, label)) {
+      return true;
+    }
+    const max = maxTypoDistance(token.length);
+    if (max === 0) {
+      return false;
+    }
+    return naming.some(
+      (word) =>
+        word[0] === token[0] && boundedEditDistance(token, word, max) !== null,
+    );
+  });
+}
+
 /** One catalog tag with its aggregate usage across the vault. */
 export type TagCandidate = {
   /** Tag text without the leading hash, in the vault's own spelling. */

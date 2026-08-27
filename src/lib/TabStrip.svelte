@@ -698,6 +698,21 @@ function finishScrollDrag(event: PointerEvent) {
 }
 </script>
 
+{#snippet newTabControl()}
+  <button
+    type="button"
+    class="skr-tab-new"
+    data-command-id="tab.new-empty"
+    aria-label={STRINGS.newTab}
+    use:commandTooltip={{ title: STRINGS.newTab }}
+    onclick={onNewTab}
+  >
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 3.5v9M3.5 8h9" />
+    </svg>
+  </button>
+{/snippet}
+
 {#if visible}
   <div
     class="skr-tab-strip"
@@ -845,6 +860,9 @@ function finishScrollDrag(event: PointerEvent) {
           <span class="skr-tab-label">{ghost.label}</span>
         </span>
       {/each}
+      {#if !overflowed}
+        {@render newTabControl()}
+      {/if}
       <span
         bind:this={indicatorElement}
         class="skr-tab-active-indicator"
@@ -852,18 +870,12 @@ function finishScrollDrag(event: PointerEvent) {
         aria-hidden="true"
       ></span>
     </div>
-    <button
-      type="button"
-      class="skr-tab-new"
-      data-command-id="tab.new-empty"
-      aria-label={STRINGS.newTab}
-      use:commandTooltip={{ title: STRINGS.newTab }}
-      onclick={onNewTab}
-    >
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M8 3.5v9M3.5 8h9" />
-      </svg>
-    </button>
+    <!-- The control follows the last tab, which is where a reader reaches for
+         it. Once the tabs overflow their strip it would scroll out of reach,
+         so it holds the strip's edge instead and stays where it can be hit. -->
+    {#if overflowed}
+      {@render newTabControl()}
+    {/if}
     {#if overflowed}
       <div class="skr-tab-list-shell">
         <button

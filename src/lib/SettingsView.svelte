@@ -3269,10 +3269,14 @@ function onKeydown(event: KeyboardEvent) {
     white-space: nowrap;
   }
 
+  /* The slot costs nothing while it holds nothing. Reserving a mark's width
+     on every item permanently clipped the longest group name to make room
+     for a mark that is usually absent, and a name that cannot be read is a
+     worse trade than a name that shifts on the rare frame a mark appears. */
   .settings-rail-slot {
     align-items: center;
     display: flex;
-    flex: 0 0 1rem;
+    flex: 0 0 auto;
     justify-content: flex-end;
   }
 
@@ -3857,9 +3861,14 @@ function onKeydown(event: KeyboardEvent) {
     font-weight: 600;
   }
 
+  /* The cards inside a half keep flowing at whatever density their column
+     allows. Stacking them one per row costs the swatches their comparability
+     on a phone, where the two halves sit above one another and each has the
+     full width to spend. */
   .palette-group-options {
     display: grid;
     gap: 0.5rem;
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
     min-width: 0;
   }
 

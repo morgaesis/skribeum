@@ -7751,7 +7751,6 @@ describe("skribeum core editing surfaces", () => {
         name: `Alternative status ${index + 1}`,
       })),
       theme: "dark",
-      update_channel: "beta",
       wrap_long_lines: false,
     };
     await persistSettings(nonDefaultSettings);

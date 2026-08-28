@@ -467,10 +467,6 @@ const settingsStore = new SettingsStore((state) => {
   const previous = settingsState.document;
   registerTaskStatusCommands(registry, state.document.task_statuses);
   settingsState = state;
-  if (previous.update_channel !== state.document.update_channel) {
-    updateCheckGeneration += 1;
-    updateState = { kind: "idle" };
-  }
   applySettings(state.document);
   if (!startupUpdateCheckRun && state.loaded) {
     startupUpdateCheckRun = true;
@@ -519,31 +515,21 @@ const statuslineUpdate = $derived(
  * settings reports every outcome, including those two.
  */
 function checkUpdatesOnStartup() {
-  const channel =
-    settingsState.document.update_channel === "beta" ? "beta" : "stable";
   const generation = ++updateCheckGeneration;
   void checkForUpdateOnStartup(
-    { channel, enabled: settingsState.document.check_updates_on_startup },
+    { enabled: settingsState.document.check_updates_on_startup },
     (state) => {
-      if (
-        generation === updateCheckGeneration &&
-        settingsState.document.update_channel === channel
-      ) {
+      if (generation === updateCheckGeneration) {
         updateState = state;
       }
     },
   );
 }
 
-function checkSelectedUpdateChannel() {
-  const channel =
-    settingsState.document.update_channel === "beta" ? "beta" : "stable";
+function checkForUpdateNow() {
   const generation = ++updateCheckGeneration;
-  void checkForUpdate(channel, (state) => {
-    if (
-      generation === updateCheckGeneration &&
-      settingsState.document.update_channel === channel
-    ) {
+  void checkForUpdate((state) => {
+    if (generation === updateCheckGeneration) {
       updateState = state;
     }
   });
@@ -5228,7 +5214,7 @@ onMount(() => {
     currentVersion={tauriConfig.version}
     {settingsFilePath}
     {updateState}
-    onCheckUpdate={checkSelectedUpdateChannel}
+    onCheckUpdate={checkForUpdateNow}
     onInstallUpdate={installSelectedUpdate}
     onRestartUpdate={restartForUpdate}
     {targetSetting}

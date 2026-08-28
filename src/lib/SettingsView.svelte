@@ -51,7 +51,6 @@ import type {
 
 type IndentStyle = "spaces" | "tabs";
 type AttachmentFolderMode = "vault" | "note" | "folder";
-type UpdateChannel = "stable" | "beta";
 type SearchScope = "titles" | "full-text";
 type TaskListboxField =
   | "category"
@@ -343,11 +342,6 @@ const obsidianDescription = $derived(
     ? STRINGS.settingsHonorObsidianDescription
     : STRINGS.settingsObsidianDesktopRequired,
 );
-const updateChannelDescription = $derived(
-  desktopAvailable
-    ? STRINGS.settingsUpdateChannelDescription
-    : STRINGS.settingsUpdateChannelDesktopRequired,
-);
 const checkUpdatesDescription = $derived(
   desktopAvailable
     ? STRINGS.settingsCheckUpdatesDescription
@@ -489,12 +483,6 @@ const sectionRows = $derived<Record<SectionId, SettingRow[]>>({
     },
   ],
   updates: [
-    {
-      id: "updates.channel",
-      label: STRINGS.settingsUpdateChannel,
-      description: updateChannelDescription,
-      keys: ["update_channel"],
-    },
     {
       id: "updates.startup-check",
       label: STRINGS.settingsCheckUpdatesOnStartup,
@@ -2857,47 +2845,6 @@ function onKeydown(event: KeyboardEvent) {
 
         {#snippet updatesRows()}
             <fieldset disabled={!desktopAvailable}>
-              {#if showRow("updates.channel")}
-                <div
-                  class="setting-row"
-                  class:changed={changedRowIds.has("updates.channel")}
-                  data-setting-id="updates.channel"
-                >
-                  <div class="setting-row-fields">
-                  <div class="setting-copy">
-                    <span class="setting-label">{STRINGS.settingsUpdateChannel}</span>
-                    <p>{updateChannelDescription}</p>
-                    {@render settingError(["update_channel"])}
-                  </div>
-                  <div class="segmented" role="radiogroup" aria-label={STRINGS.settingsUpdateChannel}>
-                    {#each ["stable", "beta"] as channel}
-                      <button
-                        type="button"
-                        role="radio"
-                        aria-checked={documentSettings.update_channel === channel}
-                        tabindex={documentSettings.update_channel === channel ? 0 : -1}
-                        class:active={documentSettings.update_channel === channel}
-                        data-choice={`update_channel-${channel}`}
-                        disabled={!desktopAvailable}
-                        onclick={() => update({ update_channel: channel })}
-                        onkeydown={(event) =>
-                          segmentedKeydown(
-                            event,
-                            ["stable", "beta"],
-                            channel as UpdateChannel,
-                            "update_channel",
-                          )}
-                        >{channel === "stable"
-                          ? STRINGS.settingsUpdateStable
-                          : STRINGS.settingsUpdateBeta}</button
-                      >
-                    {/each}
-                  </div>
-                  </div>
-                  {@render rowReset("updates.channel")}
-                </div>
-              {/if}
-
               {#if showRow("updates.startup-check")}
                 <div
                   class="setting-row"

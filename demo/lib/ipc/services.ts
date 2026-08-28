@@ -57,7 +57,6 @@ const DEFAULT_SETTINGS: SettingsDocument = {
   link_previews: true,
   search_note_bodies: true,
   search_case_sensitive: false,
-  update_channel: "stable",
   check_updates_on_startup: true,
   task_statuses: defaultTaskStatuses(),
 };
@@ -74,7 +73,6 @@ const INDENT_STYLES = new Set(["spaces", "tabs"]);
 const INDENT_WIDTH_RANGE = [1, 8] as const;
 const ATTACHMENT_FOLDER_MODES = new Set(["vault", "note", "folder"]);
 const RESULT_LIMIT_RANGE = [1, 1000] as const;
-const UPDATE_CHANNELS = new Set(["stable", "beta"]);
 const EXCLUDED_VAULT_DIRECTORIES = new Set([
   ".git",
   ".obsidian",
@@ -308,9 +306,13 @@ export async function tagCatalog(
     );
 }
 
-export async function updateCheck(
-  _channel: string,
-): Promise<{ kind: "current" }> {
+export async function updateCheck(): Promise<{ kind: "current" }> {
+  return { kind: "current" };
+}
+
+// The browser demo cannot install what a check found, so the command exists
+// only to keep the module's shape and always reports the running version.
+export async function updateInstall(): Promise<{ kind: "current" }> {
   return { kind: "current" };
 }
 
@@ -491,11 +493,6 @@ function normalizeSettings(value: unknown): SettingsDocument {
       typeof candidate.search_case_sensitive === "boolean"
         ? candidate.search_case_sensitive
         : DEFAULT_SETTINGS.search_case_sensitive,
-    update_channel: choice(
-      candidate.update_channel,
-      UPDATE_CHANNELS,
-      DEFAULT_SETTINGS.update_channel,
-    ),
     check_updates_on_startup:
       typeof candidate.check_updates_on_startup === "boolean"
         ? candidate.check_updates_on_startup
@@ -552,7 +549,6 @@ function validateSettings(doc: SettingsDocument): void {
   );
   validateBoolean("search_note_bodies", doc.search_note_bodies);
   validateBoolean("search_case_sensitive", doc.search_case_sensitive);
-  validateChoice("update_channel", doc.update_channel, UPDATE_CHANNELS);
   validateBoolean("check_updates_on_startup", doc.check_updates_on_startup);
   validateBoolean("link_previews", doc.link_previews);
   if (

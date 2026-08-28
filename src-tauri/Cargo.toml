@@ -32,6 +32,7 @@ tauri-plugin-opener = "2.5.4"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-log = "2.9.0"
 log = "0.4.33"
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
 
 # Native Maximize-button hit-testing and the real system window menu
 # (design system section 4.13) are Windows-only; this pins the same version

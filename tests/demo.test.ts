@@ -473,7 +473,6 @@ describe("browser demo IPC", () => {
       link_previews: true,
       search_note_bodies: true,
       search_case_sensitive: false,
-      update_channel: "stable",
       check_updates_on_startup: true,
       task_statuses: defaultTaskStatuses(),
     });
@@ -506,7 +505,6 @@ describe("browser demo IPC", () => {
       link_previews: false,
       search_note_bodies: false,
       search_case_sensitive: true,
-      update_channel: "beta",
       check_updates_on_startup: false,
       task_statuses: defaultTaskStatuses(),
     };
@@ -548,7 +546,6 @@ describe("browser demo IPC", () => {
         link_previews: "yes",
         search_note_bodies: "yes",
         search_case_sensitive: 1,
-        update_channel: "nightly",
       }),
     );
 
@@ -580,7 +577,6 @@ describe("browser demo IPC", () => {
       link_previews: true,
       search_note_bodies: true,
       search_case_sensitive: false,
-      update_channel: "stable",
       check_updates_on_startup: true,
       task_statuses: defaultTaskStatuses(),
     });
@@ -616,7 +612,6 @@ describe("browser demo IPC", () => {
       ["link_previews", "yes"],
       ["search_note_bodies", "yes"],
       ["search_case_sensitive", 1],
-      ["update_channel", "nightly"],
       [
         "task_statuses",
         [

@@ -36,12 +36,17 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["md", "markdown"],
+        "ext": [
+          "md",
+          "markdown"
+        ],
         "mimeType": "text/markdown",
         "role": "Editor"
       },
       {
-        "ext": ["txt"],
+        "ext": [
+          "txt"
+        ],
         "mimeType": "text/plain",
         "role": "Editor"
       }
@@ -50,10 +55,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0RTAxNzAzMDQ1OTlCQjMKUldTem0xa0VBeGZnNU83djBIQnNHRWdtZ1F4RnVGV3I5eFhaeHVDUVkxcUdCTnVuQ3JzTGpVSnoK",
-      "endpoints": [
-        "https://github.com/morgaesis/skribeum/releases/download/updater/latest.json"
-      ]
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0RTAxNzAzMDQ1OTlCQjMKUldTem0xa0VBeGZnNU83djBIQnNHRWdtZ1F4RnVGV3I5eFhaeHVDUVkxcUdCTnVuQ3JzTGpVSnoK"
     }
   }
 }

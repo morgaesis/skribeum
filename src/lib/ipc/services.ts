@@ -3,6 +3,7 @@
 // pattern as the vault layer, plus the byte-to-character range
 // conversion search highlighting needs.
 
+import type { Channel } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   commands,
@@ -13,6 +14,7 @@ import {
   type TagFrequency,
   type TreeEntry,
   type UpdateCheckDoc,
+  type UpdateProgressDoc,
   type VaultHandle,
   type VaultSessionDoc,
 } from "./bindings";
@@ -121,9 +123,19 @@ export async function fileOpenResolve(path: string): Promise<OpenFileTarget> {
   return unwrap(await commands.fileOpenResolve(path));
 }
 
-/** Checks the selected signed update manifest. */
-export async function updateCheck(channel: string): Promise<UpdateCheckDoc> {
-  return unwrap(await commands.updateCheck(channel));
+/** Checks the newest published release's own signed update manifest. */
+export async function updateCheck(): Promise<UpdateCheckDoc> {
+  return unwrap(await commands.updateCheck());
+}
+
+/**
+ * Downloads and installs the announced update through the same resolved
+ * manifest the check read, reporting bytes as they arrive.
+ */
+export async function updateInstall(
+  progress: Channel<UpdateProgressDoc>,
+): Promise<UpdateCheckDoc> {
+  return unwrap(await commands.updateInstall(progress));
 }
 
 /** Re-indexes and returns the vault tree. */

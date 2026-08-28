@@ -111,10 +111,10 @@ describe("ipc service wrappers", () => {
     expect(invoke).toHaveBeenCalledWith("settings_path");
   });
 
-  it("checks the selected update channel", async () => {
+  it("checks the newest release's own manifest, with nothing to select", async () => {
     invoke.mockResolvedValueOnce({ kind: "current" });
-    await expect(updateCheck("beta")).resolves.toEqual({ kind: "current" });
-    expect(invoke).toHaveBeenCalledWith("update_check", { channel: "beta" });
+    await expect(updateCheck()).resolves.toEqual({ kind: "current" });
+    expect(invoke).toHaveBeenCalledWith("update_check");
   });
 
   it("refreshes the tree by handle", async () => {

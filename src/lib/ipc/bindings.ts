@@ -114,7 +114,13 @@ export const commands = {
 	searchQuery: (handle: VaultHandle, query: string, limit: number, searchNoteBodies: boolean, caseSensitive: boolean) => typedError<SearchHit[], AppError>(__TAURI_INVOKE("search_query", { handle, query, limit, searchNoteBodies, caseSensitive })),
 	/**  Returns the indexed vault tag catalog with aggregate usage counts. */
 	tagCatalog: (handle: VaultHandle) => typedError<TagFrequency[], AppError>(__TAURI_INVOKE("tag_catalog", { handle })),
-	updateCheck: (channel: string) => typedError<UpdateCheckDoc, AppError>(__TAURI_INVOKE("update_check", { channel })),
+	updateCheck: () => typedError<UpdateCheckDoc, AppError>(__TAURI_INVOKE("update_check")),
+	/**
+	 *  Downloads and installs the update the check announced, reporting bytes as
+	 *  they arrive. Never restarts: the caller confirms with the person and
+	 *  flushes unsaved work first, so an install cannot interrupt an edit.
+	 */
+	updateInstall: (progress: Channel<UpdateProgressDoc>) => typedError<UpdateCheckDoc, AppError>(__TAURI_INVOKE("update_install", { progress })),
 	/**
 	 *  Reads the settings document from `settings.json` in the OS app-config
 	 *  directory. A missing file yields the defaults.
@@ -566,8 +572,6 @@ export type SettingsDoc = {
 	search_note_bodies: boolean,
 	/**  Whether search matches case sensitively. */
 	search_case_sensitive: boolean,
-	/**  Update release channel. */
-	update_channel: string,
 	/**  Whether the desktop shell asks the update server once at startup. */
 	check_updates_on_startup: boolean,
 	/**  Ordered task marker vocabulary and click-transition graph. */
@@ -676,6 +680,24 @@ export type UpdateCheckDoc =
 version: string;
 /**  Release notes from the manifest, when supplied. */
 notes: string };
+
+/**
+ *  Download progress for an update in flight. `total` is absent when the
+ *  server declines to declare a content length, which is why the interface
+ *  has to render an unmeasured state rather than assume zero.
+ */
+export type UpdateProgressDoc = {
+	/**
+	 *  Bytes received so far. Counted in 32 bits because the bindings
+	 *  generator refuses 64-bit integers over IPC and a double would arrive
+	 *  nullable to account for NaN, which a byte count can never be. The
+	 *  4GiB ceiling saturates rather than wraps; no Skribeum artifact is
+	 *  within three orders of magnitude of it.
+	 */
+	downloaded: number,
+	/**  Total bytes expected, when the server declared one. */
+	total: number | null,
+};
 
 /**  Kinds of watched change. */
 export type VaultChangeKind =

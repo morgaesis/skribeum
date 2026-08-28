@@ -45,7 +45,6 @@ fn configured_settings() -> Settings {
         link_previews: false,
         search_note_bodies: false,
         search_case_sensitive: true,
-        update_channel: "beta".to_owned(),
         check_updates_on_startup: false,
         task_statuses: configured_task_statuses(),
     }
@@ -157,7 +156,6 @@ fn every_malformed_stored_value_falls_back_safely() {
         "link_previews": "yes",
         "search_note_bodies": "yes",
         "search_case_sensitive": 1,
-        "update_channel": "nightly",
         "task_statuses": [{
             "symbol": "?",
             "name": "Question",
@@ -225,7 +223,6 @@ fn invalid_writes_are_rejected_before_creating_a_file() {
     rejects!(attachment_folder_path, "/attachments".to_owned());
     rejects!(attachment_folder_path, ".skribeum/assets".to_owned());
     rejects!(search_result_limit, 0);
-    rejects!(update_channel, "nightly".to_owned());
     rejects!(task_statuses, Vec::new());
     assert_eq!(
         fs.read(&PathBuf::from("config/settings.json")),

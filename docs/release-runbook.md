@@ -1,11 +1,17 @@
 # Release runbook
 
 Releases build from a tag, and the same job assembles the updater manifest
-from the artifacts and signatures it just produced, publishing it both on the
-release it describes and at the fixed endpoint installed applications poll.
-A published release therefore reaches installed applications without a second
-step. The Promote workflow remains for the one case that is not a new
-release: pointing the endpoint back at an older version.
+from the artifacts and signatures it just produced and attaches it to the
+release it describes. The application resolves the newest published release
+at check time and reads that release's own manifest, so a published release
+reaches installed applications without a second step and no fixed manifest
+location has to be kept current.
+
+Rolling back therefore means removing the release rather than re-pointing a
+manifest: convert the bad release to a draft, or delete it, and the resolver
+skips it and settles on the newest one that remains. Do that before anything
+else when a release turns out to be bad, because there is no longer a
+promotion step standing between publication and delivery.
 
 ## Reviewing release notes
 
@@ -48,7 +54,9 @@ from using the changelog fallback.
    section and download verification instructions.
 3. Confirm that the release contains `latest.json`, `CHECKSUM`,
    `CHECKSUM.sig`, and `updater-signatures.json`, with no per-artifact `.sig`
-   assets, and that the version in `latest.json` matches the tag.
+   assets, and that the version in `latest.json` matches the tag. The
+   application reads that asset directly, so a release missing it is skipped
+   by the resolver and delivers nothing.
 
 ## Verifying a download
 

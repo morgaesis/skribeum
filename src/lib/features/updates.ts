@@ -3,8 +3,9 @@
 // imported lazily: a build without it (the demo) reports that updates are
 // unavailable rather than failing.
 
-import { invoke } from "@tauri-apps/api/core";
-import { updateCheck } from "../ipc/services";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import type { UpdateProgressDoc } from "../ipc/bindings";
+import { updateCheck, updateInstall } from "../ipc/services";
 import { STRINGS } from "../strings";
 
 export type UpdateState =
@@ -17,17 +18,6 @@ export type UpdateState =
   | { kind: "ready"; version: string }
   | { kind: "restarting" }
   | { kind: "failed"; message: string; security: boolean };
-
-type UpdateHandle = {
-  version: string;
-  body?: string;
-  downloadAndInstall(
-    onEvent?: (event: {
-      event: string;
-      data?: { contentLength?: number; chunkLength?: number };
-    }) => void,
-  ): Promise<void>;
-};
 
 /**
  * The updater module imports cleanly outside the desktop shell; what is
@@ -80,28 +70,12 @@ export function describeUpdateFailure(error: unknown): {
   return { message: `${STRINGS.updateFailed}: ${raw}`, security: false };
 }
 
-async function loadPlugin(): Promise<{
-  check(): Promise<UpdateHandle | null>;
-} | null> {
-  if (!hasDesktopRuntime()) {
-    return null;
-  }
-  try {
-    return (await import("@tauri-apps/plugin-updater")) as unknown as {
-      check(): Promise<UpdateHandle | null>;
-    };
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Checks for an update and reports progress through `onState`. Never throws:
  * every failure path becomes a state the interface can render, because an
  * update check must not be able to break the editor.
  */
 export async function checkForUpdate(
-  channel: "stable" | "beta",
   onState: (state: UpdateState) => void,
 ): Promise<void> {
   onState({ kind: "checking" });
@@ -110,7 +84,7 @@ export async function checkForUpdate(
     return;
   }
   try {
-    const result = await updateCheck(channel);
+    const result = await updateCheck();
     if (result.kind === "current") {
       onState({ kind: "current" });
       return;
@@ -140,13 +114,13 @@ export async function checkForUpdate(
  * nobody asked for.
  */
 export async function checkForUpdateOnStartup(
-  options: { channel: "stable" | "beta"; enabled: boolean },
+  options: { enabled: boolean },
   onState: (state: UpdateState) => void,
 ): Promise<void> {
   if (!options.enabled || !hasDesktopRuntime()) {
     return;
   }
-  await checkForUpdate(options.channel, onState);
+  await checkForUpdate(onState);
 }
 
 /**
@@ -157,37 +131,31 @@ export async function checkForUpdateOnStartup(
 export async function installUpdate(
   onState: (state: UpdateState) => void,
 ): Promise<void> {
-  const plugin = await loadPlugin();
-  if (plugin === null) {
+  if (!hasDesktopRuntime()) {
     onState({ kind: "unavailable", reason: STRINGS.updateUnavailable });
     return;
   }
+  let version = "";
+  const progress = new Channel<UpdateProgressDoc>();
+  progress.onmessage = ({ downloaded, total }) => {
+    onState({
+      kind: "downloading",
+      version,
+      percent:
+        total === null || total === 0
+          ? null
+          : Math.min(100, Math.round((downloaded / total) * 100)),
+    });
+  };
   try {
-    const update = await plugin.check();
-    if (update === null) {
+    onState({ kind: "downloading", version, percent: null });
+    const result = await updateInstall(progress);
+    if (result.kind === "current") {
       onState({ kind: "current" });
       return;
     }
-    let downloaded = 0;
-    let total: number | null = null;
-    onState({ kind: "downloading", version: update.version, percent: null });
-    await update.downloadAndInstall((event) => {
-      if (event.event === "Started") {
-        total = event.data?.contentLength ?? null;
-      }
-      if (event.event === "Progress") {
-        downloaded += event.data?.chunkLength ?? 0;
-        onState({
-          kind: "downloading",
-          version: update.version,
-          percent:
-            total === null || total === 0
-              ? null
-              : Math.min(100, Math.round((downloaded / total) * 100)),
-        });
-      }
-    });
-    onState({ kind: "ready", version: update.version });
+    version = result.version;
+    onState({ kind: "ready", version: result.version });
   } catch (error) {
     onState({ kind: "failed", ...describeUpdateFailure(error) });
   }

@@ -665,7 +665,7 @@ describe("settings surface", () => {
     flushSync();
     openSection(STRINGS.settingsSectionUpdates);
     expect(document.body.textContent).toContain(
-      STRINGS.settingsUpdateChannelDesktopRequired,
+      STRINGS.settingsCheckUpdatesOnStartupDesktopRequired,
     );
     expect(document.body.textContent).toContain(
       STRINGS.settingsCheckUpdatesDesktopRequired,

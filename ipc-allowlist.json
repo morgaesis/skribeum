@@ -26,6 +26,7 @@
     "search_query",
     "tag_catalog",
     "update_check",
+    "update_install",
     "settings_read",
     "settings_path",
     "settings_write",
@@ -57,7 +58,7 @@
     "vault_tree_refresh": "Contract addition per design decision 100: on-demand re-index of the vault tree from current filesystem state, the recovery path for tree staleness after external bulk changes or watcher overflow.",
     "search_query": "Contract addition per design decision 100: ranked snippeted full-text search (the decision 79 alpha floor). The index lives in the OS app-data directory, never in the vault; match positions are byte ranges into the snippet so highlighting needs no HTML injection.",
     "tag_catalog": "Returns tags from the derived search index with note and occurrence counts for completion ranking.",
-    "update_check": "Checks the selected stable or beta signed updater manifest and returns only current or available metadata. Installation remains in the updater plugin.",
+    "update_check": "Resolves the newest published release's own update manifest and returns only current or available metadata. Downloads nothing.",
     "settings_read": "Contract addition per design decision 100: reads settings.json from the OS app-config directory per the architecture contract (schema_version, typed known keys, defaults when absent).",
     "settings_path": "Returns the resolved settings document path for display in the desktop settings surface.",
     "settings_write": "Contract addition per design decision 100: whole-document settings write with validation; unknown keys already in the file are preserved internally.",
@@ -73,6 +74,7 @@
     "file_open_resolve": "Resolves an operating-system file-open path to a known vault or the file's containing folder.",
     "open_files_take": "Drains file-open paths queued by argv, second-instance forwarding, or native open-file events.",
     "plugin:dialog|confirm": "Shows the destructive-action confirmation before clearing one note's edit history.",
-    "plugin:opener|open_url": "Opens validated HTTP and HTTPS links in the system browser. The capability excludes paths and every other URL scheme."
+    "plugin:opener|open_url": "Opens validated HTTP and HTTPS links in the system browser. The capability excludes paths and every other URL scheme.",
+    "update_install": "Downloads and installs the update the check announced, through the same resolved manifest, reporting bytes over a channel. Never restarts: the caller confirms and flushes unsaved work first."
   }
 }

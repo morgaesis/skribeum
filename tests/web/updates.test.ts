@@ -24,9 +24,7 @@ async function collect(
 
 describe("update states", () => {
   it("reports checking then unavailable when the plugin is absent", async () => {
-    const states = await collect((onState) =>
-      checkForUpdate("stable", onState),
-    );
+    const states = await collect((onState) => checkForUpdate(onState));
     expect(states[0]?.kind).toBe("checking");
     expect(states.at(-1)?.kind).toBe("unavailable");
   });
@@ -139,7 +137,7 @@ describe("update failure classification", () => {
 describe("the startup check", () => {
   it("says nothing at all when the preference is off", async () => {
     const states = await collect((onState) =>
-      checkForUpdateOnStartup({ channel: "stable", enabled: false }, onState),
+      checkForUpdateOnStartup({ enabled: false }, onState),
     );
     // Not even "checking": a launch that did not ask must be
     // indistinguishable from one that asked and found nothing.
@@ -151,14 +149,14 @@ describe("the startup check", () => {
     // demo's situation exactly. Nothing there could install what a check
     // found, so asking would only produce a state nobody can act on.
     const states = await collect((onState) =>
-      checkForUpdateOnStartup({ channel: "stable", enabled: true }, onState),
+      checkForUpdateOnStartup({ enabled: true }, onState),
     );
     expect(states).toEqual([]);
   });
 
-  it("never throws, on either channel", async () => {
+  it("never throws", async () => {
     await expect(
-      checkForUpdateOnStartup({ channel: "beta", enabled: true }, () => {}),
+      checkForUpdateOnStartup({ enabled: true }, () => {}),
     ).resolves.toBeUndefined();
   });
 });

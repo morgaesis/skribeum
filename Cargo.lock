@@ -4218,6 +4218,7 @@ name = "skribeum-app"
 version = "0.0.12"
 dependencies = [
  "log",
+ "reqwest",
  "serde",
  "serde_json",
  "skribeum-core",

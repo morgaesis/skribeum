@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The desktop application finds updates by resolving the newest published
+  release and reading that release's own signed manifest, rather than by
+  polling one fixed location that a separate manual step had to keep current.
+  Checking and installing now read the same resolved manifest; they resolved
+  it separately before and could name different versions. A published release
+  reaches installed applications with no second step, which is what three
+  releases in a row failed to do.
+- The update channel setting is gone. Both channels resolved to the same
+  place, every release is a prerelease, and one channel cannot be chosen
+  between.
+
 ### Added
 
 - The desktop application asks the update server once at startup and says so

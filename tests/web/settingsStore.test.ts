@@ -42,7 +42,6 @@ const PERSISTED: SettingsDocument = {
   link_previews: false,
   search_note_bodies: false,
   search_case_sensitive: true,
-  update_channel: "beta",
   task_statuses: defaultTaskStatuses(),
 };
 
@@ -215,7 +214,6 @@ describe("settings store", () => {
       search_result_limit: 50,
       search_note_bodies: true,
       search_case_sensitive: false,
-      update_channel: "stable",
     });
     expect(written).toEqual([
       {
@@ -243,7 +241,6 @@ describe("settings store", () => {
         search_result_limit: 50,
         search_note_bodies: true,
         search_case_sensitive: false,
-        update_channel: "stable",
       },
     ]);
   });

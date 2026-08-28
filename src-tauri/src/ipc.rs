@@ -557,6 +557,21 @@ pub enum UpdateCheckDoc {
     },
 }
 
+/// Download progress for an update in flight. `total` is absent when the
+/// server declines to declare a content length, which is why the interface
+/// has to render an unmeasured state rather than assume zero.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+pub struct UpdateProgressDoc {
+    /// Bytes received so far. Counted in 32 bits because the bindings
+    /// generator refuses 64-bit integers over IPC and a double would arrive
+    /// nullable to account for NaN, which a byte count can never be. The
+    /// 4GiB ceiling saturates rather than wraps; no Skribeum artifact is
+    /// within three orders of magnitude of it.
+    pub downloaded: u32,
+    /// Total bytes expected, when the server declared one.
+    pub total: Option<u32>,
+}
+
 /// Semantic task status category over IPC.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -683,8 +698,6 @@ pub struct SettingsDoc {
     pub search_note_bodies: bool,
     /// Whether search matches case sensitively.
     pub search_case_sensitive: bool,
-    /// Update release channel.
-    pub update_channel: String,
     /// Whether the desktop shell asks the update server once at startup.
     pub check_updates_on_startup: bool,
     /// Ordered task marker vocabulary and click-transition graph.
@@ -1440,7 +1453,6 @@ fn settings_to_doc(settings: Settings) -> SettingsDoc {
         link_previews: settings.link_previews,
         search_note_bodies: settings.search_note_bodies,
         search_case_sensitive: settings.search_case_sensitive,
-        update_channel: settings.update_channel,
         check_updates_on_startup: settings.check_updates_on_startup,
         task_statuses: settings
             .task_statuses
@@ -1479,7 +1491,6 @@ fn settings_from_doc(doc: SettingsDoc) -> Settings {
         link_previews: doc.link_previews,
         search_note_bodies: doc.search_note_bodies,
         search_case_sensitive: doc.search_case_sensitive,
-        update_channel: doc.update_channel,
         check_updates_on_startup: doc.check_updates_on_startup,
         task_statuses: doc
             .task_statuses
@@ -2413,23 +2424,101 @@ fn tag_catalog(
         .collect())
 }
 
-/// Checks the signed manifest for the selected release channel.
+/// The releases listing the resolver reads. Prereleases are included
+/// deliberately: every Skribeum release is one.
 #[cfg(any(not(feature = "webdriver"), test))]
-fn update_manifest_names(channel: &str) -> Option<&'static [&'static str]> {
-    match channel {
-        "stable" => Some(&["latest.json"]),
-        "beta" => Some(&["beta.json", "latest.json"]),
-        _ => None,
+const RELEASES_API: &str = "https://api.github.com/repos/morgaesis/skribeum/releases?per_page=20";
+
+/// The manifest asset a release must carry to be a candidate.
+#[cfg(any(not(feature = "webdriver"), test))]
+const MANIFEST_ASSET: &str = "latest.json";
+
+/// Picks the manifest URL of the newest release worth offering.
+///
+/// The listing arrives newest first, so the first entry that qualifies wins.
+/// A draft is skipped because its assets are not publicly downloadable, and a
+/// release without the manifest asset is skipped because there is nothing for
+/// the updater to read; both are ordinary states during a release that is
+/// still uploading, not errors. Prereleases qualify, since every release this
+/// project publishes is one.
+///
+/// Takes the listing as text rather than fetching it, so the selection rule
+/// is testable without a network.
+#[cfg(any(not(feature = "webdriver"), test))]
+fn newest_manifest_url(listing: &str) -> Result<String, AppError> {
+    let releases: serde_json::Value = serde_json::from_str(listing)
+        .map_err(|error| AppError::update_failed(format!("release listing: {error}")))?;
+    let entries = releases
+        .as_array()
+        .ok_or_else(|| AppError::update_failed("release listing is not an array"))?;
+    for release in entries {
+        if release.get("draft").and_then(serde_json::Value::as_bool) == Some(true) {
+            continue;
+        }
+        let Some(assets) = release.get("assets").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let manifest = assets.iter().find(|asset| {
+            asset.get("name").and_then(serde_json::Value::as_str) == Some(MANIFEST_ASSET)
+        });
+        if let Some(url) = manifest
+            .and_then(|asset| asset.get("browser_download_url"))
+            .and_then(serde_json::Value::as_str)
+        {
+            return Ok(url.to_owned());
+        }
     }
+    Err(AppError::update_failed(
+        "no published release carries an update manifest",
+    ))
+}
+
+/// Fetches the releases listing and resolves the manifest URL from it.
+#[cfg(not(feature = "webdriver"))]
+async fn resolve_manifest_url() -> Result<String, AppError> {
+    let listing = reqwest::Client::builder()
+        // GitHub rejects an API request without one.
+        .user_agent(concat!("skribeum/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| AppError::update_failed(error.to_string()))?
+        .get(RELEASES_API)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|error| AppError::update_failed(error.to_string()))?
+        .error_for_status()
+        .map_err(|error| AppError::update_failed(error.to_string()))?
+        .text()
+        .await
+        .map_err(|error| AppError::update_failed(error.to_string()))?;
+    newest_manifest_url(&listing)
+}
+
+/// Builds an updater pointed at the newest release's own manifest.
+///
+/// Check and install both go through here, so the version the application
+/// announces and the version it installs are read from one document. They
+/// were previously resolved separately, the check in this process and the
+/// install through the plugin's compiled-in endpoint, and could disagree.
+#[cfg(not(feature = "webdriver"))]
+async fn release_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, AppError> {
+    let endpoint = resolve_manifest_url()
+        .await?
+        .parse::<tauri::Url>()
+        .map_err(|error| AppError::update_failed(error.to_string()))?;
+    app.updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|error| AppError::update_failed(error.to_string()))?
+        .build()
+        .map_err(|error| AppError::update_failed(error.to_string()))
 }
 
 #[tauri::command]
 #[specta::specta]
-#[allow(clippy::needless_pass_by_value)] // Tauri commands take owned arguments.
-async fn update_check(app: AppHandle, channel: String) -> Result<UpdateCheckDoc, AppError> {
+async fn update_check(app: AppHandle) -> Result<UpdateCheckDoc, AppError> {
     #[cfg(feature = "webdriver")]
     {
-        let _ = (app, channel);
+        let _ = app;
         return Err(AppError::update_failed(
             "update checks are unavailable in the WebDriver build",
         ));
@@ -2437,25 +2526,8 @@ async fn update_check(app: AppHandle, channel: String) -> Result<UpdateCheckDoc,
 
     #[cfg(not(feature = "webdriver"))]
     {
-        let manifests = update_manifest_names(&channel)
-            .ok_or_else(|| AppError::update_failed("unknown update channel"))?;
-        let endpoints = manifests
-            .iter()
-            .map(|manifest| {
-                format!(
-                    "https://github.com/morgaesis/skribeum/releases/download/updater/{manifest}"
-                )
-                .parse::<tauri::Url>()
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| AppError::update_failed(error.to_string()))?;
-        let updater = app
-            .updater_builder()
-            .endpoints(endpoints)
-            .map_err(|error| AppError::update_failed(error.to_string()))?
-            .build()
-            .map_err(|error| AppError::update_failed(error.to_string()))?;
-        match updater
+        match release_updater(&app)
+            .await?
             .check()
             .await
             .map_err(|error| AppError::update_failed(error.to_string()))?
@@ -2469,21 +2541,130 @@ async fn update_check(app: AppHandle, channel: String) -> Result<UpdateCheckDoc,
     }
 }
 
+/// Downloads and installs the update the check announced, reporting bytes as
+/// they arrive. Never restarts: the caller confirms with the person and
+/// flushes unsaved work first, so an install cannot interrupt an edit.
+#[tauri::command]
+#[specta::specta]
+async fn update_install(
+    app: AppHandle,
+    progress: tauri::ipc::Channel<UpdateProgressDoc>,
+) -> Result<UpdateCheckDoc, AppError> {
+    #[cfg(feature = "webdriver")]
+    {
+        let _ = (app, progress);
+        return Err(AppError::update_failed(
+            "update installs are unavailable in the WebDriver build",
+        ));
+    }
+
+    #[cfg(not(feature = "webdriver"))]
+    {
+        let Some(update) = release_updater(&app)
+            .await?
+            .check()
+            .await
+            .map_err(|error| AppError::update_failed(error.to_string()))?
+        else {
+            return Ok(UpdateCheckDoc::Current);
+        };
+        let version = update.version.clone();
+        let notes = update.body.clone().unwrap_or_default();
+        let mut downloaded: u64 = 0;
+        update
+            .download_and_install(
+                |chunk, total| {
+                    downloaded += chunk as u64;
+                    // A send failure means the webview stopped listening,
+                    // which must not abort an install already in flight.
+                    let _ = progress.send(UpdateProgressDoc {
+                        downloaded: u32::try_from(downloaded).unwrap_or(u32::MAX),
+                        total: total.map(|bytes| u32::try_from(bytes).unwrap_or(u32::MAX)),
+                    });
+                },
+                || {},
+            )
+            .await
+            .map_err(|error| AppError::update_failed(error.to_string()))?;
+        Ok(UpdateCheckDoc::Available { version, notes })
+    }
+}
+
 #[cfg(test)]
 mod update_tests {
-    use super::update_manifest_names;
+    use super::newest_manifest_url;
+
+    const MANIFEST: &str = "https://example.invalid/v0.0.13/latest.json";
+
+    fn listing(entries: &str) -> String {
+        format!("[{entries}]")
+    }
+
+    fn release(tag: &str, draft: bool, assets: &str) -> String {
+        format!(r#"{{"tag_name":"{tag}","draft":{draft},"assets":[{assets}]}}"#)
+    }
+
+    fn manifest_asset(url: &str) -> String {
+        format!(r#"{{"name":"latest.json","browser_download_url":"{url}"}}"#)
+    }
 
     #[test]
-    fn beta_checks_the_stable_manifest_when_no_beta_is_published() {
+    fn takes_the_newest_release_that_carries_a_manifest() {
+        let body = listing(&format!(
+            "{},{}",
+            release("v0.0.13", false, &manifest_asset(MANIFEST)),
+            release(
+                "v0.0.12",
+                false,
+                &manifest_asset("https://example.invalid/old")
+            )
+        ));
         assert_eq!(
-            update_manifest_names("beta"),
-            Some(["beta.json", "latest.json"].as_slice())
+            newest_manifest_url(&body).expect("a qualifying release resolves"),
+            MANIFEST
         );
+    }
+
+    #[test]
+    fn skips_a_draft_because_its_assets_are_not_downloadable() {
+        let body = listing(&format!(
+            "{},{}",
+            release(
+                "v0.0.14",
+                true,
+                &manifest_asset("https://example.invalid/draft")
+            ),
+            release("v0.0.13", false, &manifest_asset(MANIFEST))
+        ));
         assert_eq!(
-            update_manifest_names("stable"),
-            Some(["latest.json"].as_slice())
+            newest_manifest_url(&body).expect("a qualifying release resolves"),
+            MANIFEST
         );
-        assert_eq!(update_manifest_names("nightly"), None);
+    }
+
+    #[test]
+    fn skips_a_release_still_uploading_its_manifest() {
+        let body = listing(&format!(
+            "{},{}",
+            release(
+                "v0.0.14",
+                false,
+                r#"{"name":"CHECKSUM","browser_download_url":"x"}"#
+            ),
+            release("v0.0.13", false, &manifest_asset(MANIFEST))
+        ));
+        assert_eq!(
+            newest_manifest_url(&body).expect("a qualifying release resolves"),
+            MANIFEST
+        );
+    }
+
+    #[test]
+    fn reports_rather_than_panics_when_nothing_qualifies() {
+        assert!(newest_manifest_url("[]").is_err());
+        assert!(newest_manifest_url(&listing(&release("v1", false, ""))).is_err());
+        assert!(newest_manifest_url("not json").is_err());
+        assert!(newest_manifest_url("{}").is_err());
     }
 }
 
@@ -3982,6 +4163,7 @@ pub fn ipc_builder() -> tauri_specta::Builder<tauri::Wry> {
             search_query,
             tag_catalog,
             update_check,
+            update_install,
             settings_read,
             settings_path,
             settings_write,

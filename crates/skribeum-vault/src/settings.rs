@@ -519,7 +519,6 @@ pub struct Settings {
     pub link_previews: bool,
     pub search_note_bodies: bool,
     pub search_case_sensitive: bool,
-    pub update_channel: String,
     /// Whether the desktop shell asks the update server once at startup.
     pub check_updates_on_startup: bool,
     /// Ordered task marker vocabulary and click-transition graph.
@@ -556,7 +555,6 @@ impl Default for Settings {
             link_previews: true,
             search_note_bodies: true,
             search_case_sensitive: false,
-            update_channel: "stable".to_owned(),
             check_updates_on_startup: true,
             task_statuses: default_task_statuses(),
         }
@@ -582,7 +580,6 @@ const INDENT_STYLES: &[&str] = &["spaces", "tabs"];
 const INDENT_WIDTH_RANGE: (u32, u32) = (1, 8);
 const ATTACHMENT_FOLDER_MODES: &[&str] = &["vault", "note", "folder"];
 const RESULT_LIMIT_RANGE: (u32, u32) = (1, 1000);
-const UPDATE_CHANNELS: &[&str] = &["stable", "beta"];
 
 impl Settings {
     /// Validates every typed value before a write touches the file.
@@ -632,7 +629,6 @@ impl Settings {
             self.search_result_limit,
             RESULT_LIMIT_RANGE,
         )?;
-        validate_choice("update_channel", &self.update_channel, UPDATE_CHANNELS)?;
         if !valid_task_statuses(&self.task_statuses) {
             return Err(SettingsError::InvalidValue("task_statuses"));
         }
@@ -772,12 +768,6 @@ impl SettingsStore {
                 .unwrap_or(defaults.search_note_bodies),
             search_case_sensitive: read_bool(&object, "search_case_sensitive")
                 .unwrap_or(defaults.search_case_sensitive),
-            update_channel: read_choice(
-                &object,
-                "update_channel",
-                UPDATE_CHANNELS,
-                &defaults.update_channel,
-            ),
             check_updates_on_startup: read_bool(&object, "check_updates_on_startup")
                 .unwrap_or(defaults.check_updates_on_startup),
             task_statuses: object
@@ -860,10 +850,6 @@ impl SettingsStore {
             (
                 "search_case_sensitive",
                 Value::from(settings.search_case_sensitive),
-            ),
-            (
-                "update_channel",
-                Value::from(settings.update_channel.clone()),
             ),
             (
                 "check_updates_on_startup",

@@ -445,13 +445,6 @@ export const STRINGS = {
   settingsSearchCase: "Match letter case",
   settingsSearchCaseDescription:
     "Treat uppercase and lowercase letters as different when searching.",
-  settingsUpdateChannel: "Update channel",
-  settingsUpdateChannelDescription:
-    "Choose stable releases or earlier beta releases. Beta checks stable releases when no beta is available.",
-  settingsUpdateChannelDesktopRequired:
-    "Choosing an update channel requires the desktop application.",
-  settingsUpdateStable: "Stable",
-  settingsUpdateBeta: "Beta",
   settingsCheckUpdates: "Check for updates",
   settingsCheckUpdatesDescription:
     "Look for a newer desktop application version without interrupting your work.",

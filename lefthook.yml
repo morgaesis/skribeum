@@ -15,27 +15,39 @@ pre-commit:
 # inside a minute on a warm cache. The packaged end-to-end suite does not: it
 # drives a real application through a real WebDriver session for several
 # minutes, so it is invoked deliberately instead, per docs/ci.md.
+# The web suite runs alone, before anything else starts. Several of its
+# tests assert wall-clock bounds on deferred work, and running them beside a
+# workspace-wide `cargo clippy --all-targets` and `cargo test` saturates every
+# core and fails them for reasons that have nothing to do with the change
+# being pushed. Running the two concurrently cost roughly eight pushes in one
+# session, at ambient loads from 1.8 to 26, none of them a real defect; a gate
+# that fails at random is one people learn to bypass. The scan and the Rust
+# legs have no such sensitivity and still share the machine with each other.
 pre-push:
-  parallel: true
+  parallel: false
   jobs:
-    - name: gitleaks
-      run: |
-        if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{push}' 2>/dev/null); then
-          gitleaks detect --redact --log-opts "${upstream}..HEAD"
-        else
-          gitleaks detect --redact
-        fi
-
-    - name: rust
-      glob: "*.{rs,toml,lock}"
-      run: |
-        cargo fmt --all --check
-        cargo clippy --workspace --all-targets --locked -- -D warnings
-        cargo test --workspace --locked
-
     - name: web
       glob: "*.{ts,svelte,css,json,html}"
       run: |
         bunx biome check .
         bun run check
         bun run test:web
+
+    - name: rest
+      group:
+        parallel: true
+        jobs:
+          - name: gitleaks
+            run: |
+              if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{push}' 2>/dev/null); then
+                gitleaks detect --redact --log-opts "${upstream}..HEAD"
+              else
+                gitleaks detect --redact
+              fi
+
+          - name: rust
+            glob: "*.{rs,toml,lock}"
+            run: |
+              cargo fmt --all --check
+              cargo clippy --workspace --all-targets --locked -- -D warnings
+              cargo test --workspace --locked

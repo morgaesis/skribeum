@@ -200,6 +200,47 @@ const capabilities: TauriCapabilities[] = [
   },
 ];
 
+/**
+ * Waits for the application to be reachable before any spec in a session
+ * runs.
+ *
+ * The WebDriver service injects a wrapper that polls for the Tauri core for a
+ * fixed five seconds and then throws `Tauri core.invoke not available after 5s
+ * timeout`; nothing it accepts as configuration changes that bound. On a
+ * loaded runner the window exists before the bridge does, so whichever spec
+ * asks for the first surface fails, and because that spec's later assertions
+ * then read an empty document, the failure surfaces as an unrelated
+ * expectation rather than as a startup problem. It has landed on every
+ * platform in this matrix, on a different test each time.
+ *
+ * Absorbing the race once per session costs seconds on a slow machine and
+ * nothing on a fast one. The shell is found by plain element lookup, which
+ * needs no injected script, and the core is then exercised by the smallest
+ * possible script until it answers, so a genuine startup failure still fails
+ * here, loudly and by its own name.
+ */
+async function waitForApplicationReady(): Promise<void> {
+  await $(".skr-shell").waitForExist({
+    timeout: 60_000,
+    timeoutMsg: "the application shell never mounted",
+  });
+  await browser.waitUntil(
+    async () => {
+      try {
+        return (await browser.execute(() => true)) === true;
+      } catch {
+        // The injected wrapper throws while the core is still absent.
+        return false;
+      }
+    },
+    {
+      timeout: 60_000,
+      interval: 500,
+      timeoutMsg: "the Tauri core never became reachable from the driver",
+    },
+  );
+}
+
 export const config: WebdriverIO.Config = {
   runner: "local",
   specs: startupVaultMode
@@ -245,6 +286,7 @@ export const config: WebdriverIO.Config = {
     timeout: 300000,
   },
   reporters: ["spec"],
+  before: waitForApplicationReady,
   onPrepare: prepareSuite,
   onComplete: stopDemoServer,
 };

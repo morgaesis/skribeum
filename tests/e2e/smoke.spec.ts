@@ -391,19 +391,6 @@ async function viewportAfterPaint(): Promise<ViewportSize> {
 const DESKTOP_VIEWPORT: ViewportSize = { width: 1100, height: 750 };
 
 /**
- * The smallest edge a resize request may carry.
- *
- * The compensation below adds the shortfall between the requested viewport
- * and the observed one to the next outer size. A reading taken before the
- * host applied the previous resize reports the old, larger viewport, and for
- * a large shrink that shortfall exceeds the request itself: 390 + (390 -
- * 1280) is negative, and the driver rejects a negative window size outright
- * with an argument error that says nothing about the viewport. The floor
- * keeps a retry a retry.
- */
-const MINIMUM_WINDOW_EDGE = 240;
-
-/**
  * Reads the viewport once the host has finished resizing the window.
  *
  * A resize reaches the webview through the display server on its own

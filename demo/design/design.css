@@ -723,6 +723,10 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .design-caret,
   .design-motion-box {
+    /* biome-ignore lint/complexity/noImportantStyles: a reduced-motion
+       override has to win against any animation declared elsewhere,
+       whatever its specificity. Dropping it would honour the preference
+       only where the cascade happened to agree. */
     animation: none !important;
   }
 }

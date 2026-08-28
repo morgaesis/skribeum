@@ -232,19 +232,13 @@ export const config: WebdriverIO.Config = {
   waitforTimeout: 10000,
   connectionRetryTimeout: 120000,
   connectionRetryCount: 2,
-  // A spec file whose application never finished starting is retried once, in
-  // a fresh session, after the other files have run. The observed failure is
-  // the app coming up without its IPC bridge: the log fills with "Tauri
-  // core.invoke not available after 5s timeout" and the first surface the
-  // spec asks for never appears, so every later assertion in that file reads
-  // an empty document. It landed on a different platform in each of three
-  // recent main runs, which is the signature of a slow runner rather than a
-  // defect, and each one was cleared by re-running the whole job by hand.
-  // One deferred retry of the affected file is narrower than that: a spec
-  // that fails twice still fails the run, and the retry is visible in the
-  // report rather than hidden in someone's decision to press the button.
-  specFileRetries: 1,
-  specFileRetriesDeferred: true,
+  // No spec-file retry. Re-running a spec file in this harness does not
+  // work: the suite prepares its vault and application session once, and a
+  // retried file runs against a session already torn down. Measured on the
+  // Windows leg of the run that introduced it, a first pass of 89 passing
+  // and 1 failing became a retry of 20 passing and 70 failing, so the retry
+  // converted an occasional one-test flake into a reliably red job. A flake
+  // that fails one assertion is easier to read than one that fails seventy.
   framework: "mocha",
   mochaOpts: {
     ui: "bdd",

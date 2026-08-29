@@ -695,30 +695,52 @@ async function editingCell(): Promise<EditingCell | null> {
  * leaves the cell. Waiting on the document selection therefore reports the
  * caret as ready one step early, which is the same failure this helper exists
  * to prevent.
+ *
+ * Where the caret sits is only half the precondition. The next keystroke is
+ * delivered to whatever holds focus, so a cell whose caret is correctly at its
+ * end but which has not been given focus yet answers the arrow key nowhere:
+ * the cell keeps its editing attributes, the caret keeps its position, and the
+ * assertion afterwards reports a cell that refused to hand the caret on rather
+ * than a key that was never delivered to it.
  */
 async function waitForCellCaretAtEnd(): Promise<void> {
-  await browser.waitUntil(
-    () =>
-      browser.execute(() => {
-        type CellEditor = {
-          state: {
-            doc: { length: number };
-            selection: { main: { empty: boolean; head: number } };
-          };
+  const ready = () =>
+    browser.execute(() => {
+      type CellEditor = {
+        state: {
+          doc: { length: number };
+          selection: { main: { empty: boolean; head: number } };
         };
-        const content = document.querySelector<
-          HTMLElement & { cmTile?: { root?: { view?: CellEditor } } }
-        >('.cm-skr-table-cell[data-editing="true"] .cm-content');
-        const view = content?.cmTile?.root?.view;
-        if (view === undefined) return false;
-        const caret = view.state.selection.main;
-        return caret.empty && caret.head === view.state.doc.length;
-      }),
-    {
-      timeout: 10000,
-      timeoutMsg: "the caret did not reach the end of the editing cell",
-    },
-  );
+      };
+      const content = document.querySelector<
+        HTMLElement & { cmTile?: { root?: { view?: CellEditor } } }
+      >('.cm-skr-table-cell[data-editing="true"] .cm-content');
+      const view = content?.cmTile?.root?.view;
+      if (content === null || view === undefined) return false;
+      const active = document.activeElement;
+      if (
+        active === null ||
+        !(active === content || content.contains(active))
+      ) {
+        return false;
+      }
+      const caret = view.state.selection.main;
+      return caret.empty && caret.head === view.state.doc.length;
+    });
+  await browser.waitUntil(ready, {
+    timeout: 10000,
+    timeoutMsg:
+      "the editing cell did not take focus with its caret at the cell end",
+  });
+  // Held across a frame, because rebuilding the table's decorations replaces
+  // the cell's editor and starts the new one at the cell start. A rebuild that
+  // lands between this check and the next keystroke moves the caret back
+  // without changing anything the check above can see.
+  await viewportAfterPaint();
+  await browser.waitUntil(ready, {
+    timeout: 10000,
+    timeoutMsg: "the editing cell did not hold focus and caret across a frame",
+  });
 }
 
 /**

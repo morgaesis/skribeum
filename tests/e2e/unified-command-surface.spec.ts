@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
+import { waitForDemoDocument } from "./settle";
 
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
 let testRun = 0;
@@ -120,9 +121,13 @@ beforeEach(async () => {
   if (demoUrl === undefined) throw new Error("browser demo URL is unavailable");
   const target = new URL(demoUrl);
   testRun += 1;
-  target.searchParams.set("test-run", String(testRun));
+  const run = String(testRun);
+  target.searchParams.set("test-run", run);
   target.searchParams.set("note", "quickstart.md");
   await browser.url(target.href);
+  // Every gate below this point is satisfied by the document the previous
+  // test left behind, so establish which document is showing first.
+  await waitForDemoDocument(run);
   await $(".demo-shell").waitForExist({ timeout: 15000 });
   await browser.waitUntil(
     () =>

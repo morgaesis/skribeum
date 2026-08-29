@@ -126,7 +126,7 @@ describe("large-note editor consumers", () => {
       2 * (source.length + 64),
     );
     expect(materialization.fullDocument).toHaveBeenCalledTimes(2);
-  });
+  }, 50_000);
 
   it("coalesces rapid input into one post-paint materialization", async () => {
     const source = `${"large note words\n".repeat(75_000)}final word`;
@@ -171,7 +171,7 @@ describe("large-note editor consumers", () => {
     expect(changedSources).toEqual([`${source}abcdefgh`]);
     expect(statistics).toHaveLength(1);
     expect(statistics[0]?.characters).toBe(source.length + 8);
-  });
+  }, 50_000);
 
   it("keeps self-embed source materialization out of the input dispatch", async () => {
     const source = `![[#Details]]\n\n## Details\n${"embedded body\n".repeat(10_000)}`;

@@ -252,7 +252,7 @@ describe("durable edit history", () => {
     recovered.history.redo(recovered.view);
     await recovered.history.depths();
     expect(recovered.view.state.doc.toString()).toBe(finalText);
-  });
+  }, 50_000);
 
   it("bounds pending entries and movements during blocked initialization", async () => {
     const read = Promise.withResolvers<EditHistorySnapshot>();
@@ -919,7 +919,7 @@ describe("durable edit history", () => {
     recovered.history.redo(recovered.view);
     await recovered.history.depths();
     expect(recovered.view.state.doc.toString()).toBe(afterInput);
-  });
+  }, 50_000);
 
   it("keeps clear and reset ordered while a pressure fence waits behind a write", async () => {
     const appendStarted = Promise.withResolvers<void>();

@@ -6,6 +6,7 @@ import {
   TREE_FOLDER_NAME,
   TREE_SECOND_NOTE_NAME,
 } from "./scratchVault";
+import { settled } from "./settle";
 
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
 
@@ -607,7 +608,13 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await browser.execute(() => {
       (
         window as Window & { __SKRIBEUM_E2E_CONTENT_DELAY_MS__?: number }
-      ).__SKRIBEUM_E2E_CONTENT_DELAY_MS__ = 700;
+        // The skeleton is only observable while the content is still
+        // arriving, so this delay is the width of the window the assertions
+        // below have to land in. Every check spends a driver round trip, and
+        // on a loaded machine a few of those together outlast a window of a
+        // few hundred milliseconds, which reads as a skeleton that rendered
+        // nothing rather than one that had already been replaced.
+      ).__SKRIBEUM_E2E_CONTENT_DELAY_MS__ = 2500;
     });
     await openTreePath(PREVIEW_SOURCE_NOTE_NAME);
     const embedContent = $(
@@ -629,10 +636,23 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     );
     const preview = $('[data-testid="link-preview"]');
     await preview.waitForDisplayed({ timeout: 1500 });
-    await preview
-      .$('[data-loading-state="skeleton"]')
-      .waitForExist({ timeout: 1000 });
-    expect(await preview.$$(".skr-skeleton-bar")).toHaveLength(3);
+    // Asked in one round trip rather than three: the skeleton's presence and
+    // the count of its bars are the same fact about the same moment, and
+    // asking separately lets the loading state end between the questions.
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => {
+          const host = document.querySelector('[data-testid="link-preview"]');
+          if (host?.querySelector('[data-loading-state="skeleton"]') == null) {
+            return -1;
+          }
+          return host.querySelectorAll(".skr-skeleton-bar").length;
+        })) === 3,
+      {
+        timeout: 10000,
+        timeoutMsg: "the loading preview never showed three skeleton bars",
+      },
+    );
     expect(
       await browser.execute(
         () =>
@@ -641,9 +661,17 @@ describe("file tree, previews, panels, and workspace tabs", () => {
             ?.contains(document.activeElement),
       ),
     ).toBe(true);
-    await preview.$(".cm-content").waitForExist({ timeout: 3000 });
+    // Outlasts the deliberate content delay above with room for a loaded
+    // machine, since the editor only mounts once the content has arrived.
+    await preview.$(".cm-content").waitForExist({ timeout: 15000 });
+    // The preview's editor mounts with the note's source text and replaces it
+    // with decorations a pass later, so its markup is compared once it stops
+    // changing. Sampling on arrival compares the raw markdown against the
+    // decorated original and reports a rendering fault that does not exist.
     expect(
-      await preview.$(".cm-content").getHTML({ includeSelectorTag: false }),
+      await settled(() =>
+        preview.$(".cm-content").getHTML({ includeSelectorTag: false }),
+      ),
     ).toBe(await embedContent.getHTML({ includeSelectorTag: false }));
 
     await browser.execute(() => {

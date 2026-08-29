@@ -23,6 +23,21 @@ export const SCRATCH_SETTINGS_PATH = path.join(
   os.tmpdir(),
   `skribeum-e2e-settings-${checkoutKey}.json`,
 );
+/**
+ * The settings the suite starts every session from.
+ *
+ * Only the preferences whose defaults would reach outside the machine belong
+ * here; everything omitted keeps its product default, which is what the
+ * surfaces under test are supposed to show.
+ *
+ * The startup update check is off because its default is on, and on means the
+ * packaged binary opens an HTTPS request to the releases API during launch,
+ * once per spec file. That makes the suite depend on a third party being
+ * reachable and unthrottled, and it spends network and processor time during
+ * the exact window the first test is measuring geometry and focus in.
+ */
+const SCRATCH_SETTINGS = { check_updates_on_startup: false };
+
 export const SCRATCH_VAULT_SESSION_PATH = path.join(
   os.tmpdir(),
   `skribeum-e2e-vault-session-${checkoutKey}`,
@@ -361,7 +376,7 @@ export const CANVAS_FILE_CONTENT = JSON.stringify({
  * the session. Contents are reset entry by entry instead.
  */
 export function createScratchVault(): void {
-  rmSync(SCRATCH_SETTINGS_PATH, { force: true });
+  writeFileSync(SCRATCH_SETTINGS_PATH, JSON.stringify(SCRATCH_SETTINGS));
   rmSync(SCRATCH_VAULT_SESSION_PATH, { recursive: true, force: true });
   rmSync(SCRATCH_EDIT_HISTORY_PATH, { force: true });
   mkdirSync(SCRATCH_VAULT_PATH, { recursive: true });

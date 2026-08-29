@@ -5,6 +5,7 @@
 
 import { $, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
+import { waitForDemoDocument } from "./settle";
 
 const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
 let testRun = 0;
@@ -150,11 +151,15 @@ async function openDemo(query: Record<string, string> = {}): Promise<void> {
   if (demoUrl === undefined) throw new Error("browser demo URL is unavailable");
   const target = new URL(demoUrl);
   testRun += 1;
-  target.searchParams.set("test-run", String(testRun));
+  const run = String(testRun);
+  target.searchParams.set("test-run", run);
   for (const [key, value] of Object.entries(query)) {
     target.searchParams.set(key, value);
   }
   await browser.url(target.href);
+  // The shell below is present on the document the previous test left behind,
+  // so waiting for it alone accepts a navigation that has not landed.
+  await waitForDemoDocument(run);
   await $(".demo-shell").waitForExist({ timeout: 15000 });
 }
 

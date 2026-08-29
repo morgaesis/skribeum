@@ -6,6 +6,7 @@
 
 import { $, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
+import { waitForDemoDocument } from "./settle";
 
 let testRun = 0;
 
@@ -170,11 +171,16 @@ async function openDemo(query: Record<string, string> = {}): Promise<void> {
   if (demoUrl === undefined) throw new Error("browser demo URL is unavailable");
   const target = new URL(demoUrl);
   testRun += 1;
-  target.searchParams.set("test-run", String(testRun));
+  const run = String(testRun);
+  target.searchParams.set("test-run", run);
   for (const [key, value] of Object.entries(query)) {
     target.searchParams.set(key, value);
   }
   await browser.url(target.href);
+  // Both gates below are satisfied by the document the previous test left
+  // behind, so a token read after that document is replaced returns the empty
+  // string. Establish which document is showing first.
+  await waitForDemoDocument(run);
   await $(".demo-shell").waitForExist({ timeout: 15000 });
   // The shell exists before the palette stylesheet has been applied to the
   // root, and every assertion here samples resolved custom properties. Wait

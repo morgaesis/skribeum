@@ -66,6 +66,7 @@ import {
   VISUAL_NOTE_CONTENT,
   VISUAL_NOTE_NAME,
 } from "./scratchVault";
+import { settled } from "./settle";
 
 // The embedded WebDriver provider synthesizes DOM events in the page
 // rather than driving OS input. Consequences the tests are written
@@ -686,24 +687,32 @@ async function editingCell(): Promise<EditingCell | null> {
  * before the press has been answered moves the selection the editor still held
  * and stays inside the cell, which reads afterwards as a cell that refused to
  * hand the caret on.
+ *
+ * The condition is read from the cell editor's own state rather than from the
+ * document selection, because those are two different facts. The browser moves
+ * the document selection while dispatching the press; the editor adopts it
+ * afterwards, and it is the adopted position that decides whether an arrow key
+ * leaves the cell. Waiting on the document selection therefore reports the
+ * caret as ready one step early, which is the same failure this helper exists
+ * to prevent.
  */
 async function waitForCellCaretAtEnd(): Promise<void> {
   await browser.waitUntil(
     () =>
       browser.execute(() => {
-        const content = document.querySelector<HTMLElement>(
-          '.cm-skr-table-cell[data-editing="true"] .cm-content',
-        );
-        const selection = getSelection();
-        if (content === null || selection === null || !selection.isCollapsed) {
-          return false;
-        }
-        const anchor = selection.anchorNode;
-        if (anchor === null || !content.contains(anchor)) return false;
-        const remainder = document.createRange();
-        remainder.setStart(anchor, selection.anchorOffset);
-        remainder.setEnd(content, content.childNodes.length);
-        return remainder.toString() === "";
+        type CellEditor = {
+          state: {
+            doc: { length: number };
+            selection: { main: { empty: boolean; head: number } };
+          };
+        };
+        const content = document.querySelector<
+          HTMLElement & { cmTile?: { root?: { view?: CellEditor } } }
+        >('.cm-skr-table-cell[data-editing="true"] .cm-content');
+        const view = content?.cmTile?.root?.view;
+        if (view === undefined) return false;
+        const caret = view.state.selection.main;
+        return caret.empty && caret.head === view.state.doc.length;
       }),
     {
       timeout: 10000,
@@ -2529,19 +2538,21 @@ describe("skribeum shell", () => {
         return caret?.getBoundingClientRect().bottom ?? 140;
       });
       await setSimulatedVisualViewport(Math.ceil(caretBottom + 24));
-      const tagGeometry = await browser.execute(() => {
-        const menu = document.querySelector<HTMLElement>(".cm-skr-tag-menu");
-        const viewport = window.visualViewport;
-        if (menu === null || viewport === null) return null;
-        const rect = menu.getBoundingClientRect();
-        return {
-          above: menu.classList.contains("cm-tooltip-above"),
-          bottom: rect.bottom,
-          top: rect.top,
-          viewportBottom: viewport.offsetTop + viewport.height,
-          viewportTop: viewport.offsetTop,
-        };
-      });
+      const tagGeometry = await settled(() =>
+        browser.execute(() => {
+          const menu = document.querySelector<HTMLElement>(".cm-skr-tag-menu");
+          const viewport = window.visualViewport;
+          if (menu === null || viewport === null) return null;
+          const rect = menu.getBoundingClientRect();
+          return {
+            above: menu.classList.contains("cm-tooltip-above"),
+            bottom: rect.bottom,
+            top: rect.top,
+            viewportBottom: viewport.offsetTop + viewport.height,
+            viewportTop: viewport.offsetTop,
+          };
+        }),
+      );
       expect(tagGeometry).not.toBeNull();
       expect(tagGeometry?.above).toBe(true);
       expect(tagGeometry?.top).toBeGreaterThanOrEqual(
@@ -2689,43 +2700,50 @@ describe("skribeum shell", () => {
       await setViewportSize(1280, 800);
       await selectEditorText("Patient typography");
       await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 10000 });
-      const wide = await browser.execute(() => {
-        const bar = document.querySelector<HTMLElement>(
-          ".cm-skr-selection-toolbar",
-        );
-        if (bar === null) throw new Error("toolbar missing");
-        const box = (bar.closest(".cm-tooltip") ?? bar).getBoundingClientRect();
-        let left = Number.POSITIVE_INFINITY;
-        let right = Number.NEGATIVE_INFINITY;
-        for (const line of document.querySelectorAll<HTMLElement>(
-          ".cm-content > .cm-line:not(.cm-skr-rich-callout)",
-        )) {
-          const lineBox = line.getBoundingClientRect();
-          const style = window.getComputedStyle(line);
-          left = Math.min(
-            left,
-            lineBox.left + Number.parseFloat(style.paddingLeft),
+      // The toolbar enters the document before it has been placed, so its
+      // placement and geometry are both read once they stop moving rather
+      // than as soon as the element exists.
+      const wide = await settled(() =>
+        browser.execute(() => {
+          const bar = document.querySelector<HTMLElement>(
+            ".cm-skr-selection-toolbar",
           );
-          right = Math.max(
-            right,
-            lineBox.right - Number.parseFloat(style.paddingRight),
+          if (bar === null) throw new Error("toolbar missing");
+          const box = (
+            bar.closest(".cm-tooltip") ?? bar
+          ).getBoundingClientRect();
+          let left = Number.POSITIVE_INFINITY;
+          let right = Number.NEGATIVE_INFINITY;
+          for (const line of document.querySelectorAll<HTMLElement>(
+            ".cm-content > .cm-line:not(.cm-skr-rich-callout)",
+          )) {
+            const lineBox = line.getBoundingClientRect();
+            const style = window.getComputedStyle(line);
+            left = Math.min(
+              left,
+              lineBox.left + Number.parseFloat(style.paddingLeft),
+            );
+            right = Math.max(
+              right,
+              lineBox.right - Number.parseFloat(style.paddingRight),
+            );
+          }
+          const anchor = [
+            ...document.querySelectorAll<HTMLElement>(".cm-content > .cm-line"),
+          ].find((line) =>
+            (line.textContent ?? "").includes("Patient typography"),
           );
-        }
-        const anchor = [
-          ...document.querySelectorAll<HTMLElement>(".cm-content > .cm-line"),
-        ].find((line) =>
-          (line.textContent ?? "").includes("Patient typography"),
-        );
-        if (anchor === undefined) throw new Error("anchor line missing");
-        // Ink-relative for the same reason as the narrow case below.
-        const ink = document.createRange();
-        ink.selectNodeContents(anchor);
-        return {
-          placement: bar.dataset.placement,
-          clearOfColumn: box.left >= right || box.right <= left,
-          gap: ink.getBoundingClientRect().top - box.bottom,
-        };
-      });
+          if (anchor === undefined) throw new Error("anchor line missing");
+          // Ink-relative for the same reason as the narrow case below.
+          const ink = document.createRange();
+          ink.selectNodeContents(anchor);
+          return {
+            placement: bar.dataset.placement,
+            clearOfColumn: box.left >= right || box.right <= left,
+            gap: ink.getBoundingClientRect().top - box.bottom,
+          };
+        }),
+      );
       if (wide.placement === "margin") {
         expect(wide.clearOfColumn).toBe(true);
       } else {
@@ -2739,30 +2757,34 @@ describe("skribeum shell", () => {
       await clearEditorSelection();
       await selectEditorText("Patient typography");
       await $(".cm-skr-selection-toolbar").waitForExist({ timeout: 10000 });
-      const narrow = await browser.execute(() => {
-        const bar = document.querySelector<HTMLElement>(
-          ".cm-skr-selection-toolbar",
-        );
-        if (bar === null) throw new Error("toolbar missing");
-        const box = (bar.closest(".cm-tooltip") ?? bar).getBoundingClientRect();
-        const anchor = [
-          ...document.querySelectorAll<HTMLElement>(".cm-content > .cm-line"),
-        ].find((line) =>
-          (line.textContent ?? "").includes("Patient typography"),
-        );
-        if (anchor === undefined) throw new Error("anchor line missing");
-        // Clearance is measured against the glyph ink, not the line box: the
-        // toolbar offsets itself from the rendered text's own top, and the
-        // line box extends above that by the leading, whose share of the
-        // line-height varies with the platform's font metrics.
-        const ink = document.createRange();
-        ink.selectNodeContents(anchor);
-        const inkBox = ink.getBoundingClientRect();
-        return {
-          placement: bar.dataset.placement,
-          gap: inkBox.top - box.bottom,
-        };
-      });
+      const narrow = await settled(() =>
+        browser.execute(() => {
+          const bar = document.querySelector<HTMLElement>(
+            ".cm-skr-selection-toolbar",
+          );
+          if (bar === null) throw new Error("toolbar missing");
+          const box = (
+            bar.closest(".cm-tooltip") ?? bar
+          ).getBoundingClientRect();
+          const anchor = [
+            ...document.querySelectorAll<HTMLElement>(".cm-content > .cm-line"),
+          ].find((line) =>
+            (line.textContent ?? "").includes("Patient typography"),
+          );
+          if (anchor === undefined) throw new Error("anchor line missing");
+          // Clearance is measured against the glyph ink, not the line box: the
+          // toolbar offsets itself from the rendered text's own top, and the
+          // line box extends above that by the leading, whose share of the
+          // line-height varies with the platform's font metrics.
+          const ink = document.createRange();
+          ink.selectNodeContents(anchor);
+          const inkBox = ink.getBoundingClientRect();
+          return {
+            placement: bar.dataset.placement,
+            gap: inkBox.top - box.bottom,
+          };
+        }),
+      );
       expect(narrow.placement).toBe("over-text");
       expect(narrow.gap).toBeGreaterThan(0);
     } finally {

@@ -282,6 +282,9 @@ describe("designed file tree", () => {
       new MouseEvent("click", { bubbles: true, ctrlKey: true }),
     );
     row?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, metaKey: true }),
+    );
+    row?.dispatchEvent(
       new MouseEvent("auxclick", { bubbles: true, button: 1 }),
     );
     // Browsers deliver click(detail=1), click(detail=2), then `dblclick`.
@@ -300,6 +303,7 @@ describe("designed file tree", () => {
     await tick();
 
     expect(opened).toEqual([
+      { path: "plain.md", newTab: true },
       { path: "plain.md", newTab: true },
       { path: "plain.md", newTab: true },
       { path: "plain.md", newTab: false },

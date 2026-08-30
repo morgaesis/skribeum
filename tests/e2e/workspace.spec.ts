@@ -1,5 +1,4 @@
 import { $, $$, browser, expect } from "@wdio/globals";
-import { ELEMENT_KEY } from "webdriver";
 import { Key } from "webdriverio";
 import {
   CONFIG_FILE_NAME,
@@ -53,69 +52,10 @@ async function waitForWorkspaceTabPaths(paths: string[]): Promise<void> {
   );
 }
 
-async function modifierClickTreePath(path: string): Promise<void> {
+async function doubleClickTreePath(path: string): Promise<void> {
   const row = $(`[role="treeitem"][data-path="${path}"]`);
   await row.waitForExist({ timeout: 15000 });
-  const element = await row.getElement();
-  if (typeof element.elementId !== "string" || element.elementId.length === 0) {
-    throw new Error(`tree row has no WebDriver element reference: ${path}`);
-  }
-  const origin = { [ELEMENT_KEY]: element.elementId };
-
-  try {
-    await browser.performActions([
-      {
-        type: "key",
-        id: "platform-modifier",
-        actions: [
-          { type: "keyDown", value: modifierKey },
-          { type: "pause", duration: 0 },
-          { type: "pause", duration: 0 },
-          { type: "keyUp", value: modifierKey },
-        ],
-      },
-      {
-        type: "pointer",
-        id: "primary-pointer",
-        parameters: { pointerType: "mouse" },
-        actions: [
-          { type: "pointerMove", duration: 0, origin, x: 0, y: 0 },
-          { type: "pointerDown", button: 0 },
-          { type: "pointerUp", button: 0 },
-          { type: "pause", duration: 0 },
-        ],
-      },
-    ]);
-  } finally {
-    await browser.releaseActions();
-  }
-}
-
-async function middleClickTreePath(path: string): Promise<void> {
-  const row = $(`[role="treeitem"][data-path="${path}"]`);
-  await row.waitForExist({ timeout: 15000 });
-  const element = await row.getElement();
-  if (typeof element.elementId !== "string" || element.elementId.length === 0) {
-    throw new Error(`tree row has no WebDriver element reference: ${path}`);
-  }
-  const origin = { [ELEMENT_KEY]: element.elementId };
-
-  try {
-    await browser.performActions([
-      {
-        type: "pointer",
-        id: "primary-pointer",
-        parameters: { pointerType: "mouse" },
-        actions: [
-          { type: "pointerMove", duration: 0, origin, x: 0, y: 0 },
-          { type: "pointerDown", button: 1 },
-          { type: "pointerUp", button: 1 },
-        ],
-      },
-    ]);
-  } finally {
-    await browser.releaseActions();
-  }
+  await row.doubleClick();
 }
 
 async function expandTreeFolder(): Promise<void> {
@@ -1015,20 +955,23 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       },
     );
 
-    // Mod-click is one of the explicit new-tab routes.
     await expectWorkspaceTabAbsent(TREE_FIRST_NOTE_NAME);
-    await modifierClickTreePath(TREE_FIRST_NOTE_NAME);
-    await waitForWorkspaceTab(TREE_FIRST_NOTE_NAME);
+    await doubleClickTreePath(TREE_FIRST_NOTE_NAME);
+    await waitForWorkspaceTabPaths([
+      TREE_SECOND_NOTE_NAME,
+      TREE_FIRST_NOTE_NAME,
+    ]);
 
     await expectWorkspaceTabAbsent(CONFIG_FILE_NAME);
-    await middleClickTreePath(CONFIG_FILE_NAME);
-    await waitForWorkspaceTab(CONFIG_FILE_NAME);
+    await doubleClickTreePath(CONFIG_FILE_NAME);
+    await waitForWorkspaceTabPaths([
+      TREE_SECOND_NOTE_NAME,
+      TREE_FIRST_NOTE_NAME,
+      CONFIG_FILE_NAME,
+    ]);
 
     await expectWorkspaceTabAbsent(PREVIEW_SOURCE_NOTE_NAME);
-    const previewRow = $(
-      `[role="treeitem"][data-path="${PREVIEW_SOURCE_NOTE_NAME}"]`,
-    );
-    await previewRow.doubleClick();
+    await doubleClickTreePath(PREVIEW_SOURCE_NOTE_NAME);
     const expectedPaths = [
       TREE_SECOND_NOTE_NAME,
       TREE_FIRST_NOTE_NAME,
@@ -1225,11 +1168,19 @@ describe("file tree, previews, panels, and workspace tabs", () => {
   it("opens, closes, reorders, splits, and restores tabs with a pane tree", async () => {
     await expandTreeFolder();
     await openTreePath(TREE_FIRST_NOTE_NAME);
-    for (const path of [TREE_SECOND_NOTE_NAME, PREVIEW_SOURCE_NOTE_NAME]) {
-      await expectWorkspaceTabAbsent(path);
-      await modifierClickTreePath(path);
-      await waitForWorkspaceTab(path);
-    }
+    await expectWorkspaceTabAbsent(TREE_SECOND_NOTE_NAME);
+    await doubleClickTreePath(TREE_SECOND_NOTE_NAME);
+    await waitForWorkspaceTabPaths([
+      TREE_FIRST_NOTE_NAME,
+      TREE_SECOND_NOTE_NAME,
+    ]);
+    await expectWorkspaceTabAbsent(PREVIEW_SOURCE_NOTE_NAME);
+    await doubleClickTreePath(PREVIEW_SOURCE_NOTE_NAME);
+    await waitForWorkspaceTabPaths([
+      TREE_FIRST_NOTE_NAME,
+      TREE_SECOND_NOTE_NAME,
+      PREVIEW_SOURCE_NOTE_NAME,
+    ]);
     const tabs = await $$('[role="tab"]');
     expect(tabs.length).toBeGreaterThanOrEqual(3);
 

@@ -1180,8 +1180,33 @@ describe("table editing through the registry", () => {
         "table.row.delete",
         "table.column.delete",
         "table.edit-source",
+        "table.sort.ascending",
+        "table.sort.descending",
       ]),
     );
+  });
+
+  it("uses sort search keywords only for table sort commands", () => {
+    expect(
+      filteredSlashCommands(registry, "sort")
+        .slice(0, 2)
+        .map((command) => command.id),
+    ).toEqual(["table.sort.ascending", "table.sort.descending"]);
+    const structural = registry
+      .commands()
+      .filter(
+        (command) =>
+          command.id.startsWith("table.") &&
+          command.pointer?.includes("slash-menu"),
+      );
+    for (const command of structural) {
+      expect(command.slash?.keywords?.includes("sort")).toBe(
+        command.id.startsWith("table.sort."),
+      );
+      expect(command.searchTerms?.includes("sort")).toBe(
+        command.id.startsWith("table.sort."),
+      );
+    }
   });
 
   const TABLE = "| a | b |\n| --- | --- |\n| c | d |";
@@ -1384,6 +1409,220 @@ describe("table editing through the registry", () => {
     expect(runEditorCommand("table.column.insert-after")).toBe(true);
     const header = view.state.doc.toString().split("\n")[0] ?? "";
     expect(header.split("|").length).toBe(5);
+  });
+
+  it("sorts a focused column through the keyboard command route", async () => {
+    const source =
+      "| Name | Score |\n| --- | ---: |\n| zed | 2 |\n| Ada | 10 |\n| ada | 1 |";
+    const view = makeView(source, 0, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    expect(runEditorCommand("table.sort.ascending")).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(view.state.doc.toString()).toBe(
+      "| Name | Score |\n| --- | ---: |\n| Ada | 10 |\n| ada | 1 |\n| zed | 2 |",
+    );
+    expect(
+      view.dom.querySelector('[role="columnheader"][aria-sort="ascending"]'),
+    ).not.toBeNull();
+    expect(
+      document.activeElement?.closest(".cm-skr-table-cell"),
+    ).not.toBeNull();
+
+    const restoredEditor = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-table-cell[data-editing="true"] .cm-editor',
+    );
+    const restored =
+      restoredEditor === null ? null : EditorView.findFromDOM(restoredEditor);
+    expect(restored?.state.doc.toString()).toBe("Name");
+    typeText(restored as EditorView, "!");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(view.state.doc.toString()).toBe(
+      "| Name! | Score |\n| --- | ---: |\n| Ada | 10 |\n| ada | 1 |\n| zed | 2 |",
+    );
+  });
+
+  it("records sort state without rewriting an already ordered table", async () => {
+    const source = "| Name |\n| --- |\n| Ada |\n| Zed |";
+    const view = makeView(source, source.indexOf("Ada"), [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+
+    expect(runEditorCommand("table.sort.ascending")).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(view.state.doc.toString()).toBe(source);
+    expect(
+      view.dom.querySelector('[role="columnheader"][aria-sort="ascending"]'),
+    ).not.toBeNull();
+  });
+
+  it("sorts by pointer, preserves state outside the table, and invalidates table edits", async () => {
+    const table = "| Name |\n| --- |\n| zed |\n| Ada |";
+    const source = `before\n\n${table}\n\nafter`;
+    const view = makeView(source, 0, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    const sort = view.dom.querySelector<HTMLButtonElement>(
+      '[aria-label="Sort table column 1 ascending"]',
+    );
+    expect(sort?.tabIndex).toBe(-1);
+    expect(sort?.textContent).toBe("");
+    expect(
+      view.dom.querySelectorAll('.cm-skr-table-sort[tabindex="0"]'),
+    ).toHaveLength(0);
+
+    sort?.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(
+      view.dom.querySelector('[role="columnheader"][aria-sort="ascending"]'),
+    ).not.toBeNull();
+
+    view.dispatch({ changes: { from: 0, insert: "prefix\n" } });
+    await Promise.resolve();
+    expect(
+      view.dom.querySelector('[role="columnheader"][aria-sort="ascending"]'),
+    ).not.toBeNull();
+
+    view.dispatch({
+      changes: { from: view.state.doc.length, insert: "\nsuffix" },
+    });
+    await Promise.resolve();
+    expect(
+      view.dom.querySelector('[role="columnheader"][aria-sort="ascending"]'),
+    ).not.toBeNull();
+
+    const changed = view.state.doc.toString();
+    const ada = changed.indexOf("Ada");
+    view.dispatch({ changes: { from: ada, to: ada + 3, insert: "Bea" } });
+    await Promise.resolve();
+    expect(
+      view.dom.querySelector('[role="columnheader"][aria-sort="none"]'),
+    ).not.toBeNull();
+  });
+
+  it("keeps independently sorted tables and their controls in sync", async () => {
+    const source =
+      "| First |\n| --- |\n| zed |\n| Ada |\n\nbetween\n\n| Second |\n| --- |\n| alpha |\n| Beta |";
+    const view = makeView(source, 0, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    const header = (label: string): HTMLElement => {
+      const found = [
+        ...view.dom.querySelectorAll<HTMLElement>(
+          '.cm-skr-table-cell[role="columnheader"]',
+        ),
+      ].find((candidate) => candidate.textContent?.trim() === label);
+      if (found === undefined)
+        throw new Error(`table header missing: ${label}`);
+      return found;
+    };
+    const sort = (label: string): HTMLButtonElement => {
+      const found = header(label).querySelector<HTMLButtonElement>(
+        ":scope > .cm-skr-table-sort",
+      );
+      if (found === null)
+        throw new Error(`table sort control missing: ${label}`);
+      return found;
+    };
+    const expectDirection = (
+      label: string,
+      direction: "ascending" | "descending" | "none",
+    ) => {
+      expect(header(label).getAttribute("aria-sort")).toBe(direction);
+      expect(sort(label).dataset.direction).toBe(direction);
+      expect(sort(label).getAttribute("aria-label")).toBe(
+        `Sort table column 1 ${direction === "ascending" ? "descending" : "ascending"}`,
+      );
+    };
+
+    sort("First").click();
+    await Promise.resolve();
+    await Promise.resolve();
+    sort("Second").click();
+    await Promise.resolve();
+    await Promise.resolve();
+    sort("Second").click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expectDirection("First", "ascending");
+    expectDirection("Second", "descending");
+  });
+
+  it("maps each table sort across outside edits and invalidates only changed tables", async () => {
+    const source =
+      "| First |\n| --- |\n| zed |\n| Ada |\n\nbetween\n\n| Second |\n| --- |\n| zulu |\n| Beta |";
+    const view = makeView(source, 0, [
+      decorationEngine(),
+      tableEditingExtension(registry, context),
+    ]);
+    const header = (label: string): HTMLElement => {
+      const found = [
+        ...view.dom.querySelectorAll<HTMLElement>(
+          '.cm-skr-table-cell[role="columnheader"]',
+        ),
+      ].find((candidate) => candidate.textContent?.trim() === label);
+      if (found === undefined)
+        throw new Error(`table header missing: ${label}`);
+      return found;
+    };
+    const sort = (label: string): HTMLButtonElement => {
+      const found = header(label).querySelector<HTMLButtonElement>(
+        ":scope > .cm-skr-table-sort",
+      );
+      if (found === null)
+        throw new Error(`table sort control missing: ${label}`);
+      return found;
+    };
+    const expectDirection = (
+      label: string,
+      direction: "ascending" | "none",
+    ) => {
+      expect(header(label).getAttribute("aria-sort")).toBe(direction);
+      expect(sort(label).dataset.direction).toBe(direction);
+    };
+
+    sort("First").click();
+    await Promise.resolve();
+    await Promise.resolve();
+    sort("Second").click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    view.dispatch({ changes: { from: 0, insert: "prefix\n" } });
+    const between = view.state.doc.toString().indexOf("between") + 2;
+    view.dispatch({ changes: { from: between, insert: "x" } });
+    await Promise.resolve();
+    expectDirection("First", "ascending");
+    expectDirection("Second", "ascending");
+
+    const firstValue = view.state.doc.toString().indexOf("Ada");
+    view.dispatch({
+      changes: { from: firstValue, to: firstValue + 3, insert: "Bea" },
+    });
+    await Promise.resolve();
+    expectDirection("First", "none");
+    expectDirection("Second", "ascending");
+
+    sort("First").click();
+    await Promise.resolve();
+    await Promise.resolve();
+    const secondValue = view.state.doc.toString().indexOf("Beta");
+    view.dispatch({
+      changes: { from: secondValue, to: secondValue + 4, insert: "Echo" },
+    });
+    await Promise.resolve();
+    expectDirection("First", "ascending");
+    expectDirection("Second", "none");
   });
 
   it("produces exact documents for all six structure commands", () => {

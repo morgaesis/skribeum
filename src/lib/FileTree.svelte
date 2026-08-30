@@ -44,7 +44,6 @@ let {
   titleSources = {},
   expandedPaths = [],
   onExpandedChange,
-  onSelectionChange,
   onOpenPath,
   registry,
   commandContext,
@@ -56,7 +55,6 @@ let {
   titleSources?: Readonly<Record<string, string>>;
   expandedPaths?: readonly string[];
   onExpandedChange?: (paths: string[]) => void;
-  onSelectionChange?: (path: string | null) => void;
   onOpenPath: (path: string, options?: { newTab?: boolean }) => void;
   registry?: CommandRegistry;
   commandContext?: () => CommandContext;
@@ -919,8 +917,8 @@ function activate(row: Row, newTab = false) {
     toggleFolder(row);
   } else {
     // Every file the vault holds opens; the tree never shows a row it
-    // refuses to act on.
-    onSelectionChange?.(row.path);
+    // refuses to act on. Selection belongs to committed navigation, so a
+    // slow or failed read leaves the tree and reading surface in agreement.
     onOpenPath(row.path, { newTab });
   }
 }
@@ -1267,7 +1265,18 @@ function dropOn(destination: string | null) {
         onfocus={() => (focusIndex = index)}
         onclick={(event) => {
           void focusRow(index);
+          // A browser sends a second ordinary click before `dblclick`. That
+          // click belongs to the double-click gesture handled below.
+          if (event.detail > 1) return;
           activate(row, event.ctrlKey || event.metaKey);
+        }}
+        ondblclick={(event) => {
+          event.preventDefault();
+          void focusRow(index);
+          // The first click already toggles a folder. The rest of the
+          // double-click gesture must not toggle it again.
+          if (row.kind === "directory") return;
+          activate(row, true);
         }}
         onauxclick={(event) => {
           if (event.button !== 1) return;

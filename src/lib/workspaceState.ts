@@ -20,6 +20,30 @@ export type WorkspaceTab = {
   dirty?: boolean;
 };
 
+export type WorkspacePreviewReplacement = {
+  paneId: string;
+  path: string;
+  tab: WorkspaceTab;
+  index: number;
+};
+
+export type WorkspacePreviewNavigation = {
+  path: string;
+  intent: "in-place" | "new-tab";
+  outcome: "committed" | "failed";
+};
+
+export type TemporaryWorkspaceSplitOutcome =
+  | "committed"
+  | "failed"
+  | "superseded";
+export type TemporaryWorkspacePanePhase =
+  | "pending"
+  | "committed"
+  | "rolled-back"
+  | "abandoned";
+export type TemporaryWorkspacePaneClaim = symbol;
+
 export type WorkspaceHistoryEntry = {
   address: NoteAddress;
   viewState: NoteViewState | null;
@@ -53,6 +77,18 @@ export type WorkspaceNode = WorkspaceLeaf | WorkspaceSplit;
 
 /** Where a new pane lands relative to the pane being split. */
 export type SplitSide = "up" | "down" | "left" | "right";
+
+/** Whether navigation reuses an open path or stays in the focused pane. */
+export type WorkspacePathDestination = "existing-pane" | "focused-pane";
+
+export type WorkspacePathLoadTarget =
+  | { kind: "ordinary" }
+  | { kind: "bound-pane"; paneId: string; acceptMissing: boolean };
+
+export type WorkspacePathLoadOutcome =
+  | { kind: "loaded"; paneId: string }
+  | { kind: "missing" }
+  | { kind: "failed" };
 
 export type VaultWorkspaceState = {
   version: 2;
@@ -113,6 +149,137 @@ export function findWorkspaceLeaf(
   );
 }
 
+/** Resolves a navigation destination without changing workspace state. */
+export function workspacePathOpenPaneId(
+  node: WorkspaceNode,
+  focusedPaneId: string,
+  path: string,
+  destination: WorkspacePathDestination,
+): string | null {
+  const focused = findWorkspaceLeaf(node, focusedPaneId);
+  if (destination === "focused-pane") return focused?.id ?? null;
+  return (
+    workspaceLeaves(node).find((leaf) =>
+      leaf.tabs.some((tab) => tab.path === path),
+    )?.id ??
+    focused?.id ??
+    null
+  );
+}
+
+/** Returns the bound pane only while it still owns workspace focus. */
+export function currentWorkspaceNavigationPane(
+  node: WorkspaceNode,
+  focusedPaneId: string,
+  destinationPaneId: string,
+): WorkspaceLeaf | null {
+  return focusedPaneId === destinationPaneId
+    ? findWorkspaceLeaf(node, destinationPaneId)
+    : null;
+}
+
+/** Whether a pane has installed a path as both a tab and its active path. */
+export function workspacePaneOwnsActivePath(
+  node: WorkspaceNode,
+  paneId: string,
+  path: string,
+): boolean {
+  const pane = findWorkspaceLeaf(node, paneId);
+  return (
+    pane?.activePath === path && pane.tabs.some((tab) => tab.path === path)
+  );
+}
+
+/** Installs a path as a tab before making it the pane's active path. */
+export function commitWorkspacePanePath(
+  node: WorkspaceNode,
+  paneId: string,
+  path: string,
+): WorkspaceLeaf | null {
+  const pane = findWorkspaceLeaf(node, paneId);
+  if (pane === null) return null;
+  if (!pane.tabs.some((tab) => tab.path === path)) {
+    pane.tabs.push({ path, viewState: null });
+  }
+  pane.emptyTab = false;
+  pane.activePath = path;
+  return workspacePaneOwnsActivePath(node, paneId, path) ? pane : null;
+}
+
+/** Accepts only outcomes owned by the target pane and its missing-note policy. */
+export function workspacePathLoadAccepted(
+  target: WorkspacePathLoadTarget,
+  outcome: WorkspacePathLoadOutcome,
+): boolean {
+  if (outcome.kind === "failed") return false;
+  if (outcome.kind === "missing") {
+    return target.kind === "ordinary" || target.acceptMissing === true;
+  }
+  return target.kind === "ordinary" || outcome.paneId === target.paneId;
+}
+
+/** Owns the current right to commit or roll back one tentative pane. */
+export class TemporaryWorkspacePaneTransition {
+  #phase: TemporaryWorkspacePanePhase = "pending";
+  readonly #initialClaim: TemporaryWorkspacePaneClaim = Symbol(
+    "temporary-pane-owner",
+  );
+  #claim: TemporaryWorkspacePaneClaim = this.#initialClaim;
+
+  constructor(
+    readonly paneId: string,
+    readonly path: string,
+    readonly previousFocusedPaneId: string,
+    readonly fallbackPaneId: string,
+  ) {}
+
+  get phase(): TemporaryWorkspacePanePhase {
+    return this.#phase;
+  }
+
+  get initialClaim(): TemporaryWorkspacePaneClaim {
+    return this.#initialClaim;
+  }
+
+  /** Transfers rollback responsibility before a newer read begins. */
+  claimNavigation(): TemporaryWorkspacePaneClaim | null {
+    if (this.#phase !== "pending") return null;
+    this.#claim = Symbol("temporary-pane-navigation");
+    return this.#claim;
+  }
+
+  settle(
+    claim: TemporaryWorkspacePaneClaim,
+    opened: boolean,
+  ): TemporaryWorkspaceSplitOutcome {
+    if (this.#phase !== "pending" || this.#claim !== claim) {
+      return "superseded";
+    }
+    if (opened) {
+      this.#phase = "committed";
+      return "committed";
+    }
+    this.#phase = "rolled-back";
+    return "failed";
+  }
+
+  rollbackFocusPaneId(
+    layout: WorkspaceNode,
+    currentFocusedPaneId: string,
+  ): string | null {
+    const current = findWorkspaceLeaf(layout, currentFocusedPaneId);
+    if (current !== null && current.id !== this.paneId) return current.id;
+    for (const candidate of [this.previousFocusedPaneId, this.fallbackPaneId]) {
+      if (findWorkspaceLeaf(layout, candidate) !== null) return candidate;
+    }
+    return workspaceLeaves(layout)[0]?.id ?? null;
+  }
+
+  abandon(): void {
+    if (this.#phase === "pending") this.#phase = "abandoned";
+  }
+}
+
 /** An identifier no leaf in the tree currently holds. */
 export function nextPaneId(node: WorkspaceNode): string {
   const used = new Set(workspaceLeaves(node).map((leaf) => leaf.id));
@@ -162,6 +329,119 @@ export function removeWorkspaceLeaf(
   return first === node.children[0] && second === node.children[1]
     ? node
     : { ...node, children: [first, second] };
+}
+
+/** Drops preview state when either tab it relates to is removed. */
+export function reconcilePreviewReplacementAfterTabRemoval(
+  replacement: WorkspacePreviewReplacement | null,
+  paneId: string,
+  path: string,
+): WorkspacePreviewReplacement | null {
+  if (replacement === null || replacement.paneId !== paneId) {
+    return replacement;
+  }
+  return replacement.path === path || replacement.tab.path === path
+    ? null
+    : replacement;
+}
+
+/** Clears pane- and path-scoped preview state at a workspace boundary. */
+export function clearWorkspacePreviewReplacement(
+  _replacement: WorkspacePreviewReplacement | null,
+): WorkspacePreviewReplacement | null {
+  return null;
+}
+
+/** Retains a displaced tab until the navigation replacing its preview commits. */
+export function reconcilePreviewReplacementAfterNavigation(
+  replacement: WorkspacePreviewReplacement | null,
+  navigation: WorkspacePreviewNavigation,
+): WorkspacePreviewReplacement | null {
+  if (replacement === null || navigation.outcome === "failed") {
+    return replacement;
+  }
+  return navigation.intent === "new-tab" && replacement.path === navigation.path
+    ? replacement
+    : null;
+}
+
+type TemporaryWorkspacePaneSettlementOptions = {
+  currentLayout: () => WorkspaceNode;
+  setLayout: (layout: WorkspaceNode) => void;
+  transition: TemporaryWorkspacePaneTransition;
+  currentFocusedPaneId: () => string;
+  restoreFocus: (paneId: string) => Promise<void>;
+};
+
+/** Settles one navigation claim and performs its sole responsible rollback. */
+export async function settleTemporaryWorkspacePaneNavigation(
+  options: TemporaryWorkspacePaneSettlementOptions & {
+    claim: TemporaryWorkspacePaneClaim;
+    opened: boolean;
+  },
+): Promise<TemporaryWorkspaceSplitOutcome> {
+  const outcome = options.transition.settle(options.claim, options.opened);
+  if (outcome !== "failed") return outcome;
+  const remaining = removeWorkspaceLeaf(
+    options.currentLayout(),
+    options.transition.paneId,
+  );
+  if (remaining === null) return outcome;
+  options.setLayout(remaining);
+  const restorePaneId = options.transition.rollbackFocusPaneId(
+    remaining,
+    options.currentFocusedPaneId(),
+  );
+  if (restorePaneId !== null) await options.restoreFocus(restorePaneId);
+  return outcome;
+}
+
+/** Creates a tentative split whose opening navigation owns its first claim. */
+export async function openInTemporaryWorkspaceSplit(
+  options: TemporaryWorkspacePaneSettlementOptions & {
+    addition: WorkspaceLeaf;
+    targetPaneId: string;
+    side: SplitSide;
+    focusAddition: () => Promise<boolean>;
+    open: () => Promise<boolean>;
+  },
+): Promise<TemporaryWorkspaceSplitOutcome> {
+  options.setLayout(
+    splitWorkspaceLeaf(
+      options.currentLayout(),
+      options.targetPaneId,
+      options.side,
+      options.addition,
+    ),
+  );
+  try {
+    if (!(await options.focusAddition())) {
+      return settleTemporaryWorkspacePaneNavigation({
+        ...options,
+        claim: options.transition.initialClaim,
+        opened: false,
+      });
+    }
+    const opened =
+      (await options.open()) &&
+      workspacePaneOwnsActivePath(
+        options.currentLayout(),
+        options.transition.paneId,
+        options.transition.path,
+      );
+    return settleTemporaryWorkspacePaneNavigation({
+      ...options,
+      claim: options.transition.initialClaim,
+      opened,
+    });
+  } catch (error) {
+    await settleTemporaryWorkspacePaneNavigation({
+      ...options,
+      claim: options.transition.initialClaim,
+      opened: false,
+    });
+    throw error;
+  }
 }
 
 /**

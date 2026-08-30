@@ -1973,6 +1973,101 @@ describe("rendered decoration DOM", () => {
     ).toBeNull();
     expect(view.dom.querySelector(".cm-skr-rich-callout")).not.toBeNull();
   });
+
+  it("reserves heading-marker geometry for H1 through H3 before revealing paint", () => {
+    const source = "# One\n\n## Two\n\n### Three";
+    const view = mountedView(source, source.indexOf("One"));
+    for (const heading of ["One", "Two", "Three"]) {
+      view.dispatch({ selection: { anchor: source.indexOf(heading) + 1 } });
+      const marker = view.dom.querySelector<HTMLElement>(
+        ".cm-skr-reveal-marker-active",
+      );
+      expect(marker, heading).not.toBeNull();
+      expect(
+        getComputedStyle(marker as HTMLElement).maxWidth,
+        heading,
+      ).not.toBe("0px");
+    }
+  });
+
+  it("keeps linked folded-callout titles semantically separate from their disclosure", () => {
+    const source = "> [!NOTE]- [Folded](Target.md)\n> Hidden body\n\noutside";
+    const view = mountedView(source, source.indexOf("outside"), {
+      paths: ["source.md", "Target.md"],
+      currentPath: "source.md",
+      config: {
+        newLinkFormat: "shortest",
+        useMarkdownLinks: false,
+        attachmentFolderPath: null,
+      },
+    });
+    const header = view.dom.querySelector<HTMLElement>(
+      '.cm-skr-rich-callout[data-callout-line="first"]',
+    );
+    const disclosure = header?.querySelector<HTMLButtonElement>(
+      'button[data-callout-toggle="true"]',
+    );
+    const link = header?.querySelector<HTMLElement>('[role="link"]');
+    expect(header?.getAttribute("role")).toBe("note");
+    expect(disclosure).not.toBeNull();
+    expect(link).not.toBeNull();
+    expect(link?.closest('[role="button"]')).toBeNull();
+    expect(disclosure?.contains(link ?? null)).toBe(false);
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+    const body = view.dom.querySelector<HTMLElement>(
+      '[data-callout-collapsed="true"]',
+    );
+    expect(body).not.toBeNull();
+    expect(getComputedStyle(body as HTMLElement).display).toBe("none");
+
+    header?.dispatchEvent(
+      new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+      }),
+    );
+    const pointerExpandedDisclosure = view.dom.querySelector<HTMLButtonElement>(
+      '[data-callout-toggle="true"]',
+    );
+    expect(pointerExpandedDisclosure?.getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    expect(document.activeElement).toBe(view.contentDOM);
+    expect(
+      view.dom.querySelector('[data-callout-collapsed="true"]'),
+    ).toBeNull();
+
+    pointerExpandedDisclosure?.focus();
+    pointerExpandedDisclosure?.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    const collapsedDisclosure = view.dom.querySelector<HTMLButtonElement>(
+      '[data-callout-toggle="true"]',
+    );
+    expect(collapsedDisclosure?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(collapsedDisclosure);
+    expect(
+      view.dom.querySelector('[data-callout-collapsed="true"]'),
+    ).not.toBeNull();
+
+    collapsedDisclosure?.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: " ",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    const expandedDisclosure = view.dom.querySelector<HTMLButtonElement>(
+      '[data-callout-toggle="true"]',
+    );
+    expect(expandedDisclosure?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(expandedDisclosure);
+  });
 });
 
 // The reveal audit: one row per construct the engine hides or renders, each
@@ -2101,167 +2196,175 @@ describe("reveal motion coverage", () => {
     ).toBeGreaterThan(3);
   });
 
-  it("rests a hidden marker at no width, clipped, and a revealed one at its own", async () => {
-    const hidden = mountedView("## Heading\n\nbody", 12);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const hiddenMarker = hidden.dom.querySelector(".cm-skr-reveal-marker");
-    expect(
-      hiddenMarker?.classList.contains("cm-skr-reveal-marker-active"),
-    ).toBe(false);
-    // The two resting widths are what the entrance and the exit travel
-    // between, so they are read here as the reader's geometry, not as class
-    // names: a hidden glyph occupies nothing and shows nothing of itself.
-    const hiddenStyle = getComputedStyle(hiddenMarker as HTMLElement);
-    expect(hiddenStyle.maxWidth).toBe("0px");
-    expect(hiddenStyle.overflow).toBe("hidden");
-    expect(hiddenStyle.opacity).toBe("0");
+  it("keeps the heading caret and click mapping fixed before, during, and after reveal", () => {
+    const characterWidth = 10;
+    const lineHeight = 20;
+    const rectangle = (
+      left: number,
+      right: number,
+      top: number,
+      bottom = top + lineHeight,
+    ): DOMRect =>
+      new DOMRect(left, top, Math.max(0, right - left), bottom - top);
+    const rectangleList = (value: DOMRect): DOMRectList => {
+      const values = [value] as unknown as DOMRectList;
+      Object.defineProperty(values, "item", {
+        value: (index: number) => (index === 0 ? value : null),
+      });
+      return values;
+    };
+    const textNodes = (root: Element): Text[] => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      const nodes: Text[] = [];
+      for (
+        let node = walker.nextNode();
+        node !== null;
+        node = walker.nextNode()
+      ) {
+        nodes.push(node as Text);
+      }
+      return nodes;
+    };
+    const visibleCharacters = (node: Text, length = node.length): number => {
+      const marker = node.parentElement?.closest<HTMLElement>(
+        ".cm-skr-reveal-marker",
+      );
+      return marker !== null && getComputedStyle(marker).maxWidth === "0px"
+        ? 0
+        : length;
+    };
+    const lineFor = (node: Node): HTMLElement | null =>
+      (node instanceof Element
+        ? node
+        : node.parentElement
+      )?.closest<HTMLElement>(".cm-line") ?? null;
+    const textPosition = (node: Text, offset: number): number => {
+      const line = lineFor(node);
+      if (line === null) return 0;
+      let position = 0;
+      for (const text of textNodes(line)) {
+        if (text === node) {
+          return position + visibleCharacters(text, offset);
+        }
+        position += visibleCharacters(text);
+      }
+      return position;
+    };
+    const lineTop = (line: HTMLElement): number => {
+      const parent = line.parentElement;
+      if (parent === null) return 0;
+      return (
+        [...parent.querySelectorAll(":scope > .cm-line")].indexOf(line) *
+        lineHeight
+      );
+    };
+    const rangeRectangle = (range: Range): DOMRect => {
+      if (!(range.startContainer instanceof Text)) {
+        return rectangle(0, 0, 0);
+      }
+      const line = lineFor(range.startContainer);
+      if (line === null) return rectangle(0, 0, 0);
+      const start = textPosition(range.startContainer, range.startOffset);
+      const end =
+        range.endContainer instanceof Text
+          ? textPosition(range.endContainer, range.endOffset)
+          : start;
+      return rectangle(
+        start * characterWidth,
+        end * characterWidth,
+        lineTop(line),
+      );
+    };
+    const elementRectangle = (element: Element): DOMRect => {
+      const line = lineFor(element);
+      if (line === null) return rectangle(0, 500, 0, 100);
+      const nodes = textNodes(element);
+      if (nodes.length === 0) return rectangle(0, 0, lineTop(line));
+      const first = nodes[0] as Text;
+      const last = nodes.at(-1) as Text;
+      return rectangle(
+        textPosition(first, 0) * characterWidth,
+        textPosition(last, last.length) * characterWidth,
+        lineTop(line),
+      );
+    };
 
-    const revealed = mountedView("## Heading\n\nbody", 4);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const revealedMarker = revealed.dom.querySelector(
-      ".cm-skr-reveal-marker-active",
+    vi.spyOn(Range.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Range) {
+        return rangeRectangle(this);
+      },
     );
-    expect(revealedMarker?.textContent).toBe("## ");
-    const revealedStyle = getComputedStyle(revealedMarker as HTMLElement);
-    expect(revealedStyle.maxWidth).toBe("none");
-    expect(revealedStyle.overflow).toBe("visible");
-    expect(revealedStyle.opacity).toBe("1");
+    vi.spyOn(Range.prototype, "getClientRects").mockImplementation(function (
+      this: Range,
+    ) {
+      return rectangleList(rangeRectangle(this));
+    });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        return elementRectangle(this);
+      },
+    );
+    vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (
+      this: Element,
+    ) {
+      return rectangleList(elementRectangle(this));
+    });
+
+    const source = "## Heading\n\nbody";
+    const headingFrom = source.indexOf("Heading");
+    const bodyFrom = source.indexOf("body");
+    const view = mountedView(source, bodyFrom);
+    const sample = (revealed: boolean) => {
+      const marker = view.dom.querySelector<HTMLElement>(
+        ".cm-skr-reveal-marker",
+      );
+      expect(marker?.classList.contains("cm-skr-reveal-marker-active")).toBe(
+        revealed,
+      );
+      const markerStart = view.coordsAtPos(0);
+      const caret = view.coordsAtPos(headingFrom);
+      const character = view.coordsForChar(headingFrom);
+      expect(markerStart).not.toBeNull();
+      expect(caret).not.toBeNull();
+      expect(character).not.toBeNull();
+      expect((caret as DOMRect).left - (markerStart as DOMRect).left).toBe(
+        3 * characterWidth,
+      );
+      expect((caret as DOMRect).left).toBe((character as DOMRect).left);
+      const mapped = view.posAtCoords({
+        x: (character as DOMRect).left + characterWidth / 4,
+        y: ((character as DOMRect).top + (character as DOMRect).bottom) / 2,
+      });
+      expect(mapped).toBe(headingFrom);
+      return {
+        caretLeft: (caret as DOMRect).left,
+        characterLeft: (character as DOMRect).left,
+        characterRight: (character as DOMRect).right,
+        mapped,
+      };
+    };
+
+    const before = sample(false);
+    view.dispatch({ selection: { anchor: headingFrom + 1 } });
+    const during = sample(true);
+    view.dispatch({ selection: { anchor: bodyFrom } });
+    const after = sample(false);
+
+    expect(during).toEqual(before);
+    expect(after).toEqual(before);
   });
 });
 
-/**
- * The glyphs a construct shows while revealed are taken away the moment the
- * caret leaves, so the width they were holding belongs to a node that is
- * already gone. These cover the stand-in that holds it open long enough for
- * the text to close over it, and the fact that it is only ever a loan.
- */
-describe("departing marker stand-in", () => {
-  const EXIT_DURATION = 50;
+describe("marker departure", () => {
+  it("keeps a heading marker in its reserved slot after the cursor leaves", async () => {
+    const view = mountedView("## Heading\n\nbody", 4);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    view.dispatch({ selection: { anchor: 13 } });
 
-  function withMotionClock(duration: number): () => void {
-    const root = document.documentElement;
-    root.style.setProperty("--skr-motion-state-duration", `${duration}ms`);
-    root.style.setProperty("--skr-motion-surface-duration", "120ms");
-    return () => {
-      root.style.removeProperty("--skr-motion-state-duration");
-      root.style.removeProperty("--skr-motion-surface-duration");
-    };
-  }
-
-  /** jsdom plays no animations, so the driver is given one it can start. */
-  function withPlayableAnimations(): () => void {
-    const target = Element.prototype as unknown as {
-      animate?: (...args: unknown[]) => Animation;
-    };
-    const original = target.animate;
-    target.animate = () =>
-      ({
-        id: "",
-        cancel: () => {},
-        addEventListener: () => {},
-      }) as unknown as Animation;
-    return () => {
-      if (original === undefined) delete target.animate;
-      else target.animate = original;
-    };
-  }
-
-  function standIns(view: EditorView): HTMLElement[] {
-    return [
-      ...view.contentDOM.querySelectorAll<HTMLElement>(
-        "[data-skr-marker-exit]",
-      ),
-    ];
-  }
-
-  it("holds an inside-scope construct's glyphs open while the text closes over them", async () => {
-    const restoreClock = withMotionClock(EXIT_DURATION);
-    const restoreAnimations = withPlayableAnimations();
-    try {
-      const doc = "a **word** b";
-      const view = mountedView(doc, 6);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      // Revealed: the glyphs are real document text, replaced outright the
-      // moment the caret leaves, so nothing of theirs survives the exit.
-      expect(
-        [...view.dom.querySelectorAll(".cm-skr-reveal-marker-active")].map(
-          (element) => element.textContent,
-        ),
-      ).toEqual(["**", "**"]);
-
-      view.dispatch({ selection: { anchor: 0 } });
-      const holding = standIns(view);
-      expect(holding.map((element) => element.textContent)).toEqual([
-        "**",
-        "**",
-      ]);
-      // A stand-in is scenery: it is not in the note, and the reader of a
-      // screen reader is never told about it.
-      expect(view.state.doc.toString()).toBe(doc);
-      expect(
-        holding.every(
-          (element) => element.getAttribute("aria-hidden") === "true",
-        ),
-      ).toBe(true);
-
-      await new Promise((resolve) => setTimeout(resolve, EXIT_DURATION + 60));
-      expect(standIns(view)).toHaveLength(0);
-      expect(view.state.doc.toString()).toBe(doc);
-      // Once the motion is over the glyphs are gone from the page as well as
-      // from the note: nothing permanent was added to what the DOM says.
-      expect(view.contentDOM.textContent).toBe("a word b");
-    } finally {
-      restoreAnimations();
-      restoreClock();
-    }
-  });
-
-  it("holds a line-scope construct's glyphs open the same way", async () => {
-    const restoreClock = withMotionClock(EXIT_DURATION);
-    const restoreAnimations = withPlayableAnimations();
-    try {
-      const view = mountedView("## Heading\n\nbody", 4);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      view.dispatch({ selection: { anchor: 13 } });
-      expect(standIns(view).map((element) => element.textContent)).toEqual([
-        "## ",
-      ]);
-      await new Promise((resolve) => setTimeout(resolve, EXIT_DURATION + 60));
-      expect(standIns(view)).toHaveLength(0);
-    } finally {
-      restoreAnimations();
-      restoreClock();
-    }
-  });
-
-  it("builds no stand-in at all when the exit clock is zeroed", async () => {
-    const restoreClock = withMotionClock(0);
-    const restoreAnimations = withPlayableAnimations();
-    try {
-      const view = mountedView("a **word** b", 6);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      view.dispatch({ selection: { anchor: 0 } });
-      expect(standIns(view)).toHaveLength(0);
-    } finally {
-      restoreAnimations();
-      restoreClock();
-    }
-  });
-
-  it("adds nothing when a keystroke leaves the revealed construct alone", async () => {
-    const restoreClock = withMotionClock(EXIT_DURATION);
-    const restoreAnimations = withPlayableAnimations();
-    try {
-      const view = mountedView("a **word** b", 6);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      // The caret moves, but stays inside the same construct: nothing has
-      // departed, so nothing is held open.
-      view.dispatch({ selection: { anchor: 7 } });
-      expect(standIns(view)).toHaveLength(0);
-    } finally {
-      restoreAnimations();
-      restoreClock();
-    }
+    const marker = view.dom.querySelector<HTMLElement>(".cm-skr-reveal-marker");
+    expect(marker?.textContent).toBe("## ");
+    expect(getComputedStyle(marker as HTMLElement).maxWidth).toBe("none");
+    expect(marker?.getAttribute("data-skr-marker-exit")).toBeNull();
   });
 });
 
@@ -2471,6 +2574,10 @@ describe("the rendered table cell key contract", () => {
     ),
   )("answers %s without touching the note", (_name, key, init) => {
     const view = mountedView(source, 0);
+    if (!forceParsing(view, view.state.doc.length, 5_000)) {
+      throw new Error("fixture syntax tree did not finish parsing");
+    }
+    view.dispatch({ selection: { anchor: 0 } });
     // The middle cell of the middle row: no edge behaviour, so no key in
     // this sweep has any business changing the note's text.
     expect(focusRenderedTableCell(view, tableFrom, 1, 1, 1)).toBe(true);

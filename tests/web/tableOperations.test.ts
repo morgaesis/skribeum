@@ -76,6 +76,68 @@ const ALL_OPERATIONS: readonly TableOperation[] = [
 const SIMPLE = "| a | b |\n| --- | --- |\n| c | d |";
 
 describe("table structure operations", () => {
+  it("sorts body rows as one stable source rewrite", () => {
+    const source =
+      "| Name | Score |\n| --- | ---: |\n| zed | 2 |\n| Ada | 10 |\n| ada | 1 |";
+    const ascending = assertContainment(source, {
+      kind: "sort-rows",
+      column: 0,
+      direction: "ascending",
+    });
+    expect(ascending).toBe(
+      "| Name | Score |\n| --- | ---: |\n| Ada | 10 |\n| ada | 1 |\n| zed | 2 |",
+    );
+    expect(
+      applyTableOperation("| Name |\n| --- |\n| Ada |\n| zed |\n| ada |", {
+        kind: "sort-rows",
+        column: 0,
+        direction: "descending",
+      }),
+    ).toBe("| Name |\n| --- |\n| zed |\n| Ada |\n| ada |");
+    expect(
+      applyTableOperation(source, {
+        kind: "sort-rows",
+        column: 1,
+        direction: "descending",
+      }),
+    ).toBe(
+      "| Name | Score |\n| --- | ---: |\n| Ada | 10 |\n| zed | 2 |\n| ada | 1 |",
+    );
+  });
+
+  it("does not rewrite a table already in the requested order", () => {
+    for (const [source, direction] of [
+      ["| Name |\n| --- |\n| Ada |\n| Zed |", "ascending"],
+      ["| Name |\n| --- |\n| Zed |\n| Ada |", "descending"],
+    ] as const) {
+      expect(
+        editTable(source, {
+          kind: "sort-rows",
+          column: 0,
+          direction,
+        }),
+      ).toEqual([]);
+      expect(
+        applyTableOperation(source, {
+          kind: "sort-rows",
+          column: 0,
+          direction,
+        }),
+      ).toBe(source);
+    }
+  });
+
+  it("preserves a terminal newline while sorting body rows", () => {
+    const source = "| Name |\n| --- |\n| Zed |\n| Ada |\n";
+    expect(
+      applyTableOperation(source, {
+        kind: "sort-rows",
+        column: 0,
+        direction: "ascending",
+      }),
+    ).toBe("| Name |\n| --- |\n| Ada |\n| Zed |\n");
+  });
+
   it("inserts a row below with the delimiter and alignment intact", () => {
     const result = assertContainment(SIMPLE, {
       kind: "insert-row",

@@ -455,14 +455,34 @@ describe("properties panel (section 4.15) and statusline (section 4.16)", () => 
     await $('button[aria-label="More actions"]').click();
     const overflow = $('[data-testid="anchored-menu"]');
     await overflow.waitForDisplayed({ timeout: 10000 });
-    await overflow.$('[data-command-id="editor.toggle-source-mode"]').click();
-    await overflow.waitForExist({ reverse: true, timeout: 10000 });
+    const sourceToggle = overflow.$(
+      '[data-command-id="editor.toggle-source-mode"]',
+    );
+    await sourceToggle.click();
+    await browser.waitUntil(
+      async () => {
+        const currentOverflow = $('[data-testid="anchored-menu"]');
+        if (!(await currentOverflow.isDisplayed())) return false;
+        const currentToggle = currentOverflow.$(
+          '[data-command-id="editor.toggle-source-mode"]',
+        );
+        return (
+          (await currentToggle.getAttribute("aria-pressed")) === "true" &&
+          (await currentToggle.$(".skr-action-menu-check").getText()) === "✓"
+        );
+      },
+      {
+        timeout: 10000,
+        timeoutMsg:
+          "source mode did not update while the overflow menu remained open",
+      },
+    );
     const lineColumn = $('[data-testid="statusline-line-column"]');
     await lineColumn.waitForDisplayed({ timeout: 10000 });
     expect(await lineColumn.getText()).toMatch(/^Ln \d+, Col \d+$/);
-    // Exits through the registered keybinding rather than a second overflow
-    // round trip: Mod-E is the same toggle command's shortcut (confirmed
-    // reliable for modifier-plus-letter chords in this WebKitGTK build).
+    // Dismiss the persistent menu before using the registered keybinding.
+    await browser.keys(Key.Escape);
+    await overflow.waitForExist({ reverse: true, timeout: 10000 });
     await browser.keys([modifierKey, "e"]);
     await lineColumn.waitForExist({ reverse: true, timeout: 10000 });
   });

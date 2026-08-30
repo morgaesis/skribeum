@@ -154,6 +154,7 @@ describe("callout source parsing", () => {
     expect(parseCallout("> Ordinary quote")).toBeNull();
     expect(parseCallout("> text [!note]")).toBeNull();
     expect(parseCallout("[!note]\nBody without a blockquote")).toBeNull();
+    expect(parseCallout("> [NOTE]- Missing marker")).toBeNull();
   });
 });
 

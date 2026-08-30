@@ -9,6 +9,7 @@ import {
   explicitTableSource,
   focusedRenderedTableCell,
   focusRenderedTableCell,
+  setRenderedTableSortState,
 } from "../editor/decorations/engine";
 import type { CommandContext, CommandRegistry } from "../registry";
 import { STRINGS } from "../strings";
@@ -177,13 +178,27 @@ function dispatchOperation(
     column: number;
     selection?: "start" | "end" | "all" | number;
   },
+  restoreOnNoop = false,
 ): boolean {
   if (view.state.readOnly) {
     return false;
   }
   const spans = editTable(context.text, operation);
   if (spans.length === 0) {
-    return true;
+    if (restoreOnNoop) {
+      view.dispatch({
+        selection: { anchor: context.blockFrom },
+        scrollIntoView: true,
+      });
+      restoreCell(
+        view,
+        context.blockFrom,
+        target.row,
+        target.column,
+        target.selection ?? "end",
+      );
+    }
+    return restoreOnNoop;
   }
   view.dispatch({
     changes: spans.map((span) => ({
@@ -339,7 +354,12 @@ function enterAdjacentTable(
 }
 
 function operationCommand(
-  operation: "delete-row" | "delete-column" | "edit-source",
+  operation:
+    | "delete-row"
+    | "delete-column"
+    | "edit-source"
+    | "sort-ascending"
+    | "sort-descending",
 ) {
   return (view: EditorView): boolean => {
     const context = tableContextAt(view.state, view);
@@ -348,6 +368,26 @@ function operationCommand(
     }
     if (operation === "edit-source") {
       return editRenderedTableSource(view);
+    }
+    if (operation === "sort-ascending" || operation === "sort-descending") {
+      const direction =
+        operation === "sort-ascending" ? "ascending" : "descending";
+      const sorted = dispatchOperation(
+        view,
+        context,
+        { kind: "sort-rows", column: context.currentColumn, direction },
+        { row: 0, column: context.currentColumn },
+        true,
+      );
+      if (sorted) {
+        setRenderedTableSortState(
+          view,
+          context.blockFrom,
+          context.currentColumn,
+          direction,
+        );
+      }
+      return sorted;
     }
     switch (operation) {
       case "delete-row":
@@ -511,15 +551,28 @@ export function registerTableEditing(registry: CommandRegistry): void {
       title: STRINGS.tableEditSource,
       run: operationCommand("edit-source"),
     },
+    {
+      id: "table.sort.ascending",
+      title: "Table: sort by column ascending",
+      run: operationCommand("sort-ascending"),
+    },
+    {
+      id: "table.sort.descending",
+      title: "Table: sort by column descending",
+      run: operationCommand("sort-descending"),
+    },
   ] as const;
   for (const command of structural) {
+    const keywords = command.id.startsWith("table.sort.")
+      ? ["table", "column", "sort"]
+      : ["table", "row", "column"];
     registry.register({
       id: command.id,
       title: command.title,
       scope: "editor",
       pointer: ["command-palette", "overflow-menu", "slash-menu"],
-      slash: { keywords: ["table", "row", "column"] },
-      searchTerms: ["table", "row", "column"],
+      slash: { keywords },
+      searchTerms: keywords,
       run: (context) => context.view !== null && command.run(context.view),
     });
   }

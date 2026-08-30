@@ -2,13 +2,17 @@ import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import StartupVaultRecovery from "../../src/lib/StartupVaultRecovery.svelte";
 import {
+  browseVaultSelection,
   emptyStartupSurface,
   failedStartupSurface,
   isStaleVaultOpenError,
   nextStartupDecision,
+  readVaultPickerSession,
   selectedStartupFailureSurface,
   staleChooserStartupDecision,
   startupSource,
+  startupVaultRows,
+  VaultPickerOperationOwnership,
   type VaultStartupSession,
 } from "../../src/lib/startupVaultRecovery";
 import StartupVaultRecoveryHarness from "./StartupVaultRecoveryHarness.svelte";
@@ -24,6 +28,127 @@ afterEach(() => {
 });
 
 describe("startup vault recovery decisions", () => {
+  it("discards a delayed picker read after dismissal", async () => {
+    const ownership = new VaultPickerOperationOwnership();
+    const delayed = Promise.withResolvers<VaultStartupSession>();
+    const reading = readVaultPickerSession(ownership, () => delayed.promise);
+
+    ownership.invalidate();
+    delayed.resolve({
+      ...emptySession,
+      recent_vaults: ["/vaults/stale"],
+    });
+
+    await expect(reading).resolves.toEqual({ kind: "superseded" });
+  });
+
+  it("lets only the newest picker request publish its session", async () => {
+    const ownership = new VaultPickerOperationOwnership();
+    const older = Promise.withResolvers<VaultStartupSession>();
+    const newer = Promise.withResolvers<VaultStartupSession>();
+    const olderRead = readVaultPickerSession(ownership, () => older.promise);
+    const newerRead = readVaultPickerSession(ownership, () => newer.promise);
+
+    newer.resolve({ ...emptySession, recent_vaults: ["/vaults/newer"] });
+    await expect(newerRead).resolves.toEqual({
+      kind: "loaded",
+      session: { ...emptySession, recent_vaults: ["/vaults/newer"] },
+    });
+
+    older.resolve({ ...emptySession, recent_vaults: ["/vaults/older"] });
+    await expect(olderRead).resolves.toEqual({ kind: "superseded" });
+  });
+
+  it("transfers only the owning picker operation across vault replacement", () => {
+    const ownership = new VaultPickerOperationOwnership();
+    const browsing = ownership.begin();
+    const stale = { ...browsing };
+
+    expect(ownership.replace(browsing)).toBe(true);
+    expect(ownership.isCurrent(browsing)).toBe(true);
+    expect(ownership.replace(stale)).toBe(false);
+
+    const newer = ownership.begin();
+    expect(ownership.isCurrent(browsing)).toBe(false);
+    expect(ownership.invalidate(browsing)).toBe(false);
+    expect(ownership.isCurrent(newer)).toBe(true);
+  });
+
+  it("blocks a delayed browse from opening after another vault replacement", async () => {
+    const ownership = new VaultPickerOperationOwnership();
+    const operation = ownership.begin();
+    const selection = Promise.withResolvers<string | null>();
+    const superseded = new Error("superseded");
+    let openedPath: string | null = null;
+
+    const browsing = browseVaultSelection(
+      () => selection.promise,
+      async (path) => {
+        if (!ownership.replace(operation)) return superseded;
+        openedPath = path;
+        return null;
+      },
+    );
+
+    ownership.replace();
+    selection.resolve("/vaults/stale-selection");
+
+    await expect(browsing).resolves.toEqual({
+      kind: "failed",
+      error: superseded,
+    });
+    expect(openedPath).toBeNull();
+    expect(ownership.isCurrent(operation)).toBe(false);
+  });
+
+  it("returns a caught failure when the vault directory dialog rejects", async () => {
+    const rejection = new Error("directory dialog unavailable");
+    let opened = false;
+
+    const result = await browseVaultSelection(
+      async () => {
+        throw rejection;
+      },
+      async () => {
+        opened = true;
+        return null;
+      },
+    );
+
+    expect(result).toEqual({ kind: "failed", error: rejection });
+    expect(opened).toBe(false);
+  });
+
+  it("treats cancelling the vault directory dialog as a no-op", async () => {
+    let opened = false;
+
+    const result = await browseVaultSelection(
+      async () => null,
+      async () => {
+        opened = true;
+        return null;
+      },
+    );
+
+    expect(result).toEqual({ kind: "cancelled" });
+    expect(opened).toBe(false);
+  });
+
+  it("opens the selected startup vault", async () => {
+    let openedPath: string | null = null;
+
+    const result = await browseVaultSelection(
+      async () => "/vaults/selected",
+      async (path) => {
+        openedPath = path;
+        return null;
+      },
+    );
+
+    expect(result).toEqual({ kind: "opened" });
+    expect(openedPath).toBe("/vaults/selected");
+  });
+
   it("keeps browser and demo launches out of native session recovery", () => {
     expect(startupSource({ desktop: false })).toEqual({ kind: "browser" });
     expect(startupSource({ desktop: true, webdriverVault: "/e2e" })).toEqual({
@@ -89,13 +214,32 @@ describe("startup vault recovery decisions", () => {
       "/work/archive/Journal",
     ]);
     expect(decision.surface.rows.map((row) => row.label)).toEqual([
-      "Notes, /work/alpha/Notes",
-      "Notes, /work/beta/Notes",
+      "Notes · alpha",
+      "Notes · beta",
       "Journal",
     ]);
     expect(decision.surface.rows[0]?.accessibleLabel).toBe(
-      "Open vault /work/alpha/Notes",
+      "Open vault Notes in alpha",
     );
+  });
+
+  it("adds ancestors until every duplicate vault name is unique", () => {
+    const rows = startupVaultRows([
+      "/a/work/Notes",
+      "/b/work/Notes",
+      "/c/other/Notes",
+    ]);
+
+    expect(rows.map((row) => row.label)).toEqual([
+      "Notes · a/work",
+      "Notes · b/work",
+      "Notes · other",
+    ]);
+    expect(rows.map((row) => row.accessibleLabel)).toEqual([
+      "Open vault Notes in a/work",
+      "Open vault Notes in b/work",
+      "Open vault Notes in other",
+    ]);
   });
 
   it("reapplies recents after the native stale-path forget result", () => {

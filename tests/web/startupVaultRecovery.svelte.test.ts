@@ -12,7 +12,7 @@ import {
   staleChooserStartupDecision,
   startupSource,
   startupVaultRows,
-  VaultPickerReadOwnership,
+  VaultPickerOperationOwnership,
   type VaultStartupSession,
 } from "../../src/lib/startupVaultRecovery";
 import StartupVaultRecoveryHarness from "./StartupVaultRecoveryHarness.svelte";
@@ -29,7 +29,7 @@ afterEach(() => {
 
 describe("startup vault recovery decisions", () => {
   it("discards a delayed picker read after dismissal", async () => {
-    const ownership = new VaultPickerReadOwnership();
+    const ownership = new VaultPickerOperationOwnership();
     const delayed = Promise.withResolvers<VaultStartupSession>();
     const reading = readVaultPickerSession(ownership, () => delayed.promise);
 
@@ -43,7 +43,7 @@ describe("startup vault recovery decisions", () => {
   });
 
   it("lets only the newest picker request publish its session", async () => {
-    const ownership = new VaultPickerReadOwnership();
+    const ownership = new VaultPickerOperationOwnership();
     const older = Promise.withResolvers<VaultStartupSession>();
     const newer = Promise.withResolvers<VaultStartupSession>();
     const olderRead = readVaultPickerSession(ownership, () => older.promise);
@@ -57,6 +57,48 @@ describe("startup vault recovery decisions", () => {
 
     older.resolve({ ...emptySession, recent_vaults: ["/vaults/older"] });
     await expect(olderRead).resolves.toEqual({ kind: "superseded" });
+  });
+
+  it("transfers only the owning picker operation across vault replacement", () => {
+    const ownership = new VaultPickerOperationOwnership();
+    const browsing = ownership.begin();
+    const stale = { ...browsing };
+
+    expect(ownership.replace(browsing)).toBe(true);
+    expect(ownership.isCurrent(browsing)).toBe(true);
+    expect(ownership.replace(stale)).toBe(false);
+
+    const newer = ownership.begin();
+    expect(ownership.isCurrent(browsing)).toBe(false);
+    expect(ownership.invalidate(browsing)).toBe(false);
+    expect(ownership.isCurrent(newer)).toBe(true);
+  });
+
+  it("blocks a delayed browse from opening after another vault replacement", async () => {
+    const ownership = new VaultPickerOperationOwnership();
+    const operation = ownership.begin();
+    const selection = Promise.withResolvers<string | null>();
+    const superseded = new Error("superseded");
+    let openedPath: string | null = null;
+
+    const browsing = browseVaultSelection(
+      () => selection.promise,
+      async (path) => {
+        if (!ownership.replace(operation)) return superseded;
+        openedPath = path;
+        return null;
+      },
+    );
+
+    ownership.replace();
+    selection.resolve("/vaults/stale-selection");
+
+    await expect(browsing).resolves.toEqual({
+      kind: "failed",
+      error: superseded,
+    });
+    expect(openedPath).toBeNull();
+    expect(ownership.isCurrent(operation)).toBe(false);
   });
 
   it("returns a caught failure when the vault directory dialog rejects", async () => {

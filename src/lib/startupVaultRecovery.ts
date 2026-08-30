@@ -36,37 +36,50 @@ export type VaultPickerReadResult =
   | { kind: "failed"; error: unknown }
   | { kind: "superseded" };
 
-/** Gives only the newest picker read permission to update picker state. */
-export class VaultPickerReadOwnership {
+export type VaultPickerOperation = { epoch: number };
+
+/** Gives one picker operation permission to publish across vault replacement. */
+export class VaultPickerOperationOwnership {
   #epoch = 0;
 
-  begin(): number {
+  begin(): VaultPickerOperation {
     this.#epoch += 1;
-    return this.#epoch;
+    return { epoch: this.#epoch };
   }
 
-  invalidate(): void {
+  /** Invalidates every operation, or only the operation that still owns state. */
+  invalidate(operation?: VaultPickerOperation): boolean {
+    if (operation !== undefined && !this.isCurrent(operation)) return false;
     this.#epoch += 1;
+    return true;
   }
 
-  isCurrent(epoch: number): boolean {
-    return this.#epoch === epoch;
+  /** Transfers a current operation across a vault replacement boundary. */
+  replace(operation?: VaultPickerOperation): boolean {
+    if (operation !== undefined && !this.isCurrent(operation)) return false;
+    this.#epoch += 1;
+    if (operation !== undefined) operation.epoch = this.#epoch;
+    return true;
+  }
+
+  isCurrent(operation: VaultPickerOperation): boolean {
+    return this.#epoch === operation.epoch;
   }
 }
 
 /** Reads picker rows without allowing an obsolete completion to escape. */
 export async function readVaultPickerSession(
-  ownership: VaultPickerReadOwnership,
+  ownership: VaultPickerOperationOwnership,
   read: () => Promise<VaultStartupSession>,
 ): Promise<VaultPickerReadResult> {
-  const epoch = ownership.begin();
+  const operation = ownership.begin();
   try {
     const session = await read();
-    return ownership.isCurrent(epoch)
+    return ownership.isCurrent(operation)
       ? { kind: "loaded", session }
       : { kind: "superseded" };
   } catch (error) {
-    return ownership.isCurrent(epoch)
+    return ownership.isCurrent(operation)
       ? { kind: "failed", error }
       : { kind: "superseded" };
   }

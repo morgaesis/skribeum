@@ -195,7 +195,8 @@ import {
   staleChooserStartupDecision,
   startupSource,
   startupVaultRows,
-  VaultPickerReadOwnership,
+  type VaultPickerOperation,
+  VaultPickerOperationOwnership,
   type VaultStartupSession,
 } from "./lib/startupVaultRecovery";
 import { STRINGS } from "./lib/strings";
@@ -222,6 +223,7 @@ import WindowControls from "./lib/WindowControls.svelte";
 import { showWindowSystemMenu } from "./lib/windowChrome";
 import {
   clearWorkspacePreviewReplacement,
+  commitWorkspacePanePath,
   currentWorkspaceNavigationPane,
   defaultWorkspaceState,
   emptyPane,
@@ -389,7 +391,7 @@ let vaultPickerOpen = $state(false);
 let vaultPickerRows = $state<ReturnType<typeof startupVaultRows>>([]);
 let vaultPickerError = $state<string | null>(null);
 let vaultPickerButton = $state<HTMLButtonElement | null>();
-const vaultPickerReads = new VaultPickerReadOwnership();
+const vaultPickerOperations = new VaultPickerOperationOwnership();
 let vaultPickerReadPending = false;
 let sidebarHeaderHovered = $state(false);
 let sidebarFocused = $state(false);
@@ -973,10 +975,7 @@ function trackOpenedPaneTab(
   path: string,
   pane = focusedWorkspacePane(),
 ): WorkspacePathLoadOutcome {
-  ensurePaneTab(pane, path);
-  pane.emptyTab = false;
-  pane.activePath = path;
-  return workspacePaneOwnsActivePath(workspace.layout, pane.id, path)
+  return commitWorkspacePanePath(workspace.layout, pane.id, path) !== null
     ? { kind: "loaded", paneId: pane.id }
     : { kind: "failed" };
 }
@@ -992,6 +991,17 @@ function pathLoadDestinationPane(
         workspace.focusedPaneId,
         target.paneId,
       );
+}
+
+function boundPathLoadTarget(
+  paneId: string,
+  acceptMissing = true,
+): WorkspacePathLoadTarget {
+  return {
+    kind: "bound-pane",
+    paneId,
+    acceptMissing,
+  };
 }
 
 /** Takes the pane binding queued with one browser navigation load. */
@@ -1039,7 +1049,7 @@ async function activateWorkspaceTab(path: string | null) {
   const tab = ensurePaneTab(pane, path);
   pane.emptyTab = false;
   pane.activePath = path;
-  await reopenPath(path, tab.viewState, "tab");
+  await reopenPath(path, tab.viewState, "tab", boundPathLoadTarget(pane.id));
   updatePaneNavigationState();
 }
 
@@ -1073,7 +1083,12 @@ async function adoptFocusedPane(id: string) {
     clearDocumentSurface();
   } else {
     const tab = ensurePaneTab(pane, pane.activePath);
-    await reopenPath(pane.activePath, tab.viewState, "tab");
+    await reopenPath(
+      pane.activePath,
+      tab.viewState,
+      "tab",
+      boundPathLoadTarget(pane.id),
+    );
   }
   updatePaneNavigationState();
 }
@@ -1480,7 +1495,12 @@ function paneNavigate(direction: -1 | 1): boolean {
   const tab = ensurePaneTab(pane, entry.address.path);
   pane.emptyTab = false;
   pane.activePath = tab.path;
-  void openNoteAddress(entry.address, entry.viewState, "history");
+  void openNoteAddress(
+    entry.address,
+    entry.viewState,
+    "history",
+    boundPathLoadTarget(pane.id),
+  );
   updatePaneNavigationState();
   return true;
 }
@@ -3271,7 +3291,12 @@ async function openVaultAtPath(
   initialNote?: string,
   reportError = true,
   isCurrent: () => boolean = () => true,
+  pickerOperation?: VaultPickerOperation,
 ): Promise<unknown | null> {
+  if (!vaultPickerOperations.replace(pickerOperation)) {
+    return new Error("The vault open request was superseded.");
+  }
+  hideVaultPicker();
   errorText = null;
   tagCatalogGeneration += 1;
   if ((await editor?.flush()) === false) {
@@ -3355,7 +3380,12 @@ async function openVaultAtPath(
       const path = pane.activePath;
       if (path !== null) {
         const tab = ensurePaneTab(pane, path);
-        await reopenPath(path, tab.viewState);
+        await reopenPath(
+          path,
+          tab.viewState,
+          "note",
+          boundPathLoadTarget(pane.id),
+        );
         updatePaneNavigationState();
       }
     } else if (addressed !== null) {
@@ -3387,7 +3417,12 @@ async function openVaultAtPath(
       const path = pane.activePath;
       if (path !== null) {
         const tab = ensurePaneTab(pane, path);
-        await reopenPath(path, tab.viewState);
+        await reopenPath(
+          path,
+          tab.viewState,
+          "note",
+          boundPathLoadTarget(pane.id),
+        );
         navigation?.syncAddress({ path });
         updatePaneNavigationState();
       }
@@ -3506,8 +3541,10 @@ async function recoverStartupVault(
 }
 
 async function openStartupVault(path?: string): Promise<void> {
+  const operation = vaultPickerOperations.begin();
   if (path === undefined) {
-    const result = await browseForVault();
+    const result = await browseForVault(operation);
+    if (!vaultPickerOperations.isCurrent(operation)) return;
     if (result.kind === "failed") {
       errorText = null;
       const error = describeError(STRINGS.vaultOpenFailed, result.error);
@@ -3516,10 +3553,21 @@ async function openStartupVault(path?: string): Promise<void> {
           ? { ...startupVaultSurface, error }
           : emptyStartupSurface(error);
     }
+    vaultPickerOperations.invalidate(operation);
     return;
   }
-  const failure = await openVaultAtPath(path, undefined, false);
-  if (failure === null) return;
+  const failure = await openVaultAtPath(
+    path,
+    undefined,
+    false,
+    () => true,
+    operation,
+  );
+  if (!vaultPickerOperations.isCurrent(operation)) return;
+  if (failure === null) {
+    vaultPickerOperations.invalidate(operation);
+    return;
+  }
   errorText = null;
   const error = describeError(STRINGS.vaultOpenFailed, failure);
   if (
@@ -3530,28 +3578,44 @@ async function openStartupVault(path?: string): Promise<void> {
       path,
       error,
     );
+    vaultPickerOperations.invalidate(operation);
     return;
   }
   try {
     const nextSession = await vaultSessionForget(path);
+    if (!vaultPickerOperations.isCurrent(operation)) return;
     const next = staleChooserStartupDecision(nextSession);
     if (next.kind === "surface") {
       startupVaultSurface = next.surface;
+      vaultPickerOperations.invalidate(operation);
       return;
     }
-    const fallbackFailure = await openVaultAtPath(next.path, undefined, false);
-    if (fallbackFailure === null) return;
+    const fallbackFailure = await openVaultAtPath(
+      next.path,
+      undefined,
+      false,
+      () => true,
+      operation,
+    );
+    if (!vaultPickerOperations.isCurrent(operation)) return;
+    if (fallbackFailure === null) {
+      vaultPickerOperations.invalidate(operation);
+      return;
+    }
     startupVaultSurface = failedStartupSurface(
       nextSession,
       next.path,
       describeError(STRINGS.vaultOpenFailed, fallbackFailure),
     );
+    vaultPickerOperations.invalidate(operation);
   } catch (forgetError) {
+    if (!vaultPickerOperations.isCurrent(operation)) return;
     startupVaultSurface = selectedStartupFailureSurface(
       startupVaultSurface,
       path,
       describeError(STRINGS.vaultOpenFailed, forgetError),
     );
+    vaultPickerOperations.invalidate(operation);
   }
 }
 
@@ -3612,18 +3676,21 @@ async function startupVaultRecoverySequence(
   }
 }
 
-function browseForVault() {
+function browseForVault(operation: VaultPickerOperation) {
   return browseVaultSelection(
     () => openDirectoryDialog({ directory: true, multiple: false }),
-    (path) => openVaultAtPath(path, undefined, false),
+    (path) => openVaultAtPath(path, undefined, false, () => true, operation),
   );
 }
 
 async function pickVault() {
-  const result = await browseForVault();
+  const operation = vaultPickerOperations.begin();
+  const result = await browseForVault(operation);
+  if (!vaultPickerOperations.isCurrent(operation)) return;
   if (result.kind === "failed") {
     errorText = describeError(STRINGS.vaultOpenFailed, result.error);
   }
+  vaultPickerOperations.invalidate(operation);
 }
 
 async function openVaultPicker() {
@@ -3634,7 +3701,7 @@ async function openVaultPicker() {
   vaultPickerError = null;
   vaultPickerReadPending = true;
   const result = await readVaultPickerSession(
-    vaultPickerReads,
+    vaultPickerOperations,
     vaultSessionRead,
   );
   if (result.kind === "superseded") return;
@@ -3648,39 +3715,81 @@ async function openVaultPicker() {
   vaultPickerOpen = true;
 }
 
-function closeVaultPicker() {
-  vaultPickerReads.invalidate();
+function hideVaultPicker() {
   vaultPickerReadPending = false;
   vaultPickerOpen = false;
   vaultPickerError = null;
 }
 
+function closeVaultPicker(operation?: VaultPickerOperation) {
+  if (!vaultPickerOperations.invalidate(operation)) return;
+  hideVaultPicker();
+}
+
+function reopenVaultPicker(
+  operation: VaultPickerOperation,
+  error: string | null,
+  rows = vaultPickerRows,
+): boolean {
+  if (!vaultPickerOperations.isCurrent(operation)) return false;
+  vaultPickerReadPending = false;
+  vaultPickerRows = rows;
+  vaultPickerError = error;
+  vaultPickerOpen = true;
+  return true;
+}
+
 async function openRecentVaultFromPicker(path: string) {
-  const failure = await openVaultAtPath(path, undefined, false);
+  const operation = vaultPickerOperations.begin();
+  const failure = await openVaultAtPath(
+    path,
+    undefined,
+    false,
+    () => true,
+    operation,
+  );
+  if (!vaultPickerOperations.isCurrent(operation)) return;
   if (failure === null) {
-    closeVaultPicker();
+    closeVaultPicker(operation);
     return;
   }
   if (failure instanceof IpcError && isStaleVaultOpenError(failure.app.code)) {
     try {
       const session = await vaultSessionForget(path);
-      vaultPickerRows = startupVaultRows(session.recent_vaults);
-      vaultPickerError = null;
+      if (!vaultPickerOperations.isCurrent(operation)) return;
+      reopenVaultPicker(
+        operation,
+        null,
+        startupVaultRows(session.recent_vaults),
+      );
+      vaultPickerOperations.invalidate(operation);
       return;
     } catch (error) {
-      vaultPickerError = describeError(STRINGS.vaultOpenFailed, error);
+      if (!vaultPickerOperations.isCurrent(operation)) return;
+      reopenVaultPicker(
+        operation,
+        describeError(STRINGS.vaultOpenFailed, error),
+      );
+      vaultPickerOperations.invalidate(operation);
       return;
     }
   }
-  vaultPickerError = describeError(STRINGS.vaultOpenFailed, failure);
+  reopenVaultPicker(operation, describeError(STRINGS.vaultOpenFailed, failure));
+  vaultPickerOperations.invalidate(operation);
 }
 
 async function browseVaultFromPicker() {
-  const result = await browseForVault();
-  if (result.kind === "opened") closeVaultPicker();
+  const operation = vaultPickerOperations.begin();
+  const result = await browseForVault(operation);
+  if (!vaultPickerOperations.isCurrent(operation)) return;
+  if (result.kind === "opened") closeVaultPicker(operation);
   else if (result.kind === "failed") {
-    vaultPickerError = describeError(STRINGS.vaultOpenFailed, result.error);
-  }
+    reopenVaultPicker(
+      operation,
+      describeError(STRINGS.vaultOpenFailed, result.error),
+    );
+    vaultPickerOperations.invalidate(operation);
+  } else vaultPickerOperations.invalidate(operation);
 }
 
 function openEndToEndVault(path: string): Promise<unknown | null> {
@@ -3751,11 +3860,9 @@ async function openNote(
     }
     const destinationPane = pathLoadDestinationPane(target);
     if (destinationPane === null) return { kind: "failed" };
-    ensurePaneTab(destinationPane, path);
-    destinationPane.emptyTab = false;
-    destinationPane.activePath = path;
     if (
-      !workspacePaneOwnsActivePath(workspace.layout, destinationPane.id, path)
+      commitWorkspacePanePath(workspace.layout, destinationPane.id, path) ===
+      null
     ) {
       return { kind: "failed" };
     }
@@ -3815,6 +3922,16 @@ async function openNote(
     }
     if (pathLoadDestinationPane(target) === null) return { kind: "failed" };
     if (isMissingNoteError(error)) {
+      const outcome = { kind: "missing" } as const;
+      if (!workspacePathLoadAccepted(target, outcome)) return outcome;
+      const destinationPane = pathLoadDestinationPane(target);
+      if (destinationPane === null) return { kind: "failed" };
+      if (
+        commitWorkspacePanePath(workspace.layout, destinationPane.id, path) ===
+        null
+      ) {
+        return { kind: "failed" };
+      }
       note = null;
       currentNoteSource = "";
       sourceMode = false;
@@ -3825,7 +3942,7 @@ async function openNote(
       imageError = null;
       selectedPath = null;
       missingAddress = { path };
-      return { kind: "missing" };
+      return outcome;
     }
     errorText = describeError(STRINGS.noteReadFailed, error);
     return { kind: "failed" };
@@ -3853,6 +3970,7 @@ async function openNoteAddress(
     target,
   );
   if (!workspacePathLoadAccepted(target, outcome)) return false;
+  if (pathLoadDestinationPane(target) === null) return false;
   if (outcome.kind === "missing") {
     missingAddress = address;
     if (source === "history") focusReadingSurface();
@@ -3860,6 +3978,7 @@ async function openNoteAddress(
   }
   if (source === "history") {
     await tick();
+    if (pathLoadDestinationPane(target) === null) return false;
     focusReadingSurface();
     requestAnimationFrame(() => focusReadingSurface());
     return true;
@@ -3869,6 +3988,7 @@ async function openNoteAddress(
     return true;
   }
   await tick();
+  if (pathLoadDestinationPane(target) === null) return false;
   const view = editor?.getView();
   if (view === undefined) {
     return false;
@@ -3931,7 +4051,14 @@ async function navigateToNote(
       ) {
         if (!(await focusWorkspacePane(destinationPaneId))) return false;
         await activateWorkspaceTab(path);
-        if (fragment !== undefined) await openNoteAddress(address, null);
+        if (fragment !== undefined) {
+          await openNoteAddress(
+            address,
+            null,
+            "fresh",
+            boundPathLoadTarget(destinationPaneId),
+          );
+        }
         const committed = selectedPath === path;
         if (committed) {
           settlePreviewReplacement("committed");
@@ -3948,10 +4075,10 @@ async function navigateToNote(
       }
     }
     captureFocusedTabState();
-    const loadTarget: WorkspacePathLoadTarget =
-      destination === "focused-pane" || temporaryNavigation !== null
-        ? { kind: "bound-pane", paneId: pane.id }
-        : ORDINARY_PATH_LOAD_TARGET;
+    const loadTarget = boundPathLoadTarget(
+      pane.id,
+      !temporaryPaneTransitions.has(pane.id),
+    );
     const alreadyOpen = pane.tabs.some((tab) => tab.path === path);
     const previousActiveIndex =
       pane.activePath === null
@@ -3992,6 +4119,7 @@ async function navigateToNote(
         }
       }
       if (!opened) return false;
+      if (pathLoadDestinationPane(loadTarget) !== pane) return false;
       settlePreviewReplacement("committed");
       commitNavigatedTab(
         pane,
@@ -4012,6 +4140,7 @@ async function navigateToNote(
       loadTarget,
     );
     if (opened) {
+      if (pathLoadDestinationPane(loadTarget) !== pane) return false;
       settlePreviewReplacement("committed");
       commitNavigatedTab(
         pane,
@@ -4174,8 +4303,10 @@ async function refreshMissingNote() {
   if (address === null) {
     return;
   }
+  const paneId = workspace.focusedPaneId;
   await refreshTree();
-  await openNoteAddress(address);
+  if (workspace.focusedPaneId !== paneId) return;
+  await openNoteAddress(address, null, "fresh", boundPathLoadTarget(paneId));
 }
 
 function decodeFile(bytes: Uint8Array): string {
@@ -4479,10 +4610,10 @@ async function reopenPath(
   path: string,
   restoration: NoteViewState | null = null,
   switchKind: PaneSwitchKind = "note",
+  target: WorkspacePathLoadTarget = ORDINARY_PATH_LOAD_TARGET,
 ): Promise<boolean> {
   return (
-    (await loadPath(path, restoration, switchKind, ORDINARY_PATH_LOAD_TARGET))
-      .kind === "loaded"
+    (await loadPath(path, restoration, switchKind, target)).kind === "loaded"
   );
 }
 

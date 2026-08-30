@@ -83,7 +83,7 @@ export type WorkspacePathDestination = "existing-pane" | "focused-pane";
 
 export type WorkspacePathLoadTarget =
   | { kind: "ordinary" }
-  | { kind: "bound-pane"; paneId: string };
+  | { kind: "bound-pane"; paneId: string; acceptMissing: boolean };
 
 export type WorkspacePathLoadOutcome =
   | { kind: "loaded"; paneId: string }
@@ -190,13 +190,31 @@ export function workspacePaneOwnsActivePath(
   );
 }
 
-/** Ordinary navigation accepts missing-note surfaces; pane-bound drops do not. */
+/** Installs a path as a tab before making it the pane's active path. */
+export function commitWorkspacePanePath(
+  node: WorkspaceNode,
+  paneId: string,
+  path: string,
+): WorkspaceLeaf | null {
+  const pane = findWorkspaceLeaf(node, paneId);
+  if (pane === null) return null;
+  if (!pane.tabs.some((tab) => tab.path === path)) {
+    pane.tabs.push({ path, viewState: null });
+  }
+  pane.emptyTab = false;
+  pane.activePath = path;
+  return workspacePaneOwnsActivePath(node, paneId, path) ? pane : null;
+}
+
+/** Accepts only outcomes owned by the target pane and its missing-note policy. */
 export function workspacePathLoadAccepted(
   target: WorkspacePathLoadTarget,
   outcome: WorkspacePathLoadOutcome,
 ): boolean {
   if (outcome.kind === "failed") return false;
-  if (outcome.kind === "missing") return target.kind === "ordinary";
+  if (outcome.kind === "missing") {
+    return target.kind === "ordinary" || target.acceptMissing === true;
+  }
   return target.kind === "ordinary" || outcome.paneId === target.paneId;
 }
 

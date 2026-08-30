@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clearWorkspacePreviewReplacement,
+  commitWorkspacePanePath,
   currentWorkspaceNavigationPane,
   defaultWorkspaceState,
   emptyPane,
@@ -26,6 +27,7 @@ import {
   type WorkspaceNode,
   workspaceLeaves,
   workspacePaneOwnsActivePath,
+  workspacePathLoadAccepted,
   workspacePathOpenPaneId,
 } from "../../src/lib/workspaceState";
 
@@ -90,6 +92,74 @@ describe("per-vault workspace state", () => {
         "existing-pane",
       ),
     ).toBe("pane-1");
+  });
+
+  it("accepts a missing surface only for an owned ordinary navigation", () => {
+    expect(
+      workspacePathLoadAccepted(
+        { kind: "bound-pane", paneId: "pane-1", acceptMissing: true },
+        { kind: "missing" },
+      ),
+    ).toBe(true);
+    expect(
+      workspacePathLoadAccepted(
+        { kind: "bound-pane", paneId: "pane-1", acceptMissing: false },
+        { kind: "missing" },
+      ),
+    ).toBe(false);
+    expect(
+      workspacePathLoadAccepted(
+        { kind: "bound-pane", paneId: "pane-1", acceptMissing: true },
+        { kind: "loaded", paneId: "pane-2" },
+      ),
+    ).toBe(false);
+  });
+
+  it("installs an accepted missing path as a tab before making it active", () => {
+    const layout = leaf("pane-1", ["existing.md"]);
+
+    const pane = commitWorkspacePanePath(layout, "pane-1", "missing.md");
+
+    expect(pane?.activePath).toBe("missing.md");
+    expect(pane?.tabs.map((tab) => tab.path)).toContain("missing.md");
+    expect(pane?.tabs.some((tab) => tab.path === pane.activePath)).toBe(true);
+  });
+
+  it("supersedes a captured-pane read when focus changes before completion", async () => {
+    const layout = splitWorkspaceLeaf(
+      leaf("pane-1", ["one.md"]),
+      "pane-1",
+      "right",
+      leaf("pane-2", ["two.md"]),
+    );
+    let focusedPaneId = "pane-1";
+    let selectedPath = "one.md";
+    const read = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+
+    const navigation = (async () => {
+      started.resolve();
+      await read.promise;
+      const destination = currentWorkspaceNavigationPane(
+        layout,
+        focusedPaneId,
+        "pane-1",
+      );
+      if (destination === null) return false;
+      commitWorkspacePanePath(layout, destination.id, "delayed.md");
+      selectedPath = "delayed.md";
+      return true;
+    })();
+
+    await started.promise;
+    focusedPaneId = "pane-2";
+    selectedPath = "two.md";
+    read.resolve();
+
+    await expect(navigation).resolves.toBe(false);
+    expect(selectedPath).toBe("two.md");
+    expect(findWorkspaceLeaf(layout, "pane-1")?.activePath).toBe("one.md");
+    expect(findWorkspaceLeaf(layout, "pane-2")?.activePath).toBe("two.md");
   });
 
   it("clears pane and path preview state at a workspace replacement", () => {

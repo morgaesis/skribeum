@@ -68,6 +68,27 @@ function tabPathsOf(node: unknown): string[] {
   return (candidate.children ?? []).flatMap(tabPathsOf);
 }
 
+function activePathsNameTabs(node: unknown): boolean {
+  if (typeof node !== "object" || node === null) return false;
+  const candidate = node as {
+    type?: string;
+    activePath?: string | null;
+    tabs?: Array<{ path?: string }>;
+    children?: unknown[];
+  };
+  if (candidate.type === "split") {
+    return (
+      candidate.children?.length === 2 &&
+      candidate.children.every(activePathsNameTabs)
+    );
+  }
+  return (
+    candidate.activePath === null ||
+    (typeof candidate.activePath === "string" &&
+      (candidate.tabs ?? []).some((tab) => tab.path === candidate.activePath))
+  );
+}
+
 async function clearWorkspaceStorage(): Promise<void> {
   await browser.execute(() => {
     for (const key of Object.keys(localStorage)) {
@@ -948,6 +969,39 @@ describe("file tree, previews, panels, and workspace tabs", () => {
       CONFIG_FILE_NAME,
       PREVIEW_SOURCE_NOTE_NAME,
     ]);
+  });
+
+  it("keeps an accepted missing-note navigation backed by an active tab", async () => {
+    const missingPath = "removed-before-navigation.md";
+    await browser.execute(async (path) => {
+      await (
+        window as Window & {
+          __SKRIBEUM_E2E_OPEN_NOTE__?: (target: string) => Promise<void>;
+        }
+      ).__SKRIBEUM_E2E_OPEN_NOTE__?.(path);
+    }, missingPath);
+    await $('[data-testid="note-not-found"]').waitForDisplayed({
+      timeout: 10000,
+    });
+
+    let snapshot: { layout: unknown } | null = null;
+    await browser.waitUntil(
+      async () => {
+        snapshot = (await workspaceSnapshot()) as typeof snapshot;
+        return (
+          snapshot !== null &&
+          tabPathsOf(snapshot.layout).includes(missingPath) &&
+          activePathsNameTabs(snapshot.layout)
+        );
+      },
+      {
+        timeoutMsg:
+          "missing-note navigation did not persist an active tab invariant",
+      },
+    );
+    expect(snapshot).not.toBeNull();
+
+    await openTreePath(TREE_FIRST_NOTE_NAME);
   });
 
   it("routes tree-row drops to pane centers and edges", async () => {

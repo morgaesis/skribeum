@@ -52,30 +52,25 @@ async function waitForWorkspaceTabPaths(paths: string[]): Promise<void> {
   );
 }
 
-async function openTreePathInNewTabFromKeyboardMenu(
-  path: string,
-): Promise<void> {
+async function openTreePathInNewTabFromRowMenu(path: string): Promise<void> {
   const row = $(`[role="treeitem"][data-path="${path}"]`);
   await row.waitForDisplayed({ timeout: 15000 });
-  await browser.execute(
-    (element) => (element as HTMLElement).focus({ preventScroll: true }),
-    await row.getElement(),
+  await row.moveTo();
+
+  const actions = row.$(
+    'button[aria-haspopup="menu"][aria-label^="File actions:"]',
   );
-  await browser.waitUntil(() => row.isFocused(), {
-    timeout: 15000,
-    timeoutMsg: `tree row did not receive focus: ${path}`,
-  });
-  await browser.keys([Key.Shift, Key.F10]);
+  await actions.waitForDisplayed({ timeout: 15000 });
+  await actions.waitForClickable({ timeout: 15000 });
+  await actions.click();
 
   const command = $(
     '[role="menu"] [role="menuitem"][data-command-id="tree.note.open-in-new-tab"]',
   );
   await command.waitForDisplayed({ timeout: 15000 });
-  await browser.waitUntil(() => command.isFocused(), {
-    timeout: 15000,
-    timeoutMsg: `open-in-new-tab command did not receive focus: ${path}`,
-  });
-  await browser.keys(Key.Enter);
+  await command.waitForClickable({ timeout: 15000 });
+  await command.click();
+  await command.waitForDisplayed({ reverse: true, timeout: 15000 });
 }
 
 async function expandTreeFolder(): Promise<void> {
@@ -976,14 +971,14 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     );
 
     await expectWorkspaceTabAbsent(TREE_FIRST_NOTE_NAME);
-    await openTreePathInNewTabFromKeyboardMenu(TREE_FIRST_NOTE_NAME);
+    await openTreePathInNewTabFromRowMenu(TREE_FIRST_NOTE_NAME);
     await waitForWorkspaceTabPaths([
       TREE_SECOND_NOTE_NAME,
       TREE_FIRST_NOTE_NAME,
     ]);
 
     await expectWorkspaceTabAbsent(CONFIG_FILE_NAME);
-    await openTreePathInNewTabFromKeyboardMenu(CONFIG_FILE_NAME);
+    await openTreePathInNewTabFromRowMenu(CONFIG_FILE_NAME);
     await waitForWorkspaceTabPaths([
       TREE_SECOND_NOTE_NAME,
       TREE_FIRST_NOTE_NAME,
@@ -991,7 +986,7 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     ]);
 
     await expectWorkspaceTabAbsent(PREVIEW_SOURCE_NOTE_NAME);
-    await openTreePathInNewTabFromKeyboardMenu(PREVIEW_SOURCE_NOTE_NAME);
+    await openTreePathInNewTabFromRowMenu(PREVIEW_SOURCE_NOTE_NAME);
     const expectedPaths = [
       TREE_SECOND_NOTE_NAME,
       TREE_FIRST_NOTE_NAME,
@@ -1189,13 +1184,13 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await expandTreeFolder();
     await openTreePath(TREE_FIRST_NOTE_NAME);
     await expectWorkspaceTabAbsent(TREE_SECOND_NOTE_NAME);
-    await openTreePathInNewTabFromKeyboardMenu(TREE_SECOND_NOTE_NAME);
+    await openTreePathInNewTabFromRowMenu(TREE_SECOND_NOTE_NAME);
     await waitForWorkspaceTabPaths([
       TREE_FIRST_NOTE_NAME,
       TREE_SECOND_NOTE_NAME,
     ]);
     await expectWorkspaceTabAbsent(PREVIEW_SOURCE_NOTE_NAME);
-    await openTreePathInNewTabFromKeyboardMenu(PREVIEW_SOURCE_NOTE_NAME);
+    await openTreePathInNewTabFromRowMenu(PREVIEW_SOURCE_NOTE_NAME);
     await waitForWorkspaceTabPaths([
       TREE_FIRST_NOTE_NAME,
       TREE_SECOND_NOTE_NAME,

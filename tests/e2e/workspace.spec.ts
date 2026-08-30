@@ -1,4 +1,5 @@
 import { $, $$, browser, expect } from "@wdio/globals";
+import { ELEMENT_KEY } from "webdriver";
 import { Key } from "webdriverio";
 import {
   CONFIG_FILE_NAME,
@@ -52,10 +53,54 @@ async function waitForWorkspaceTabPaths(paths: string[]): Promise<void> {
   );
 }
 
-async function doubleClickTreePath(path: string): Promise<void> {
+async function trustedDoubleClickTreePath(path: string): Promise<void> {
   const row = $(`[role="treeitem"][data-path="${path}"]`);
   await row.waitForExist({ timeout: 15000 });
-  await row.doubleClick();
+  const element = await row.getElement();
+  if (typeof element.elementId !== "string" || element.elementId.length === 0) {
+    throw new Error(`tree row has no WebDriver element reference: ${path}`);
+  }
+
+  try {
+    await browser.performActions([
+      {
+        type: "pointer",
+        id: "trusted-double-click",
+        parameters: { pointerType: "mouse" },
+        actions: [
+          {
+            type: "pointerMove",
+            duration: 0,
+            origin: { [ELEMENT_KEY]: element.elementId },
+            x: 0,
+            y: 0,
+          },
+          { type: "pointerDown", button: 0 },
+          { type: "pointerUp", button: 0 },
+          { type: "pointerDown", button: 0 },
+          { type: "pointerUp", button: 0 },
+        ],
+      },
+    ]);
+  } finally {
+    await browser.releaseActions();
+  }
+}
+
+async function openTreePathInNewTabFromMenu(path: string): Promise<void> {
+  const row = $(`[role="treeitem"][data-path="${path}"]`);
+  await row.waitForExist({ timeout: 15000 });
+  const actionsButton = row.$(
+    'button[aria-haspopup="menu"][aria-label^="File actions:"]',
+  );
+  await actionsButton.waitForClickable({ timeout: 15000 });
+  await actionsButton.click();
+
+  const command = $(
+    '[role="menu"] [role="menuitem"][data-command-id="tree.note.open-in-new-tab"]',
+  );
+  await command.waitForClickable({ timeout: 15000 });
+  await command.click();
 }
 
 async function expandTreeFolder(): Promise<void> {
@@ -956,14 +1001,14 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     );
 
     await expectWorkspaceTabAbsent(TREE_FIRST_NOTE_NAME);
-    await doubleClickTreePath(TREE_FIRST_NOTE_NAME);
+    await trustedDoubleClickTreePath(TREE_FIRST_NOTE_NAME);
     await waitForWorkspaceTabPaths([
       TREE_SECOND_NOTE_NAME,
       TREE_FIRST_NOTE_NAME,
     ]);
 
     await expectWorkspaceTabAbsent(CONFIG_FILE_NAME);
-    await doubleClickTreePath(CONFIG_FILE_NAME);
+    await openTreePathInNewTabFromMenu(CONFIG_FILE_NAME);
     await waitForWorkspaceTabPaths([
       TREE_SECOND_NOTE_NAME,
       TREE_FIRST_NOTE_NAME,
@@ -971,7 +1016,7 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     ]);
 
     await expectWorkspaceTabAbsent(PREVIEW_SOURCE_NOTE_NAME);
-    await doubleClickTreePath(PREVIEW_SOURCE_NOTE_NAME);
+    await openTreePathInNewTabFromMenu(PREVIEW_SOURCE_NOTE_NAME);
     const expectedPaths = [
       TREE_SECOND_NOTE_NAME,
       TREE_FIRST_NOTE_NAME,
@@ -1169,13 +1214,13 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await expandTreeFolder();
     await openTreePath(TREE_FIRST_NOTE_NAME);
     await expectWorkspaceTabAbsent(TREE_SECOND_NOTE_NAME);
-    await doubleClickTreePath(TREE_SECOND_NOTE_NAME);
+    await openTreePathInNewTabFromMenu(TREE_SECOND_NOTE_NAME);
     await waitForWorkspaceTabPaths([
       TREE_FIRST_NOTE_NAME,
       TREE_SECOND_NOTE_NAME,
     ]);
     await expectWorkspaceTabAbsent(PREVIEW_SOURCE_NOTE_NAME);
-    await doubleClickTreePath(PREVIEW_SOURCE_NOTE_NAME);
+    await openTreePathInNewTabFromMenu(PREVIEW_SOURCE_NOTE_NAME);
     await waitForWorkspaceTabPaths([
       TREE_FIRST_NOTE_NAME,
       TREE_SECOND_NOTE_NAME,

@@ -1,4 +1,5 @@
 import { $, $$, browser, expect } from "@wdio/globals";
+import { ELEMENT_KEY } from "webdriver";
 import { Key } from "webdriverio";
 import {
   CONFIG_FILE_NAME,
@@ -9,7 +10,7 @@ import {
 } from "./scratchVault";
 import { settled } from "./settle";
 
-const modifierKey = process.platform === "darwin" ? Key.Command : Key.Ctrl;
+const modifierKey = process.platform === "darwin" ? Key.Command : Key.Control;
 
 async function openTreePath(path: string): Promise<void> {
   const row = $(`[role="treeitem"][data-path="${path}"]`);
@@ -55,9 +56,36 @@ async function waitForWorkspaceTabPaths(paths: string[]): Promise<void> {
 async function modifierClickTreePath(path: string): Promise<void> {
   const row = $(`[role="treeitem"][data-path="${path}"]`);
   await row.waitForExist({ timeout: 15000 });
+  const element = await row.getElement();
+  if (typeof element.elementId !== "string" || element.elementId.length === 0) {
+    throw new Error(`tree row has no WebDriver element reference: ${path}`);
+  }
+  const origin = { [ELEMENT_KEY]: element.elementId };
+
   try {
-    await browser.action("key").down(modifierKey).perform(true);
-    await row.click();
+    await browser.performActions([
+      {
+        type: "key",
+        id: "platform-modifier",
+        actions: [
+          { type: "keyDown", value: modifierKey },
+          { type: "pause", duration: 0 },
+          { type: "pause", duration: 0 },
+          { type: "keyUp", value: modifierKey },
+        ],
+      },
+      {
+        type: "pointer",
+        id: "primary-pointer",
+        parameters: { pointerType: "mouse" },
+        actions: [
+          { type: "pointerMove", duration: 0, origin, x: 0, y: 0 },
+          { type: "pointerDown", button: 0 },
+          { type: "pointerUp", button: 0 },
+          { type: "pause", duration: 0 },
+        ],
+      },
+    ]);
   } finally {
     await browser.releaseActions();
   }
@@ -66,7 +94,28 @@ async function modifierClickTreePath(path: string): Promise<void> {
 async function middleClickTreePath(path: string): Promise<void> {
   const row = $(`[role="treeitem"][data-path="${path}"]`);
   await row.waitForExist({ timeout: 15000 });
-  await row.click({ button: "middle" });
+  const element = await row.getElement();
+  if (typeof element.elementId !== "string" || element.elementId.length === 0) {
+    throw new Error(`tree row has no WebDriver element reference: ${path}`);
+  }
+  const origin = { [ELEMENT_KEY]: element.elementId };
+
+  try {
+    await browser.performActions([
+      {
+        type: "pointer",
+        id: "primary-pointer",
+        parameters: { pointerType: "mouse" },
+        actions: [
+          { type: "pointerMove", duration: 0, origin, x: 0, y: 0 },
+          { type: "pointerDown", button: 1 },
+          { type: "pointerUp", button: 1 },
+        ],
+      },
+    ]);
+  } finally {
+    await browser.releaseActions();
+  }
 }
 
 async function expandTreeFolder(): Promise<void> {

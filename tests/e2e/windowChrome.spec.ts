@@ -15,9 +15,10 @@
 // runs on every platform including macOS, because the surface it protects is
 // the one a reader sees when the application slides out from under the
 // window's own controls.
+import path from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
-import { VISUAL_NOTE_NAME } from "./scratchVault";
+import { SCRATCH_VAULT_PATH, VISUAL_NOTE_NAME } from "./scratchVault";
 
 const isMacOS = process.platform === "darwin";
 const isLinux = process.platform === "linux";
@@ -73,6 +74,18 @@ async function openVisualNote(): Promise<void> {
   );
 }
 
+/** Waits for the desktop header and tab strip to expose their two identities. */
+async function waitForDesktopIdentity(): Promise<void> {
+  const vaultControl = $('button[aria-label="Vaults"]');
+  await vaultControl.waitForDisplayed({ timeout: 15000 });
+  expect((await vaultControl.getText()).trim()).toBe(
+    path.basename(SCRATCH_VAULT_PATH),
+  );
+  const selectedTab = $('.skr-tab[role="tab"][aria-selected="true"]');
+  await selectedTab.waitForDisplayed({ timeout: 15000 });
+  expect((await selectedTab.getText()).trim()).toBe("A room for reading");
+}
+
 /** Feeds a synthetic window-chrome state transition through the same state
  * path a real native window event would take (see `WindowControls.svelte`).
  * A real macOS or Windows session is required to confirm the transition
@@ -121,7 +134,7 @@ async function rootFontSizePx(): Promise<number> {
       await browser.tauri.switchWindow("main");
       await browser.setWindowSize(1100, 750);
       await openVisualNote();
-      await $("[data-testid=note-title]").waitForExist({ timeout: 15000 });
+      await waitForDesktopIdentity();
     });
 
     afterEach(async () => {
@@ -513,7 +526,7 @@ describe("the application never moves inside its own window", () => {
     await browser.tauri.switchWindow("main");
     await useViewport(1100, 750);
     await openVisualNote();
-    await $("[data-testid=note-title]").waitForExist({ timeout: 15000 });
+    await waitForDesktopIdentity();
   });
 
   after(async () => {

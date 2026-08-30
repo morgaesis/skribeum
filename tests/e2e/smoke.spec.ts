@@ -2099,11 +2099,15 @@ describe("skribeum shell", () => {
     ]);
     // macOS keeps its native traffic lights and draws no caption buttons
     // (design system section 4.13); Windows and Linux draw three after the
-    // overflow button.
+    // overflow button. The vault identity control follows navigation.
     const captionButtonCount = process.platform === "darwin" ? 0 : 3;
-    expect(header?.buttons.map((button) => button.label)).toEqual(
-      Array(3 + captionButtonCount).fill(""),
-    );
+    expect(header?.buttons.map((button) => button.label)).toEqual([
+      "",
+      "",
+      path.basename(SCRATCH_VAULT_PATH),
+      "",
+      ...Array(captionButtonCount).fill(""),
+    ]);
     const captionAriaLabels =
       captionButtonCount === 0
         ? []
@@ -2111,12 +2115,20 @@ describe("skribeum shell", () => {
     expect(header?.buttons.map((button) => button.ariaLabel)).toEqual([
       "Back",
       "Forward",
+      "Vaults",
       "More actions",
       ...captionAriaLabels,
     ]);
-    expect(await $("[data-testid=note-title]").getText()).toBe(
-      "A room for reading",
+    const vaultPicker = $('button[aria-label="Vaults"]');
+    expect((await vaultPicker.getText()).trim()).toBe(
+      path.basename(SCRATCH_VAULT_PATH),
     );
+    expect(await vaultPicker.getAttribute("aria-haspopup")).toBe("menu");
+    expect(await vaultPicker.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      (await $('.skr-tab[role="tab"][aria-selected="true"]').getText()).trim(),
+    ).toBe("A room for reading");
+    expect(await $("[data-testid=note-title]").isExisting()).toBe(false);
     expect(await horizontalViewportEscapes()).toEqual([]);
 
     const routes = [
@@ -2143,11 +2155,15 @@ describe("skribeum shell", () => {
     const original = noteOnDisk(VISUAL_NOTE_NAME);
     await openNoteFromTree(VISUAL_NOTE_NAME);
     await $(".skr-properties-toggle").waitForExist({ timeout: 10000 });
-    expect(await $("[data-testid=note-title]").getText()).toBe(
-      "A room for reading",
+    expect((await $('button[aria-label="Vaults"]').getText()).trim()).toBe(
+      path.basename(SCRATCH_VAULT_PATH),
     );
-    // The compact header of section 4.15 carries the caps label and the
-    // property count; note identity lives in the title region and tree.
+    expect(
+      (await $('.skr-tab[role="tab"][aria-selected="true"]').getText()).trim(),
+    ).toBe("A room for reading");
+    // The desktop header keeps vault identity in its picker; the compact
+    // properties row carries the caps label and property count. The selected
+    // tab carries note identity.
     expect(await $(".skr-properties-count").getText()).toBe("4");
     expect(await $("[data-testid=source-mode-chip]").isExisting()).toBe(false);
 
@@ -2185,15 +2201,43 @@ describe("skribeum shell", () => {
     await $('button[aria-label="More actions"]').click();
     const menu = $('[data-testid="anchored-menu"]');
     await menu.waitForDisplayed({ timeout: 10000 });
+    const sourceToggle = menu.$(
+      '[data-command-id="editor.toggle-source-mode"]',
+    );
+    expect(await sourceToggle.getAttribute("aria-pressed")).toBe("true");
+    const trailing = sourceToggle.$(".skr-action-menu-trailing");
+    expect(await trailing.$(".skr-action-menu-check").getText()).toBe("✓");
     expect(
-      await menu
-        .$('[data-command-id="editor.toggle-source-mode"]')
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
+      await browser.execute(
+        (element) =>
+          (element as HTMLElement).lastElementChild?.classList.contains(
+            "skr-action-menu-trailing",
+          ) ?? false,
+        await sourceToggle.getElement(),
+      ),
+    ).toBe(true);
+    await sourceToggle.click();
+    await browser.waitUntil(
+      async () => {
+        const currentMenu = $('[data-testid="anchored-menu"]');
+        if (!(await currentMenu.isDisplayed())) return false;
+        const currentToggle = currentMenu.$(
+          '[data-command-id="editor.toggle-source-mode"]',
+        );
+        return (
+          (await currentToggle.getAttribute("aria-pressed")) === "false" &&
+          (await currentToggle.$(".skr-action-menu-check").getText()) === ""
+        );
+      },
+      {
+        timeout: 10000,
+        timeoutMsg:
+          "source mode did not update while the overflow menu remained open",
+      },
+    );
     await browser.keys(Key.Escape);
     await menu.waitForExist({ reverse: true, timeout: 10000 });
 
-    await browser.keys([modifierKey, "e"]);
     await chip.waitForExist({ reverse: true, timeout: 10000 });
     await $(".skr-properties").waitForExist({ timeout: 10000 });
     await $(".cm-skr-table-row").waitForExist({ timeout: 10000 });
@@ -5149,12 +5193,12 @@ describe("skribeum shell", () => {
           return null;
         }
         const style = getComputedStyle(marker);
+        const bounds = marker.getBoundingClientRect();
         return {
           active: marker.classList.contains("cm-skr-reveal-marker-active"),
           opacity: style.opacity,
           reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
-          maxWidth: style.maxWidth,
-          width: marker.getBoundingClientRect().width,
+          geometry: { height: bounds.height, width: bounds.width },
           // The glyph is played rather than transitioned, because the view
           // rebuilds the node whenever its decoration class changes and a
           // transition would have no starting value to run from.
@@ -5176,10 +5220,7 @@ describe("skribeum shell", () => {
     );
     const hidden = await headingMarkerState();
     expect(hidden?.opacity).toBe("0");
-    // At rest the glyph is squeezed to no width at all, clipped to the
-    // nothing it occupies, so it reserves no room in the line.
-    expect(hidden?.maxWidth).toBe("0px");
-    expect(hidden?.width).toBe(0);
+    expect(hidden?.geometry.width).toBeGreaterThan(0);
     const followingPositionBefore = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -5209,11 +5250,8 @@ describe("skribeum shell", () => {
       },
     );
     const revealed = await headingMarkerState();
-    // Settled active glyph: fully opaque, uncapped, and holding its own
-    // measured width rather than reserving none.
     expect(revealed?.opacity).toBe("1");
-    expect(revealed?.maxWidth).toBe("none");
-    expect(revealed?.width).toBeGreaterThan(0);
+    expect(revealed?.geometry).toEqual(hidden?.geometry);
     const followingPositionAfter = await browser.execute(() => {
       const following = [
         ...document.querySelectorAll<HTMLElement>(".cm-line"),
@@ -6860,25 +6898,38 @@ describe("skribeum core editing surfaces", () => {
     expect(await $('[data-settings-section="appearance"]').isExisting()).toBe(
       false,
     );
-    // A query crosses groups, so the rail drops its selection and reports how
-    // many rows each group contributes to the results.
+    // A query crosses groups, so the settings rail drops its selection while
+    // the always-visible workspace tab remains selected.
     expect(
-      await browser.execute(() => ({
-        selected: document.querySelectorAll(
-          '[role="tab"][aria-selected="true"]',
-        ).length,
-        about: document
-          .querySelector(
-            '[data-testid="settings-rail-about"] .settings-rail-count',
-          )
-          ?.textContent?.trim(),
-        appearance: document
-          .querySelector(
-            '[data-testid="settings-rail-appearance"] .settings-rail-count',
-          )
-          ?.textContent?.trim(),
-      })),
-    ).toEqual({ selected: 0, about: "1", appearance: "0" });
+      await browser.execute(() => {
+        const settings = document.querySelector(
+          '[data-testid="settings-view"]',
+        );
+        return {
+          selectedSettingsTabs:
+            settings?.querySelectorAll('[role="tab"][aria-selected="true"]')
+              .length ?? 0,
+          selectedWorkspaceTabs: document.querySelectorAll(
+            '.skr-tab[role="tab"][aria-selected="true"]',
+          ).length,
+          about: document
+            .querySelector(
+              '[data-testid="settings-rail-about"] .settings-rail-count',
+            )
+            ?.textContent?.trim(),
+          appearance: document
+            .querySelector(
+              '[data-testid="settings-rail-appearance"] .settings-rail-count',
+            )
+            ?.textContent?.trim(),
+        };
+      }),
+    ).toEqual({
+      selectedSettingsTabs: 0,
+      selectedWorkspaceTabs: 1,
+      about: "1",
+      appearance: "0",
+    });
     await search.clearValue();
     await $('[data-settings-section="appearance"]').waitForDisplayed({
       timeout: 5000,
@@ -6904,7 +6955,9 @@ describe("skribeum core editing surfaces", () => {
     expect(
       await browser.execute(() => {
         const tabs = [
-          ...document.querySelectorAll<HTMLElement>('[role="tab"]'),
+          ...document.querySelectorAll<HTMLElement>(
+            '[data-testid="settings-view"] [role="tab"]',
+          ),
         ];
         const selected = tabs.filter(
           (tab) => tab.getAttribute("aria-selected") === "true",
@@ -6929,7 +6982,7 @@ describe("skribeum core editing surfaces", () => {
       browser.execute(
         () =>
           document.querySelector<HTMLElement>(
-            '[role="tab"][aria-selected="true"]',
+            '[data-testid="settings-view"] [role="tab"][aria-selected="true"]',
           )?.dataset.section ?? null,
       );
     await pressFocusedKey("ArrowUp");

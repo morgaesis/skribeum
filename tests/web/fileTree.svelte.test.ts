@@ -1,5 +1,5 @@
 import { flushSync, mount, tick, unmount } from "svelte";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 // The tree's row presentation lives in the shell stylesheet, so the
 // assertions below can read resolved style rather than class names.
 import "../../src/app.css";
@@ -497,11 +497,13 @@ describe("designed file tree", () => {
 
   it("opens row actions by pointer and keyboard and dispatches through the registry", async () => {
     const renamed: string[] = [];
+    const openNoteInNewTab = vi.fn(() => Promise.resolve());
     const registry = createAppRegistry(undefined, true);
     const context = commandContext({
       renameTreeEntry: async (path) => {
         renamed.push(path);
       },
+      openNoteInNewTab,
     });
     const component = mount(FileTree, {
       target: document.body,
@@ -545,6 +547,14 @@ describe("designed file tree", () => {
     await tick();
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
     expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
+    expect(
+      (document.activeElement as HTMLElement | null)?.dataset.commandId,
+    ).toBe("tree.note.open-in-new-tab");
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await tick();
+    expect(openNoteInNewTab).toHaveBeenCalledWith("plain.md");
 
     await unmount(component);
   });

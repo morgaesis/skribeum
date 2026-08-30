@@ -55,15 +55,12 @@ async function waitForWorkspaceTabPaths(paths: string[]): Promise<void> {
 async function modifierClickTreePath(path: string): Promise<void> {
   const row = $(`[role="treeitem"][data-path="${path}"]`);
   await row.waitForExist({ timeout: 15000 });
-  await browser.actions([
-    browser.action("key").down(modifierKey).pause(0).pause(0).up(modifierKey),
-    browser
-      .action("pointer")
-      .move({ origin: row })
-      .down("left")
-      .up("left")
-      .pause(0),
-  ]);
+  try {
+    await browser.action("key").down(modifierKey).perform(true);
+    await row.click();
+  } finally {
+    await browser.releaseActions();
+  }
 }
 
 async function middleClickTreePath(path: string): Promise<void> {

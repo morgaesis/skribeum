@@ -7534,21 +7534,47 @@ describe("skribeum core editing surfaces", () => {
       window.__skribeumNativeMatchMedia = nativeMatchMedia;
     `);
 
+      type AppearanceState = {
+        dialogPresent: boolean;
+        shownGroup: string | null;
+        systemScheme: boolean | null;
+        gazetteChecked: string | null;
+        signalChecked: string | null;
+        signalLive: boolean;
+        graphiteChecked: string | null;
+        lightChecked: string | null;
+        studioChecked: string | null;
+      };
       /** One scoped snapshot for readiness, custody, and failure diagnostics. */
-      const appearanceState = () =>
+      const readAppearanceState = (): Promise<AppearanceState> =>
         browser.execute(() => {
           const view = document.querySelector<HTMLElement>(
             '[data-testid="settings-view"]',
           );
-          const control = (testId: string) =>
-            view?.querySelector<HTMLElement>(`[data-testid="${testId}"]`) ??
-            null;
-          const system = control("settings-theme-system");
-          const gazette = control("settings-palette-gazette");
-          const signal = control("settings-palette-signal");
-          const graphite = control("settings-palette-graphite");
-          const light = control("settings-theme-light");
-          const studio = control("settings-palette-studio");
+          const system =
+            view?.querySelector<HTMLElement>(
+              '[data-testid="settings-theme-system"]',
+            ) ?? null;
+          const gazette =
+            view?.querySelector<HTMLElement>(
+              '[data-testid="settings-palette-gazette"]',
+            ) ?? null;
+          const signal =
+            view?.querySelector<HTMLElement>(
+              '[data-testid="settings-palette-signal"]',
+            ) ?? null;
+          const graphite =
+            view?.querySelector<HTMLElement>(
+              '[data-testid="settings-palette-graphite"]',
+            ) ?? null;
+          const light =
+            view?.querySelector<HTMLElement>(
+              '[data-testid="settings-theme-light"]',
+            ) ?? null;
+          const studio =
+            view?.querySelector<HTMLElement>(
+              '[data-testid="settings-palette-studio"]',
+            ) ?? null;
           return {
             dialogPresent: view !== null,
             shownGroup:
@@ -7566,17 +7592,16 @@ describe("skribeum core editing surfaces", () => {
             studioChecked: studio?.getAttribute("aria-checked") ?? null,
           };
         });
-      type AppearanceState = Awaited<ReturnType<typeof appearanceState>>;
       const waitForAppearanceState = async (
         description: string,
         predicate: (state: AppearanceState) => boolean,
         timeout: number,
       ) => {
-        let observed = await appearanceState();
+        let observed = await readAppearanceState();
         try {
           await browser.waitUntil(
             async () => {
-              observed = await appearanceState();
+              observed = await readAppearanceState();
               return predicate(observed);
             },
             { timeout },
@@ -7597,7 +7622,7 @@ describe("skribeum core editing surfaces", () => {
         } catch (error) {
           throw new Error(
             `${description}; observed ${JSON.stringify(
-              await appearanceState(),
+              await readAppearanceState(),
             )}; cause ${String(error)}`,
           );
         }
@@ -7610,7 +7635,7 @@ describe("skribeum core editing surfaces", () => {
       } catch {
         throw new Error(
           `settings view did not become visible; observed ${JSON.stringify(
-            await appearanceState(),
+            await readAppearanceState(),
           )}`,
         );
       }

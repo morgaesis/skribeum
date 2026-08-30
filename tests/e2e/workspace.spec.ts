@@ -1,6 +1,7 @@
 import { $, $$, browser, expect } from "@wdio/globals";
 import { Key } from "webdriverio";
 import {
+  CONFIG_FILE_NAME,
   PREVIEW_SOURCE_NOTE_NAME,
   TREE_FIRST_NOTE_NAME,
   TREE_FOLDER_NAME,
@@ -52,12 +53,118 @@ function paneCountOf(node: unknown): number {
   );
 }
 
+function tabPathsOf(node: unknown): string[] {
+  if (typeof node !== "object" || node === null) return [];
+  const candidate = node as {
+    type?: string;
+    tabs?: Array<{ path?: string }>;
+    children?: unknown[];
+  };
+  if (candidate.type !== "split") {
+    return (candidate.tabs ?? [])
+      .map((tab) => tab.path)
+      .filter((path): path is string => typeof path === "string");
+  }
+  return (candidate.children ?? []).flatMap(tabPathsOf);
+}
+
 async function clearWorkspaceStorage(): Promise<void> {
   await browser.execute(() => {
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith("skribeum.workspace.")) localStorage.removeItem(key);
     }
   });
+}
+
+/** Sends the tree-row drag payload through a pane's drop handlers. */
+async function dragTreePathToPane(
+  path: string,
+  paneIndex: number,
+  zone: "center" | "left" | "up",
+): Promise<void> {
+  await browser.execute(
+    (
+      treePath: string,
+      targetIndex: number,
+      dropZone: "center" | "left" | "up",
+    ) => {
+      const source = document.querySelector<HTMLElement>(
+        `[role="treeitem"][data-path="${CSS.escape(treePath)}"]`,
+      );
+      const target = [
+        ...document.querySelectorAll<HTMLElement>("[data-pane-id]"),
+      ][targetIndex];
+      if (source === null || target === undefined) {
+        throw new Error("tree-row pane-drop fixture is not rendered");
+      }
+      const transfer = new DataTransfer();
+      source.dispatchEvent(
+        new DragEvent("dragstart", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: transfer,
+        }),
+      );
+      const bounds = target.getBoundingClientRect();
+      const clientX =
+        dropZone === "center" || dropZone === "up"
+          ? bounds.left + bounds.width / 2
+          : bounds.left + bounds.width * 0.1;
+      const clientY =
+        dropZone === "up"
+          ? bounds.top + bounds.height * 0.1
+          : bounds.top + bounds.height / 2;
+      target.dispatchEvent(
+        new DragEvent("dragover", {
+          bubbles: true,
+          cancelable: true,
+          clientX,
+          clientY,
+          dataTransfer: transfer,
+        }),
+      );
+      target.dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          clientX,
+          clientY,
+          dataTransfer: transfer,
+        }),
+      );
+      source.dispatchEvent(
+        new DragEvent("dragend", { bubbles: true, dataTransfer: transfer }),
+      );
+    },
+    path,
+    paneIndex,
+    zone,
+  );
+}
+
+type PaneSnapshot = {
+  id: string;
+  activePath: string | null;
+  focused: boolean;
+  tabs: string[];
+};
+
+async function paneSnapshots(): Promise<PaneSnapshot[]> {
+  return browser.execute(() =>
+    [...document.querySelectorAll<HTMLElement>("[data-pane-id]")].map(
+      (pane) => ({
+        id: pane.dataset.paneId ?? "",
+        activePath:
+          pane
+            .querySelector<HTMLElement>("[data-testid='reading-surface']")
+            ?.getAttribute("data-note-path") ?? null,
+        focused: pane.classList.contains("skr-editor-pane-focused"),
+        tabs: [...pane.querySelectorAll<HTMLElement>("[data-tab-key]")]
+          .map((tab) => tab.dataset.tabKey ?? "")
+          .filter((path) => path.length > 0),
+      }),
+    ),
+  );
 }
 
 describe("file tree, previews, panels, and workspace tabs", () => {
@@ -261,6 +368,56 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     );
     await keyboardCopied.waitForDisplayed({ timeout: 10000 });
     expect(await keyboardCopied.getText()).toContain("Link copied");
+  });
+
+  it("keeps the tab strip visible on narrow viewports", async () => {
+    await openTreePath(TREE_FIRST_NOTE_NAME);
+    await browser.setWindowSize(600, 800);
+
+    const strip = $(".skr-tab-strip");
+    await strip.waitForDisplayed({ timeout: 10000 });
+    expect(await strip.getCSSProperty("display")).toMatchObject({
+      value: "flex",
+    });
+    expect(await strip.$$('[role="tab"]')).toHaveLength(1);
+
+    await browser.setWindowSize(1280, 800);
+    await $("[role=tree]").waitForDisplayed({ timeout: 10000 });
+  });
+
+  it("keeps one vault picker open while source mode toggles", async () => {
+    const vaultControl = $('button[aria-label="Vaults"]');
+    await vaultControl.waitForDisplayed({ timeout: 10000 });
+    await vaultControl.click();
+    await browser.waitUntil(
+      async () => (await $$('[data-testid="anchored-menu"]')).length === 1,
+      { timeoutMsg: "vault picker did not open" },
+    );
+    expect(await $$('[data-vault-picker-active="true"]')).toHaveLength(1);
+    await vaultControl.click();
+    await browser.waitUntil(
+      async () => (await $$('[data-testid="anchored-menu"]')).length === 0,
+      { timeoutMsg: "vault picker did not close on a second activation" },
+    );
+
+    await openTreePath(TREE_FIRST_NOTE_NAME);
+    await $('[aria-label="More actions"]').click();
+    const sourceToggle = $('[data-command-id="editor.toggle-source-mode"]');
+    await sourceToggle.waitForDisplayed({ timeout: 10000 });
+    await sourceToggle.click();
+    expect(await $$('[data-testid="anchored-menu"]')).toHaveLength(1);
+    const trailing = sourceToggle.$(".skr-action-menu-trailing");
+    expect(await trailing.$(".skr-action-menu-check").getText()).toBe("✓");
+    expect(
+      await browser.execute(
+        (element) =>
+          (element as HTMLElement).lastElementChild?.classList.contains(
+            "skr-action-menu-trailing",
+          ) ?? false,
+        await sourceToggle.getElement(),
+      ),
+    ).toBe(true);
+    await browser.keys(Key.Escape);
   });
 
   it("resizes, resets, collapses, and restores the sidebar per vault", async () => {
@@ -727,12 +884,12 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await expandTreeFolder();
     await openTreePath(TREE_FIRST_NOTE_NAME);
     // Open in place is the default: a second tree open replaces the active
-    // tab rather than adding one, so the strip stays absent at one note.
+    // tab while the strip remains available for its single tab.
     await openTreePath(TREE_SECOND_NOTE_NAME);
     await browser.waitUntil(
-      async () => (await $$('[role="tab"]').length) === 0,
+      async () => (await $$('[role="tab"]').length) === 1,
       {
-        timeoutMsg: "a plain tree open added a tab instead of reusing one",
+        timeoutMsg: "a plain tree open did not retain one active tab",
       },
     );
 
@@ -757,6 +914,189 @@ describe("file tree, previews, panels, and workspace tabs", () => {
         timeoutMsg: "mod-click did not open a second tab",
       },
     );
+
+    const configRow = await $(
+      `[role="treeitem"][data-path="${CONFIG_FILE_NAME}"]`,
+    ).getElement();
+    await browser.execute((element) => {
+      (element as HTMLElement).dispatchEvent(
+        new MouseEvent("auxclick", { bubbles: true, button: 1 }),
+      );
+    }, configRow);
+    await browser.waitUntil(
+      async () => (await $$('[role="tab"]').length) === 3,
+      { timeoutMsg: "middle-click did not open a third tab" },
+    );
+
+    const previewRow = await $(
+      `[role="treeitem"][data-path="${PREVIEW_SOURCE_NOTE_NAME}"]`,
+    ).getElement();
+    await browser.execute((element) => {
+      const row = element as HTMLElement;
+      row.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      row.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+      row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    }, previewRow);
+    await browser.waitUntil(
+      async () => (await $$('[role="tab"]').length) === 4,
+      { timeoutMsg: "double-click did not preserve the displaced tab" },
+    );
+    const snapshot = (await workspaceSnapshot()) as { layout: unknown };
+    expect(tabPathsOf(snapshot.layout)).toEqual([
+      TREE_SECOND_NOTE_NAME,
+      TREE_FIRST_NOTE_NAME,
+      CONFIG_FILE_NAME,
+      PREVIEW_SOURCE_NOTE_NAME,
+    ]);
+  });
+
+  it("routes tree-row drops to pane centers and edges", async () => {
+    await clearWorkspaceStorage();
+    await browser.refresh();
+    await $(`[role="treeitem"][data-path="${TREE_FOLDER_NAME}"]`).waitForExist({
+      timeout: 15000,
+    });
+    await expandTreeFolder();
+    await openTreePath(TREE_FIRST_NOTE_NAME);
+
+    await dragTreePathToPane(TREE_SECOND_NOTE_NAME, 0, "center");
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() =>
+          document
+            .querySelector("[data-testid='reading-surface']")
+            ?.getAttribute("data-note-path"),
+        )) === TREE_SECOND_NOTE_NAME,
+      { timeoutMsg: "center tree drop did not open its file in the pane" },
+    );
+    expect(await $$(".skr-editor-pane")).toHaveLength(1);
+
+    await dragTreePathToPane(PREVIEW_SOURCE_NOTE_NAME, 0, "left");
+    await browser.waitUntil(
+      async () => (await $$(".skr-editor-pane")).length === 2,
+      { timeoutMsg: "edge tree drop did not create a second pane" },
+    );
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() =>
+          document
+            .querySelector("[data-testid='reading-surface']")
+            ?.getAttribute("data-note-path"),
+        )) === PREVIEW_SOURCE_NOTE_NAME,
+      { timeoutMsg: "edge tree drop did not make its file active" },
+    );
+
+    await clearWorkspaceStorage();
+    await browser.refresh();
+    await $("[role=tree]").waitForExist({ timeout: 15000 });
+  });
+
+  it("keeps already-open tree drops in their center and edge destinations", async () => {
+    await clearWorkspaceStorage();
+    await browser.refresh();
+    await $(`[role="treeitem"][data-path="${TREE_FOLDER_NAME}"]`).waitForExist({
+      timeout: 15000,
+    });
+    await expandTreeFolder();
+    await openTreePath(TREE_FIRST_NOTE_NAME);
+    await dragTreePathToPane(TREE_SECOND_NOTE_NAME, 0, "left");
+    await browser.waitUntil(
+      async () => {
+        const panes = await paneSnapshots();
+        return (
+          panes.length === 2 &&
+          panes.some((pane) => pane.activePath === TREE_SECOND_NOTE_NAME)
+        );
+      },
+      { timeoutMsg: "center-drop setup did not create two populated panes" },
+    );
+
+    const beforeCenter = await paneSnapshots();
+    const centerIndex = beforeCenter.findIndex(
+      (pane) => pane.activePath === TREE_SECOND_NOTE_NAME,
+    );
+    const centerId = beforeCenter[centerIndex]?.id;
+    const existingCenterHolder = beforeCenter.find(
+      (pane) => pane.activePath === TREE_FIRST_NOTE_NAME,
+    );
+    expect(centerIndex).toBeGreaterThanOrEqual(0);
+    expect(centerId).toBeTruthy();
+    expect(existingCenterHolder).toBeDefined();
+    await dragTreePathToPane(TREE_FIRST_NOTE_NAME, centerIndex, "center");
+    await browser.waitUntil(
+      async () => {
+        const destination = (await paneSnapshots()).find(
+          (pane) => pane.id === centerId,
+        );
+        return (
+          destination?.focused === true &&
+          destination.activePath === TREE_FIRST_NOTE_NAME &&
+          destination.tabs.includes(TREE_FIRST_NOTE_NAME)
+        );
+      },
+      {
+        timeoutMsg:
+          "already-open center drop left the hovered pane for the existing tab",
+      },
+    );
+    const afterCenter = await paneSnapshots();
+    expect(
+      afterCenter
+        .find((pane) => pane.id === existingCenterHolder?.id)
+        ?.tabs.includes(TREE_FIRST_NOTE_NAME),
+    ).toBe(true);
+
+    await clearWorkspaceStorage();
+    await browser.refresh();
+    await $(`[role="treeitem"][data-path="${TREE_FOLDER_NAME}"]`).waitForExist({
+      timeout: 15000,
+    });
+    await expandTreeFolder();
+    await openTreePath(TREE_FIRST_NOTE_NAME);
+    await dragTreePathToPane(TREE_SECOND_NOTE_NAME, 0, "left");
+    await browser.waitUntil(
+      async () => {
+        const panes = await paneSnapshots();
+        return (
+          panes.length === 2 && panes.every((pane) => pane.activePath !== null)
+        );
+      },
+      { timeoutMsg: "edge-drop setup did not create two populated panes" },
+    );
+
+    const beforeEdge = await paneSnapshots();
+    const edgeIndex = beforeEdge.findIndex(
+      (pane) => pane.activePath === TREE_SECOND_NOTE_NAME,
+    );
+    const previousPaneIds = new Set(beforeEdge.map((pane) => pane.id));
+    expect(edgeIndex).toBeGreaterThanOrEqual(0);
+    await dragTreePathToPane(TREE_FIRST_NOTE_NAME, edgeIndex, "up");
+    await browser.waitUntil(
+      async () => {
+        const panes = await paneSnapshots();
+        const created = panes.find(
+          (pane) => pane.focused && !previousPaneIds.has(pane.id),
+        );
+        return (
+          panes.length === 3 &&
+          created?.activePath === TREE_FIRST_NOTE_NAME &&
+          created.tabs.includes(TREE_FIRST_NOTE_NAME)
+        );
+      },
+      {
+        timeoutMsg:
+          "already-open edge drop did not populate and focus its new pane",
+      },
+    );
+    const afterEdge = await paneSnapshots();
+    expect(afterEdge.every((pane) => pane.tabs.length > 0)).toBe(true);
+    expect(
+      afterEdge.filter((pane) => pane.tabs.includes(TREE_FIRST_NOTE_NAME)),
+    ).toHaveLength(2);
+
+    await clearWorkspaceStorage();
+    await browser.refresh();
+    await $("[role=tree]").waitForExist({ timeout: 15000 });
   });
 
   it("opens, closes, reorders, splits, and restores tabs with a pane tree", async () => {

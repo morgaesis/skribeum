@@ -186,4 +186,74 @@ describe("unified command surface component", () => {
 
     void unmount(component);
   });
+
+  it("keeps keyboard-selected results visible without moving combobox focus", () => {
+    const items: PickerItem[] = Array.from({ length: 4 }, (_, index) => ({
+      id: `result-${index}`,
+      kind: "command",
+      actionKind: "command",
+      titleSegments: [{ text: `Result ${index}`, highlighted: false }],
+      accessibleName: `Result ${index}`,
+    }));
+    const component = mount(UnifiedCommandSurface, {
+      target: document.body,
+      props: {
+        items,
+        mode: "command",
+        onQueryChange: () => {},
+        onPick: () => {},
+        onClose: () => {},
+        restoreFocus: false,
+      },
+    });
+    flushSync();
+    const input =
+      document.body.querySelector<HTMLInputElement>('[role="combobox"]');
+    const results = document.body.querySelector<HTMLElement>(
+      ".command-surface-results",
+    );
+    const options = [
+      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
+    ];
+    if (input === null || results === null) {
+      throw new Error("command surface controls are missing");
+    }
+    results.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 80, left: 0, right: 320 }) as DOMRect;
+    options.forEach((option, index) => {
+      option.getBoundingClientRect = () => {
+        const top = index * 40 - results.scrollTop;
+        return { top, bottom: top + 40, left: 0, right: 320 } as DOMRect;
+      };
+    });
+    input.focus();
+
+    for (let index = 0; index < 3; index += 1) {
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    }
+    flushSync();
+    expect(input.getAttribute("aria-activedescendant")).toBe(
+      "skr-command-option-3",
+    );
+    expect(results.scrollTop).toBe(80);
+    expect(document.activeElement).toBe(input);
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Home", bubbles: true }),
+    );
+    flushSync();
+    expect(results.scrollTop).toBe(0);
+    expect(document.activeElement).toBe(input);
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "End", bubbles: true }),
+    );
+    flushSync();
+    expect(results.scrollTop).toBe(80);
+    expect(document.activeElement).toBe(input);
+
+    void unmount(component);
+  });
 });

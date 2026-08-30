@@ -184,14 +184,18 @@ import {
   focusTabCloseSuccessor,
 } from "./lib/shellFocus";
 import {
+  browseVaultSelection,
   emptyStartupSurface,
   failedStartupSurface,
   isStaleVaultOpenError,
   nextStartupDecision,
+  readVaultPickerSession,
   type StartupVaultSurface,
   selectedStartupFailureSurface,
   staleChooserStartupDecision,
   startupSource,
+  startupVaultRows,
+  VaultPickerReadOwnership,
   type VaultStartupSession,
 } from "./lib/startupVaultRecovery";
 import { STRINGS } from "./lib/strings";
@@ -217,6 +221,8 @@ import { bindVisualViewportCss } from "./lib/visualViewport";
 import WindowControls from "./lib/WindowControls.svelte";
 import { showWindowSystemMenu } from "./lib/windowChrome";
 import {
+  clearWorkspacePreviewReplacement,
+  currentWorkspaceNavigationPane,
   defaultWorkspaceState,
   emptyPane,
   findWorkspaceLeaf,
@@ -228,6 +234,9 @@ import {
   OUTLINE_DEFAULT_REM,
   OUTLINE_MAX_REM,
   OUTLINE_MIN_REM,
+  openInTemporaryWorkspaceSplit,
+  reconcilePreviewReplacementAfterNavigation,
+  reconcilePreviewReplacementAfterTabRemoval,
   remapWorkspacePath,
   removeWorkspaceLeaf,
   removeWorkspacePath,
@@ -238,12 +247,22 @@ import {
   SPLIT_MIN_REM,
   type SplitSide,
   saveWorkspaceState,
+  settleTemporaryWorkspacePaneNavigation,
   splitWorkspaceLeaf,
+  type TemporaryWorkspacePaneClaim,
+  TemporaryWorkspacePaneTransition,
   type WorkspaceLeaf,
   type WorkspaceNode,
+  type WorkspacePathDestination,
+  type WorkspacePathLoadOutcome,
+  type WorkspacePathLoadTarget,
+  type WorkspacePreviewReplacement,
   type WorkspaceSplit,
   type WorkspaceTab,
   workspaceLeaves,
+  workspacePaneOwnsActivePath,
+  workspacePathLoadAccepted,
+  workspacePathOpenPaneId,
 } from "./lib/workspaceState";
 
 let {
@@ -351,6 +370,27 @@ let splitDropZone = $state<{
   paneId: string;
   side: SplitSide | "center";
 } | null>(null);
+let previewReplacement: WorkspacePreviewReplacement | null = null;
+const temporaryPaneTransitions = new Map<
+  string,
+  TemporaryWorkspacePaneTransition
+>();
+const ORDINARY_PATH_LOAD_TARGET = {
+  kind: "ordinary",
+} as const satisfies WorkspacePathLoadTarget;
+const browserNavigationPaneBindings: Array<{
+  token: symbol;
+  path: string;
+  target: WorkspacePathLoadTarget;
+  loaded: boolean | null;
+}> = [];
+/** Recent-vault picker state for the visible desktop vault-name control. */
+let vaultPickerOpen = $state(false);
+let vaultPickerRows = $state<ReturnType<typeof startupVaultRows>>([]);
+let vaultPickerError = $state<string | null>(null);
+let vaultPickerButton = $state<HTMLButtonElement | null>();
+const vaultPickerReads = new VaultPickerReadOwnership();
+let vaultPickerReadPending = false;
 let sidebarHeaderHovered = $state(false);
 let sidebarFocused = $state(false);
 /** Live editor facts for the statusline and note-info surfaces. */
@@ -390,6 +430,9 @@ let activeOverlay = $state<string | null>(null);
 type SheetId = "file-tree" | "outline" | "overflow" | "note-info";
 let activeSheet = $state<SheetId | null>(null);
 let narrowViewport = $state(false);
+// No focus or zen mode exists, so every pane keeps its tab strip visible.
+// This is the visibility boundary for any explicit focus mode.
+const tabStripVisible = true;
 let noteTitleVisible = $state(true);
 let currentNoteSource = $state("");
 let sourceMode = $state(false);
@@ -811,13 +854,57 @@ function focusedWorkspacePane(): WorkspaceLeaf {
   );
 }
 
-/** The pane holding a note in one of its tabs, searched in tree order. */
-function paneHoldingPath(path: string): WorkspaceLeaf | null {
-  return (
-    workspaceLeaves(workspace.layout).find((leaf) =>
-      leaf.tabs.some((tab) => tab.path === path),
-    ) ?? null
-  );
+/** Clears every document-specific surface when the focused pane is empty. */
+function clearDocumentSurface(): void {
+  note = null;
+  selectedPath = null;
+  currentNoteSource = "";
+  sourceMode = false;
+  missingAddress = null;
+  contentView = null;
+  canvas = null;
+  canvasPreviews = {};
+  canvasError = null;
+  imageDocument = null;
+  imageError = null;
+  noteTimes = null;
+  editorStatistics = null;
+}
+
+function abandonTemporaryPaneTransitions(): void {
+  for (const transition of temporaryPaneTransitions.values()) {
+    transition.abandon();
+  }
+  temporaryPaneTransitions.clear();
+}
+
+async function settleTemporaryPaneClaim(
+  transition: TemporaryWorkspacePaneTransition,
+  claim: TemporaryWorkspacePaneClaim,
+  opened: boolean,
+): Promise<void> {
+  await settleTemporaryWorkspacePaneNavigation({
+    currentLayout: () => workspace.layout,
+    setLayout: (layout) => (workspace.layout = layout),
+    transition,
+    claim,
+    opened,
+    currentFocusedPaneId: () => workspace.focusedPaneId,
+    restoreFocus: async (paneId) => {
+      if (
+        workspace.focusedPaneId !== paneId ||
+        findWorkspaceLeaf(workspace.layout, workspace.focusedPaneId) === null
+      ) {
+        await adoptFocusedPane(paneId);
+      }
+    },
+  });
+  if (
+    transition.phase !== "pending" &&
+    temporaryPaneTransitions.get(transition.paneId) === transition
+  ) {
+    temporaryPaneTransitions.delete(transition.paneId);
+  }
 }
 
 /**
@@ -882,52 +969,40 @@ function ensurePaneTab(pane: WorkspaceLeaf, path: string): WorkspaceTab {
  * the browser address never has a document to sync to (`focusedWorkspacePane().activePath`
  * is what the address effect and the outline both key off).
  */
-function trackOpenedPaneTab(path: string): void {
-  const pane = focusedWorkspacePane();
+function trackOpenedPaneTab(
+  path: string,
+  pane = focusedWorkspacePane(),
+): WorkspacePathLoadOutcome {
   ensurePaneTab(pane, path);
   pane.emptyTab = false;
   pane.activePath = path;
+  return workspacePaneOwnsActivePath(workspace.layout, pane.id, path)
+    ? { kind: "loaded", paneId: pane.id }
+    : { kind: "failed" };
 }
 
-/**
- * Open in place: the focused pane's active tab becomes this note instead of
- * the pane gaining one more tab. An empty pane, or one showing the empty
- * tab, gains its first tab here rather than carrying a special case.
- */
-function placeTabInPlace(pane: WorkspaceLeaf, path: string): void {
-  pane.emptyTab = false;
-  if (pane.tabs.some((tab) => tab.path === path)) {
-    pane.activePath = path;
-    return;
-  }
-  const index =
-    pane.activePath === null
-      ? -1
-      : pane.tabs.findIndex((tab) => tab.path === pane.activePath);
-  const tab = { path, viewState: null } satisfies WorkspaceTab;
-  if (index < 0) {
-    pane.tabs.push(tab);
-  } else {
-    const replaced = pane.tabs[index];
-    if (replaced !== undefined) editor?.forgetTab(replaced.path);
-    pane.tabs.splice(index, 1, tab);
-  }
-  pane.activePath = path;
+/** Resolves a load's pane without letting an async focus change retarget it. */
+function pathLoadDestinationPane(
+  target: WorkspacePathLoadTarget,
+): WorkspaceLeaf | null {
+  return target.kind === "ordinary"
+    ? focusedWorkspacePane()
+    : currentWorkspaceNavigationPane(
+        workspace.layout,
+        workspace.focusedPaneId,
+        target.paneId,
+      );
 }
 
-/** One of the four explicit new-tab routes: always adds a tab. */
-function placeTabBeside(pane: WorkspaceLeaf, path: string): void {
-  pane.emptyTab = false;
-  if (pane.tabs.some((tab) => tab.path === path)) {
-    pane.activePath = path;
-    return;
-  }
-  const index =
-    pane.activePath === null
-      ? pane.tabs.length - 1
-      : pane.tabs.findIndex((tab) => tab.path === pane.activePath);
-  pane.tabs.splice(index + 1, 0, { path, viewState: null });
-  pane.activePath = path;
+/** Takes the pane binding queued with one browser navigation load. */
+function takeBrowserNavigationPaneBinding(
+  path: string,
+): (typeof browserNavigationPaneBindings)[number] | null {
+  const index = browserNavigationPaneBindings.findIndex(
+    (binding) => binding.path === path,
+  );
+  if (index < 0) return null;
+  return browserNavigationPaneBindings.splice(index, 1)[0] ?? null;
 }
 
 function pushPaneHistory(
@@ -955,9 +1030,7 @@ async function activateWorkspaceTab(path: string | null) {
     captureFocusedTabState();
     pane.emptyTab = true;
     pane.activePath = null;
-    note = null;
-    selectedPath = null;
-    currentNoteSource = "";
+    clearDocumentSurface();
     claimEmptyPaneFocus(pane.id);
     return;
   }
@@ -982,9 +1055,7 @@ async function openEmptyWorkspaceTab(paneId = workspace.focusedPaneId) {
   }
   pane.emptyTab = true;
   pane.activePath = null;
-  note = null;
-  selectedPath = null;
-  currentNoteSource = "";
+  clearDocumentSurface();
   claimEmptyPaneFocus(pane.id);
   updatePaneNavigationState();
 }
@@ -999,9 +1070,7 @@ async function adoptFocusedPane(id: string) {
     ) ?? undefined;
   const pane = focusedWorkspacePane();
   if (pane.activePath === null) {
-    note = null;
-    selectedPath = null;
-    currentNoteSource = "";
+    clearDocumentSurface();
   } else {
     const tab = ensurePaneTab(pane, pane.activePath);
     await reopenPath(pane.activePath, tab.viewState, "tab");
@@ -1009,15 +1078,16 @@ async function adoptFocusedPane(id: string) {
   updatePaneNavigationState();
 }
 
-async function focusWorkspacePane(id: string) {
-  if (workspace.focusedPaneId === id) return;
-  if (findWorkspaceLeaf(workspace.layout, id) === null) return;
+async function focusWorkspacePane(id: string): Promise<boolean> {
+  if (workspace.focusedPaneId === id) return true;
+  if (findWorkspaceLeaf(workspace.layout, id) === null) return false;
   if ((await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
-    return;
+    return false;
   }
   captureFocusedTabState();
   await adoptFocusedPane(id);
+  return workspace.focusedPaneId === id;
 }
 
 /**
@@ -1099,6 +1169,14 @@ async function closeWorkspaceTab(
   if (closesActiveEditor) captureFocusedTabState();
   const [closed] = pane.tabs.splice(index, 1);
   if (closed !== undefined) {
+    const reconciled = reconcilePreviewReplacementAfterTabRemoval(
+      previewReplacement,
+      pane.id,
+      path,
+    );
+    if (previewReplacement !== null && reconciled === null) {
+      discardPreviewReplacement();
+    }
     workspace.closedTabs = [...workspace.closedTabs, closed].slice(-20);
   }
   // The tab's durable, byte-offset-approximated view state survives in
@@ -1118,9 +1196,7 @@ async function closeWorkspaceTab(
     const next = pane.tabs[Math.min(index, pane.tabs.length - 1)];
     if (next === undefined) {
       pane.activePath = null;
-      note = null;
-      selectedPath = null;
-      currentNoteSource = "";
+      clearDocumentSurface();
       // Closing the last tab, or the tab the caret was in, always claims
       // the resulting empty pane's primary action (design spec section
       // 16.1), whether the close came from the keyboard or a pointer click
@@ -1334,6 +1410,8 @@ async function moveTabIntoPane(
   if (source === null || target === null) return;
   const position = source.tabs.findIndex((tab) => tab.path === path);
   if (position < 0) return;
+  const transition = temporaryPaneTransitions.get(target.id);
+  const claim = transition?.claimNavigation();
   captureFocusedTabState();
   const [tab] = source.tabs.splice(position, 1);
   if (tab === undefined) return;
@@ -1350,6 +1428,10 @@ async function moveTabIntoPane(
   }
   target.emptyTab = false;
   target.activePath = tab.path;
+  if (transition !== undefined && claim !== null && claim !== undefined) {
+    transition.settle(claim, true);
+    temporaryPaneTransitions.delete(target.id);
+  }
   pushPaneHistory(target, { path: tab.path }, tab.viewState);
   if (source.tabs.length === 0 && source.emptyTab !== true) {
     const remaining = removeWorkspaceLeaf(workspace.layout, source.id);
@@ -1437,6 +1519,25 @@ function updateTabDropZone(event: DragEvent, paneId: string) {
   splitDropZone = { paneId, side };
 }
 
+/** Applies the tab drop model to a supported file-tree payload. */
+function updateTreeDropZone(event: DragEvent, paneId: string) {
+  const target = event.currentTarget as HTMLElement;
+  const side = dropZoneAt(
+    target.getBoundingClientRect(),
+    event.clientX,
+    event.clientY,
+  );
+  if (
+    narrowViewport ||
+    (side !== "center" && splitUnavailableReason(paneId, side) !== null)
+  ) {
+    splitDropZone = null;
+    return;
+  }
+  event.preventDefault();
+  splitDropZone = { paneId, side };
+}
+
 /**
  * The drop zone only ever describes a drag in flight, so it ends with the
  * drag rather than with the drop that happens to conclude it. A pane clears
@@ -1471,6 +1572,77 @@ async function dropTabOnPane(event: DragEvent, paneId: string) {
   // immediately collapse: nothing to do.
   if (origin.paneId === paneId && (source?.tabs.length ?? 0) <= 1) return;
   await splitPaneWithTab(paneId, zone.side, origin.path, origin.paneId);
+}
+
+/** Splits a target pane while keeping its existing tabs and opening a file. */
+async function splitPaneWithDroppedPath(
+  paneId: string,
+  side: SplitSide,
+  path: string,
+): Promise<void> {
+  if (narrowViewport || splitUnavailableReason(paneId, side) !== null) return;
+  if (findWorkspaceLeaf(workspace.layout, paneId) === null) return;
+  const previousFocusedPaneId = workspace.focusedPaneId;
+  const created = emptyPane(nextPaneId(workspace.layout));
+  const transition = new TemporaryWorkspacePaneTransition(
+    created.id,
+    path,
+    previousFocusedPaneId,
+    paneId,
+  );
+  temporaryPaneTransitions.set(created.id, transition);
+  try {
+    await openInTemporaryWorkspaceSplit({
+      currentLayout: () => workspace.layout,
+      setLayout: (layout) => (workspace.layout = layout),
+      targetPaneId: paneId,
+      side,
+      addition: created,
+      transition,
+      focusAddition: () => focusWorkspacePane(created.id),
+      open: () =>
+        openPath(path, {
+          destination: "focused-pane",
+          claimTemporaryPane: false,
+        }),
+      currentFocusedPaneId: () => workspace.focusedPaneId,
+      restoreFocus: async (restorePaneId) => {
+        if (
+          workspace.focusedPaneId !== restorePaneId ||
+          findWorkspaceLeaf(workspace.layout, workspace.focusedPaneId) === null
+        ) {
+          await adoptFocusedPane(restorePaneId);
+        }
+      },
+    });
+  } finally {
+    if (
+      transition.phase !== "pending" &&
+      temporaryPaneTransitions.get(created.id) === transition
+    ) {
+      temporaryPaneTransitions.delete(created.id);
+    }
+  }
+}
+
+/** Opens a tree file in the hovered pane or in a new edge split. */
+async function dropTreePathOnPane(path: string, paneId: string): Promise<void> {
+  const zone = splitDropZone;
+  splitDropZone = null;
+  if (
+    zone === null ||
+    zone.paneId !== paneId ||
+    !commandSurfacePaths.includes(path)
+  ) {
+    return;
+  }
+  if (zone.side === "center") {
+    if (await focusWorkspacePane(paneId)) {
+      await openPath(path, { destination: "focused-pane" });
+    }
+    return;
+  }
+  await splitPaneWithDroppedPath(paneId, zone.side, path);
 }
 
 function splitRatioBounds(
@@ -1900,6 +2072,13 @@ async function deleteTreeEntry(path: string, restoreFocus?: () => void) {
   }
   try {
     tree = await treeEntryDelete(activeVault, path);
+    if (
+      previewReplacement !== null &&
+      (treePathWithin(previewReplacement.path, path) ||
+        treePathWithin(previewReplacement.tab.path, path))
+    ) {
+      discardPreviewReplacement();
+    }
     workspace = removeWorkspacePath(workspace, path);
     recents = recents.filter((candidate) => !treePathWithin(candidate, path));
     for (const candidate of [...pendingRecovered.keys()]) {
@@ -1996,8 +2175,12 @@ function closeOverlay() {
 function commandContext(): CommandContext {
   return {
     view: editor?.getView() ?? null,
-    openNote: (path) => navigateToNote(path),
-    openNoteInNewTab: (path) => navigateToNote(path, undefined, "new-tab"),
+    openNote: async (path) => {
+      await navigateToNote(path);
+    },
+    openNoteInNewTab: async (path) => {
+      await navigateToNote(path, undefined, "new-tab");
+    },
     createNote: createNewNote,
     openVault: () => pickVault(),
     openView: (id) => {
@@ -2281,6 +2464,7 @@ $effect(() => {
     const focused = focusedWorkspacePane().activePath;
     const flattened = flattenWorkspaceLayout(workspace.layout);
     if (focused !== null) flattened.activePath = focused;
+    abandonTemporaryPaneTransitions();
     workspace.layout = flattened;
     workspace.focusedPaneId = flattened.id;
   }
@@ -2318,7 +2502,9 @@ $effect(() => {
 
 function runActionCommand(id: string) {
   const context = commandContext();
-  activeSheet = null;
+  const keepsOverflowOpen =
+    activeSheet === "overflow" && id === TOGGLE_SOURCE_MODE_COMMAND;
+  if (!keepsOverflowOpen) activeSheet = null;
   taskStatusSurfaceMarker = null;
   tableCellSurfaceActive = false;
   void tick().then(() => {
@@ -2330,7 +2516,7 @@ function runActionCommand(id: string) {
       surfaceFocusOrigin = null;
       return;
     }
-    if (activeOverlay === null && activeSheet === null) {
+    if (!keepsOverflowOpen && activeOverlay === null && activeSheet === null) {
       restoreSurfaceFocus();
     }
   });
@@ -3109,6 +3295,8 @@ async function openVaultAtPath(
     },
     (session, prepared) => {
       const { nextTree, config, nextTags } = prepared;
+      discardPreviewReplacement();
+      abandonTemporaryPaneTransitions();
       vault = session.handle;
       activeVaultGeneration = session.generation;
       activeVaultPath = session.root;
@@ -3319,7 +3507,15 @@ async function recoverStartupVault(
 
 async function openStartupVault(path?: string): Promise<void> {
   if (path === undefined) {
-    await pickVault();
+    const result = await browseForVault();
+    if (result.kind === "failed") {
+      errorText = null;
+      const error = describeError(STRINGS.vaultOpenFailed, result.error);
+      startupVaultSurface =
+        startupVaultSurface.kind === "chooser"
+          ? { ...startupVaultSurface, error }
+          : emptyStartupSurface(error);
+    }
     return;
   }
   const failure = await openVaultAtPath(path, undefined, false);
@@ -3416,12 +3612,75 @@ async function startupVaultRecoverySequence(
   }
 }
 
+function browseForVault() {
+  return browseVaultSelection(
+    () => openDirectoryDialog({ directory: true, multiple: false }),
+    (path) => openVaultAtPath(path, undefined, false),
+  );
+}
+
 async function pickVault() {
-  const path = await openDirectoryDialog({ directory: true, multiple: false });
-  if (path === null) {
+  const result = await browseForVault();
+  if (result.kind === "failed") {
+    errorText = describeError(STRINGS.vaultOpenFailed, result.error);
+  }
+}
+
+async function openVaultPicker() {
+  if (vaultPickerOpen || vaultPickerReadPending) {
+    closeVaultPicker();
     return;
   }
-  await openVaultAtPath(path);
+  vaultPickerError = null;
+  vaultPickerReadPending = true;
+  const result = await readVaultPickerSession(
+    vaultPickerReads,
+    vaultSessionRead,
+  );
+  if (result.kind === "superseded") return;
+  vaultPickerReadPending = false;
+  if (result.kind === "loaded") {
+    vaultPickerRows = startupVaultRows(result.session.recent_vaults);
+  } else {
+    vaultPickerRows = [];
+    vaultPickerError = describeError(STRINGS.vaultOpenFailed, result.error);
+  }
+  vaultPickerOpen = true;
+}
+
+function closeVaultPicker() {
+  vaultPickerReads.invalidate();
+  vaultPickerReadPending = false;
+  vaultPickerOpen = false;
+  vaultPickerError = null;
+}
+
+async function openRecentVaultFromPicker(path: string) {
+  const failure = await openVaultAtPath(path, undefined, false);
+  if (failure === null) {
+    closeVaultPicker();
+    return;
+  }
+  if (failure instanceof IpcError && isStaleVaultOpenError(failure.app.code)) {
+    try {
+      const session = await vaultSessionForget(path);
+      vaultPickerRows = startupVaultRows(session.recent_vaults);
+      vaultPickerError = null;
+      return;
+    } catch (error) {
+      vaultPickerError = describeError(STRINGS.vaultOpenFailed, error);
+      return;
+    }
+  }
+  vaultPickerError = describeError(STRINGS.vaultOpenFailed, failure);
+}
+
+async function browseVaultFromPicker() {
+  const result = await browseForVault();
+  if (result.kind === "opened") closeVaultPicker();
+  else if (result.kind === "failed") {
+    vaultPickerError = describeError(STRINGS.vaultOpenFailed, result.error);
+  }
 }
 
 function openEndToEndVault(path: string): Promise<unknown | null> {
@@ -3459,10 +3718,11 @@ async function openNote(
   path: string,
   restoration: NoteViewState | null = null,
   switchKind: PaneSwitchKind = "note",
-): Promise<boolean> {
+  target: WorkspacePathLoadTarget = ORDINARY_PATH_LOAD_TARGET,
+): Promise<WorkspacePathLoadOutcome> {
   const currentVault = vault;
   if (currentVault === null) {
-    return false;
+    return { kind: "failed" };
   }
   const vaultGeneration = activeVaultGeneration;
   const request = contentRequests.next();
@@ -3470,7 +3730,7 @@ async function openNote(
   // Persist pending edits of the current note before switching away.
   if ((await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
-    return false;
+    return { kind: "failed" };
   }
   historyViewState = restoration;
   const debugWindow = window as Window & {
@@ -3487,7 +3747,17 @@ async function openNote(
       !activeVaultMatches(currentVault, vaultGeneration) ||
       !contentRequests.isCurrent(request)
     ) {
-      return false;
+      return { kind: "failed" };
+    }
+    const destinationPane = pathLoadDestinationPane(target);
+    if (destinationPane === null) return { kind: "failed" };
+    ensurePaneTab(destinationPane, path);
+    destinationPane.emptyTab = false;
+    destinationPane.activePath = path;
+    if (
+      !workspacePaneOwnsActivePath(workspace.layout, destinationPane.id, path)
+    ) {
+      return { kind: "failed" };
     }
     const recovered = pendingRecovered.get(path);
     if (recovered !== undefined) {
@@ -3525,10 +3795,6 @@ async function openNote(
     imageError = null;
     selectedPath = path;
     void refreshNoteTimes(currentVault, path);
-    const pane = focusedWorkspacePane();
-    ensurePaneTab(pane, path);
-    pane.emptyTab = false;
-    pane.activePath = path;
     refreshLinkContext();
     recents = [path, ...recents.filter((entry) => entry !== path)].slice(0, 50);
     await tick();
@@ -3539,14 +3805,15 @@ async function openNote(
       debugWindow.__SKRIBEUM_DEBUG_NOTE_OPEN_MS__ =
         performance.now() - debugStart;
     }
-    return true;
+    return { kind: "loaded", paneId: destinationPane.id };
   } catch (error) {
     if (
       !activeVaultMatches(currentVault, vaultGeneration) ||
       !contentRequests.isCurrent(request)
     ) {
-      return false;
+      return { kind: "failed" };
     }
+    if (pathLoadDestinationPane(target) === null) return { kind: "failed" };
     if (isMissingNoteError(error)) {
       note = null;
       currentNoteSource = "";
@@ -3558,10 +3825,10 @@ async function openNote(
       imageError = null;
       selectedPath = null;
       missingAddress = { path };
-      return false;
+      return { kind: "missing" };
     }
     errorText = describeError(STRINGS.noteReadFailed, error);
-    return false;
+    return { kind: "failed" };
   }
 }
 
@@ -3569,6 +3836,7 @@ async function openNoteAddress(
   address: NoteAddress,
   restoration: NoteViewState | null = null,
   source: "fresh" | "history" = "fresh",
+  target: WorkspacePathLoadTarget = ORDINARY_PATH_LOAD_TARGET,
 ): Promise<boolean> {
   const editorWasFocused = editor?.getView()?.hasFocus === true;
   if (editorWasFocused || source === "history") focusReadingSurface();
@@ -3578,18 +3846,17 @@ async function openNoteAddress(
   // click or the quick switcher would (`openPath`): `reopenPath` carries the
   // same kind dispatch, and a fragment (a heading or block target) only
   // ever applies to the note surface below.
-  const opened = await reopenPath(
+  const outcome = await loadPath(
     address.path,
     restoration,
     source === "history" ? "history" : "note",
+    target,
   );
-  if (!opened) {
-    if (missingAddress !== null) {
-      missingAddress = address;
-      if (source === "history") focusReadingSurface();
-      return true;
-    }
-    return false;
+  if (!workspacePathLoadAccepted(target, outcome)) return false;
+  if (outcome.kind === "missing") {
+    missingAddress = address;
+    if (source === "history") focusReadingSurface();
+    return true;
   }
   if (source === "history") {
     await tick();
@@ -3629,35 +3896,231 @@ async function navigateToNote(
   path: string,
   fragment?: string,
   intent: "in-place" | "new-tab" = "in-place",
-): Promise<void> {
+  destination: WorkspacePathDestination = "existing-pane",
+  claimTemporaryPane = true,
+): Promise<boolean> {
+  const startingPreviewReplacement = previewReplacement;
+  let previewReplacementSettled = false;
+  let temporaryNavigation: {
+    transition: TemporaryWorkspacePaneTransition;
+    claim: TemporaryWorkspacePaneClaim;
+  } | null = null;
+  let navigationCommitted = false;
+  const settlePreviewReplacement = (outcome: "committed" | "failed"): void => {
+    if (previewReplacementSettled) return;
+    previewReplacementSettled = true;
+    settlePreviewReplacementAfterNavigation(
+      startingPreviewReplacement,
+      path,
+      intent,
+      outcome,
+    );
+  };
   const address = fragment === undefined ? { path } : { path, fragment };
-  if (intent === "in-place") {
-    const holder = paneHoldingPath(path);
-    if (holder !== null && holder.id !== workspace.focusedPaneId) {
-      await focusWorkspacePane(holder.id);
-      await activateWorkspaceTab(path);
-      if (fragment !== undefined) await openNoteAddress(address, null);
-      return;
+  try {
+    if (intent === "in-place") {
+      const destinationPaneId = workspacePathOpenPaneId(
+        workspace.layout,
+        workspace.focusedPaneId,
+        path,
+        destination,
+      );
+      if (
+        destinationPaneId !== null &&
+        destinationPaneId !== workspace.focusedPaneId
+      ) {
+        if (!(await focusWorkspacePane(destinationPaneId))) return false;
+        await activateWorkspaceTab(path);
+        if (fragment !== undefined) await openNoteAddress(address, null);
+        const committed = selectedPath === path;
+        if (committed) {
+          settlePreviewReplacement("committed");
+        }
+        return committed;
+      }
+    }
+    const pane = focusedWorkspacePane();
+    if (claimTemporaryPane) {
+      const transition = temporaryPaneTransitions.get(pane.id);
+      const claim = transition?.claimNavigation();
+      if (transition !== undefined && claim !== null && claim !== undefined) {
+        temporaryNavigation = { transition, claim };
+      }
+    }
+    captureFocusedTabState();
+    const loadTarget: WorkspacePathLoadTarget =
+      destination === "focused-pane" || temporaryNavigation !== null
+        ? { kind: "bound-pane", paneId: pane.id }
+        : ORDINARY_PATH_LOAD_TARGET;
+    const alreadyOpen = pane.tabs.some((tab) => tab.path === path);
+    const previousActiveIndex =
+      pane.activePath === null
+        ? -1
+        : pane.tabs.findIndex((tab) => tab.path === pane.activePath);
+    const insertionIndex =
+      pane.activePath === null
+        ? pane.tabs.length
+        : Math.max(0, previousActiveIndex + 1);
+    if (navigationSurface === "browser") {
+      const binding =
+        navigation === null || loadTarget.kind === "ordinary"
+          ? null
+          : {
+              token: Symbol(path),
+              path,
+              target: loadTarget,
+              loaded: null,
+            };
+      if (binding !== null) browserNavigationPaneBindings.push(binding);
+      let opened = false;
+      try {
+        if (navigation === null) {
+          opened = await openNoteAddress(address, null, "fresh", loadTarget);
+        } else {
+          await navigation.open(address);
+          opened =
+            binding === null
+              ? selectedPath === path && pane.activePath === path
+              : binding.loaded === true;
+        }
+      } finally {
+        if (binding !== null) {
+          const pending = browserNavigationPaneBindings.findIndex(
+            (candidate) => candidate.token === binding.token,
+          );
+          if (pending >= 0) browserNavigationPaneBindings.splice(pending, 1);
+        }
+      }
+      if (!opened) return false;
+      settlePreviewReplacement("committed");
+      commitNavigatedTab(
+        pane,
+        path,
+        intent,
+        alreadyOpen,
+        previousActiveIndex,
+        insertionIndex,
+      );
+      navigationCommitted = true;
+      return true;
+    }
+    const existing = pane.tabs.find((candidate) => candidate.path === path);
+    const opened = await openNoteAddress(
+      address,
+      existing?.viewState ?? null,
+      "fresh",
+      loadTarget,
+    );
+    if (opened) {
+      settlePreviewReplacement("committed");
+      commitNavigatedTab(
+        pane,
+        path,
+        intent,
+        alreadyOpen,
+        previousActiveIndex,
+        insertionIndex,
+      );
+      pane.activePath = path;
+      pushPaneHistory(pane, address);
+      navigationCommitted = true;
+    }
+    return opened;
+  } finally {
+    settlePreviewReplacement("failed");
+    if (temporaryNavigation !== null) {
+      await settleTemporaryPaneClaim(
+        temporaryNavigation.transition,
+        temporaryNavigation.claim,
+        navigationCommitted,
+      );
     }
   }
-  captureFocusedTabState();
-  const pane = focusedWorkspacePane();
-  // The tab is placed before the note loads: the load itself only ensures a
-  // tab exists, so placing afterwards would find the one it just added and
-  // leave the replaced tab behind.
-  if (intent === "new-tab") placeTabBeside(pane, path);
-  else placeTabInPlace(pane, path);
-  if (navigationSurface === "browser") {
-    await (navigation?.open(address) ?? openNoteAddress(address));
-    pane.activePath = path;
+}
+
+/** Applies tab placement only after the incoming document has loaded. */
+function commitNavigatedTab(
+  pane: WorkspaceLeaf,
+  path: string,
+  intent: "in-place" | "new-tab",
+  alreadyOpen: boolean,
+  previousActiveIndex: number,
+  insertionIndex: number,
+): void {
+  if (intent === "in-place" && !alreadyOpen && previousActiveIndex >= 0) {
+    replaceCommittedActiveTab(pane, path, previousActiveIndex);
+  }
+  if (intent === "new-tab" && alreadyOpen) {
+    promotePreviewTab(pane, path);
+  }
+  if (intent !== "new-tab" || alreadyOpen) return;
+  const committedIndex = pane.tabs.findIndex((tab) => tab.path === path);
+  if (committedIndex < 0) return;
+  const [tab] = pane.tabs.splice(committedIndex, 1);
+  if (tab !== undefined) {
+    pane.tabs.splice(Math.min(insertionIndex, pane.tabs.length), 0, tab);
+  }
+}
+
+/** Replaces the active tab only after its incoming document has loaded. */
+function replaceCommittedActiveTab(
+  pane: WorkspaceLeaf,
+  path: string,
+  previousActiveIndex: number,
+): void {
+  const committedIndex = pane.tabs.findIndex((tab) => tab.path === path);
+  if (committedIndex < 0 || committedIndex === previousActiveIndex) return;
+  const [committed] = pane.tabs.splice(committedIndex, 1);
+  const [replaced] = pane.tabs.splice(previousActiveIndex, 1);
+  if (committed === undefined) return;
+  if (replaced !== undefined) {
+    previewReplacement = {
+      paneId: pane.id,
+      path,
+      tab: replaced,
+      index: previousActiveIndex,
+    };
+  }
+  pane.tabs.splice(previousActiveIndex, 0, committed);
+}
+
+/** Retains the prior active tab when a preview receives a double-click. */
+function promotePreviewTab(pane: WorkspaceLeaf, path: string): void {
+  const preview = previewReplacement;
+  if (preview === null || preview.paneId !== pane.id || preview.path !== path) {
     return;
   }
-  const tab = pane.tabs.find((candidate) => candidate.path === path);
-  const opened = await openNoteAddress(address, tab?.viewState ?? null);
-  if (opened) {
-    pane.activePath = path;
-    pushPaneHistory(pane, address);
+  const index = pane.tabs.findIndex((tab) => tab.path === path);
+  if (index < 0) return;
+  pane.tabs.splice(Math.min(preview.index, pane.tabs.length), 0, preview.tab);
+  previewReplacement = null;
+}
+
+function settlePreviewReplacementAfterNavigation(
+  replacement: WorkspacePreviewReplacement | null,
+  path: string,
+  intent: "in-place" | "new-tab",
+  outcome: "committed" | "failed",
+): void {
+  if (previewReplacement !== replacement) return;
+  const reconciled = reconcilePreviewReplacementAfterNavigation(replacement, {
+    path,
+    intent,
+    outcome,
+  });
+  if (replacement !== null && reconciled === null) {
+    discardPreviewReplacement(replacement);
   }
+}
+
+/** Discards a displaced preview tab after another navigation supersedes it. */
+function discardPreviewReplacement(
+  expected: WorkspacePreviewReplacement | null = previewReplacement,
+): void {
+  if (previewReplacement !== expected) return;
+  const preview = previewReplacement;
+  previewReplacement = clearWorkspacePreviewReplacement(previewReplacement);
+  if (preview !== null) editor?.forgetTab(preview.tab.path);
 }
 
 function wikilinkNavigationOptions(): FollowWikilinkOptions {
@@ -3726,16 +4189,19 @@ function decodeCanvas(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
-async function openCanvas(path: string) {
+async function openCanvas(
+  path: string,
+  target: WorkspacePathLoadTarget = ORDINARY_PATH_LOAD_TARGET,
+): Promise<WorkspacePathLoadOutcome> {
   const currentVault = vault;
   if (currentVault === null) {
-    return;
+    return { kind: "failed" };
   }
   const request = contentRequests.next();
   errorText = null;
   if ((await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
-    return;
+    return { kind: "failed" };
   }
   try {
     const parsed = parseCanvas(
@@ -3754,8 +4220,10 @@ async function openCanvas(path: string) {
       }),
     );
     if (vault !== currentVault || !contentRequests.isCurrent(request)) {
-      return;
+      return { kind: "failed" };
     }
+    const destinationPane = pathLoadDestinationPane(target);
+    if (destinationPane === null) return { kind: "failed" };
     note = null;
     currentNoteSource = "";
     sourceMode = false;
@@ -3766,14 +4234,18 @@ async function openCanvas(path: string) {
     imageError = null;
     contentView = VIEW_CANVAS;
     selectedPath = path;
-    trackOpenedPaneTab(path);
+    const outcome = trackOpenedPaneTab(path, destinationPane);
+    if (outcome.kind !== "loaded") return outcome;
     outlineOpen = false;
     await tick();
     canvasViewer?.focus();
+    return outcome;
   } catch (error) {
     if (vault !== currentVault || !contentRequests.isCurrent(request)) {
-      return;
+      return { kind: "failed" };
     }
+    const destinationPane = pathLoadDestinationPane(target);
+    if (destinationPane === null) return { kind: "failed" };
     note = null;
     currentNoteSource = "";
     sourceMode = false;
@@ -3784,7 +4256,7 @@ async function openCanvas(path: string) {
     imageError = null;
     contentView = VIEW_CANVAS;
     selectedPath = path;
-    trackOpenedPaneTab(path);
+    return trackOpenedPaneTab(path, destinationPane);
   }
 }
 
@@ -3793,17 +4265,20 @@ async function openCanvas(path: string) {
  * extension, never from the file's contents, and the viewer hands the bytes
  * to an image element and to nothing else.
  */
-async function openImage(path: string) {
+async function openImage(
+  path: string,
+  target: WorkspacePathLoadTarget = ORDINARY_PATH_LOAD_TARGET,
+): Promise<WorkspacePathLoadOutcome> {
   const currentVault = vault;
   const mediaType = imageMediaType(path);
   if (currentVault === null || mediaType === null) {
-    return;
+    return { kind: "failed" };
   }
   const request = contentRequests.next();
   errorText = null;
   if ((await editor?.flush()) === false) {
     errorText = STRINGS.contentSwitchUnsaved;
-    return;
+    return { kind: "failed" };
   }
   let bytes: Uint8Array | null = null;
   let failure: unknown = null;
@@ -3813,8 +4288,10 @@ async function openImage(path: string) {
     failure = error;
   }
   if (vault !== currentVault || !contentRequests.isCurrent(request)) {
-    return;
+    return { kind: "failed" };
   }
+  const destinationPane = pathLoadDestinationPane(target);
+  if (destinationPane === null) return { kind: "failed" };
   note = null;
   currentNoteSource = "";
   sourceMode = false;
@@ -3825,14 +4302,16 @@ async function openImage(path: string) {
   missingAddress = null;
   outlineOpen = false;
   selectedPath = path;
-  trackOpenedPaneTab(path);
+  const outcome = trackOpenedPaneTab(path, destinationPane);
+  if (outcome.kind !== "loaded") return outcome;
   if (bytes === null) {
     imageDocument = null;
     imageError = describeError(STRINGS.fileOpenFailed, failure);
-    return;
+    return outcome;
   }
   imageDocument = { path, bytes, mediaType };
   imageError = null;
+  return outcome;
 }
 
 /**
@@ -3980,38 +4459,55 @@ async function addCanvasNode() {
  * so a canvas or an image opened this way never falls back to the editor
  * showing its raw bytes.
  */
+async function loadPath(
+  path: string,
+  restoration: NoteViewState | null = null,
+  switchKind: PaneSwitchKind = "note",
+  target: WorkspacePathLoadTarget = ORDINARY_PATH_LOAD_TARGET,
+): Promise<WorkspacePathLoadOutcome> {
+  const kind = vaultDocumentKind(path);
+  if (kind === "canvas") {
+    return openCanvas(path, target);
+  }
+  if (kind === "image") {
+    return openImage(path, target);
+  }
+  return openNote(path, restoration, switchKind, target);
+}
+
 async function reopenPath(
   path: string,
   restoration: NoteViewState | null = null,
   switchKind: PaneSwitchKind = "note",
 ): Promise<boolean> {
-  const kind = vaultDocumentKind(path);
-  if (kind === "canvas") {
-    await openCanvas(path);
-    return selectedPath === path;
-  }
-  if (kind === "image") {
-    await openImage(path);
-    return selectedPath === path;
-  }
-  return openNote(path, restoration, switchKind);
+  return (
+    (await loadPath(path, restoration, switchKind, ORDINARY_PATH_LOAD_TARGET))
+      .kind === "loaded"
+  );
 }
 
 /**
- * Tree-click and quick-switcher entry point: places the tab first, exactly
- * as `navigateToNote` does for a note, and lets the shared address model
- * (`navigateToNote` → `openNoteAddress` → `reopenPath`) decide which
- * surface the path opens on. Every document kind gets the same tab and
- * history bookkeeping as a note; only the loader they land on differs.
+ * Tree-click and quick-switcher entry point. The shared address model
+ * (`navigateToNote` → `openNoteAddress` → `reopenPath`) selects the surface,
+ * and navigation commits tab placement only after that loader succeeds.
  */
-function openPath(path: string, options?: { newTab?: boolean }) {
+async function openPath(
+  path: string,
+  options?: {
+    newTab?: boolean;
+    destination?: WorkspacePathDestination;
+    claimTemporaryPane?: boolean;
+  },
+): Promise<boolean> {
   if (activeSheet === "file-tree") {
     closeSheet();
   }
-  void navigateToNote(
+  return navigateToNote(
     path,
     undefined,
     options?.newTab === true ? "new-tab" : "in-place",
+    options?.destination,
+    options?.claimTemporaryPane !== false,
   );
 }
 
@@ -4165,8 +4661,9 @@ function pollEndToEndVault() {
         ) => number | null;
         __SKRIBEUM_E2E_ACTIVE_TAB_DIRTY__?: () => boolean | null;
       };
-      target.__SKRIBEUM_E2E_OPEN_NOTE__ = (notePath) =>
-        navigateToNote(notePath);
+      target.__SKRIBEUM_E2E_OPEN_NOTE__ = async (notePath) => {
+        await navigateToNote(notePath);
+      };
       // Routes by document kind, the way activating a tree row does, so a
       // spec can reach the image viewer and not only the note surface.
       target.__SKRIBEUM_E2E_OPEN_PATH__ = (targetPath) => openPath(targetPath);
@@ -4260,7 +4757,17 @@ onMount(() => {
   navigation = createNoteNavigator({
     mode: navigationSurface,
     browserWindow: window,
-    load: openNoteAddress,
+    load: async (address, restoration, source) => {
+      const binding = takeBrowserNavigationPaneBinding(address.path);
+      const loaded = await openNoteAddress(
+        address,
+        restoration,
+        source,
+        binding?.target ?? ORDINARY_PATH_LOAD_TARGET,
+      );
+      if (binding !== null) binding.loaded = loaded;
+      return loaded;
+    },
     capture: () => editor?.captureHistoryState() ?? null,
     changed: (state) => {
       navigationState = state;
@@ -4299,7 +4806,9 @@ onMount(() => {
     };
   }
   if (typeof debugWindow.__SKRIBEUM_E2E_VAULT__ === "string") {
-    debugWindow.__SKRIBEUM_E2E_OPEN_NOTE__ = (path) => navigateToNote(path);
+    debugWindow.__SKRIBEUM_E2E_OPEN_NOTE__ = async (path) => {
+      await navigateToNote(path);
+    };
     debugWindow.__SKRIBEUM_E2E_HISTORY_STATE__ = () =>
       editor?.captureHistoryState() ?? null;
     debugWindow.__SKRIBEUM_E2E_READING_DRIFT__ = (state) =>
@@ -4580,16 +5089,33 @@ onMount(() => {
       </nav>
     </div>
     <div class="skr-note-title-region">
-      <span
-        class="skr-note-title m-0"
-        class:skr-note-title-hidden={!shellTitleVisible}
-        aria-hidden="true"
-        data-testid="note-title"
-      >
-        {shellTitle}
-      </span>
-      {#if shellTitleVisible && note !== null}
-        <h2 class="sr-only">{shellTitle}</h2>
+      {#if !narrowViewport && vault !== null}
+        <button
+          bind:this={vaultPickerButton}
+          type="button"
+          class="skr-vault-picker-button"
+          aria-label={STRINGS.vaultPickerLabel}
+          aria-haspopup="menu"
+          aria-expanded={vaultPickerOpen}
+          onclick={() => void openVaultPicker()}
+        >
+          <span>{vaultName}</span>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m4 6 4 4 4-4" />
+          </svg>
+        </button>
+      {:else}
+        <span
+          class="skr-note-title m-0"
+          class:skr-note-title-hidden={!shellTitleVisible}
+          aria-hidden="true"
+          data-testid="note-title"
+        >
+          {shellTitle}
+        </span>
+        {#if shellTitleVisible && note !== null}
+          <h2 class="sr-only">{shellTitle}</h2>
+        {/if}
       {/if}
       {#if sourceMode}
         <span class="skr-source-chip" data-testid="source-mode-chip">
@@ -4625,6 +5151,48 @@ onMount(() => {
       <WindowControls {registry} {commandContext} {narrowViewport} />
     </div>
   </header>
+
+  {#if vaultPickerOpen && vaultPickerButton !== null}
+    <AnchoredMenu
+      anchor={vaultPickerButton as HTMLButtonElement}
+      label={STRINGS.vaultPickerLabel}
+      align="start"
+      onClose={closeVaultPicker}
+    >
+      <div class="skr-vault-picker">
+        {#if vaultPickerError !== null}
+          <p class="skr-startup-error" role="alert">{vaultPickerError}</p>
+        {/if}
+        {#each vaultPickerRows as row (row.path)}
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-label={row.accessibleLabel}
+            aria-checked={activeVaultPath !== null && comparableNativePath(row.path) === comparableNativePath(activeVaultPath)}
+            data-vault-picker-active={activeVaultPath !== null && comparableNativePath(row.path) === comparableNativePath(activeVaultPath)
+              ? "true"
+              : undefined}
+            onclick={() => void openRecentVaultFromPicker(row.path)}
+          >
+            <span class="skr-vault-picker-label">{row.label}</span>
+            {#if activeVaultPath !== null && comparableNativePath(row.path) === comparableNativePath(activeVaultPath)}
+              <span class="skr-vault-picker-current" aria-label={STRINGS.currentVault}>✓</span>
+            {/if}
+          </button>
+        {/each}
+        <button
+          type="button"
+          role="menuitem"
+          data-command-id="vault.open"
+          disabled={openVaultDisabledReason !== null}
+          title={openVaultDisabledReason ?? undefined}
+          onclick={() => void browseVaultFromPicker()}
+        >
+          <span>{STRINGS.browseVault}</span>
+        </button>
+      </div>
+    </AnchoredMenu>
+  {/if}
 
   {#if collisionGroups.length > 0}
     <aside class="skr-type-label skr-warning border-b px-3 py-1" role="alert">
@@ -4706,7 +5274,6 @@ onMount(() => {
                 titleSources={treeTitleSources}
                 expandedPaths={workspace.expandedFolders}
                 onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
-                onSelectionChange={(path) => (workspace.selectedPath = path)}
                 onOpenPath={openPath}
                 {registry}
                 {commandContext}
@@ -4751,8 +5318,7 @@ onMount(() => {
                   "application/x-skribeum-tree-path",
                 )
               ) {
-                event.preventDefault();
-                splitDropZone = null;
+                updateTreeDropZone(event, pane.id);
                 return;
               }
               updateTabDropZone(event, pane.id);
@@ -4768,13 +5334,7 @@ onMount(() => {
               );
               if (treePath) {
                 event.preventDefault();
-                splitDropZone = null;
-                void (async () => {
-                  await focusWorkspacePane(pane.id);
-                  // Routed by kind, so an image dropped on a pane lands in
-                  // the viewer rather than being read as a note.
-                  openPath(treePath);
-                })();
+                void dropTreePathOnPane(treePath, pane.id);
                 return;
               }
               void dropTabOnPane(event, pane.id);
@@ -4786,7 +5346,7 @@ onMount(() => {
               activePath={pane.activePath}
               titleSources={treeTitleSources}
               focused={pane.id === workspace.focusedPaneId}
-              visible={pane.tabs.length > 1 || workspacePanes.length > 1 || pane.emptyTab === true}
+              visible={tabStripVisible}
               emptyTab={pane.emptyTab === true}
               closeTooltip={tooltipForCommand("tab.close", STRINGS.closeTab)}
               onActivate={(path) => {
@@ -5068,7 +5628,6 @@ onMount(() => {
         titleSources={treeTitleSources}
         expandedPaths={workspace.expandedFolders}
         onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
-        onSelectionChange={(path) => (workspace.selectedPath = path)}
         onOpenPath={openPath}
         {registry}
         {commandContext}
@@ -5154,17 +5713,17 @@ onMount(() => {
         title={paneCommandUnavailability.get(command.id)}
         onclick={() => runActionCommand(command.id)}
       >
-        <span class="skr-action-menu-label">
+        <span class="skr-action-menu-label">{command.title}</span>
+        <span class="skr-action-menu-trailing">
+          {#if formattedCommandKeybinding(command) !== undefined}
+            <kbd>{formattedCommandKeybinding(command)}</kbd>
+          {/if}
           {#if command.id === TOGGLE_SOURCE_MODE_COMMAND}
             <span class="skr-action-menu-check" aria-hidden="true">
               {sourceMode ? "✓" : ""}
             </span>
           {/if}
-          <span>{command.title}</span>
         </span>
-        {#if formattedCommandKeybinding(command) !== undefined}
-          <kbd>{formattedCommandKeybinding(command)}</kbd>
-        {/if}
       </button>
     {/each}
     {#each contextualOverflowCommands() as command (command.id)}

@@ -243,6 +243,58 @@ describe("designed file tree", () => {
     await unmount(component);
   });
 
+  it("routes modifier, middle, and double activation through explicit new tabs", async () => {
+    const opened: Array<{ path: string; newTab: boolean | undefined }> = [];
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        selectedPath: "manual.pdf",
+        onOpenPath: (path: string, options?: { newTab?: boolean }) =>
+          opened.push({ path, newTab: options?.newTab }),
+      },
+    });
+    flushSync();
+
+    const row = document.querySelector<HTMLElement>('[data-path="plain.md"]');
+    row?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, ctrlKey: true }),
+    );
+    row?.dispatchEvent(
+      new MouseEvent("auxclick", { bubbles: true, button: 1 }),
+    );
+    // Browsers deliver click(detail=1), click(detail=2), then `dblclick`.
+    row?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    row?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+    row?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+
+    const folder = document.querySelector<HTMLElement>('[data-path="Folder"]');
+    folder?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, detail: 1 }),
+    );
+    folder?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, detail: 2 }),
+    );
+    folder?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await tick();
+
+    expect(opened).toEqual([
+      { path: "plain.md", newTab: true },
+      { path: "plain.md", newTab: true },
+      { path: "plain.md", newTab: false },
+      { path: "plain.md", newTab: true },
+    ]);
+    expect(row?.getAttribute("aria-selected")).toBe("false");
+    expect(
+      document
+        .querySelector<HTMLElement>('[data-path="manual.pdf"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(folder?.getAttribute("aria-expanded")).toBe("false");
+    await unmount(component);
+  });
+
   it("opens row actions by pointer and keyboard and dispatches through the registry", async () => {
     const renamed: string[] = [];
     const registry = createAppRegistry(undefined, true);

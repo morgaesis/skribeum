@@ -90,7 +90,7 @@ describe("tab strip", () => {
     await unmount(component);
   });
 
-  it("stays absent for one note and exposes activation and close routes", async () => {
+  it("renders one note and exposes activation and close routes", async () => {
     const closed: string[] = [];
     const activated: string[] = [];
     const single = mount(TabStrip, {
@@ -100,7 +100,7 @@ describe("tab strip", () => {
         activePath: "note-1.md",
         titleSources: {},
         focused: true,
-        visible: false,
+        visible: true,
         paneId: "pane-1",
         onActivate: (path: string | null) => activated.push(path ?? ""),
         onClose: (path: string | null) => closed.push(path ?? ""),
@@ -110,7 +110,8 @@ describe("tab strip", () => {
       },
     });
     flushSync();
-    expect(document.querySelector('[role="tablist"]')).toBeNull();
+    expect(document.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(document.querySelector(".skr-tab-new")).not.toBeNull();
     await unmount(single);
 
     const component = mount(TabStrip, {

@@ -52,11 +52,11 @@
 296..297 hide node=QuoteMark
 296..297 mark class="cm-skr-quote-mark"
 296..327 motion rendered=Blockquote
-298..298 widget callout-icon aria-hidden="true" data-callout="faq"
+298..298 widget callout-icon aria-expanded="false" aria-label="Expand callout" data-callout="faq" data-callout-from="296" data-callout-toggle="true" role="button"
 298..305 hide node=CalloutMark
 298..305 mark class="cm-skr-callout-mark" data-callout="faq"
 300..303 mark class="cm-skr-callout-type"
-328..328 line class="cm-skr-rich-callout" data-accent="yellow" data-callout="faq" data-callout-canonical="question" data-callout-line="last" data-foldable="true"
+328..328 line class="cm-skr-rich-callout" data-accent="yellow" data-callout="faq" data-callout-canonical="question" data-callout-collapsed="true" data-callout-line="last" data-foldable="true"
 328..329 hide node=QuoteMark
 328..329 mark class="cm-skr-quote-mark"
 328..382 motion rendered=Blockquote
@@ -64,7 +64,7 @@
 384..385 hide node=QuoteMark
 384..385 mark class="cm-skr-quote-mark"
 384..422 motion rendered=Blockquote
-386..386 widget callout-icon aria-hidden="true" data-callout="info"
+386..386 widget callout-icon aria-expanded="true" aria-label="Collapse callout" data-callout="info" data-callout-from="384" data-callout-toggle="true" role="button"
 386..394 hide node=CalloutMark
 386..394 mark class="cm-skr-callout-mark" data-callout="info"
 388..392 mark class="cm-skr-callout-type"

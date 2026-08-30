@@ -183,6 +183,54 @@ select {
   gap: 0.5rem;
 }
 
+.skr-vault-picker-button {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  padding: 0.25rem 0.5rem;
+  color: var(--skr-text);
+  background: transparent;
+  font-family: var(--skr-font-interface);
+  font-size: var(--skr-type-control);
+  font-weight: 600;
+}
+
+.skr-vault-picker-button > span,
+.skr-vault-picker-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skr-vault-picker-button svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
+.skr-vault-picker {
+  display: grid;
+  min-width: min(18rem, calc(100vw - 1rem));
+}
+
+.skr-vault-picker button {
+  min-width: 0;
+}
+
+.skr-vault-picker-current {
+  width: 1rem;
+  flex: none;
+  color: var(--skr-text-muted);
+  text-align: center;
+}
+
 .skr-note-title {
   min-width: 0;
   overflow: hidden;
@@ -1350,6 +1398,14 @@ select {
   display: flex;
   min-width: 0;
   align-items: center;
+  flex: 1;
+}
+
+.skr-action-menu-trailing {
+  display: flex;
+  min-width: 1rem;
+  align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
 
@@ -1888,7 +1944,6 @@ html body .settings-dialog {
     display: none;
   }
 
-  .skr-tab-strip,
   .skr-split-divider {
     display: none;
   }

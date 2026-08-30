@@ -29,6 +29,7 @@ let inputElement = $state<HTMLInputElement | null>();
 let closeElement = $state<HTMLButtonElement | null>();
 let backdropElement = $state<HTMLElement | null>();
 let dialogElement = $state<HTMLElement | null>();
+let resultsElement = $state<HTMLUListElement | null>();
 let closing = false;
 let visualTop = $state(0);
 let visualLeft = $state(0);
@@ -59,6 +60,28 @@ $effect(() => {
   if (active >= options.length) {
     active = Math.max(0, options.length - 1);
   }
+});
+
+/** Keeps the active option visible without moving focus off the combobox. */
+function revealActiveOption(): void {
+  const results = resultsElement;
+  const option = results?.querySelector<HTMLElement>(
+    `#skr-command-option-${active}`,
+  );
+  if (results == null || option == null) return;
+  const listBox = results.getBoundingClientRect();
+  const optionBox = option.getBoundingClientRect();
+  if (optionBox.top < listBox.top) {
+    results.scrollTop += optionBox.top - listBox.top;
+  } else if (optionBox.bottom > listBox.bottom) {
+    results.scrollTop += optionBox.bottom - listBox.bottom;
+  }
+}
+
+$effect(() => {
+  active;
+  options.length;
+  revealActiveOption();
 });
 
 function updateVisualViewport() {
@@ -216,6 +239,7 @@ onDestroy(() => {
       >{STRINGS.closeAction}</button>
     </div>
     <ul
+      bind:this={resultsElement}
       id={LISTBOX_ID}
       class="command-surface-results"
       role="listbox"

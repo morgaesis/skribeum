@@ -67,7 +67,7 @@ function makePointerView(
           base: markdownLanguage,
           extensions: obsidianMarkdownExtensions,
         }),
-        decorationEngine(),
+        decorationEngine(options.context),
         wikilinkPointerNavigation(() => options),
       ],
     }),
@@ -526,6 +526,200 @@ describe("external link navigation", () => {
       "noopener",
     );
     expect(openUrl).not.toHaveBeenCalled();
+  });
+});
+
+describe("vault-local Markdown link navigation", () => {
+  const context = {
+    paths: [
+      "notes/drafts/source.md",
+      "notes/a#b.md",
+      "raw/2026/notion-design-mining.md",
+      "raw/2026/extension-target.md",
+    ],
+    config: DEFAULT_OBSIDIAN_APP_CONFIG,
+    currentPath: "notes/drafts/source.md",
+  };
+
+  it("follows a relative Markdown link through the note resolver by pointer", () => {
+    const navigate = vi.fn();
+    const doc =
+      "Before [raw](../../raw/2026/notion-design-mining#Design) after";
+    const view = makePointerView(
+      doc,
+      0,
+      navigationOptions({ navigate, context }),
+    );
+    const target = view.dom.querySelector<HTMLElement>(".cm-skr-link");
+    if (target === null) throw new Error("Markdown link decoration missing");
+    expect(target.dataset.noteTarget).toBe(
+      "raw/2026/notion-design-mining.md#Design",
+    );
+
+    const event = pressLink(view, {}, target);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({
+      path: "raw/2026/notion-design-mining.md",
+      fragment: "Design",
+    });
+  });
+
+  it("decodes a percent-encoded hash as part of the Markdown path", () => {
+    const navigate = vi.fn();
+    const doc = "Before [hash](notes/a%23b.md#Part%201) after";
+    const view = makePointerView(
+      doc,
+      0,
+      navigationOptions({ navigate, context }),
+    );
+    const target = view.dom.querySelector<HTMLElement>(".cm-skr-link");
+    if (target === null) throw new Error("Markdown link decoration missing");
+
+    const event = pressLink(view, {}, target);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({
+      path: "notes/a#b.md",
+      fragment: "Part 1",
+    });
+  });
+
+  it("keeps local Markdown links pointer-navigable when previews are disabled", () => {
+    const navigate = vi.fn();
+    const doc = "Before [raw](../../raw/2026/notion-design-mining) after";
+    const view = makePointerView(
+      doc,
+      0,
+      navigationOptions({
+        navigate,
+        context: { ...context, linkPreviews: false },
+      }),
+    );
+    const target = view.dom.querySelector<HTMLElement>(".cm-skr-link");
+    if (target === null) throw new Error("Markdown link decoration missing");
+
+    expect(target.dataset.noteTarget).toBe("raw/2026/notion-design-mining.md");
+    expect(target.dataset.previewTarget).toBeUndefined();
+
+    const event = pressLink(view, {}, target);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({
+      path: "raw/2026/notion-design-mining.md",
+    });
+  });
+
+  it("follows a relative Markdown link inside a rendered callout", () => {
+    const navigate = vi.fn();
+    const doc =
+      "> [!NOTE]- [raw](../../raw/2026/notion-design-mining)\n> Hidden body\n\noutside";
+    const view = makePointerView(
+      doc,
+      doc.indexOf("outside"),
+      navigationOptions({ navigate, context }),
+    );
+    const target = view.dom.querySelector<HTMLElement>(
+      ".cm-skr-rich-callout [data-note-target]",
+    );
+    if (target === null) throw new Error("callout Markdown link missing");
+    const disclosure = view.dom.querySelector<HTMLElement>(
+      '[data-callout-toggle="true"]',
+    );
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+
+    const event = pressLink(view, {}, target);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({
+      path: "raw/2026/notion-design-mining.md",
+    });
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+
+    target.focus();
+    expect(
+      followLinkUnderCursor(view, navigationOptions({ navigate, context })),
+    ).toBe(true);
+    expect(navigate).toHaveBeenLastCalledWith({
+      path: "raw/2026/notion-design-mining.md",
+    });
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it.each([
+    ["Enter", "Enter"],
+    ["Space", " "],
+  ])(
+    "follows a focused callout Markdown link with %s without toggling disclosure",
+    (_keyName, key) => {
+      const navigate = vi.fn();
+      const doc =
+        "> [!NOTE]- [raw](../../raw/2026/notion-design-mining)\n> Hidden body\n\noutside";
+      const view = makePointerView(
+        doc,
+        doc.indexOf("outside"),
+        navigationOptions({ navigate, context }),
+      );
+      const target = view.dom.querySelector<HTMLElement>(
+        ".cm-skr-rich-callout [data-note-target]",
+      );
+      if (target === null) throw new Error("callout Markdown link missing");
+      target.focus();
+      const disclosure = view.dom.querySelector<HTMLElement>(
+        'button[data-callout-toggle="true"]',
+      );
+      expect(disclosure).not.toBeNull();
+      expect(disclosure?.contains(target)).toBe(false);
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+
+      target.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledWith({
+        path: "raw/2026/notion-design-mining.md",
+      });
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(target);
+    },
+  );
+
+  it("infers an extension and follows the cursor Markdown link by keyboard", () => {
+    const navigate = vi.fn();
+    const doc = "[target](../../raw/2026/extension-target#Section)";
+    const view = makePointerView(
+      doc,
+      doc.indexOf("target") + 2,
+      navigationOptions({ navigate, context }),
+    );
+
+    expect(
+      followLinkUnderCursor(view, navigationOptions({ navigate, context })),
+    ).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({
+      path: "raw/2026/extension-target.md",
+      fragment: "Section",
+    });
+  });
+
+  it("leaves a plain source-revealed Markdown click as an editing gesture", () => {
+    const navigate = vi.fn();
+    const doc = "[raw](../../raw/2026/notion-design-mining)";
+    const view = makePointerView(
+      doc,
+      doc.indexOf("notion") + 2,
+      navigationOptions({ navigate, context }),
+    );
+    const target = view.dom.querySelector<HTMLElement>(".cm-skr-link");
+    if (target === null) throw new Error("Markdown link decoration missing");
+
+    pressLink(view, {}, target);
+
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 

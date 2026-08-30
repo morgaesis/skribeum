@@ -26,6 +26,69 @@ export type StartupSource =
   | { kind: "native" }
   | { kind: "session" };
 
+export type VaultBrowseResult =
+  | { kind: "cancelled" }
+  | { kind: "opened" }
+  | { kind: "failed"; error: unknown };
+
+export type VaultPickerReadResult =
+  | { kind: "loaded"; session: VaultStartupSession }
+  | { kind: "failed"; error: unknown }
+  | { kind: "superseded" };
+
+/** Gives only the newest picker read permission to update picker state. */
+export class VaultPickerReadOwnership {
+  #epoch = 0;
+
+  begin(): number {
+    this.#epoch += 1;
+    return this.#epoch;
+  }
+
+  invalidate(): void {
+    this.#epoch += 1;
+  }
+
+  isCurrent(epoch: number): boolean {
+    return this.#epoch === epoch;
+  }
+}
+
+/** Reads picker rows without allowing an obsolete completion to escape. */
+export async function readVaultPickerSession(
+  ownership: VaultPickerReadOwnership,
+  read: () => Promise<VaultStartupSession>,
+): Promise<VaultPickerReadResult> {
+  const epoch = ownership.begin();
+  try {
+    const session = await read();
+    return ownership.isCurrent(epoch)
+      ? { kind: "loaded", session }
+      : { kind: "superseded" };
+  } catch (error) {
+    return ownership.isCurrent(epoch)
+      ? { kind: "failed", error }
+      : { kind: "superseded" };
+  }
+}
+
+/** Resolves directory selection and vault opening into one caught result. */
+export async function browseVaultSelection(
+  selectDirectory: () => Promise<string | null>,
+  openVault: (path: string) => Promise<unknown | null>,
+): Promise<VaultBrowseResult> {
+  try {
+    const path = await selectDirectory();
+    if (path === null) return { kind: "cancelled" };
+    const failure = await openVault(path);
+    return failure === null
+      ? { kind: "opened" }
+      : { kind: "failed", error: failure };
+  } catch (error) {
+    return { kind: "failed", error };
+  }
+}
+
 function vaultName(path: string): string {
   return (
     path
@@ -35,20 +98,79 @@ function vaultName(path: string): string {
   );
 }
 
+function vaultPathParts(path: string): string[] {
+  return path
+    .replace(/[\\/]+$/u, "")
+    .split(/[\\/]/u)
+    .filter((part) => part.length > 0);
+}
+
+function ancestorLabel(path: string, count: number): string {
+  const parts = vaultPathParts(path);
+  return parts
+    .slice(Math.max(0, parts.length - count - 1), Math.max(0, parts.length - 1))
+    .join("/");
+}
+
 /**
  * Preserves newest-first ordering while ensuring indistinguishable basenames
  * have visibly distinct, fully announced labels.
  */
 export function startupVaultRows(paths: readonly string[]): StartupVaultRow[] {
   const names = paths.map(vaultName);
+  const qualifiers = paths.map(() => "");
+  const indexesByName = new Map<string, number[]>();
+  for (const [index, name] of names.entries()) {
+    const indexes = indexesByName.get(name);
+    if (indexes === undefined) indexesByName.set(name, [index]);
+    else indexes.push(index);
+  }
+
+  for (const indexes of indexesByName.values()) {
+    if (indexes.length < 2) continue;
+    const resolved = new Set<number>();
+    const maximumAncestors = Math.max(
+      ...indexes.map((index) => vaultPathParts(paths[index] ?? "").length - 1),
+    );
+    for (let count = 1; count <= maximumAncestors; count += 1) {
+      const labels = new Map<string, number[]>();
+      for (const index of indexes) {
+        if (resolved.has(index)) continue;
+        const label = ancestorLabel(paths[index] ?? "", count);
+        const grouped = labels.get(label);
+        if (grouped === undefined) labels.set(label, [index]);
+        else grouped.push(index);
+      }
+      for (const [label, grouped] of labels) {
+        if (label.length === 0 || grouped.length > 1) continue;
+        const [index] = grouped;
+        if (index !== undefined) {
+          qualifiers[index] = label;
+          resolved.add(index);
+        }
+      }
+    }
+    const fallbackCounts = new Map<string, number>();
+    for (const index of indexes) {
+      if (resolved.has(index)) continue;
+      const fullPath = (paths[index] ?? "").replace(/[\\/]+$/u, "");
+      const occurrence = (fallbackCounts.get(fullPath) ?? 0) + 1;
+      fallbackCounts.set(fullPath, occurrence);
+      qualifiers[index] =
+        occurrence === 1 ? fullPath : `${fullPath} (${occurrence})`;
+    }
+  }
+
   return paths.map((path, index) => {
     const name = names[index] ?? path;
-    const duplicate =
-      names.filter((candidate) => candidate === name).length > 1;
+    const qualifier = qualifiers[index] ?? "";
     return {
       path,
-      label: duplicate ? `${name}, ${path}` : name,
-      accessibleLabel: `Open vault ${path}`,
+      label: qualifier.length > 0 ? `${name} · ${qualifier}` : name,
+      accessibleLabel:
+        qualifier.length > 0
+          ? `Open vault ${name} in ${qualifier}`
+          : `Open vault ${name}`,
     };
   });
 }

@@ -980,6 +980,94 @@ function externalLinkFromNode(
   return null;
 }
 
+/** Resolves a vault-local Markdown target through the shared note resolver. */
+export function resolveMarkdownNoteAddress(
+  rawTarget: string,
+  context: WikilinkResolutionContext,
+): NoteAddress | null {
+  const unwrapped =
+    rawTarget.startsWith("<") && rawTarget.endsWith(">")
+      ? rawTarget.slice(1, -1)
+      : rawTarget;
+  const hash = unwrapped.indexOf("#");
+  const rawPath = hash === -1 ? unwrapped : unwrapped.slice(0, hash);
+  const rawFragment = hash === -1 ? undefined : unwrapped.slice(hash + 1);
+  let pathPart: string;
+  let fragment: string | undefined;
+  try {
+    pathPart = decodeURIComponent(rawPath);
+    fragment =
+      rawFragment === undefined ? undefined : decodeURIComponent(rawFragment);
+  } catch {
+    return null;
+  }
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(pathPart) || pathPart.startsWith("//")) {
+    return null;
+  }
+  if (pathPart.length === 0) {
+    if (context.currentPath === null || context.currentPath === undefined) {
+      return null;
+    }
+    return fragment === undefined
+      ? { path: context.currentPath }
+      : { path: context.currentPath, fragment };
+  }
+  if (pathPart.startsWith("/") || pathPart.includes("?")) {
+    return null;
+  }
+  const source = context.currentPath ?? "";
+  const base = source.split("/").slice(0, -1);
+  const segments = [...base];
+  for (const segment of pathPart.split("/")) {
+    if (segment === "." || segment.length === 0) continue;
+    if (segment === "..") {
+      if (segments.length === 0) return null;
+      segments.pop();
+    } else {
+      segments.push(segment);
+    }
+  }
+  for (const candidate of [segments.join("/"), pathPart]) {
+    const targetPath = resolutionTarget(candidate, context);
+    const attachment = attachmentCandidate(candidate, context);
+    const resolved =
+      (attachment === null ? null : resolvePath(attachment, context.paths)) ??
+      (targetPath === null ? null : resolvePath(targetPath, context.paths));
+    if (resolved !== null) {
+      return fragment === undefined
+        ? { path: resolved }
+        : { path: resolved, fragment };
+    }
+  }
+  return null;
+}
+
+/** Returns the vault-local Markdown link at a document offset. */
+function markdownLinkAt(
+  state: EditorState,
+  position: number,
+  context: WikilinkResolutionContext,
+): NoteAddress | null {
+  const bounded = Math.max(0, Math.min(position, state.doc.length));
+  for (const side of [1, -1] as const) {
+    let node: SyntaxNode | null = syntaxTree(state).resolveInner(bounded, side);
+    while (node !== null) {
+      if (node.name === "Image") break;
+      if (node.name === "Link") {
+        const url = node.getChild("URL");
+        return url === null
+          ? null
+          : resolveMarkdownNoteAddress(
+              state.doc.sliceString(url.from, url.to),
+              context,
+            );
+      }
+      node = node.parent;
+    }
+  }
+  return null;
+}
+
 /** Returns the external HTTP or HTTPS link at a document offset. */
 export function externalLinkAt(
   state: EditorState,
@@ -1112,6 +1200,12 @@ export function followLinkAt(
     view.contentDOM.blur();
     return true;
   }
+  const markdown = markdownLinkAt(view.state, position, options.context);
+  if (markdown !== null) {
+    navigateWithIntent(options, markdown, intent);
+    view.contentDOM.blur();
+    return true;
+  }
   return followWikilinkAt(view, position, options, intent);
 }
 
@@ -1138,7 +1232,9 @@ export function linkPositionFromElement(
   target: EventTarget | null,
 ): number | null {
   const element = target instanceof Element ? target : null;
-  const link = element?.closest(".cm-skr-wikilink, [data-external-url]");
+  const link = element?.closest(
+    ".cm-skr-wikilink, [data-external-url], [data-note-target]",
+  );
   if (link === null || link === undefined || !view.dom.contains(link)) {
     return null;
   }

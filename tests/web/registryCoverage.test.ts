@@ -276,6 +276,8 @@ describe("registration coverage (criterion 1)", () => {
       "table.row.delete",
       "table.column.delete",
       "table.edit-source",
+      "table.sort.ascending",
+      "table.sort.descending",
       "task.set-status",
     ]);
     expect(

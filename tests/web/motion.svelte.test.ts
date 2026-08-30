@@ -17,10 +17,8 @@ import {
 } from "vitest";
 import Dialog from "../../src/lib/Dialog.svelte";
 import {
-  glyphWidth,
   playFormEntrance,
   playGlyphEntrance,
-  playGlyphExit,
 } from "../../src/lib/editor/motion";
 import FileTree from "../../src/lib/FileTree.svelte";
 import type { TreeEntry } from "../../src/lib/ipc/bindings";
@@ -428,25 +426,7 @@ describe("reveal marker glyph motion", () => {
     };
   }
 
-  /**
-   * jsdom lays nothing out, so a glyph that has to measure its own width has
-   * to be given one. The width the driver ends up animating to is the width
-   * this returns, which is what proves the driver measures the element rather
-   * than assuming a size.
-   */
-  function withMeasuredWidth(element: HTMLElement, width: number): void {
-    element.getBoundingClientRect = () =>
-      ({
-        width,
-        height: 16,
-        top: 0,
-        left: 0,
-        right: width,
-        bottom: 16,
-      }) as DOMRect;
-  }
-
-  it("rests at the two states the glyph animates between, with no transition and no travel", () => {
+  it("rests at one geometry in both visibility states, with no transition or travel", () => {
     const marker = markerProbe();
     const hidden = getComputedStyle(marker);
     expect(hidden.opacity).toBe("0");
@@ -459,9 +439,7 @@ describe("reveal marker glyph motion", () => {
     expect(revealed.opacity).toBe("1");
     expect(transitionOf(marker)).toBe("");
 
-    // The glyph is an object that takes up room, so its width is the motion
-    // and nothing about it slides: a translate on top of a growing width
-    // would carry the glyph out of the space it is opening.
+    expect(hidden.maxWidth).toBe(revealed.maxWidth);
     expect(hidden.transform).toBe("none");
     expect(revealed.transform).toBe("none");
     expect(loadedDeclarations(".cm-skr-reveal-marker", "transform")).toEqual(
@@ -472,9 +450,8 @@ describe("reveal marker glyph motion", () => {
     ).toEqual([]);
   });
 
-  it("enters a glyph on the surface clock, growing from no width to the width it measures", () => {
+  it("enters a glyph on the surface clock without animating its geometry", () => {
     const marker = markerProbe();
-    withMeasuredWidth(marker, 27.5);
     const recorder = recordAnimations();
     try {
       playGlyphEntrance(marker);
@@ -485,75 +462,10 @@ describe("reveal marker glyph motion", () => {
         "cubic-bezier(0.2,0,0,1)",
       );
       expect(call?.options.fill).toBe("none");
-      expect(call?.keyframes).toEqual([
-        { maxWidth: "0px", opacity: "0" },
-        { maxWidth: "27.5px", opacity: "1" },
-      ]);
-      // Clipped while it grows, so a glyph only shows as much of itself as it
-      // has room for; unclipped again once it is all there, so a descender is
-      // never shaved at rest.
-      expect(getComputedStyle(marker).overflow).toBe("hidden");
-      call?.finish();
-      expect(marker.style.overflow).toBe("");
+      expect(call?.keyframes).toEqual([{ opacity: "0" }, { opacity: "1" }]);
     } finally {
       recorder.restore();
     }
-  });
-
-  it("leaves a glyph on the state clock, squeezing its measured width back to nothing", () => {
-    const marker = markerProbe();
-    withMeasuredWidth(marker, 27.5);
-    const recorder = recordAnimations();
-    try {
-      playGlyphExit(marker);
-      const call = recorder.calls[0];
-      expect(call?.options.duration).toBe(50);
-      expect(call?.options.easing).toBe("linear");
-      expect(call?.keyframes).toEqual([
-        { maxWidth: "27.5px", opacity: "1" },
-        { maxWidth: "0px", opacity: "0" },
-      ]);
-      expect(getComputedStyle(marker).overflow).toBe("hidden");
-      call?.finish();
-      expect(marker.style.overflow).toBe("");
-    } finally {
-      recorder.restore();
-    }
-  });
-
-  it("keeps a retargeted glyph clipped when the motion it replaced reports its end", () => {
-    const marker = markerProbe();
-    withMeasuredWidth(marker, 27.5);
-    const recorder = recordAnimations();
-    try {
-      playGlyphEntrance(marker);
-      // The caret turns around mid-entrance and the glyph is sent back out.
-      playGlyphExit(marker);
-      expect(getComputedStyle(marker).overflow).toBe("hidden");
-      // The entrance's cancel lands afterwards. The exit is still running, so
-      // the glyph stays clipped until the exit itself is done with it.
-      recorder.calls[0]?.reportCancelled();
-      expect(getComputedStyle(marker).overflow).toBe("hidden");
-      recorder.calls[1]?.finish();
-      expect(marker.style.overflow).toBe("");
-    } finally {
-      recorder.restore();
-    }
-  });
-
-  it("measures a glyph with its resting width cap lifted, and puts the cap back", () => {
-    const marker = markerProbe();
-    // The hidden resting state caps the glyph at no width at all, so a width
-    // read through that cap would report nothing to animate.
-    marker.style.maxWidth = "0px";
-    let capWhileMeasuring: string | null = null;
-    marker.getBoundingClientRect = () => {
-      capWhileMeasuring = marker.style.maxWidth;
-      return { width: 12, height: 16 } as DOMRect;
-    };
-    expect(glyphWidth(marker)).toBe(12);
-    expect(capWhileMeasuring).toBe("none");
-    expect(marker.style.maxWidth).toBe("0px");
   });
 
   it("swaps a construct between its forms with opacity alone", () => {
@@ -578,7 +490,6 @@ describe("reveal marker glyph motion", () => {
     const recorder = recordAnimations();
     try {
       expect(playGlyphEntrance(marker)).toBeNull();
-      expect(playGlyphExit(marker)).toBeNull();
       expect(playFormEntrance(marker)).toBeNull();
       expect(recorder.calls).toHaveLength(0);
     } finally {

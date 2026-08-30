@@ -39,7 +39,11 @@ import {
   attachMenuDismissal,
   pointInMenuCone,
 } from "../../anchoredMenu";
-import { externalHttpUrl } from "../../features/navigation";
+import {
+  externalHttpUrl,
+  followLinkAt,
+  resolveMarkdownNoteAddress,
+} from "../../features/navigation";
 import {
   editTableCell,
   escapeTableCellPipes,
@@ -80,12 +84,7 @@ import {
   obsidianMarkdownExtensionsFor,
   skribeumMarkdownParser,
 } from "../markdown/obsidian";
-import {
-  playFormEntrance,
-  playGlyphEntrance,
-  playGlyphExit,
-  stateTiming,
-} from "../motion";
+import { playFormEntrance, playGlyphEntrance } from "../motion";
 import { PostPaintScheduler } from "../postPaintScheduler";
 import { calloutIconSvg, parseCallout } from "./callouts";
 import {
@@ -102,7 +101,6 @@ import {
 import {
   EMPTY_WIKILINK_CONTEXT,
   followWikilinkTarget,
-  resolveMarkdownLinkTarget,
   resolveWikilinkTarget,
   type WikilinkResolutionContext,
   wikilinkNavigationOptionsFacet,
@@ -185,6 +183,35 @@ const sourceRevealEnabled = Facet.define<boolean, boolean>({
 
 const sourceRevealFocusEnabled = Facet.define<boolean, boolean>({
   combine: (values) => values.at(-1) ?? true,
+});
+
+type CalloutExpansion = ReadonlyMap<number, boolean>;
+
+const setCalloutExpansion = StateEffect.define<{
+  from: number;
+  expanded: boolean;
+}>();
+
+const calloutExpansionField = StateField.define<CalloutExpansion>({
+  create: () => new Map(),
+  update(value, transaction) {
+    let next: Map<number, boolean> | null = null;
+    if (transaction.docChanged) {
+      next = new Map(
+        [...value].map(([from, expanded]) => [
+          transaction.changes.mapPos(from, -1),
+          expanded,
+        ]),
+      );
+    }
+    for (const effect of transaction.effects) {
+      if (effect.is(setCalloutExpansion)) {
+        if (next === null) next = new Map(value);
+        next.set(effect.value.from, effect.value.expanded);
+      }
+    }
+    return next ?? value;
+  },
 });
 
 const setTableCellReveal = StateEffect.define<boolean>();
@@ -1401,6 +1428,45 @@ const syncingTableCellViews = new WeakSet<EditorView>();
 const tableCellRevealStates = new WeakMap<EditorView, boolean>();
 const tablePointerCleanups = new WeakMap<HTMLElement, () => void>();
 
+type RenderedTableSortState = {
+  tableFrom: number;
+  tableTo: number;
+  column: number;
+  direction: "ascending" | "descending";
+  source: string;
+};
+
+const setRenderedTableSort = StateEffect.define<RenderedTableSortState>();
+
+type RenderedTableSortStates = ReadonlyMap<number, RenderedTableSortState>;
+
+const renderedTableSortStateField = StateField.define<RenderedTableSortStates>({
+  create: () => new Map(),
+  update(value, transaction) {
+    let next: Map<number, RenderedTableSortState> | null = null;
+    if (transaction.docChanged) {
+      next = new Map();
+      for (const state of value.values()) {
+        const tableFrom = transaction.changes.mapPos(state.tableFrom, 1);
+        const tableTo = transaction.changes.mapPos(state.tableTo, -1);
+        if (
+          tableTo > tableFrom &&
+          transaction.newDoc.sliceString(tableFrom, tableTo) === state.source
+        ) {
+          next.set(tableFrom, { ...state, tableFrom, tableTo });
+        }
+      }
+    }
+    for (const effect of transaction.effects) {
+      if (effect.is(setRenderedTableSort)) {
+        if (next === null) next = new Map(value);
+        next.set(effect.value.tableFrom, effect.value);
+      }
+    }
+    return next ?? value;
+  },
+});
+
 function delimiterAlignments(text: string, count: number) {
   const cells = text
     .replace(/^\s*\|/u, "")
@@ -1469,6 +1535,72 @@ function tableLayoutAt(state: EditorState, from: number): TableLayout | null {
     node = node.parent;
   }
   return node?.from === from ? tableLayout(node, state.doc) : null;
+}
+
+/** Records the source order a table sort produced, never a second row order. */
+export function setRenderedTableSortState(
+  view: EditorView,
+  tableFrom: number,
+  column: number,
+  direction: "ascending" | "descending",
+): void {
+  const layout = tableLayoutAt(view.state, tableFrom);
+  if (layout === null) return;
+  view.dispatch({
+    effects: setRenderedTableSort.of({
+      tableFrom: layout.from,
+      tableTo: layout.to,
+      column,
+      direction,
+      source: view.state.sliceDoc(layout.from, layout.to),
+    }),
+  });
+  queueMicrotask(() => syncRenderedTableSortControls(view, layout.from));
+}
+
+function sortControlLabel(
+  column: number,
+  direction: "ascending" | "descending" | "none",
+): string {
+  const next = direction === "ascending" ? "descending" : "ascending";
+  return `Sort table column ${column + 1} ${next}`;
+}
+
+function syncRenderedTableSortControls(
+  view: EditorView,
+  tableFrom: number,
+): void {
+  const state = view.state
+    .field(renderedTableSortStateField, false)
+    ?.get(tableFrom);
+  for (const header of view.dom.querySelectorAll<HTMLElement>(
+    `.cm-skr-table-cell[role="columnheader"][data-table-from="${tableFrom}"]`,
+  )) {
+    const column = Number(header.dataset.column);
+    const direction = state?.column === column ? state.direction : "none";
+    header.setAttribute("aria-sort", direction);
+    const sort = header.querySelector<HTMLButtonElement>(
+      ":scope > .cm-skr-table-sort",
+    );
+    if (sort !== null) {
+      sort.dataset.direction = direction;
+      sort.setAttribute("aria-label", sortControlLabel(column, direction));
+    }
+  }
+}
+
+function renderedTableSortState(
+  view: EditorView,
+  layout: TableLayout,
+): Pick<RenderedTableSortState, "column" | "direction"> | undefined {
+  const state = view.state
+    .field(renderedTableSortStateField, false)
+    ?.get(layout.from);
+  return state !== undefined &&
+    state.tableTo === layout.to &&
+    state.source === view.state.sliceDoc(layout.from, layout.to)
+    ? state
+    : undefined;
 }
 
 function tableLayoutWithin(
@@ -2259,6 +2391,47 @@ class TableWidget extends WidgetType {
           this.taskStatuses,
           this.wikilinks,
         );
+        if (layoutRow.header && !view.state.readOnly) {
+          const sortState = renderedTableSortState(view, this.layout);
+          const direction =
+            sortState?.column === cellLayout.column
+              ? sortState.direction
+              : "none";
+          cell.setAttribute("aria-sort", direction);
+          const sort = document.createElement("button");
+          sort.type = "button";
+          sort.className = "cm-skr-table-sort";
+          // A rendered grid owns one tab stop: its active cell. Keyboard
+          // sorting stays in the command registry without adding cell stops.
+          sort.tabIndex = -1;
+          sort.dataset.direction = direction;
+          sort.setAttribute(
+            "aria-label",
+            sortControlLabel(cellLayout.column, direction),
+          );
+          const keepCellFocus = (event: Event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          };
+          sort.addEventListener("pointerdown", keepCellFocus);
+          sort.addEventListener("mousedown", keepCellFocus);
+          sort.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const nextDirection =
+              sort.dataset.direction === "ascending"
+                ? "descending"
+                : "ascending";
+            dispatchTableWidgetCommand(
+              view,
+              `table.sort.${nextDirection}`,
+              Number(cell.dataset.tableFrom),
+              Number(cell.dataset.row),
+              Number(cell.dataset.column),
+            );
+          });
+          cell.append(sort);
+        }
         const focusAtPointer = (event: MouseEvent | PointerEvent) => {
           if (view.state.readOnly) {
             return;
@@ -2474,6 +2647,22 @@ class TableWidget extends WidgetType {
         const column = Number(cell.dataset.column);
         cell.dataset.tableFrom = String(this.layout.from);
         cell.style.textAlign = this.layout.alignments[column] ?? "left";
+        if (cell.getAttribute("role") === "columnheader") {
+          const sortState = renderedTableSortState(view, this.layout);
+          const direction =
+            sortState?.column === column ? sortState.direction : "none";
+          cell.setAttribute("aria-sort", direction);
+          const sort = cell.querySelector<HTMLButtonElement>(
+            ":scope > .cm-skr-table-sort",
+          );
+          if (sort !== null) {
+            sort.dataset.direction = direction;
+            sort.setAttribute(
+              "aria-label",
+              sortControlLabel(column, direction),
+            );
+          }
+        }
       }
     }
 
@@ -3277,19 +3466,44 @@ class ThematicBreakWidget extends WidgetType {
   }
 }
 
+type CalloutDisclosure = {
+  from: number;
+  expanded: boolean;
+};
+
 class CalloutIconWidget extends WidgetType {
-  constructor(readonly type: string) {
+  constructor(
+    readonly type: string,
+    readonly disclosure: CalloutDisclosure | null,
+  ) {
     super();
   }
 
   override eq(other: CalloutIconWidget): boolean {
-    return other.type === this.type;
+    return (
+      other.type === this.type &&
+      other.disclosure?.from === this.disclosure?.from &&
+      other.disclosure?.expanded === this.disclosure?.expanded
+    );
   }
 
   override toDOM(): HTMLElement {
-    const host = document.createElement("span");
+    const host: HTMLElement =
+      this.disclosure === null
+        ? document.createElement("span")
+        : Object.assign(document.createElement("button"), { type: "button" });
     host.className = "cm-skr-callout-icon-host";
-    host.setAttribute("aria-hidden", "true");
+    if (this.disclosure === null) {
+      host.setAttribute("aria-hidden", "true");
+    } else {
+      host.dataset.calloutToggle = "true";
+      host.dataset.calloutFrom = String(this.disclosure.from);
+      host.setAttribute("aria-expanded", String(this.disclosure.expanded));
+      host.setAttribute(
+        "aria-label",
+        this.disclosure.expanded ? "Collapse callout" : "Expand callout",
+      );
+    }
     host.innerHTML = calloutIconSvg(this.type);
     return host;
   }
@@ -3371,6 +3585,8 @@ type ComputeOptions = {
   ranges?: readonly { from: number; to: number }[];
   wikilinks?: WikilinkResolutionContext;
   taskStatuses?: readonly TaskStatus[];
+  /** Explicit folded-callout states, with source markers as their keys. */
+  calloutExpansion?: CalloutExpansion;
   /** Preselected across the full table when decorations are split. */
   activeReveal?: RevealRegion | null;
   /** One table intentionally shown as source instead of its grid widget. */
@@ -3532,22 +3748,26 @@ function dynamicAttributes(
           tabindex: "0",
         };
       }
-      if (wikilinks.linkPreviews === false) {
-        return {};
-      }
-      const target =
+      const address =
         rawTarget === null
           ? null
-          : resolveMarkdownLinkTarget(rawTarget, wikilinks);
-      return target === null
-        ? {}
-        : {
-            "data-preview-target": target,
-            role: "link",
-            tabindex: "0",
-            "aria-haspopup": "dialog",
-            "aria-keyshortcuts": "P",
-          };
+          : resolveMarkdownNoteAddress(rawTarget, wikilinks);
+      if (address === null) return {};
+      const target =
+        address.fragment === undefined
+          ? address.path
+          : `${address.path}#${address.fragment}`;
+      const attributes: Record<string, string> = {
+        "data-note-target": target,
+        role: "link",
+        tabindex: "0",
+      };
+      if (wikilinks.linkPreviews !== false) {
+        attributes["data-preview-target"] = target;
+        attributes["aria-haspopup"] = "dialog";
+        attributes["aria-keyshortcuts"] = "P";
+      }
+      return attributes;
     }
     case "wikilink-resolution": {
       const target = node.getChild("WikilinkTarget");
@@ -3935,6 +4155,7 @@ function widgetFor(
   doc: Text,
   wikilinks: WikilinkResolutionContext,
   taskStatuses: readonly TaskStatus[],
+  calloutExpansion: CalloutExpansion,
 ): {
   widget: WidgetType;
   block: boolean;
@@ -4045,10 +4266,40 @@ function widgetFor(
       };
     case "callout-icon": {
       const type = calloutTypeOf(node, doc);
+      let blockquote: SyntaxNode | null = node;
+      while (blockquote !== null && blockquote.name !== "Blockquote") {
+        blockquote = blockquote.parent;
+      }
+      const callout =
+        blockquote === null
+          ? null
+          : parseCallout(doc.sliceString(blockquote.from, blockquote.to));
+      const disclosure =
+        blockquote !== null && callout?.foldable === true
+          ? {
+              from: blockquote.from,
+              expanded:
+                calloutExpansion.get(blockquote.from) ??
+                callout.initiallyExpanded,
+            }
+          : null;
+      const attributes =
+        disclosure === null
+          ? { "aria-hidden": "true", "data-callout": type ?? "note" }
+          : {
+              "aria-expanded": String(disclosure.expanded),
+              "aria-label": disclosure.expanded
+                ? "Collapse callout"
+                : "Expand callout",
+              "data-callout": type ?? "note",
+              "data-callout-from": String(disclosure.from),
+              "data-callout-toggle": "true",
+              role: "button",
+            };
       return {
-        widget: new CalloutIconWidget(type ?? "note"),
+        widget: new CalloutIconWidget(type ?? "note", disclosure),
         block: false,
-        attributes: { "aria-hidden": "true", "data-callout": type ?? "note" },
+        attributes,
       };
     }
   }
@@ -4069,6 +4320,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
   const taskStatuses = normalizeTaskStatuses(
     options.taskStatuses ?? DEFAULT_TASK_STATUSES,
   );
+  const calloutExpansion = options.calloutExpansion ?? new Map();
   const activeReveal =
     options.activeReveal === undefined
       ? findActiveReveal(doc, tree, table, selection, wikilinks, taskStatuses)
@@ -4141,6 +4393,15 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
           if (dynamic === null) {
             continue;
           }
+          const richCallout =
+            rule.dynamic === "rich-callout"
+              ? parseCallout(doc.sliceString(node.from, node.to))
+              : null;
+          const calloutExpanded =
+            richCallout === null
+              ? true
+              : (calloutExpansion.get(node.from) ??
+                richCallout.initiallyExpanded);
           const revealedNow = revealed(rule, node);
           if (
             activeReveal?.descendants === true &&
@@ -4166,6 +4427,12 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
                 ...(rule.dynamic === "rich-callout"
                   ? {
                       ...(firstRichLine ? { role: "note" } : {}),
+                      ...(richCallout?.foldable === true &&
+                      !firstRichLine &&
+                      !revealedNow &&
+                      !calloutExpanded
+                        ? { "data-callout-collapsed": "true" }
+                        : {}),
                       "data-callout-line":
                         firstRichLine && lastRichLine
                           ? "only"
@@ -4278,10 +4545,10 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               );
               continue;
             }
-            // A line-scope marker keeps its node while hidden, reserving no
-            // width, so the line's geometry is settled before the caret ever
-            // arrives. An inside-scope marker is replaced outright: its
-            // characters must stay out of the caret's path.
+            // A line-scope marker keeps its node and full width while hidden,
+            // so the line's geometry is settled before the caret arrives. An
+            // inside-scope marker is replaced outright: its characters must
+            // stay out of the caret's path.
             if (rule.reveal === "cursor-line") {
               built.span(
                 hideFrom,
@@ -4320,6 +4587,7 @@ export function computeDecorations(options: ComputeOptions): DecorationSet {
               doc,
               wikilinks,
               taskStatuses,
+              calloutExpansion,
             );
             const skr = `widget ${presentation.widget}${serializeAttributes(builtWidget.attributes)}`;
             if (presentation.place === "before") {
@@ -4446,6 +4714,7 @@ function buildViewDecorations(
         ranges,
         wikilinks,
         taskStatuses,
+        calloutExpansion: state.field(calloutExpansionField),
         activeReveal,
         explicitTableSource:
           state.field(explicitTableSourceField, false) ?? null,
@@ -4474,6 +4743,7 @@ function buildBlockDecorations(
         selection,
         wikilinks,
         taskStatuses,
+        calloutExpansion: state.field(calloutExpansionField),
         activeReveal: activeRevealIn(state),
         explicitTableSource:
           state.field(explicitTableSourceField, false) ?? null,
@@ -4596,6 +4866,7 @@ function refreshRevealDecorations(
       ranges,
       wikilinks: state.field(wikilinkContext, false) ?? EMPTY_WIKILINK_CONTEXT,
       taskStatuses: state.facet(taskStatusConfiguration),
+      calloutExpansion: state.field(calloutExpansionField),
       activeReveal: active,
       explicitTableSource: state.field(explicitTableSourceField, false) ?? null,
       ...(kind === "inline"
@@ -4632,6 +4903,8 @@ function decorationInputsChanged(
       startState.facet(sourceRevealFocusEnabled) ||
     state.field(tableCellRevealField, false) !==
       startState.field(tableCellRevealField, false) ||
+    state.field(calloutExpansionField, false) !==
+      startState.field(calloutExpansionField, false) ||
     state.facet(taskStatusConfiguration) !==
       startState.facet(taskStatusConfiguration) ||
     state.field(wikilinkContext, false) !==
@@ -4749,79 +5022,6 @@ function observesReveal(update: ViewUpdate): boolean {
   );
 }
 
-/** Marks the stand-in that carries a departing glyph's width. */
-const MARKER_EXIT_ATTRIBUTE = "data-skr-marker-exit";
-
-/**
- * A departing marker's stand-in. The glyphs a construct shows while revealed
- * come back from the document itself, and the moment the caret leaves, the
- * engine takes them away again: a line-scope marker keeps a node of no width,
- * and an inside-scope marker is replaced outright so its characters stay out
- * of the caret's path. Either way the width that has to be given back
- * belongs to a node that no longer holds it, so the exit is played on a
- * stand-in instead — a widget holding the same glyphs, at the same place,
- * for exactly as long as the exit runs.
- *
- * It never becomes part of the note. The document is untouched, the caret
- * cannot enter it, it is hidden from assistive technology while it exists,
- * and it is dropped as soon as the motion is over.
- */
-class MarkerExitWidget extends WidgetType {
-  constructor(readonly text: string) {
-    super();
-  }
-
-  eq(other: MarkerExitWidget): boolean {
-    return other.text === this.text;
-  }
-
-  toDOM(): HTMLElement {
-    const element = document.createElement("span");
-    element.className = "cm-skr-reveal-marker";
-    element.setAttribute("aria-hidden", "true");
-    element.setAttribute(MARKER_EXIT_ATTRIBUTE, "true");
-    element.textContent = this.text;
-    return element;
-  }
-
-  ignoreEvent(): boolean {
-    return false;
-  }
-}
-
-/**
- * The glyphs the reveal is about to take away, read off the view as it still
- * stands. This runs before the view has written the update out, which is the
- * only moment the departing glyphs are still on screen to be copied.
- */
-function departingGlyphs(
-  view: EditorView,
-  region: RevealRegion,
-  update: ViewUpdate,
-): { position: number; text: string }[] {
-  const found: { position: number; text: string }[] = [];
-  for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
-    ".cm-skr-reveal-marker-active",
-  )) {
-    const text = element.textContent ?? "";
-    if (text === "") continue;
-    let position: number;
-    try {
-      position = view.posAtDOM(element);
-    } catch {
-      continue;
-    }
-    if (position < region.from || position > region.to) continue;
-    found.push({
-      position: update.docChanged
-        ? update.changes.mapPos(position, -1)
-        : position,
-      text,
-    });
-  }
-  return found;
-}
-
 /**
  * The reveal's motion. The decoration engine decides what a reveal looks
  * like; this decides when it moves, which CSS cannot: CodeMirror builds a new
@@ -4833,15 +5033,11 @@ function departingGlyphs(
  * heading into view, a note arriving) is not a reveal and must not animate.
  */
 class RevealMotion {
-  /** The stand-ins currently holding a departing glyph's width. */
-  exits: DecorationSet = Decoration.none;
   private previous: RevealRegion | null;
   private pending: {
     previous: RevealRegion | null;
     next: RevealRegion | null;
   } | null = null;
-  private retire: ReturnType<typeof setTimeout> | null = null;
-  private retiring = false;
 
   constructor(view: EditorView) {
     // The first observation is the view as it already is. A note opens with
@@ -4850,12 +5046,6 @@ class RevealMotion {
   }
 
   update(update: ViewUpdate): void {
-    if (this.retiring) {
-      this.retiring = false;
-      this.exits = Decoration.none;
-    } else if (update.docChanged && this.exits !== Decoration.none) {
-      this.exits = this.exits.map(update.changes);
-    }
     // The remembered region is mapped on every change, including the ones
     // this plugin does no other work for: an input burst the engine defers
     // still moves the text, and the region has to still describe the same
@@ -4878,35 +5068,6 @@ class RevealMotion {
       return;
     }
     this.pending = { previous, next };
-    this.exits =
-      previous === null ? Decoration.none : this.standInsFor(update, previous);
-  }
-
-  /**
-   * The stand-ins for one departure, built in the same update that takes the
-   * glyphs away so they are on screen in the frame the real ones leave. With
-   * the exit clock zeroed there is no motion to hold anything open for, so
-   * none are built at all and reduced motion costs the DOM nothing.
-   */
-  private standInsFor(
-    update: ViewUpdate,
-    previous: RevealRegion,
-  ): DecorationSet {
-    if (stateTiming(update.view.contentDOM).duration <= 0) {
-      return Decoration.none;
-    }
-    const glyphs = departingGlyphs(update.view, previous, update);
-    if (glyphs.length === 0) return Decoration.none;
-    return Decoration.set(
-      glyphs.map((glyph) =>
-        Decoration.widget({
-          widget: new MarkerExitWidget(glyph.text),
-          side: -1,
-          skr: `marker-exit ${JSON.stringify(glyph.text)}`,
-        }).range(glyph.position),
-      ),
-      true,
-    );
   }
 
   /**
@@ -4922,10 +5083,6 @@ class RevealMotion {
     this.play(view, pending.previous, pending.next);
   }
 
-  destroy(): void {
-    if (this.retire !== null) clearTimeout(this.retire);
-  }
-
   private within(
     view: EditorView,
     element: HTMLElement,
@@ -4937,22 +5094,6 @@ class RevealMotion {
     } catch {
       return false;
     }
-  }
-
-  /**
-   * Drops the stand-ins once the exit has run. Nothing else will necessarily
-   * touch the view again — a caret that moved once and stopped produces no
-   * further update — so the retirement asks for one of its own rather than
-   * waiting for a keystroke that may never come.
-   */
-  private retireStandIns(view: EditorView, after: number): void {
-    if (this.retire !== null) clearTimeout(this.retire);
-    this.retire = setTimeout(() => {
-      this.retire = null;
-      if (this.exits === Decoration.none) return;
-      this.retiring = true;
-      view.dispatch();
-    }, after);
   }
 
   private play(
@@ -4982,20 +5123,6 @@ class RevealMotion {
       }
     }
     if (previous === null) return;
-    // The construct the caret just left: its glyphs are squeezed back out of
-    // the line on their stand-ins, and its rendered form is back as a node
-    // built in this same frame.
-    let longest = 0;
-    for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
-      `[${MARKER_EXIT_ATTRIBUTE}]`,
-    )) {
-      if (playGlyphExit(element) !== null) {
-        longest = Math.max(longest, stateTiming(element).duration);
-      }
-    }
-    // Whatever happened, the stand-ins go: one that could not be animated at
-    // all is a glyph the note would otherwise carry for good.
-    if (this.exits !== Decoration.none) this.retireStandIns(view, longest);
     for (const element of view.contentDOM.querySelectorAll<HTMLElement>(
       ".cm-skr-reveal-rendered",
     )) {
@@ -5004,9 +5131,7 @@ class RevealMotion {
   }
 }
 
-const revealMotionPlugin = ViewPlugin.fromClass(RevealMotion, {
-  decorations: (value) => value.exits,
-});
+const revealMotionPlugin = ViewPlugin.fromClass(RevealMotion, {});
 
 /**
  * The reveal's motion runs from an update listener rather than from the
@@ -5692,9 +5817,60 @@ const frontmatterCursorGuard = Prec.highest(
   keymap.of([{ key: "ArrowUp", run: frontmatterAwareCursorUp }]),
 );
 
+/** Finds the foldable callout whose header owns a source position. */
+function foldableCalloutAt(
+  state: EditorState,
+  position: number,
+): { from: number; expanded: boolean } | null {
+  const bounded = Math.max(0, Math.min(position, state.doc.length));
+  for (const side of [1, -1] as const) {
+    let node: SyntaxNode | null = syntaxTree(state).resolveInner(bounded, side);
+    while (node !== null && node.name !== "Blockquote") {
+      node = node.parent;
+    }
+    if (node === null) continue;
+    const header = state.doc.lineAt(node.from);
+    if (bounded < header.from || bounded > header.to) continue;
+    const callout = parseCallout(state.doc.sliceString(node.from, node.to));
+    if (callout === null || !callout.foldable) continue;
+    return {
+      from: node.from,
+      expanded:
+        state.field(calloutExpansionField).get(node.from) ??
+        callout.initiallyExpanded,
+    };
+  }
+  return null;
+}
+
+/** Switches a foldable callout without moving the caret into its source. */
+function toggleFoldableCallout(view: EditorView, position: number): boolean {
+  const callout = foldableCalloutAt(view.state, position);
+  if (callout === null) return false;
+  view.dispatch({
+    effects: setCalloutExpansion.of({
+      from: callout.from,
+      expanded: !callout.expanded,
+    }),
+    userEvent: "toggle.callout",
+  });
+  return true;
+}
+
+/** Restores keyboard focus to a callout disclosure after its line rerenders. */
+function focusFoldableCalloutDisclosure(view: EditorView, from: number): void {
+  const disclosure = view.contentDOM.querySelector<HTMLElement>(
+    `button[data-callout-toggle="true"][data-callout-from="${from}"]`,
+  );
+  disclosure?.focus();
+}
+
 const calloutPointerMapping = EditorView.domEventHandlers({
   mousedown(event, view) {
     if (event.button !== 0 || !(event.target instanceof Element)) {
+      return false;
+    }
+    if (event.target.closest('[role="link"]') !== null) {
       return false;
     }
     const directLine = event.target.closest<HTMLElement>(
@@ -5720,6 +5896,11 @@ const calloutPointerMapping = EditorView.domEventHandlers({
       return false;
     }
     const sourceLine = view.state.doc.lineAt(view.posAtDOM(lineElement, 0));
+    if (toggleFoldableCallout(view, sourceLine.from)) {
+      event.preventDefault();
+      view.focus();
+      return true;
+    }
     const lineRect = lineElement.getBoundingClientRect();
     const coordinatePosition = view.posAtCoords({
       x: event.clientX,
@@ -5733,6 +5914,135 @@ const calloutPointerMapping = EditorView.domEventHandlers({
     view.focus();
     view.dispatch({ selection: { anchor }, scrollIntoView: true });
     return true;
+  },
+});
+
+/** Enter and Space activate a focused foldable callout disclosure. */
+const calloutFoldKeys = EditorView.domEventHandlers({
+  keydown(event, view) {
+    if (event.key !== "Enter" && event.key !== " ") return false;
+    const disclosure =
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>(
+            'button[data-callout-toggle="true"]',
+          )
+        : null;
+    if (disclosure === null || !view.dom.contains(disclosure)) return false;
+    const from = Number(disclosure.dataset.calloutFrom);
+    if (!Number.isSafeInteger(from)) return false;
+    if (!toggleFoldableCallout(view, from)) return false;
+    event.preventDefault();
+    focusFoldableCalloutDisclosure(view, from);
+    return true;
+  },
+});
+
+/**
+ * Rendered Markdown labels follow the same address path as wikilinks. Source
+ * form clicks remain editing gestures unless a primary modifier is held.
+ */
+const pendingMarkdownLinkClicks = new WeakMap<
+  EditorView,
+  { position: number; handled: boolean }
+>();
+
+const markdownLinkPointerNavigation = EditorView.domEventHandlers({
+  keydown(event, view) {
+    if (
+      (event.key !== "Enter" && event.key !== " ") ||
+      !(event.target instanceof Element)
+    ) {
+      return false;
+    }
+    const link = event.target.closest<HTMLElement>("[data-note-target]");
+    const provider = view.state.facet(wikilinkNavigationOptionsFacet);
+    const target = link?.dataset.noteTarget;
+    if (
+      link === null ||
+      provider === null ||
+      target === undefined ||
+      link.classList.contains("cm-skr-reveal-source") ||
+      link.querySelector(".cm-skr-reveal-marker-active") !== null
+    ) {
+      return false;
+    }
+    event.preventDefault();
+    return followLinkAt(view, view.posAtDOM(link, 0), provider());
+  },
+  mousedown(event, view) {
+    pendingMarkdownLinkClicks.delete(view);
+    if (event.button !== 0 || event.altKey || event.shiftKey) return false;
+    const link =
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-note-target]")
+        : null;
+    const provider = view.state.facet(wikilinkNavigationOptionsFacet);
+    const target = link?.dataset.noteTarget;
+    if (link === null || provider === null || target === undefined) {
+      return false;
+    }
+    if (
+      !(event.ctrlKey || event.metaKey) &&
+      (link.classList.contains("cm-skr-reveal-source") ||
+        link.querySelector(".cm-skr-reveal-marker-active") !== null)
+    ) {
+      return false;
+    }
+    event.preventDefault();
+    const handled = followLinkAt(view, view.posAtDOM(link, 0), provider(), {
+      newTab: event.ctrlKey || event.metaKey,
+    });
+    pendingMarkdownLinkClicks.set(view, {
+      position: view.posAtDOM(link, 0),
+      handled,
+    });
+    return handled;
+  },
+  click(event, view) {
+    if (event.button !== 0 || event.altKey || event.shiftKey) return false;
+    const link =
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-note-target]")
+        : null;
+    const provider = view.state.facet(wikilinkNavigationOptionsFacet);
+    const target = link?.dataset.noteTarget;
+    if (link === null || provider === null || target === undefined) {
+      return false;
+    }
+    const position = view.posAtDOM(link, 0);
+    const preceding = pendingMarkdownLinkClicks.get(view);
+    pendingMarkdownLinkClicks.delete(view);
+    if (preceding?.position === position) {
+      if (preceding.handled) event.preventDefault();
+      return preceding.handled;
+    }
+    if (
+      !(event.ctrlKey || event.metaKey) &&
+      (link.classList.contains("cm-skr-reveal-source") ||
+        link.querySelector(".cm-skr-reveal-marker-active") !== null)
+    ) {
+      return false;
+    }
+    event.preventDefault();
+    return followLinkAt(view, position, provider(), {
+      newTab: event.ctrlKey || event.metaKey,
+    });
+  },
+  auxclick(event, view) {
+    if (event.button !== 1) return false;
+    const link =
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-note-target]")
+        : null;
+    const provider = view.state.facet(wikilinkNavigationOptionsFacet);
+    const target = link?.dataset.noteTarget;
+    if (link === null || provider === null || target === undefined) {
+      return false;
+    }
+    event.preventDefault();
+    return followLinkAt(view, view.posAtDOM(link, 0), provider(), {
+      newTab: true,
+    });
   },
 });
 
@@ -6070,24 +6380,18 @@ const engineTheme = EditorView.baseTheme({
     textTransform: "uppercase",
   },
   ".cm-skr-setext-underline": { color: "var(--skr-text-muted)" },
-  // A hidden glyph is an object of no width, clipped to the nothing it
-  // occupies. The width cap is what the entrance and the exit animate
-  // (app.css holds the resting pair), so the text beside the glyph is carried
-  // along by it rather than displaced in a single frame.
+  // A hidden marker reserves the same width as a revealed one. Marker paint
+  // changes without moving surrounding text or the caret target.
   ".cm-skr-reveal-marker": {
     display: "inline-block",
-    maxWidth: "0",
-    overflow: "hidden",
+    maxWidth: "none",
+    overflow: "visible",
     color: "var(--skr-text-muted)",
     opacity: "0",
     verticalAlign: "bottom",
     whiteSpace: "pre",
   },
-  // The revealed glyph takes its natural width and stops being clipped, so a
-  // descender is never shaved once the motion has finished with it.
   ".cm-skr-reveal-marker-active": {
-    maxWidth: "none",
-    overflow: "visible",
     opacity: "1",
   },
   ".cm-skr-emphasis": { fontStyle: "italic" },
@@ -6101,7 +6405,7 @@ const engineTheme = EditorView.baseTheme({
     textDecoration: "underline",
     textUnderlineOffset: "0.15em",
   },
-  "[data-external-url]": { cursor: "pointer" },
+  "[data-external-url], [data-note-target]": { cursor: "pointer" },
   ".cm-skr-link-label": { color: "var(--skr-link)" },
   ".cm-skr-wikilink": {
     color: "var(--skr-link)",
@@ -6477,6 +6781,7 @@ const engineTheme = EditorView.baseTheme({
     fontWeight: "600",
   },
   ".cm-skr-table-cell": {
+    position: "relative",
     boxSizing: "border-box",
     minWidth: "0",
     overflowWrap: "anywhere",
@@ -6520,6 +6825,35 @@ const engineTheme = EditorView.baseTheme({
   },
   ".cm-skr-table-cell-editor .cm-gutters, .cm-skr-table-cell-editor .cm-activeLine":
     { backgroundColor: "transparent" },
+  ".cm-skr-table-sort": {
+    position: "absolute",
+    top: "0.25rem",
+    right: "0.25rem",
+    width: "1.25rem",
+    height: "1.25rem",
+    margin: "0",
+    padding: "0",
+    color: "var(--skr-text-muted)",
+    backgroundColor: "transparent",
+    border: "0",
+    borderRadius: "var(--skr-radius-control)",
+    cursor: "pointer",
+    font: "inherit",
+    lineHeight: "1",
+    opacity: "0.5",
+    transition:
+      "opacity var(--skr-motion-state-duration) var(--skr-motion-state-easing), background-color var(--skr-motion-state-duration) var(--skr-motion-state-easing)",
+  },
+  ".cm-skr-table-sort::after": {
+    content: '"⌄"',
+  },
+  ".cm-skr-table-header:hover .cm-skr-table-sort, .cm-skr-table-cell:focus-within .cm-skr-table-sort, .cm-skr-table-sort:focus-visible":
+    {
+      opacity: "1",
+    },
+  ".cm-skr-table-sort:hover, .cm-skr-table-sort:focus-visible": {
+    backgroundColor: "var(--skr-surface-subtle)",
+  },
   ".cm-skr-table-insert": {
     position: "absolute",
     zIndex: "2",
@@ -6693,12 +7027,26 @@ const engineTheme = EditorView.baseTheme({
       paddingBottom: "0.75rem",
       borderBottomRightRadius: "0.375rem",
     },
+  '.cm-line.cm-skr-rich-callout[data-callout-collapsed="true"]': {
+    display: "none",
+  },
   ".cm-skr-callout-icon-host, .cm-skr-callout-icon": {
     display: "inline-flex",
     flex: "0 0 auto",
     color: "var(--skr-callout-color)",
   },
   ".cm-skr-callout-icon-host": { marginRight: "0.4rem" },
+  'button.cm-skr-callout-icon-host[data-callout-toggle="true"]': {
+    border: "0",
+    padding: "0",
+    background: "transparent",
+    font: "inherit",
+    cursor: "pointer",
+  },
+  'button.cm-skr-callout-icon-host[data-callout-toggle="true"]:focus-visible': {
+    outline: "2px solid var(--skr-focus)",
+    outlineOffset: "2px",
+  },
   ".cm-skr-tag": {
     color: "var(--skr-accent)",
     backgroundColor: "var(--skr-accent-subtle)",
@@ -6759,6 +7107,8 @@ export function decorationEngine(
     initialContext === undefined
       ? wikilinkContext
       : wikilinkContext.init(() => initialContext),
+    calloutExpansionField,
+    renderedTableSortStateField,
     explicitTableSourceField,
     blockEngineField,
     enginePlugin,
@@ -6769,6 +7119,8 @@ export function decorationEngine(
     EditorView.atomicRanges.of(atomicDecorations),
     frontmatterCursorGuard,
     calloutPointerMapping,
+    calloutFoldKeys,
+    markdownLinkPointerNavigation,
     footnotePointerNavigation,
     tableSessionPlugin,
     engineTheme,

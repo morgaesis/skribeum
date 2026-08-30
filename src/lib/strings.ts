@@ -12,6 +12,9 @@ const TAG_NEAR_MATCH_ANNOTATION = "near match";
 export const STRINGS = {
   appTitle: "Skribeum",
   openVault: "Open vault",
+  browseVault: "Browse for vault",
+  vaultPickerLabel: "Vaults",
+  currentVault: "Current vault",
   vaultRecoveryPending: "Preparing vault recovery",
   vaultRecoveryHeading: "Open a recent vault",
   noVaultHeading: "No vault is open",

@@ -14,7 +14,10 @@ export type TableOperation =
   | { kind: "insert-row"; line: number; position: "above" | "below" }
   | { kind: "insert-column"; column: number; position: "before" | "after" }
   | { kind: "delete-row"; line: number }
-  | { kind: "delete-column"; column: number };
+  | { kind: "delete-column"; column: number }
+  | { kind: "sort-rows"; column: number; direction: TableSortDirection };
+
+export type TableSortDirection = "ascending" | "descending";
 
 export type ColumnAlignment = "none" | "left" | "center" | "right";
 
@@ -196,6 +199,48 @@ function structuralSpans(
   const lines = parseTableLines(text);
   const delimiterIndex = tableDelimiterIndex(lines);
   const columnCount = Math.max(...lines.map((line) => line.cells.length), 1);
+  if (operation.kind === "sort-rows") {
+    const firstBody = delimiterIndex + 1;
+    const trailingNewline = text.endsWith("\n");
+    const body = lines.slice(firstBody, trailingNewline ? -1 : undefined);
+    if (delimiterIndex < 0 || body.length < 2) {
+      return [];
+    }
+    const column = Math.max(0, Math.min(operation.column, columnCount - 1));
+    const collator = new Intl.Collator(undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+    const ordered = body
+      .map((line, index) => ({
+        line,
+        index,
+        key: line.text
+          .slice(line.cells[column]?.from, line.cells[column]?.to)
+          .trim(),
+      }))
+      .sort((left, right) => {
+        const compared = collator.compare(left.key, right.key);
+        const directed =
+          operation.direction === "ascending" ? compared : -compared;
+        // Equal values retain their original source order on every runtime.
+        return directed || left.index - right.index;
+      });
+    if (ordered.every((entry, index) => entry.index === index)) {
+      return [];
+    }
+    const first = body[0];
+    if (first === undefined) {
+      return [];
+    }
+    return [
+      {
+        from: first.start,
+        to: trailingNewline ? text.length - 1 : text.length,
+        insert: ordered.map((entry) => entry.line.text).join("\n"),
+      },
+    ];
+  }
   if (operation.kind === "insert-row") {
     const template = lines[0];
     const leading = template?.leadingPipe !== false;

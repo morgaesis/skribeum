@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  clearWorkspacePreviewReplacement,
+  currentWorkspaceNavigationPane,
   defaultWorkspaceState,
   emptyPane,
   findWorkspaceLeaf,
@@ -9,15 +11,22 @@ import {
   minimumNodeExtentRem,
   nextPaneId,
   normalizeWorkspaceState,
+  openInTemporaryWorkspaceSplit,
+  reconcilePreviewReplacementAfterNavigation,
+  reconcilePreviewReplacementAfterTabRemoval,
   remapWorkspacePath,
   removeWorkspaceLeaf,
   removeWorkspacePath,
   saveWorkspaceState,
+  settleTemporaryWorkspacePaneNavigation,
   splitWorkspaceLeaf,
+  TemporaryWorkspacePaneTransition,
   type VaultWorkspaceState,
   type WorkspaceLeaf,
   type WorkspaceNode,
   workspaceLeaves,
+  workspacePaneOwnsActivePath,
+  workspacePathOpenPaneId,
 } from "../../src/lib/workspaceState";
 
 function leaf(id: string, paths: string[]): WorkspaceLeaf {
@@ -57,6 +66,450 @@ function chain(count: number): WorkspaceNode {
 }
 
 describe("per-vault workspace state", () => {
+  it("resolves explicit and ordinary opens to their intended panes", () => {
+    const layout = splitWorkspaceLeaf(
+      leaf("pane-1", ["already-open.md"]),
+      "pane-1",
+      "right",
+      leaf("pane-2", ["destination.md"]),
+    );
+
+    expect(
+      workspacePathOpenPaneId(
+        layout,
+        "pane-2",
+        "already-open.md",
+        "focused-pane",
+      ),
+    ).toBe("pane-2");
+    expect(
+      workspacePathOpenPaneId(
+        layout,
+        "pane-2",
+        "already-open.md",
+        "existing-pane",
+      ),
+    ).toBe("pane-1");
+  });
+
+  it("clears pane and path preview state at a workspace replacement", () => {
+    const oldWorkspacePreview = {
+      paneId: "pane-1",
+      path: "old-vault/preview.md",
+      tab: { path: "old-vault/displaced.md", viewState: null },
+      index: 0,
+    };
+
+    const replacement = clearWorkspacePreviewReplacement(oldWorkspacePreview);
+    const promotable =
+      replacement?.paneId === "pane-1" ? replacement.tab : null;
+
+    expect(replacement).toBeNull();
+    expect(promotable).toBeNull();
+  });
+
+  it("cannot promote a displaced tab after its preview tab closes", () => {
+    const replacement = {
+      paneId: "pane-1",
+      path: "preview.md",
+      tab: { path: "displaced.md", viewState: null },
+      index: 0,
+    };
+
+    const reconciled = reconcilePreviewReplacementAfterTabRemoval(
+      replacement,
+      "pane-1",
+      "preview.md",
+    );
+    const promoted =
+      reconciled?.paneId === "pane-1" && reconciled.path === "preview.md"
+        ? reconciled.tab
+        : null;
+
+    expect(reconciled).toBeNull();
+    expect(promoted).toBeNull();
+    expect(
+      reconcilePreviewReplacementAfterTabRemoval(
+        replacement,
+        "pane-1",
+        "displaced.md",
+      ),
+    ).toBeNull();
+  });
+
+  it("retains a displaced tab when its replacement navigation fails", () => {
+    const replacement = {
+      paneId: "pane-1",
+      path: "preview-b.md",
+      tab: { path: "original-a.md", viewState: null },
+      index: 0,
+    };
+
+    expect(
+      reconcilePreviewReplacementAfterNavigation(replacement, {
+        path: "failed-c.md",
+        intent: "in-place",
+        outcome: "failed",
+      }),
+    ).toBe(replacement);
+    expect(
+      reconcilePreviewReplacementAfterNavigation(replacement, {
+        path: "replacement-c.md",
+        intent: "in-place",
+        outcome: "committed",
+      }),
+    ).toBeNull();
+    expect(
+      reconcilePreviewReplacementAfterNavigation(replacement, {
+        path: "preview-b.md",
+        intent: "new-tab",
+        outcome: "committed",
+      }),
+    ).toBe(replacement);
+  });
+
+  it("rolls back a temporary split when focus transfer fails", async () => {
+    let layout: WorkspaceNode = leaf("pane-1", ["existing.md"]);
+    const baseline = structuredClone(layout);
+    let opened = false;
+    let focusedPaneId = "pane-1";
+    const transition = new TemporaryWorkspacePaneTransition(
+      "pane-2",
+      "dropped.md",
+      "pane-1",
+      "pane-1",
+    );
+
+    const outcome = await openInTemporaryWorkspaceSplit({
+      currentLayout: () => layout,
+      setLayout: (next) => (layout = next),
+      targetPaneId: "pane-1",
+      side: "right",
+      addition: emptyPane("pane-2"),
+      transition,
+      focusAddition: async () => false,
+      open: async () => {
+        opened = true;
+        return true;
+      },
+      currentFocusedPaneId: () => focusedPaneId,
+      restoreFocus: async (paneId) => {
+        focusedPaneId = paneId;
+      },
+    });
+
+    expect(outcome).toBe("failed");
+    expect(opened).toBe(false);
+    expect(focusedPaneId).toBe("pane-1");
+    expect(transition.phase).toBe("rolled-back");
+    expect(layout).toEqual(baseline);
+  });
+
+  it("removes a failed temporary leaf without changing existing tabs", async () => {
+    let layout: WorkspaceNode = leaf("pane-1", ["one.md", "two.md"]);
+    const baseline = structuredClone(layout);
+    let focusedPaneId = "pane-1";
+    const transition = new TemporaryWorkspacePaneTransition(
+      "pane-2",
+      "missing.md",
+      "pane-1",
+      "pane-1",
+    );
+
+    const outcome = await openInTemporaryWorkspaceSplit({
+      currentLayout: () => layout,
+      setLayout: (next) => (layout = next),
+      targetPaneId: "pane-1",
+      side: "left",
+      addition: emptyPane("pane-2"),
+      transition,
+      focusAddition: async () => {
+        focusedPaneId = "pane-2";
+        return true;
+      },
+      open: async () => false,
+      currentFocusedPaneId: () => focusedPaneId,
+      restoreFocus: async (paneId) => {
+        focusedPaneId = paneId;
+      },
+    });
+
+    expect(outcome).toBe("failed");
+    expect(focusedPaneId).toBe("pane-1");
+    expect(layout).toEqual(baseline);
+    expect(workspaceLeaves(layout)[0]?.tabs.map((tab) => tab.path)).toEqual([
+      "one.md",
+      "two.md",
+    ]);
+  });
+
+  it("rolls back a missing dropped path before the new pane owns a tab", async () => {
+    let layout: WorkspaceNode = emptyPane("pane-1");
+    const baseline = structuredClone(layout);
+    const created = emptyPane("pane-2");
+    let focusedPaneId = "pane-1";
+    const transition = new TemporaryWorkspacePaneTransition(
+      created.id,
+      "vanished.md",
+      "pane-1",
+      "pane-1",
+    );
+
+    const outcome = await openInTemporaryWorkspaceSplit({
+      currentLayout: () => layout,
+      setLayout: (next) => (layout = next),
+      targetPaneId: "pane-1",
+      side: "right",
+      addition: created,
+      transition,
+      focusAddition: async () => {
+        focusedPaneId = created.id;
+        return true;
+      },
+      // Ordinary navigation accepts a missing surface, but the transition
+      // still rejects it because the destination owns no active tab.
+      open: async () => true,
+      currentFocusedPaneId: () => focusedPaneId,
+      restoreFocus: async (paneId) => {
+        focusedPaneId = paneId;
+      },
+    });
+
+    expect(outcome).toBe("failed");
+    expect(focusedPaneId).toBe("pane-1");
+    expect(layout).toEqual(baseline);
+    expect(workspaceLeaves(layout)[0]?.activePath).toBeNull();
+    expect(workspaceLeaves(layout)[0]?.tabs).toEqual([]);
+  });
+
+  it("preserves newer surviving focus when a bound load is cancelled", async () => {
+    let layout: WorkspaceNode = splitWorkspaceLeaf(
+      leaf("pane-1", ["existing.md"]),
+      "pane-1",
+      "right",
+      leaf("pane-3", ["newer-focus.md"]),
+    );
+    const baseline = structuredClone(layout);
+    const created = emptyPane("pane-2");
+    let focusedPaneId = "pane-1";
+    const load = Promise.withResolvers<void>();
+    const loadStarted = Promise.withResolvers<void>();
+    const transition = new TemporaryWorkspacePaneTransition(
+      created.id,
+      "delayed.md",
+      "pane-1",
+      "pane-1",
+    );
+
+    const opening = openInTemporaryWorkspaceSplit({
+      currentLayout: () => layout,
+      setLayout: (next) => (layout = next),
+      targetPaneId: "pane-1",
+      side: "right",
+      addition: created,
+      transition,
+      focusAddition: async () => {
+        focusedPaneId = created.id;
+        return true;
+      },
+      open: async () => {
+        loadStarted.resolve();
+        await load.promise;
+        const destination = currentWorkspaceNavigationPane(
+          layout,
+          focusedPaneId,
+          created.id,
+        );
+        if (destination === null) return false;
+        destination.tabs.push({ path: "delayed.md", viewState: null });
+        destination.activePath = "delayed.md";
+        return workspacePaneOwnsActivePath(layout, created.id, "delayed.md");
+      },
+      currentFocusedPaneId: () => focusedPaneId,
+      restoreFocus: async (paneId) => {
+        focusedPaneId = paneId;
+      },
+    });
+
+    await loadStarted.promise;
+    focusedPaneId = "pane-3";
+    load.resolve();
+
+    expect(await opening).toBe("failed");
+    expect(focusedPaneId).toBe("pane-3");
+    expect(layout).toEqual(baseline);
+    expect(
+      workspaceLeaves(layout).find((pane) => pane.id === "pane-3")?.activePath,
+    ).toBe("newer-focus.md");
+  });
+
+  it("keeps a temporary leaf claimed by a later successful navigation", async () => {
+    let layout: WorkspaceNode = splitWorkspaceLeaf(
+      leaf("pane-1", ["existing.md"]),
+      "pane-1",
+      "right",
+      leaf("pane-3", ["moved.md"]),
+    );
+    let restoreCount = 0;
+    let focusedPaneId = "pane-1";
+    const originalOpen = Promise.withResolvers<boolean>();
+    const openStarted = Promise.withResolvers<void>();
+    const transition = new TemporaryWorkspacePaneTransition(
+      "pane-2",
+      "original-drop.md",
+      "pane-1",
+      "pane-1",
+    );
+
+    const opening = openInTemporaryWorkspaceSplit({
+      currentLayout: () => layout,
+      setLayout: (next) => (layout = next),
+      targetPaneId: "pane-1",
+      side: "right",
+      addition: emptyPane("pane-2"),
+      transition,
+      focusAddition: async () => {
+        focusedPaneId = "pane-2";
+        return true;
+      },
+      open: async () => {
+        openStarted.resolve();
+        return originalOpen.promise;
+      },
+      currentFocusedPaneId: () => focusedPaneId,
+      restoreFocus: async (paneId) => {
+        restoreCount += 1;
+        focusedPaneId = paneId;
+      },
+    });
+
+    await openStarted.promise;
+    const claimed = findWorkspaceLeaf(layout, "pane-2");
+    if (claimed === null) throw new Error("temporary pane was not created");
+    const claim = transition.claimNavigation();
+    if (claim === null) throw new Error("temporary pane was not claimable");
+    claimed.tabs.push({ path: "later.md", viewState: null });
+    claimed.activePath = "later.md";
+    const newerOutcome = await settleTemporaryWorkspacePaneNavigation({
+      currentLayout: () => layout,
+      setLayout: (next) => (layout = next),
+      transition,
+      claim,
+      opened: true,
+      currentFocusedPaneId: () => focusedPaneId,
+      restoreFocus: async (paneId) => {
+        restoreCount += 1;
+        focusedPaneId = paneId;
+      },
+    });
+    originalOpen.resolve(false);
+
+    expect(newerOutcome).toBe("committed");
+    expect(await opening).toBe("superseded");
+    expect(restoreCount).toBe(0);
+    expect(findWorkspaceLeaf(layout, "pane-2")).toBe(claimed);
+    expect(claimed.activePath).toBe("later.md");
+    expect(transition.phase).toBe("committed");
+  });
+
+  it("rolls back once when the claiming navigation also fails", async () => {
+    let layout: WorkspaceNode = leaf("pane-1", ["existing.md"]);
+    const baseline = structuredClone(layout);
+    let focusedPaneId = "pane-1";
+    let restoreCount = 0;
+    const originalOpen = Promise.withResolvers<boolean>();
+    const openStarted = Promise.withResolvers<void>();
+    const transition = new TemporaryWorkspacePaneTransition(
+      "pane-2",
+      "original-drop.md",
+      "pane-1",
+      "pane-1",
+    );
+
+    const opening = openInTemporaryWorkspaceSplit({
+      currentLayout: () => layout,
+      setLayout: (next) => (layout = next),
+      targetPaneId: "pane-1",
+      side: "right",
+      addition: emptyPane("pane-2"),
+      transition,
+      focusAddition: async () => {
+        focusedPaneId = "pane-2";
+        return true;
+      },
+      open: async () => {
+        openStarted.resolve();
+        return originalOpen.promise;
+      },
+      currentFocusedPaneId: () => focusedPaneId,
+      restoreFocus: async (paneId) => {
+        restoreCount += 1;
+        focusedPaneId = paneId;
+      },
+    });
+
+    await openStarted.promise;
+    const claim = transition.claimNavigation();
+    if (claim === null) throw new Error("temporary pane was not claimable");
+    originalOpen.resolve(false);
+
+    expect(await opening).toBe("superseded");
+    expect(findWorkspaceLeaf(layout, "pane-2")).not.toBeNull();
+
+    const newerOutcome = await settleTemporaryWorkspacePaneNavigation({
+      currentLayout: () => layout,
+      setLayout: (next) => (layout = next),
+      transition,
+      claim,
+      opened: false,
+      currentFocusedPaneId: () => focusedPaneId,
+      restoreFocus: async (paneId) => {
+        restoreCount += 1;
+        focusedPaneId = paneId;
+      },
+    });
+
+    expect(newerOutcome).toBe("failed");
+    expect(layout).toEqual(baseline);
+    expect(focusedPaneId).toBe("pane-1");
+    expect(restoreCount).toBe(1);
+    expect(transition.phase).toBe("rolled-back");
+  });
+
+  it("commits only when the temporary pane owns the requested active tab", async () => {
+    let layout: WorkspaceNode = leaf("pane-1", ["existing.md"]);
+    const created = emptyPane("pane-2");
+    const transition = new TemporaryWorkspacePaneTransition(
+      created.id,
+      "dropped.md",
+      "pane-1",
+      "pane-1",
+    );
+
+    const outcome = await openInTemporaryWorkspaceSplit({
+      currentLayout: () => layout,
+      setLayout: (next) => (layout = next),
+      targetPaneId: "pane-1",
+      side: "right",
+      addition: created,
+      transition,
+      focusAddition: async () => true,
+      open: async () => {
+        created.tabs.push({ path: "dropped.md", viewState: null });
+        created.activePath = "dropped.md";
+        return true;
+      },
+      currentFocusedPaneId: () => created.id,
+      restoreFocus: async () => {},
+    });
+
+    expect(outcome).toBe("committed");
+    expect(transition.phase).toBe("committed");
+    expect(workspacePaneOwnsActivePath(layout, created.id, "dropped.md")).toBe(
+      true,
+    );
+  });
+
   it("persists panel, tree, tab, split-tree, and per-pane history state", () => {
     const storage = memoryStorage();
     const state = defaultWorkspaceState();

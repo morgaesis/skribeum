@@ -7478,28 +7478,47 @@ describe("skribeum core editing surfaces", () => {
       light_palette: "gazette",
       dark_palette: "signal",
     };
-    await persistSettings(storedSystemSettings);
-    await browser.refresh();
-    await $('[role="tree"]').waitForExist({ timeout: 15000 });
-    await browser.waitUntil(
-      () =>
-        browser.execute(
-          () =>
-            (
-              window as Window & {
-                __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
-              }
-            ).__SKRIBEUM_E2E_CURRENT_PATH__?.() !== null,
-        ),
-      {
-        timeout: 30000,
-        timeoutMsg: "refreshed desktop document did not become ready",
-      },
-    );
-    await $(".cm-content").click();
-    await waitForEditorFocus();
 
-    await browser.execute(`
+    // Both operations are safe to repeat. Keeping them together means a
+    // failed assertion cannot leave either the patched media query or the
+    // real persisted settings document behind for the next test.
+    const restoreTestState = async () => {
+      try {
+        await closeIfOpen('[data-testid="settings-view"]');
+      } finally {
+        try {
+          await restoreNativeMatchMedia();
+        } finally {
+          await persistSettings(original);
+          await browser.refresh();
+          await $('[role="tree"]').waitForExist({ timeout: 15000 });
+        }
+      }
+    };
+
+    try {
+      await persistSettings(storedSystemSettings);
+      await browser.refresh();
+      await $('[role="tree"]').waitForExist({ timeout: 15000 });
+      await browser.waitUntil(
+        () =>
+          browser.execute(
+            () =>
+              (
+                window as Window & {
+                  __SKRIBEUM_E2E_CURRENT_PATH__?: () => string | null;
+                }
+              ).__SKRIBEUM_E2E_CURRENT_PATH__?.() !== null,
+          ),
+        {
+          timeout: 30000,
+          timeoutMsg: "refreshed desktop document did not become ready",
+        },
+      );
+      await $(".cm-content").click();
+      await waitForEditorFocus();
+
+      await browser.execute(`
       const nativeMatchMedia = window.matchMedia.bind(window);
       const media = "(prefers-color-scheme: dark)";
       const query = new EventTarget();
@@ -7515,223 +7534,312 @@ describe("skribeum core editing surfaces", () => {
       window.__skribeumNativeMatchMedia = nativeMatchMedia;
     `);
 
-    await browser.keys([modifierKey, ","]);
-    const dialog = $('[data-testid="settings-view"]');
-    await dialog.waitForExist({ timeout: 10000 });
-    await openSettingsGroup("appearance");
-    /** The System card's own state, null while the control is not mounted. */
-    const systemSchemeSelected = () =>
-      browser.execute(() => {
-        const card = document.querySelector(
-          '[data-testid="settings-theme-system"]',
-        );
-        return card === null
-          ? null
-          : card.getAttribute("aria-checked") === "true";
-      });
-    // The dialog's existence only means the container mounted; the controls
-    // inside it commit the persisted document a moment later, so poll for
-    // that committed state rather than asserting immediately on open. The
-    // bound is generous because the commit follows a full reload's vault
-    // reindex on the slowest CI runners; the poll returns the moment the
-    // state lands.
-    //
-    // The whole snapshot is read in one document pass, and a control that is
-    // not mounted yet reads as absent rather than raising. Reading each
-    // control through its own element command instead spends the full
-    // implicit-existence wait on every control that has yet to appear, which
-    // turns this bound into two samples and ends the poll on a driver error
-    // naming the selector rather than on the state that was reached. It also
-    // leaves nothing for the diagnosis below to report, because that read
-    // fails the same way. The surface shows one group at a time, so a control
-    // belonging to another group is absent by design and has to read that way.
-    const committedState = () =>
-      browser.execute(() => {
-        const system = document.querySelector(
-          '[data-testid="settings-theme-system"]',
-        );
-        const gazette = document.querySelector(
-          '[data-testid="settings-palette-gazette"]',
-        );
-        const signal = document.querySelector(
-          '[data-testid="settings-palette-signal"]',
-        );
-        return {
-          dialogPresent:
-            document.querySelector('[data-testid="settings-view"]') !== null,
-          shownGroup:
-            document.querySelector<HTMLElement>("[data-settings-section]")
-              ?.dataset.settingsSection ?? null,
-          systemScheme:
-            system === null
-              ? null
-              : system.getAttribute("aria-checked") === "true",
-          gazetteChecked: gazette?.getAttribute("aria-checked") ?? null,
-          // Each half of the pair is its own radio group and always reports
-          // its own stored choice checked. Which half is painting is stated
-          // once above the group, not on any one card.
-          signalChecked: signal?.getAttribute("aria-checked") ?? null,
-          signalLive: (signal?.getAttribute("class") ?? "").includes("live"),
-        };
-      });
-    try {
-      await browser.waitUntil(
-        async () => {
-          const state = await committedState();
-          return (
-            state.systemScheme === true &&
-            state.gazetteChecked === "true" &&
-            state.signalChecked === "true" &&
-            state.signalLive === false
+      /** One scoped snapshot for readiness, custody, and failure diagnostics. */
+      const appearanceState = () =>
+        browser.execute(() => {
+          const view = document.querySelector<HTMLElement>(
+            '[data-testid="settings-view"]',
           );
-        },
-        { timeout: 20000 },
-      );
-    } catch {
-      throw new Error(
-        `settings surface did not commit the persisted document; observed ${JSON.stringify(
-          await committedState(),
-        )}`,
-      );
-    }
-
-    await browser.execute(() => {
-      const testWindow = window as unknown as {
-        __skribeumColourSchemeQuery?: MediaQueryList;
+          const control = (testId: string) =>
+            view?.querySelector<HTMLElement>(`[data-testid="${testId}"]`) ??
+            null;
+          const system = control("settings-theme-system");
+          const gazette = control("settings-palette-gazette");
+          const signal = control("settings-palette-signal");
+          const graphite = control("settings-palette-graphite");
+          const light = control("settings-theme-light");
+          const studio = control("settings-palette-studio");
+          return {
+            dialogPresent: view !== null,
+            shownGroup:
+              view?.querySelector<HTMLElement>("[data-settings-section]")
+                ?.dataset.settingsSection ?? null,
+            systemScheme:
+              system === null
+                ? null
+                : system.getAttribute("aria-checked") === "true",
+            gazetteChecked: gazette?.getAttribute("aria-checked") ?? null,
+            signalChecked: signal?.getAttribute("aria-checked") ?? null,
+            signalLive: signal?.classList.contains("live") ?? false,
+            graphiteChecked: graphite?.getAttribute("aria-checked") ?? null,
+            lightChecked: light?.getAttribute("aria-checked") ?? null,
+            studioChecked: studio?.getAttribute("aria-checked") ?? null,
+          };
+        });
+      type AppearanceState = Awaited<ReturnType<typeof appearanceState>>;
+      const waitForAppearanceState = async (
+        description: string,
+        predicate: (state: AppearanceState) => boolean,
+        timeout: number,
+      ) => {
+        let observed = await appearanceState();
+        try {
+          await browser.waitUntil(
+            async () => {
+              observed = await appearanceState();
+              return predicate(observed);
+            },
+            { timeout },
+          );
+        } catch {
+          throw new Error(
+            `${description}; observed ${JSON.stringify(observed)}`,
+          );
+        }
+        return observed;
       };
-      const query = testWindow.__skribeumColourSchemeQuery;
-      if (query === undefined)
-        throw new Error("colour-scheme query is missing");
-      Object.defineProperty(query, "matches", {
-        configurable: true,
-        value: true,
-      });
-      const event = new Event("change");
-      Object.defineProperties(event, {
-        matches: { value: true },
-        media: { value: query.media },
-      });
-      query.dispatchEvent(event);
-    });
-    // The stored dark choice was already reported checked by its own group;
-    // what the system flip changes is which half is painting, so that is
-    // what this waits on.
-    await browser.waitUntil(
-      async () =>
-        (await browser.execute(
-          () =>
-            document
-              .querySelector('[data-testid="settings-palette-signal"]')
-              ?.classList.contains("live") ?? false,
-        )) === true,
-      {
-        timeout: 5000,
-        timeoutMsg: "system dark palette did not become active",
-      },
-    );
-    expect(await systemSchemeSelected()).toBe(true);
-    expect(
-      await browser.execute(() => document.documentElement.dataset.theme),
-    ).toBe("system");
+      const withAppearanceDiagnostics = async <Result>(
+        description: string,
+        operation: () => Promise<Result>,
+      ) => {
+        try {
+          return await operation();
+        } catch (error) {
+          throw new Error(
+            `${description}; observed ${JSON.stringify(
+              await appearanceState(),
+            )}; cause ${String(error)}`,
+          );
+        }
+      };
 
-    // A click on a palette card is an opinion about that palette, not about
-    // the colour scheme: it writes its own field and leaves the mode alone.
-    await selectSettingsChoice(
-      '[data-testid="settings-palette-graphite"]',
-      "Graphite palette",
-    );
-    await browser.waitUntil(
-      async () => {
-        const stored = await persistedSettings();
-        return (
-          typeof stored !== "string" &&
-          stored.theme === "system" &&
-          stored.light_palette === "gazette" &&
-          stored.dark_palette === "graphite"
+      await browser.keys([modifierKey, ","]);
+      const dialog = $('[data-testid="settings-view"]');
+      try {
+        await dialog.waitForDisplayed({ timeout: 10000 });
+      } catch {
+        throw new Error(
+          `settings view did not become visible; observed ${JSON.stringify(
+            await appearanceState(),
+          )}`,
         );
-      },
-      { timeout: 10000, timeoutMsg: "dark palette field did not persist" },
-    );
-    // The write the card owns has landed, so the colour scheme it does not
-    // own is read on settled state rather than raced against the same commit.
-    expect(await systemSchemeSelected()).toBe(true);
-    expect(
-      await browser.execute(() => ({
-        theme: document.documentElement.dataset.theme,
-        lightPalette: document.documentElement.dataset.lightPalette,
-        darkPalette: document.documentElement.dataset.darkPalette,
-      })),
-    ).toEqual({
-      theme: "system",
-      lightPalette: "gazette",
-      darkPalette: "graphite",
-    });
+      }
+      await withAppearanceDiagnostics(
+        "Appearance group did not open",
+        async () => openSettingsGroup("appearance"),
+      );
+      await waitForAppearanceState(
+        "Appearance controls did not become ready",
+        (state) =>
+          state.dialogPresent &&
+          state.shownGroup === "appearance" &&
+          state.systemScheme !== null &&
+          state.gazetteChecked !== null &&
+          state.signalChecked !== null &&
+          state.graphiteChecked !== null &&
+          state.lightChecked !== null &&
+          state.studioChecked !== null,
+        5000,
+      );
+      /** The System card's own state, null while the control is not mounted. */
+      const systemSchemeSelected = () =>
+        browser.execute(() => {
+          const card = document.querySelector(
+            '[data-testid="settings-view"] [data-testid="settings-theme-system"]',
+          );
+          return card === null
+            ? null
+            : card.getAttribute("aria-checked") === "true";
+        });
+      // The dialog's existence only means the container mounted; the controls
+      // inside it commit the persisted document a moment later, so poll for
+      // that committed state rather than asserting immediately on open. The
+      // bound is generous because the commit follows a full reload's vault
+      // reindex on the slowest CI runners; the poll returns the moment the
+      // state lands.
+      //
+      // The whole snapshot is read in one document pass, and a control that is
+      // not mounted yet reads as absent rather than raising. Reading each
+      // control through its own element command instead spends the full
+      // implicit-existence wait on every control that has yet to appear, which
+      // turns this bound into two samples and ends the poll on a driver error
+      // naming the selector rather than on the state that was reached. It also
+      // leaves nothing for the diagnosis below to report, because that read
+      // fails the same way. The surface shows one group at a time, so a control
+      // belonging to another group is absent by design and has to read that way.
+      await waitForAppearanceState(
+        "settings surface did not commit the persisted document",
+        (state) =>
+          state.dialogPresent &&
+          state.shownGroup === "appearance" &&
+          state.systemScheme === true &&
+          state.gazetteChecked === "true" &&
+          state.signalChecked === "true" &&
+          state.signalLive === false,
+        20000,
+      );
 
-    // Each miniature shell paints from the palette its own half previews,
-    // whatever the application is currently showing.
-    expect(
       await browser.execute(() => {
-        const resolve = (expression: string) => {
-          const probe = document.createElement("div");
-          probe.style.color = expression;
-          document.body.append(probe);
-          const value = getComputedStyle(probe).color;
-          probe.remove();
-          return value;
+        const testWindow = window as unknown as {
+          __skribeumColourSchemeQuery?: MediaQueryList;
         };
-        const pane = (mode: string, index: number) =>
-          document.querySelectorAll<HTMLElement>(
-            `[data-testid="settings-theme-${mode}"] .mode-pane`,
-          )[index];
-        const lightPane = pane("light", 0);
-        const darkPane = pane("dark", 0);
-        const systemPanes = document.querySelectorAll(
-          '[data-testid="settings-theme-system"] .mode-pane',
-        ).length;
-        return {
-          light:
-            lightPane !== undefined &&
-            getComputedStyle(lightPane).backgroundColor ===
-              resolve("var(--skr-preview-gazette-surface)"),
-          dark:
-            darkPane !== undefined &&
-            getComputedStyle(darkPane).backgroundColor ===
-              resolve("var(--skr-preview-graphite-surface)"),
-          systemPanes,
-        };
-      }),
-    ).toEqual({ light: true, dark: true, systemPanes: 2 });
+        const query = testWindow.__skribeumColourSchemeQuery;
+        if (query === undefined)
+          throw new Error("colour-scheme query is missing");
+        Object.defineProperty(query, "matches", {
+          configurable: true,
+          value: true,
+        });
+        const event = new Event("change");
+        Object.defineProperties(event, {
+          matches: { value: true },
+          media: { value: query.media },
+        });
+        query.dispatchEvent(event);
+      });
+      // The stored dark choice was already reported checked by its own group;
+      // what the system flip changes is which half is painting, so that is
+      // what this waits on.
+      await waitForAppearanceState(
+        "system dark palette did not become active while Settings stayed open",
+        (state) =>
+          state.dialogPresent &&
+          state.shownGroup === "appearance" &&
+          state.systemScheme === true &&
+          state.signalLive,
+        5000,
+      );
+      expect(await systemSchemeSelected()).toBe(true);
+      expect(
+        await browser.execute(() => document.documentElement.dataset.theme),
+      ).toBe("system");
 
-    // A mode card writes the colour scheme and touches neither palette.
-    await selectSettingsChoice(
-      '[data-testid="settings-theme-light"]',
-      "Light colour scheme",
-    );
-    await selectSettingsChoice(
-      '[data-testid="settings-palette-studio"]',
-      "Studio palette",
-    );
-    await browser.waitUntil(
-      async () => {
-        const stored = await persistedSettings();
-        return (
-          typeof stored !== "string" &&
-          stored.theme === "light" &&
-          stored.light_palette === "studio" &&
-          stored.dark_palette === "graphite"
-        );
-      },
-      {
-        timeout: 10000,
-        timeoutMsg: "the colour scheme and palette fields did not round-trip",
-      },
-    );
+      // A click on a palette card is an opinion about that palette, not about
+      // the colour scheme: it writes its own field and leaves the mode alone.
+      await withAppearanceDiagnostics(
+        "Graphite palette did not become active",
+        async () =>
+          selectSettingsChoice(
+            '[data-testid="settings-view"] [data-testid="settings-palette-graphite"]',
+            "Graphite palette",
+          ),
+      );
+      await waitForAppearanceState(
+        "Settings closed after the dark palette write",
+        (state) =>
+          state.dialogPresent &&
+          state.shownGroup === "appearance" &&
+          state.graphiteChecked === "true",
+        5000,
+      );
+      await withAppearanceDiagnostics(
+        "dark palette field did not persist",
+        async () =>
+          browser.waitUntil(
+            async () => {
+              const stored = await persistedSettings();
+              return (
+                typeof stored !== "string" &&
+                stored.theme === "system" &&
+                stored.light_palette === "gazette" &&
+                stored.dark_palette === "graphite"
+              );
+            },
+            { timeout: 10000 },
+          ),
+      );
+      // The write the card owns has landed, so the colour scheme it does not
+      // own is read on settled state rather than raced against the same commit.
+      expect(await systemSchemeSelected()).toBe(true);
+      expect(
+        await browser.execute(() => ({
+          theme: document.documentElement.dataset.theme,
+          lightPalette: document.documentElement.dataset.lightPalette,
+          darkPalette: document.documentElement.dataset.darkPalette,
+        })),
+      ).toEqual({
+        theme: "system",
+        lightPalette: "gazette",
+        darkPalette: "graphite",
+      });
 
-    await closeIfOpen('[data-testid="settings-view"]');
-    await restoreNativeMatchMedia();
-    await persistSettings(original);
-    await browser.refresh();
-    await $('[role="tree"]').waitForExist({ timeout: 15000 });
+      // Each miniature shell paints from the palette its own half previews,
+      // whatever the application is currently showing.
+      expect(
+        await browser.execute(() => {
+          const resolve = (expression: string) => {
+            const probe = document.createElement("div");
+            probe.style.color = expression;
+            document.body.append(probe);
+            const value = getComputedStyle(probe).color;
+            probe.remove();
+            return value;
+          };
+          const pane = (mode: string, index: number) =>
+            document.querySelectorAll<HTMLElement>(
+              `[data-testid="settings-view"] [data-testid="settings-theme-${mode}"] .mode-pane`,
+            )[index];
+          const lightPane = pane("light", 0);
+          const darkPane = pane("dark", 0);
+          const systemPanes = document.querySelectorAll(
+            '[data-testid="settings-view"] [data-testid="settings-theme-system"] .mode-pane',
+          ).length;
+          return {
+            light:
+              lightPane !== undefined &&
+              getComputedStyle(lightPane).backgroundColor ===
+                resolve("var(--skr-preview-gazette-surface)"),
+            dark:
+              darkPane !== undefined &&
+              getComputedStyle(darkPane).backgroundColor ===
+                resolve("var(--skr-preview-graphite-surface)"),
+            systemPanes,
+          };
+        }),
+      ).toEqual({ light: true, dark: true, systemPanes: 2 });
+
+      // A mode card writes the colour scheme and touches neither palette.
+      await withAppearanceDiagnostics(
+        "Light colour scheme did not become active",
+        async () =>
+          selectSettingsChoice(
+            '[data-testid="settings-view"] [data-testid="settings-theme-light"]',
+            "Light colour scheme",
+          ),
+      );
+      await waitForAppearanceState(
+        "Settings closed after the colour scheme write",
+        (state) =>
+          state.dialogPresent &&
+          state.shownGroup === "appearance" &&
+          state.lightChecked === "true",
+        5000,
+      );
+      await withAppearanceDiagnostics(
+        "Studio palette did not become active",
+        async () =>
+          selectSettingsChoice(
+            '[data-testid="settings-view"] [data-testid="settings-palette-studio"]',
+            "Studio palette",
+          ),
+      );
+      await waitForAppearanceState(
+        "Settings closed after the light palette write",
+        (state) =>
+          state.dialogPresent &&
+          state.shownGroup === "appearance" &&
+          state.studioChecked === "true",
+        5000,
+      );
+      await withAppearanceDiagnostics(
+        "the colour scheme and palette fields did not round-trip",
+        async () =>
+          browser.waitUntil(
+            async () => {
+              const stored = await persistedSettings();
+              return (
+                typeof stored !== "string" &&
+                stored.theme === "light" &&
+                stored.light_palette === "studio" &&
+                stored.dark_palette === "graphite"
+              );
+            },
+            { timeout: 10000 },
+          ),
+      );
+    } finally {
+      await restoreTestState();
+    }
   });
 
   it("typed_slider_entry_commits_clamps_and_reverts", async () => {

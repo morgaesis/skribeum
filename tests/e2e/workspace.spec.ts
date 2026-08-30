@@ -15,6 +15,61 @@ async function openTreePath(path: string): Promise<void> {
   const row = $(`[role="treeitem"][data-path="${path}"]`);
   await row.waitForExist({ timeout: 15000 });
   await row.click();
+  await waitForWorkspaceTab(path);
+}
+
+async function waitForWorkspaceTab(path: string): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      (await paneSnapshots()).some(
+        (pane) => pane.activePath === path && pane.tabs.includes(path),
+      ),
+    {
+      timeout: 15000,
+      timeoutMsg: `workspace did not commit the tab for ${path}`,
+    },
+  );
+}
+
+async function expectWorkspaceTabAbsent(path: string): Promise<void> {
+  expect((await paneSnapshots()).some((pane) => pane.tabs.includes(path))).toBe(
+    false,
+  );
+}
+
+async function waitForWorkspaceTabPaths(paths: string[]): Promise<void> {
+  await browser.waitUntil(
+    async () => {
+      const snapshot = (await workspaceSnapshot()) as { layout: unknown };
+      return (
+        JSON.stringify(tabPathsOf(snapshot.layout)) === JSON.stringify(paths)
+      );
+    },
+    {
+      timeout: 15000,
+      timeoutMsg: `workspace did not commit tabs in order: ${paths.join(", ")}`,
+    },
+  );
+}
+
+async function modifierClickTreePath(path: string): Promise<void> {
+  const row = $(`[role="treeitem"][data-path="${path}"]`);
+  await row.waitForExist({ timeout: 15000 });
+  await browser.actions([
+    browser.action("key").down(modifierKey).pause(0).pause(0).up(modifierKey),
+    browser
+      .action("pointer")
+      .move({ origin: row })
+      .down("left")
+      .up("left")
+      .pause(0),
+  ]);
+}
+
+async function middleClickTreePath(path: string): Promise<void> {
+  const row = $(`[role="treeitem"][data-path="${path}"]`);
+  await row.waitForExist({ timeout: 15000 });
+  await row.click({ button: "middle" });
 }
 
 async function expandTreeFolder(): Promise<void> {
@@ -915,60 +970,28 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     );
 
     // Mod-click is one of the explicit new-tab routes.
-    await browser.execute(
-      (element) => {
-        (element as HTMLElement).dispatchEvent(
-          new MouseEvent("click", {
-            bubbles: true,
-            ctrlKey: true,
-            metaKey: true,
-          }),
-        );
-      },
-      await $(
-        `[role="treeitem"][data-path="${TREE_FIRST_NOTE_NAME}"]`,
-      ).getElement(),
-    );
-    await browser.waitUntil(
-      async () => (await $$('[role="tab"]').length) === 2,
-      {
-        timeoutMsg: "mod-click did not open a second tab",
-      },
-    );
+    await expectWorkspaceTabAbsent(TREE_FIRST_NOTE_NAME);
+    await modifierClickTreePath(TREE_FIRST_NOTE_NAME);
+    await waitForWorkspaceTab(TREE_FIRST_NOTE_NAME);
 
-    const configRow = await $(
-      `[role="treeitem"][data-path="${CONFIG_FILE_NAME}"]`,
-    ).getElement();
-    await browser.execute((element) => {
-      (element as HTMLElement).dispatchEvent(
-        new MouseEvent("auxclick", { bubbles: true, button: 1 }),
-      );
-    }, configRow);
-    await browser.waitUntil(
-      async () => (await $$('[role="tab"]').length) === 3,
-      { timeoutMsg: "middle-click did not open a third tab" },
-    );
+    await expectWorkspaceTabAbsent(CONFIG_FILE_NAME);
+    await middleClickTreePath(CONFIG_FILE_NAME);
+    await waitForWorkspaceTab(CONFIG_FILE_NAME);
 
-    const previewRow = await $(
+    await expectWorkspaceTabAbsent(PREVIEW_SOURCE_NOTE_NAME);
+    const previewRow = $(
       `[role="treeitem"][data-path="${PREVIEW_SOURCE_NOTE_NAME}"]`,
-    ).getElement();
-    await browser.execute((element) => {
-      const row = element as HTMLElement;
-      row.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-      row.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
-      row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    }, previewRow);
-    await browser.waitUntil(
-      async () => (await $$('[role="tab"]').length) === 4,
-      { timeoutMsg: "double-click did not preserve the displaced tab" },
     );
-    const snapshot = (await workspaceSnapshot()) as { layout: unknown };
-    expect(tabPathsOf(snapshot.layout)).toEqual([
+    await previewRow.doubleClick();
+    const expectedPaths = [
       TREE_SECOND_NOTE_NAME,
       TREE_FIRST_NOTE_NAME,
       CONFIG_FILE_NAME,
       PREVIEW_SOURCE_NOTE_NAME,
-    ]);
+    ];
+    await waitForWorkspaceTabPaths(expectedPaths);
+    const snapshot = (await workspaceSnapshot()) as { layout: unknown };
+    expect(tabPathsOf(snapshot.layout)).toEqual(expectedPaths);
   });
 
   it("keeps an accepted missing-note navigation backed by an active tab", async () => {
@@ -1157,18 +1180,9 @@ describe("file tree, previews, panels, and workspace tabs", () => {
     await expandTreeFolder();
     await openTreePath(TREE_FIRST_NOTE_NAME);
     for (const path of [TREE_SECOND_NOTE_NAME, PREVIEW_SOURCE_NOTE_NAME]) {
-      await browser.execute(
-        (element) => {
-          (element as HTMLElement).dispatchEvent(
-            new MouseEvent("click", {
-              bubbles: true,
-              ctrlKey: true,
-              metaKey: true,
-            }),
-          );
-        },
-        await $(`[role="treeitem"][data-path="${path}"]`).getElement(),
-      );
+      await expectWorkspaceTabAbsent(path);
+      await modifierClickTreePath(path);
+      await waitForWorkspaceTab(path);
     }
     const tabs = await $$('[role="tab"]');
     expect(tabs.length).toBeGreaterThanOrEqual(3);

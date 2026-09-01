@@ -55,11 +55,34 @@ async function waitForWorkspaceTabPaths(paths: string[]): Promise<void> {
 async function openTreePathInNewTabFromRowMenu(path: string): Promise<void> {
   const row = $(`[role="treeitem"][data-path="${path}"]`);
   await row.waitForDisplayed({ timeout: 15000 });
-  await row.moveTo();
+
+  // WebKitGTK does not reliably expose the hover-only action affordance to
+  // WebDriver. The tree's native keyboard route focuses the requested row,
+  // then Tab exposes its real action button through :focus-within.
+  const paths = await Promise.all(
+    (await $$('[role="treeitem"][data-path]')).map((item) =>
+      item.getAttribute("data-path"),
+    ),
+  );
+  const index = paths.indexOf(path);
+  if (index < 0) throw new Error(`tree row is not available: ${path}`);
+  await browser.keys(Key.Home);
+  for (let step = 0; step < index; step += 1) {
+    await browser.keys(Key.ArrowDown);
+  }
+  await browser.waitUntil(() => row.isFocused(), {
+    timeout: 15000,
+    timeoutMsg: `tree did not focus ${path}`,
+  });
 
   const actions = row.$(
     'button[aria-haspopup="menu"][aria-label^="File actions:"]',
   );
+  await browser.keys(Key.Tab);
+  await browser.waitUntil(() => actions.isFocused(), {
+    timeout: 15000,
+    timeoutMsg: `tree actions did not receive focus for ${path}`,
+  });
   await actions.waitForDisplayed({ timeout: 15000 });
   await actions.waitForClickable({ timeout: 15000 });
   await actions.click();

@@ -5405,7 +5405,7 @@ onMount(() => {
                 titleSources={treeTitleSources}
                 expandedPaths={workspace.expandedFolders}
                 onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
-                onOpenPath={openPath}
+                onOpenPath={(path, options) => openPath(path, options)}
                 {registry}
                 {commandContext}
                 desktop={hasDesktopRuntime()}
@@ -5759,7 +5759,7 @@ onMount(() => {
         titleSources={treeTitleSources}
         expandedPaths={workspace.expandedFolders}
         onExpandedChange={(paths) => (workspace.expandedFolders = paths)}
-        onOpenPath={openPath}
+        onOpenPath={(path, options) => openPath(path, options)}
         {registry}
         {commandContext}
         desktop={hasDesktopRuntime()}

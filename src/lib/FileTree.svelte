@@ -55,7 +55,7 @@ let {
   titleSources?: Readonly<Record<string, string>>;
   expandedPaths?: readonly string[];
   onExpandedChange?: (paths: string[]) => void;
-  onOpenPath: (path: string, options?: { newTab?: boolean }) => void;
+  onOpenPath: (path: string, options?: { newTab?: boolean }) => unknown;
   registry?: CommandRegistry;
   commandContext?: () => CommandContext;
   desktop?: boolean;
@@ -101,6 +101,19 @@ let revealSpan = $state(0);
 let revealGeneration = 0;
 let revealTimer: ReturnType<typeof setTimeout> | null = null;
 let highlightElement = $state<HTMLElement | null>();
+type PrimaryClickIntent = {
+  path: string;
+  generation: number;
+  pending: Promise<void> | null;
+};
+// A native double-click is the one activation route whose second action must
+// follow the first. All other opens start immediately so App-level request
+// ownership can supersede slow reads. This record keeps only the matching
+// first click, and drops its settled promise while retaining the gesture key
+// long enough for the browser's subsequent `dblclick` event.
+let primaryClickIntent: PrimaryClickIntent | null = null;
+let openGestureGeneration = 0;
+let mountGeneration = 0;
 // Plain (non-reactive) bookkeeping: the choreography effect below both
 // reads and writes these, and making them `$state` would make its own
 // writes re-trigger itself mid-flush, stomping the entrance markers it had
@@ -244,6 +257,9 @@ function cancelRevealCallbacks(): void {
 
 onDestroy(() => {
   mounted = false;
+  mountGeneration += 1;
+  openGestureGeneration += 1;
+  primaryClickIntent = null;
   highlightMotionGeneration += 1;
   revealGeneration += 1;
   menuCloseGeneration += 1;
@@ -912,15 +928,94 @@ async function playExpansionChange(
   }, duration);
 }
 
-function activate(row: Row, newTab = false) {
+function invokeOpenPath(path: string, newTab: boolean): Promise<void> | null {
+  try {
+    const result = onOpenPath(path, { newTab });
+    if (
+      result === null ||
+      (typeof result !== "object" && typeof result !== "function")
+    )
+      return null;
+    let then: unknown;
+    try {
+      then = (result as { then?: unknown }).then;
+    } catch {
+      return null;
+    }
+    if (typeof then !== "function") return null;
+    return Promise.resolve(result).then(
+      () => undefined,
+      () => undefined,
+    );
+  } catch {
+    return null;
+  }
+}
+
+function supersedePrimaryClick(): number {
+  primaryClickIntent = null;
+  openGestureGeneration += 1;
+  return openGestureGeneration;
+}
+
+function activate(row: Row, newTab = false): Promise<void> {
   if (row.kind === "directory") {
     toggleFolder(row);
-  } else {
-    // Every file the vault holds opens; the tree never shows a row it
-    // refuses to act on. Selection belongs to committed navigation, so a
-    // slow or failed read leaves the tree and reading surface in agreement.
-    onOpenPath(row.path, { newTab });
+    return Promise.resolve();
   }
+
+  // Every file the vault holds opens; the tree never shows a row it
+  // refuses to act on. Selection belongs to committed navigation, so a
+  // slow or failed read leaves the tree and reading surface in agreement.
+  return invokeOpenPath(row.path, newTab) ?? Promise.resolve();
+}
+
+function beginPrimaryClick(row: Row): void {
+  const generation = supersedePrimaryClick();
+  if (row.kind === "directory") {
+    toggleFolder(row);
+    return;
+  }
+
+  const intent: PrimaryClickIntent = {
+    path: row.path,
+    generation,
+    pending: invokeOpenPath(row.path, false),
+  };
+  primaryClickIntent = intent;
+  const pending = intent.pending;
+  if (pending !== null) {
+    void pending.then(() => {
+      if (primaryClickIntent === intent) intent.pending = null;
+    });
+  }
+}
+
+async function promotePrimaryDoubleClick(path: string): Promise<void> {
+  const intent = primaryClickIntent;
+  if (intent === null || intent.path !== path) return;
+
+  const generation = intent.generation;
+  const lifetime = mountGeneration;
+  const pending = intent.pending;
+  if (primaryClickIntent === intent) primaryClickIntent = null;
+  if (pending !== null) {
+    try {
+      await pending;
+    } catch {
+      // `invokeOpenPath` already converts failures into settlement. Keep this
+      // boundary defensive so a foreign thenable cannot poison promotion.
+    }
+  }
+  if (
+    !mounted ||
+    mountGeneration !== lifetime ||
+    openGestureGeneration !== generation
+  )
+    return;
+
+  openGestureGeneration += 1;
+  void invokeOpenPath(path, true);
 }
 
 function parentIndex(row: Row): number {
@@ -1085,7 +1180,8 @@ function onKeydown(event: KeyboardEvent) {
       break;
     case "Enter":
     case " ":
-      activate(row);
+      supersedePrimaryClick();
+      void activate(row);
       break;
     case "F10":
       if (!event.shiftKey) return;
@@ -1268,7 +1364,19 @@ function dropOn(destination: string | null) {
           // A browser sends a second ordinary click before `dblclick`. That
           // click belongs to the double-click gesture handled below.
           if (event.detail > 1) return;
-          activate(row, event.ctrlKey || event.metaKey);
+          if (
+            event.detail === 1 &&
+            event.button === 0 &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey &&
+            !event.altKey
+          ) {
+            beginPrimaryClick(row);
+            return;
+          }
+          supersedePrimaryClick();
+          void activate(row, event.ctrlKey || event.metaKey);
         }}
         ondblclick={(event) => {
           event.preventDefault();
@@ -1276,13 +1384,14 @@ function dropOn(destination: string | null) {
           // The first click already toggles a folder. The rest of the
           // double-click gesture must not toggle it again.
           if (row.kind === "directory") return;
-          activate(row, true);
+          void promotePrimaryDoubleClick(row.path);
         }}
         onauxclick={(event) => {
           if (event.button !== 1) return;
           event.preventDefault();
           void focusRow(index);
-          activate(row, true);
+          supersedePrimaryClick();
+          void activate(row, true);
         }}
         oncontextmenu={(event) => rowContextMenu(event, row)}
         onpointerdown={(event) => beginHold(event, row)}

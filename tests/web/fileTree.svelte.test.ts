@@ -1,5 +1,5 @@
 import { flushSync, mount, tick, unmount } from "svelte";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 // The tree's row presentation lives in the shell stylesheet, so the
 // assertions below can read resolved style rather than class names.
 import "../../src/app.css";
@@ -19,6 +19,26 @@ function notes(count: number): TreeEntry[] {
     kind: "note" as const,
     hidden: false,
   }));
+}
+
+function deferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: () => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<void>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function dispatchNativeDoubleClick(row: HTMLElement): void {
+  row.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+  row.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+  row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
 }
 
 function setViewport(tree: HTMLUListElement, height: number, top = 0): void {
@@ -262,6 +282,9 @@ describe("designed file tree", () => {
       new MouseEvent("click", { bubbles: true, ctrlKey: true }),
     );
     row?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, metaKey: true }),
+    );
+    row?.dispatchEvent(
       new MouseEvent("auxclick", { bubbles: true, button: 1 }),
     );
     // Browsers deliver click(detail=1), click(detail=2), then `dblclick`.
@@ -282,6 +305,7 @@ describe("designed file tree", () => {
     expect(opened).toEqual([
       { path: "plain.md", newTab: true },
       { path: "plain.md", newTab: true },
+      { path: "plain.md", newTab: true },
       { path: "plain.md", newTab: false },
       { path: "plain.md", newTab: true },
     ]);
@@ -295,13 +319,191 @@ describe("designed file tree", () => {
     await unmount(component);
   });
 
+  it("invokes a newer file immediately while an earlier open is pending", async () => {
+    const slowOpen = deferred();
+    const opened: string[] = [];
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        onOpenPath: (path: string) => {
+          opened.push(path);
+          return path === "plain.md" ? slowOpen.promise : undefined;
+        },
+      },
+    });
+    flushSync();
+
+    try {
+      document
+        .querySelector<HTMLElement>('[data-path="plain.md"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      document
+        .querySelector<HTMLElement>('[data-path="manual.pdf"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+
+      expect(opened).toEqual(["plain.md", "manual.pdf"]);
+      slowOpen.resolve();
+      await slowOpen.promise;
+    } finally {
+      slowOpen.resolve();
+      await unmount(component);
+    }
+  });
+
+  it("promotes a native double-click after its matching first open settles", async () => {
+    const firstOpen = deferred();
+    const promoted = deferred();
+    const opened: Array<{ path: string; newTab: boolean | undefined }> = [];
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        onOpenPath: (path: string, options?: { newTab?: boolean }) => {
+          opened.push({ path, newTab: options?.newTab });
+          if (options?.newTab === true) {
+            promoted.resolve();
+            return;
+          }
+          return firstOpen.promise;
+        },
+      },
+    });
+    flushSync();
+
+    try {
+      const row = document.querySelector<HTMLElement>('[data-path="plain.md"]');
+      expect(row).not.toBeNull();
+      if (row === null) return;
+
+      dispatchNativeDoubleClick(row);
+      expect(opened).toEqual([{ path: "plain.md", newTab: false }]);
+
+      firstOpen.resolve();
+      await promoted.promise;
+      expect(opened).toEqual([
+        { path: "plain.md", newTab: false },
+        { path: "plain.md", newTab: true },
+      ]);
+    } finally {
+      firstOpen.resolve();
+      promoted.resolve();
+      await unmount(component);
+    }
+  });
+
+  it("recovers double-click promotion and future opens from first-open failures", async () => {
+    const rejectedOpen = deferred();
+    const rejectedPromotion = deferred();
+    const opened: Array<{ path: string; newTab: boolean | undefined }> = [];
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        onOpenPath: (path: string, options?: { newTab?: boolean }) => {
+          opened.push({ path, newTab: options?.newTab });
+          if (options?.newTab === true) {
+            if (path === "manual.pdf") rejectedPromotion.resolve();
+            return;
+          }
+          if (path === "plain.md") throw new Error("synchronous open failure");
+          if (path === "manual.pdf") return rejectedOpen.promise;
+        },
+      },
+    });
+    flushSync();
+
+    try {
+      const thrownRow = document.querySelector<HTMLElement>(
+        '[data-path="plain.md"]',
+      );
+      const rejectedRow = document.querySelector<HTMLElement>(
+        '[data-path="manual.pdf"]',
+      );
+      const futureRow = document.querySelector<HTMLElement>(
+        '[data-path="Folder/one.md"]',
+      );
+      expect(thrownRow).not.toBeNull();
+      expect(rejectedRow).not.toBeNull();
+      expect(futureRow).not.toBeNull();
+      if (thrownRow === null || rejectedRow === null || futureRow === null)
+        return;
+
+      dispatchNativeDoubleClick(thrownRow);
+      expect(opened).toEqual([
+        { path: "plain.md", newTab: false },
+        { path: "plain.md", newTab: true },
+      ]);
+
+      dispatchNativeDoubleClick(rejectedRow);
+      expect(opened.at(-1)).toEqual({ path: "manual.pdf", newTab: false });
+      rejectedOpen.reject(new Error("asynchronous open failure"));
+      await rejectedPromotion.promise;
+      expect(opened.at(-1)).toEqual({ path: "manual.pdf", newTab: true });
+
+      futureRow.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, detail: 1 }),
+      );
+      expect(opened.at(-1)).toEqual({
+        path: "Folder/one.md",
+        newTab: false,
+      });
+    } finally {
+      rejectedOpen.resolve();
+      rejectedPromotion.resolve();
+      await unmount(component);
+    }
+  });
+
+  it("does not promote a pending double-click after teardown", async () => {
+    const firstOpen = deferred();
+    const opened: Array<{ path: string; newTab: boolean | undefined }> = [];
+    const component = mount(FileTree, {
+      target: document.body,
+      props: {
+        entries,
+        expandedPaths: ["Folder"],
+        onOpenPath: (path: string, options?: { newTab?: boolean }) => {
+          opened.push({ path, newTab: options?.newTab });
+          return options?.newTab === true ? undefined : firstOpen.promise;
+        },
+      },
+    });
+    flushSync();
+    let destroyed = false;
+
+    try {
+      const row = document.querySelector<HTMLElement>('[data-path="plain.md"]');
+      expect(row).not.toBeNull();
+      if (row === null) return;
+
+      dispatchNativeDoubleClick(row);
+      expect(opened).toEqual([{ path: "plain.md", newTab: false }]);
+
+      await unmount(component);
+      destroyed = true;
+      firstOpen.resolve();
+      await firstOpen.promise;
+      await Promise.resolve();
+      expect(opened).toEqual([{ path: "plain.md", newTab: false }]);
+    } finally {
+      firstOpen.resolve();
+      if (!destroyed) await unmount(component);
+    }
+  });
+
   it("opens row actions by pointer and keyboard and dispatches through the registry", async () => {
     const renamed: string[] = [];
+    const openNoteInNewTab = vi.fn(() => Promise.resolve());
     const registry = createAppRegistry(undefined, true);
     const context = commandContext({
       renameTreeEntry: async (path) => {
         renamed.push(path);
       },
+      openNoteInNewTab,
     });
     const component = mount(FileTree, {
       target: document.body,
@@ -345,6 +547,14 @@ describe("designed file tree", () => {
     await tick();
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
     expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
+    expect(
+      (document.activeElement as HTMLElement | null)?.dataset.commandId,
+    ).toBe("tree.note.open-in-new-tab");
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await tick();
+    expect(openNoteInNewTab).toHaveBeenCalledWith("plain.md");
 
     await unmount(component);
   });
